@@ -171,6 +171,8 @@ ${HAZARD_ORDER.map(hazardChip).join("\n")}
   </footer>
 </div>
 
+<script src="assets/catalog.js"></script>
+<script src="assets/search.js"></script>
 <script src="assets/progress.js"></script>
 </body>
 </html>

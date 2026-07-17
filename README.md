@@ -88,8 +88,13 @@ dependency blocks my threads"), because in the second case a name match is usual
 Add `--json` for structured output, `--diagrams` to keep the mermaid source.
 
 A grounded answer — search, then read two `usage` blocks and a relation list — costs about
-**750 tokens**, against ~490,000 to read the corpus and ~3,600 for a single raw page.
+**600 tokens**, against ~490,000 to read the corpus and ~3,600 for a single raw page.
 `site/assets/catalog.json` is the index behind it.
+
+The hub has the same search, offline: type a symptom (or press `/`) and the elevation map
+filters in place — matches stay in their band, so you see not just *which* patterns fit but
+*where they sit*. It reads `catalog.js` as a script rather than fetching it, so it works by
+double-clicking `index.html`, no server needed.
 
 ## Conventions
 
