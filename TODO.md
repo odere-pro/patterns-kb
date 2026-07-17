@@ -65,16 +65,25 @@ ethos).
 
 **Effort.** Small (hub synonyms) to large (embeddings).
 
-## 5. Slim the vendored highlighter
+## 5. Slim the vendored highlighter — ✅ RESOLVED
 
-**What.** `site/assets/vendor/highlight.min.js` is the prebuilt highlight.js core+common
-bundle (~125 KB) but the corpus only ever highlights TypeScript. A custom core+typescript
-build is ~35 KB.
+`site/assets/vendor/highlight.min.js` is now a **core + typescript-only** build (~29 KB, down
+from the ~125 KB core+common bundle) — the corpus only ever highlights TypeScript.
 
-**Why deferred.** Producing that build needs npm tooling outside the repo; the prebuilt
-bundle is reproducible by URL (`@highlightjs/cdn-assets@11.11.1`).
+**Reproduce** (one-off, outside the repo — the result is vendored, no build dependency ships):
 
-**Effort.** Small, but changes how the vendored file is reproduced.
+```
+npm install highlight.js@11.11.1 esbuild
+# entry.js:
+#   import hljs from 'highlight.js/lib/core';
+#   import ts from 'highlight.js/lib/languages/typescript';
+#   hljs.registerLanguage('typescript', ts);
+#   if (typeof window !== 'undefined') window.hljs = hljs;
+npx esbuild entry.js --bundle --minify --format=iife --outfile=highlight.min.js
+```
+
+IIFE (not ESM) so it loads from `file://`; sets `window.hljs` for `sketch.js`. BSD-3-Clause,
+see `highlight.LICENSE`.
 
 ## Notes / non-tasks
 
