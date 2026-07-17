@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reactor · Patterns</title>
+  <meta name="description" content="Reactor — a single event loop demultiplexes events from many sources and dispatches each to its registered handler, with no thread per connection.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="reactor" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="One loop dispatches events to their handlers" data-kb-order="80">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Reactor</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Reactor</h1>
+      <p class="doc-essence">A single event loop watches every open socket, timer, and signal at once, and the instant one is ready it dispatches straight to the handler that registered for it — no thread parked per connection, no one blocked waiting.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="reactor">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>reactor</strong> is a single-threaded event loop that owns one job: ask the OS which of many registered event sources is ready — a socket that can be read, a timer that has fired, a signal that arrived — and dispatch each ready one to the handler that registered interest in it. The asking is done through a demultiplexer (<code>select</code>, <code>poll</code>, <code>epoll</code>, <code>kqueue</code>); the loop blocks there, wakes with a list of ready descriptors, and calls each handler in turn, synchronously, on the loop's own thread.</p>
+        <p>The force it resolves is the cost of <strong>thread-per-connection</strong> concurrency. Give every connection its own OS thread and each idle one still pins a stack and a scheduler entry — thousands of connections mean thousands of threads mostly doing nothing but costing context-switches and memory. Reactor decouples "wait for something to happen" from "do work when it happens": one thread (or a handful, one per core) can watch tens of thousands of descriptors for the price of a single blocking call, and only pays for CPU when there is real work to dispatch.</p>
+        <p>The catch is exactly what makes it cheap: there is one loop. A handler that blocks — a slow disk read, a synchronous DNS lookup, a tight CPU loop — stalls every other connection sharing that thread. The pattern trades away preemption; it demands that handlers give control back quickly.</p>
+        <p>Doug Schmidt formalized it in the ACE framework in the mid-1990s, and it now sits underneath most high-concurrency network servers: nginx's worker processes, Redis's single command-processing thread, and Node.js's event loop over libuv are all reactors.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    IO["Sockets, timers, signals"] --> DM["Demultiplexer, epoll/kqueue"]
+    DM --> LOOP["Event loop, one thread"]
+    LOOP -->|dispatch| H1["Handler, read"]
+    LOOP -->|dispatch| H2["Handler, write"]
+    LOOP -->|dispatch| H3["Handler, timeout"]
+    H1 --> LOOP
+    H2 --> LOOP
+    H3 --> LOOP
+        </pre>
+        <figcaption>The loop blocks on the demultiplexer, wakes with the ready set, and dispatches each event to its registered handler before blocking again.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Single-threaded reactor</dt>
+        <dd>One loop runs both the demultiplexing and every handler. Simplest, no locking anywhere, but a slow handler stalls all other connections.</dd>
+        <dt>Worker-pool reactor</dt>
+        <dd>The loop only demultiplexes and dispatches; the actual handler work runs on a bounded thread or task pool, so one slow handler no longer blocks ingestion of new events.</dd>
+        <dt>Multi-reactor (thread-per-core)</dt>
+        <dd>Run N independent loops, each pinned to a core and owning its own slice of connections, sharing nothing — the shape behind nginx workers and modern thread-per-core servers.</dd>
+        <dt>Reactor vs. Proactor</dt>
+        <dd>Reactor notifies "this descriptor is ready, go read it yourself"; Proactor notifies "your read already completed, here's the data" — the OS or an async layer performs the I/O, as in Windows IOCP.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>No thread-per-connection overhead — one loop scales to tens of thousands of idle sockets.</li>
+            <li>No locking inside the loop: handlers on the same thread never race each other.</li>
+            <li>Low, predictable memory footprint per connection compared to a parked thread and stack.</li>
+            <li>Dispatch order within the loop is explicit and easy to reason about.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>A single blocking or CPU-heavy handler stalls every other event on that loop.</li>
+            <li>One loop uses one core — real parallelism needs multiple reactor instances.</li>
+            <li>Callback-driven control flow is harder to step through than straight-line, blocking code.</li>
+            <li>Every handler must be written non-blocking, which pushes async style through the whole call chain.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>You're serving many concurrent, mostly-idle I/O connections — sockets, pipes, timers.</li>
+            <li>Thread-per-connection overhead (memory, context switches) is the actual bottleneck.</li>
+            <li>Work is I/O-bound and can be expressed as short, non-blocking handlers.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The workload is CPU-bound — a reactor's single loop just serializes the crunching.</li>
+            <li>Your runtime already gives you cheap, preemptible concurrency (lightweight threads, coroutines) — reintroducing an explicit loop adds complexity for no gain.</li>
+            <li>You depend on libraries that only offer blocking calls and can't be made async or offloaded to a pool.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal single-threaded reactor</summary>
+<pre><code>type Handler = (fd: number) =&gt; void;
+
+class Reactor {
+  private handlers = new Map&lt;number, Handler&gt;();
+
+  register(fd: number, handler: Handler): void {
+    this.handlers.set(fd, handler);
+  }
+
+  unregister(fd: number): void {
+    this.handlers.delete(fd);
+  }
+
+  // The loop: block until the OS says something is ready,
+  // then dispatch each ready fd to its handler. A handler
+  // must never block — that stalls every other connection.
+  run(): void {
+    while (true) {
+      const ready = demultiplex([...this.handlers.keys()]); // epoll/kqueue
+      for (const fd of ready) {
+        this.handlers.get(fd)?.(fd);
+      }
+    }
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="future-promise"><a href="./future-promise.html">Future / Promise</a><span class="rel-note">The loop resolves futures as events arrive</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    RE["Reactor"]
+    RE --- FP["Future / Promise"]
+    click FP "./future-promise.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="streaming"><a href="../../themes/streaming.html">Streaming</a><span>Event-loop dispatch for non-blocking streams</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./actor-model.html">← Actor Model</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./monitor-object.html">Monitor Object →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+</body>
+</html>

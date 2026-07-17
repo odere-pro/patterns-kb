@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Content-Based Router · Patterns</title>
+  <meta name="description" content="Content-Based Router — inspects a message's actual content and forwards it down whichever channel matches what it finds.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="content-based-router" data-kb-kind="pattern" data-kb-band="messaging" data-kb-group="messaging" data-kb-essence="Routes a message by inspecting its actual content" data-kb-order="87">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-msg-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-msg-h">Messaging</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Content-Based Router</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Messaging</p>
+      <h1 class="doc-title">Content-Based Router</h1>
+      <p class="doc-essence">Inspects a message's actual content — not its type, not its headers — and forwards it down whichever channel matches what's inside.</p>
+      <div class="doc-metarow">
+        <span class="badge">Messaging</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="content-based-router">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>content-based router</strong> sits on a single inbound channel, opens each message's body, and forwards it to one of several outbound channels depending on what it finds there — a large order to a fraud-review queue, a ticket tagged "billing" to the billing team's queue, a malformed payload to a dead-letter channel. The rule set is usually short: a chain of conditions evaluated in order, a lookup table, or a small rules engine, with a default channel for anything that matches nothing.</p>
+        <p>The problem it resolves is a producer and consumer that shouldn't need to know about each other's variations. Without a router, branching logic like "if this order is over the fraud threshold, route it for review" gets copy-pasted into every consumer, or worse, pushed back onto the producer, coupling it to downstream concerns it has no business knowing about. Centralizing that one decision means the producer emits a single kind of message onto a single channel, and each consumer only ever sees the subset meant for it.</p>
+        <p>It differs from a plain <a href="./message-router.html">Message Router</a> in what drives the decision. A router in general can dispatch on metadata, round-robin, or external state; a content-based router dispatches strictly on values found inside the message itself, so the same routing logic works regardless of which system produced the message or how it got there.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    IN["Inbound message"] --> R{"Inspect body"}
+    R -->|amount &gt; 10000| HP["Fraud review channel"]
+    R -->|region == EU| EU["EU billing channel"]
+    R -->|else| DEF["Default channel"]
+        </pre>
+        <figcaption>The router evaluates conditions against the message body in order and forwards to the first match, falling through to a default channel when nothing matches.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Static / table-driven routing</dt>
+        <dd>Rules live in a lookup table — a field value mapped to a channel name — so operators can add or change destinations without redeploying router code.</dd>
+        <dt>Dynamic / rule-engine routing</dt>
+        <dd>Conditions are expressed in a rules DSL, JSONPath/XPath predicate, or business-rule engine, letting the routing logic evolve independently of the integration code around it.</dd>
+        <dt>Header-assisted routing</dt>
+        <dd>A cheap header check (a type or version field) narrows the candidates first, so the router only parses the full body when the header alone can't decide.</dd>
+        <dt>Multi-match / recipient hybrid</dt>
+        <dd>When more than one condition can match the same message, it's copied to every matching channel instead of exactly one — the point where this pattern shades into a Recipient List.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Centralizes branching logic in one place instead of scattering conditionals through every consumer.</li>
+            <li>Keeps the producer ignorant of how many consumer variants exist downstream.</li>
+            <li>New destination channels are added by extending the router, not by touching producers or existing consumers.</li>
+            <li>Makes the routing rules visible, named, and testable as a single unit.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Becomes a central, must-not-break piece of infrastructure — a bug there misroutes everything behind it.</li>
+            <li>Must parse the full message body to route, adding cost and a dependency on the message schema.</li>
+            <li>Conditions accrete over time into a tangle of nested, hard-to-audit rules.</li>
+            <li>A catch-all default branch can silently swallow or misroute anything unclassified.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Messages on the same channel need genuinely different handling based on what's in them.</li>
+            <li>You want to add handling for a new case without editing the producer.</li>
+            <li>The routing decision depends on values only visible in the payload, not in headers or metadata.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The destination is knowable from a header or message type alone — a plain header-based router is cheaper and skips parsing the body.</li>
+            <li>There's only one consumer or one destination — there's nothing to route between.</li>
+            <li>Routing rules change so often they're really business logic — put them in a rules engine or the domain layer, not hardcoded into the router.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — routing an order by its content</summary>
+<pre><code>type Channel = "fraud-review" | "eu-billing" | "default";
+
+interface OrderMessage {
+  amount: number;
+  region: "US" | "EU" | "APAC";
+}
+
+// The rule set: evaluated in order, first match wins.
+function route(order: OrderMessage): Channel {
+  if (order.amount &gt; 10_000) return "fraud-review";
+  if (order.region === "EU") return "eu-billing";
+  return "default";
+}
+
+function dispatch(
+  order: OrderMessage,
+  channels: Record&lt;Channel, (o: OrderMessage) =&gt; void&gt;,
+): void {
+  const channel = route(order);
+  channels[channel](order);
+}
+
+// Producer only ever emits OrderMessage; it never sees a channel name.
+dispatch({ amount: 15_000, region: "US" }, {
+  "fraud-review": (o) =&gt; reviewQueue.publish(o),
+  "eu-billing": (o) =&gt; euBillingQueue.publish(o),
+  "default": (o) =&gt; defaultQueue.publish(o),
+});</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Variant of</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="variant-of" data-kb-to="message-router"><a href="./message-router.html">Message Router</a><span class="rel-note">Route by rules; content-based inspects the body</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    CBR["Content-Based Router"]
+    CBR --- MR["Message Router"]
+    click MR "./message-router.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./message-router.html">&larr; Message Router</a>
+      <a class="up" href="../../index.html">&uarr; The Map</a>
+      <a class="next" href="./message-translator.html">Message Translator &rarr;</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+</body>
+</html>

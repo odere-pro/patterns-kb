@@ -23,7 +23,7 @@ const problems = [];
 let pages = 0;
 
 for (const node of Object.values(graph.nodes)) {
-  const rel = `${node.dir}/${node.id}.html`;
+  const rel = node.path;
   const file = join(ROOT, "site", rel);
   if (!existsSync(file)) { problems.push(`MISSING FILE: ${rel}`); continue; }
   pages++;

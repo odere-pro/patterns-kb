@@ -21,8 +21,8 @@ const bandTotal = (band) =>
   Object.values(N).filter((n) => n.kind === "pattern" && n.band === band).length;
 
 function chip(n) {
-  const dir = n.kind === "hazard" ? "hazards" : "patterns";
-  return `            <div class="chip"><input class="chip-box" type="checkbox" data-id="${n.id}" data-band="${n.band}" data-group="${n.group}" aria-label="Mark ${esc(n.name)} practiced"><a class="chip-name" href="${dir}/${n.id}.html">${esc(n.name)}</a><span class="chip-note">${esc(n.essence)}</span></div>`;
+  // n.path is site-relative and the hub sits at site/, so it needs no adjustment.
+  return `            <div class="chip"><input class="chip-box" type="checkbox" data-id="${n.id}" data-band="${n.band}" data-group="${n.group}" aria-label="Mark ${esc(n.name)} practiced"><a class="chip-name" href="${n.path}">${esc(n.name)}</a><span class="chip-note">${esc(n.essence)}</span></div>`;
 }
 function chips(group) {
   return patternsIn(group).map(chip).join("\n");
@@ -76,13 +76,13 @@ ${chips(band)}
 /* ---- themes ---- */
 function themeCard(id) {
   const t = N[id];
-  return `        <a class="theme-card" href="themes/${id}.html"><span class="theme-name">${esc(t.name)}</span><span class="theme-note">${esc(t.essence)}</span></a>`;
+  return `        <a class="theme-card" href="${t.path}"><span class="theme-name">${esc(t.name)}</span><span class="theme-note">${esc(t.essence)}</span></a>`;
 }
 
 /* ---- hazards ---- */
 function hazardChip(id) {
   const h = N[id];
-  return `        <div class="chip chip--plain hazard-chip"><a class="chip-name" href="hazards/${id}.html">${esc(h.name)}</a><span class="chip-note">${esc(h.essence)}</span></div>`;
+  return `        <div class="chip chip--plain hazard-chip"><a class="chip-name" href="${h.path}">${esc(h.name)}</a><span class="chip-note">${esc(h.essence)}</span></div>`;
 }
 
 const totalPatterns = Object.values(N).filter((n) => n.kind === "pattern").length;

@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR } from "./lib/model.mjs";
+import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, folderFor } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = join(ROOT, "site");
@@ -26,16 +26,24 @@ const titleize = (id) =>
   id.split("-").map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
 
 /* ---------------- read every page ---------------- */
+function walk(rel) {
+  const out = [];
+  for (const e of readdirSync(join(SITE, rel), { withFileTypes: true })) {
+    if (e.isDirectory()) out.push(...walk(`${rel}/${e.name}`));
+    else if (e.name.endsWith(".html")) out.push({ dir: rel, file: e.name });
+  }
+  return out;
+}
+
 const raw = [];
-for (const [kind, dir] of Object.entries(KIND_DIR)) {
-  const abs = join(SITE, dir);
-  for (const f of readdirSync(abs).filter((f) => f.endsWith(".html"))) {
-    const root = parse(readFileSync(join(abs, f), "utf8"));
+for (const [kind, top] of Object.entries(KIND_DIR)) {
+  for (const { dir, file } of walk(top)) {
+    const root = parse(readFileSync(join(SITE, dir, file), "utf8"));
     const doc = root.querySelector("[data-kb-id]");
-    if (!doc) fail(`${dir}/${f}: no [data-kb-id] root`);
+    if (!doc) fail(`${dir}/${file}: no [data-kb-id] root`);
     const id = doc.getAttribute("data-kb-id");
-    if (id !== f.replace(".html", "")) fail(`${dir}/${f}: data-kb-id "${id}" != filename`);
-    if (doc.getAttribute("data-kb-kind") !== kind) fail(`${dir}/${f}: kind != ${kind}`);
+    if (id !== file.replace(".html", "")) fail(`${dir}/${file}: data-kb-id "${id}" != filename`);
+    if (doc.getAttribute("data-kb-kind") !== kind) fail(`${dir}/${file}: kind != ${kind}`);
     raw.push({ kind, dir, root, doc, id });
   }
 }
@@ -56,13 +64,17 @@ for (const { kind, dir, root, doc, id } of raw) {
   const docClass =
     kind === "hazard" ? "hazard" : kind === "theme" ? "theme"
     : ELEVATION_BANDS.has(band) ? "" : "lens";
+  const group = doc.getAttribute("data-kb-group");
+  // The filesystem is part of the data model: a page's location must agree with the
+  // band/group it declares, so the two can never drift apart.
+  const expected = folderFor({ kind, band, group });
+  if (dir !== expected) fail(`${id}: lives in "${dir}" but its band/group means "${expected}"`);
   nodes[id] = {
-    id, name, kind, band,
-    group: doc.getAttribute("data-kb-group"),
+    id, name, kind, band, group,
     essence: doc.getAttribute("data-kb-essence"),
     docClass,
     dir,
-    relPath: `../${dir}/${id}.html`,
+    path: `${dir}/${id}.html`,   // site-relative; consumers relativize for their own depth
     relations: [], themes: [], memberPatterns: [],
   };
 }
@@ -97,7 +109,7 @@ for (const { root, id } of raw) {
       to, type,
       note: item.querySelector(".rel-note")?.text.trim() ?? "",
       name: nodes[to]?.name ?? titleize(to),
-      href: nodes[to] ? `../${nodes[to].dir}/${to}.html` : null,
+      href: nodes[to]?.path ?? null,
       label: def.label,
     });
     rendered++;
@@ -140,10 +152,10 @@ for (const { root, id, kind } of raw) {
     const role = step.getAttribute("data-kb-role");
     theme.memberPatterns.push({
       id: mid, name: target?.name ?? titleize(mid), role,
-      href: target ? `../${target.dir}/${mid}.html` : null,
+      href: target?.path ?? null,
     });
     // Invert onto the pattern — this is the "fluency tie-in".
-    if (target) target.themes.push({ id, name: theme.name, role, href: theme.relPath });
+    if (target) target.themes.push({ id, name: theme.name, role, href: theme.path });
   }
 }
 

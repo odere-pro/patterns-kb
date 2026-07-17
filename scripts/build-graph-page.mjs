@@ -17,7 +17,7 @@ const THEME_ORDER = ["cap-theorem", "streaming", "spike-handling", "performance"
   "scalability", "consistency-and-replication", "observability", "resilience"];
 
 // From a page in site/map/, a sibling subpage is ../<dir>/<id>.html
-const pageHref = (id) => `../${N[id].dir}/${id}.html`;
+const pageHref = (id) => `../${N[id].path}`;
 
 function themeCluster(themeId) {
   const t = N[themeId];
@@ -55,11 +55,11 @@ const legend = Object.entries(graph.relationTypes)
 // most-connected patterns
 const ranked = Object.values(N)
   .filter((n) => n.kind === "pattern")
-  .map((n) => ({ id: n.id, name: n.name, dir: n.dir, deg: n.relations.length }))
+  .map((n) => ({ id: n.id, name: n.name, path: n.path, deg: n.relations.length }))
   .sort((a, b) => b.deg - a.deg)
   .slice(0, 12);
 const rankedHtml = ranked
-  .map((r) => `          <div class="rel-item"><a href="../${r.dir}/${r.id}.html">${esc(r.name)}</a><span class="rel-note">${r.deg} connections</span></div>`)
+  .map((r) => `          <div class="rel-item"><a href="../${r.path}">${esc(r.name)}</a><span class="rel-note">${r.deg} connections</span></div>`)
   .join("\n");
 
 const html = `<!doctype html>

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Saga · Patterns</title>
+  <meta name="description" content="Saga — coordinates a multi-step business transaction across services by chaining local transactions with compensations, trading atomicity for availability.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="saga" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Coordinates a multi-step transaction across services" data-kb-order="65">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Saga</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Saga</h1>
+      <p class="doc-essence">Breaks a business transaction that spans several services into a chain of local transactions, each paired with a compensating action that undoes it if a later step fails.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="saga">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>saga</strong> replaces one big cross-service transaction with a sequence of small local ones. Each participating service commits its own local transaction, touching only data it owns, then triggers the next step — either by publishing an event or by responding to a coordinator's command. If any step fails, the saga runs <em>compensating transactions</em> for every step already committed, undoing their effects in reverse order.</p>
+        <p>The force it resolves is that <strong>a business transaction now spans data no single database can lock</strong>. In a monolith, wrapping several tables in one ACID transaction is free. Split that same operation across microservices and there's no shared transaction manager: a two-phase commit would need every participant to hold locks until the slowest one votes, coupling everyone's availability to the least reliable service and colliding badly with real-world timeouts and partitions.</p>
+        <p>A saga refuses that coupling. Each local transaction commits and is durable the instant it runs — no service blocks waiting on another's yes. What you give up is isolation and immediate consistency: a saga in flight leaves partially-applied state visible to the rest of the system, and correctness arrives only once every step, or every compensation, has actually run.</p>
+        <p>Coordination happens one of two ways: <em>choreographed</em>, where each service listens for the previous step's event and decides its own next action, or <em>orchestrated</em>, where a dedicated coordinator issues each step as a command and tracks the saga's progress explicitly, as a state machine.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    A["Order created"] --> B["Payment charged"]
+    B --> C["Stock reserved"]
+    C --> D["Shipped, saga complete"]
+    C -.-> E["Compensate, refund payment"]
+    E -.-> F["Compensate, cancel order"]
+        </pre>
+        <figcaption>The happy path commits one local transaction per step. A failure anywhere triggers compensations that undo every already-committed step, in reverse order.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Orchestration</dt>
+        <dd>A saga execution coordinator issues each step as a command and persists the saga's progress as a state machine — the transaction logic lives in one visible place instead of scattered across services.</dd>
+        <dt>Choreography</dt>
+        <dd>Each service publishes a <a href="../../ddd/domain-event.html">Domain Event</a> when its step completes, and downstream services subscribe and react on their own. No central coordinator, but the flow is implicit across every participant's code.</dd>
+        <dt>Compensating Transaction</dt>
+        <dd>Not every failure needs undoing — idempotent retries absorb transient errors, while a <a href="../resilience/compensating-transaction.html">Compensating Transaction</a> only runs for a step that fully committed and must be semantically reversed.</dd>
+        <dt>Semantic lock</dt>
+        <dd>Mark an entity provisional or pending while its saga is in flight, so concurrent readers and writers can detect the in-progress state instead of treating it as final.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Avoids distributed locks and two-phase commit — each service stays autonomous and available.</li>
+            <li>Scales horizontally, since no participant blocks waiting on the others' votes.</li>
+            <li>The sequence of steps and compensations documents the business process explicitly.</li>
+            <li>Works across heterogeneous datastores; each service keeps its own transaction technology.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>No isolation: partial saga state is visible to other transactions mid-flight, unless masked by a semantic lock.</li>
+            <li>Every step needs a compensation designed for it, including ones that feel irreversible.</li>
+            <li>A failure now spans several services — tracing and debugging needs distributed context.</li>
+            <li>Compensations must themselves be idempotent and retry-safe, and their own failure needs a plan.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>A business transaction spans multiple services or databases with no shared transaction manager.</li>
+            <li>Two-phase commit is off the table, or coupling every participant's availability is unacceptable.</li>
+            <li>Steps are naturally reversible, or an approximate rollback — refund, cancel, release — is good enough.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The whole operation stays inside one service, where a local transaction already gives you ACID.</li>
+            <li>A step is truly irreversible and no compensation makes business sense.</li>
+            <li>You need strict isolation or a single consistent view mid-transaction — sagas only give you eventual consistency.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal orchestrated saga</summary>
+<pre><code>interface Step {
+  action: () =&gt; Promise&lt;void&gt;;
+  compensate: () =&gt; Promise&lt;void&gt;;
+}
+
+class Saga {
+  private completed: Step[] = [];
+  constructor(private readonly steps: Step[]) {}
+
+  async run(): Promise&lt;void&gt; {
+    for (const step of this.steps) {
+      try {
+        await step.action();
+        this.completed.push(step);      // remember for compensation
+      } catch (err) {
+        await this.compensate();
+        throw err;
+      }
+    }
+  }
+
+  private async compensate(): Promise&lt;void&gt; {
+    for (const step of this.completed.reverse()) {
+      await step.compensate();          // undo in reverse order
+    }
+  }
+}
+
+await new Saga([
+  { action: () =&gt; orders.create(), compensate: () =&gt; orders.cancel() },
+  { action: () =&gt; payments.charge(), compensate: () =&gt; payments.refund() },
+  { action: () =&gt; inventory.reserve(), compensate: () =&gt; inventory.release() },
+]).run();</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="outbox"><a href="./outbox.html">Outbox</a><span class="rel-note">Publish each saga step reliably via the outbox</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="domain-event"><a href="../../ddd/domain-event.html">Domain Event</a><span class="rel-note">Choreographed sagas react to domain events</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="cqrs"><a href="../../architecture/cqrs.html">CQRS</a><span class="rel-note">Sagas often drive read-model updates</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="correlation-identifier"><a href="../../messaging/correlation-identifier.html">Correlation Identifier</a><span class="rel-note">Correlate the steps of one saga</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Requires</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prerequisite" data-kb-to="idempotency"><a href="../../messaging/idempotency.html">Idempotency</a><span class="rel-note">Steps and compensations must be replay-safe</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Composed of</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="composed-of" data-kb-to="compensating-transaction"><a href="../resilience/compensating-transaction.html">Compensating Transaction</a><span class="rel-note">A saga undoes work with compensating transactions</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    SG["Saga"]
+    SG --- CT["Compensating Transaction"]
+    SG --- OB["Outbox"]
+    SG --- ID["Idempotency"]
+    SG --- DE["Domain Event"]
+    SG --- CQ["CQRS"]
+    SG --- CI["Correlation Identifier"]
+    click CT "../resilience/compensating-transaction.html"
+    click OB "./outbox.html"
+    click ID "../../messaging/idempotency.html"
+    click DE "../../ddd/domain-event.html"
+    click CQ "../../architecture/cqrs.html"
+    click CI "../../messaging/correlation-identifier.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="cap-theorem"><a href="../../../themes/cap-theorem.html">CAP Theorem</a><span>Choose availability, then reconcile with eventual consistency</span></div>
+        <div class="fluency-item" data-kb-theme="consistency-and-replication"><a href="../../../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Eventual consistency across services</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../routing/autoscaling.html">← Autoscaling</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./strangler-fig.html">Strangler Fig →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+</body>
+</html>

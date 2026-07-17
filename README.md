@@ -11,7 +11,7 @@ performance (load balancer / cache / memory), and authentication / roles / polic
 ```
 site/                     # the deployable site — plain static HTML, no build step to view
   index.html              # the hub: the "elevation map" — GENERATED from the pages
-  patterns/<id>.html      # one page per pattern — the source of truth
+  patterns/<band>/[<group>/]<id>.html   # one page per pattern — the source of truth
   hazards/<id>.html       # anti-patterns to recognize
   themes/<id>.html        # systems-fluency narratives (CAP, streaming, spikes, performance, auth, …)
   map/graph.html          # global relationship overview — GENERATED
@@ -26,6 +26,20 @@ scripts/                  # authoring-time tools (never needed to view the site)
   offline, including diagrams; there is no build step.
 - **Served:** `make serve` (static file server), then browse `http://localhost:8000`.
 - **Published:** pushed to GitHub Pages via `.github/workflows/pages.yml` (deploys `site/` as-is).
+
+## Layout of the pattern tree
+
+Patterns nest by band, with a group level only where a band is actually subdivided
+(`gof` and `distributed`) — no `enterprise/enterprise/` stutter:
+
+```
+site/patterns/gof/creational/singleton.html
+site/patterns/distributed/resilience/circuit-breaker.html
+site/patterns/concurrency/thread-pool.html
+```
+
+The path is part of the data model: `make check` fails if a page's location disagrees
+with the `data-kb-band` / `data-kb-group` it declares.
 
 ## The pages are the data
 

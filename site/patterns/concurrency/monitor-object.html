@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Monitor Object · Patterns</title>
+  <meta name="description" content="Monitor Object — bundles a lock and condition variables with an object's state, so only one thread runs its methods at a time and others wait instead of spin.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="monitor-object" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="Synchronizes access to an object's own methods" data-kb-order="81">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Monitor Object</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Monitor Object</h1>
+      <p class="doc-essence">Wraps an object's private state behind a single lock and a set of condition variables, so only one thread ever runs its methods at a time — and a thread that finds the state not yet ready blocks on that condition instead of spinning or retrying.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="monitor-object">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>monitor object</strong> bundles a mutual-exclusion lock together with one or more <em>condition variables</em> around a single piece of shared state, so that only one thread can execute any of the object's synchronized methods at a time. Each such method acquires the lock automatically on entry and releases it on exit; a method that finds the state isn't ready yet calls <code>wait()</code> on a condition, which atomically releases the lock and parks the thread, to be woken later by another thread's <code>notify()</code> once the state changes.</p>
+        <p>The forces it resolves are <strong>mutual exclusion</strong> and <strong>condition synchronization</strong> together. A bare lock only buys exclusion — it says nothing about waiting for a specific state, so callers either spin-poll the condition themselves or invent ad-hoc signaling with semaphores scattered across call sites, each one a chance to forget an acquire, mismatch a release, or misuse a counting semaphore as a binary one. The monitor folds both concerns into the object itself: the lock and its condition variables live next to the data they protect, and every caller sees ordinary method calls — <code>put()</code>, <code>take()</code>, <code>enqueue()</code> — with the synchronization hidden behind them.</p>
+        <p>The idea comes from Hoare and Brinch Hansen's monitors in the 1970s and is usually built into the language rather than left to a library — every object in Java is an implicit monitor via <code>synchronized</code>, <code>wait()</code>, and <code>notify()</code>; C#'s <code>lock</code> and <code>Monitor</code> class work the same way. That built-in-ness is also its cost: nothing stops a synchronized method from calling out to another object's monitor while still holding its own lock, which is exactly how deadlocks and the classic <em>nested monitor problem</em> creep in.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant P as Producer
+    participant Buf as Monitor, lock plus state
+    participant C as Consumer
+    C-&gt;&gt;Buf: take, acquire lock
+    Note over Buf: buffer empty, C waits, lock released
+    P-&gt;&gt;Buf: put item, acquire lock
+    Note over Buf: item stored, notEmpty signaled
+    Buf--&gt;&gt;C: C wakes and reacquires lock
+    C-&gt;&gt;Buf: remove item, release lock
+        </pre>
+        <figcaption>A consumer finds the buffer empty and waits, releasing the lock. A producer acquires the lock, adds an item, and signals — waking the consumer to reacquire the lock and proceed.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Intrinsic vs. explicit locks</dt>
+        <dd>Java's <code>synchronized</code> keyword makes every object a built-in monitor with one implicit lock; <code>java.util.concurrent.locks.Lock</code> plus <code>Condition</code> externalizes the same idea and allows several condition variables per lock.</dd>
+        <dt>Signal vs. broadcast</dt>
+        <dd><code>notify()</code> wakes exactly one waiting thread; <code>notifyAll()</code> wakes them all so each can recheck its own condition — cheaper versus safer when several conditions share one wait set.</dd>
+        <dt>Multiple condition variables</dt>
+        <dd>One lock can guard several named conditions — <em>not full</em> and <em>not empty</em> on a bounded buffer — so producers and consumers don't wake the wrong kind of waiter unnecessarily.</dd>
+        <dt><a href="./rw-lock.html">Read-Write Lock</a></dt>
+        <dd>Splits the single exclusive lock into a shared read mode and an exclusive write mode, letting many readers through at once — a finer-grained monitor for read-heavy state.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Packages the lock with the state it protects, so synchronization can't be bypassed by reaching the object directly.</li>
+            <li>Threads block on a precise condition instead of busy-polling or backing off and retrying.</li>
+            <li>Built into mainstream languages — Java's <code>synchronized</code>/<code>wait</code>/<code>notify</code>, C#'s <code>lock</code>/<code>Monitor</code> — with no library needed.</li>
+            <li>Simpler to reason about than raw semaphores: no separate counting variable to keep in sync with the data.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>One lock per object serializes every method, even ones touching disjoint parts of the state.</li>
+            <li><code>notify()</code> can wake the wrong waiter when several conditions share one wait set; <code>notifyAll()</code> trades that bug for wasted wakeups.</li>
+            <li>Calling another object's monitor method while holding your own lock invites the nested monitor problem and deadlock.</li>
+            <li>Confined to one process's address space — doesn't extend across machines or even separate processes.</li>
+            <li>Every wait must recheck its condition in a loop, since spurious wakeups are allowed by the model.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Multiple threads share mutable state that needs both exclusion and "wait until ready" semantics — a bounded queue, connection pool, or work queue.</li>
+            <li>You want the synchronization to live inside the object, invisible to callers, rather than scattered across every call site.</li>
+            <li>The language gives you a monitor for free, and the state is naturally owned by one object.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The state isn't actually shared or mutable — there's nothing to protect.</li>
+            <li>Access is overwhelmingly reads with rare writes — a <a href="./rw-lock.html">Read-Write Lock</a> lets readers run concurrently instead of serializing behind one lock.</li>
+            <li>You'd rather avoid shared state and locking altogether — the <a href="./actor-model.html">Actor Model</a> replaces both with message passing between isolated actors.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a bounded buffer as a monitor</summary>
+<pre><code>class BoundedBuffer&lt;T&gt; {
+  private readonly items: T[] = [];
+  private readonly lock = new Mutex();
+  private readonly notFull = new Condition(this.lock);
+  private readonly notEmpty = new Condition(this.lock);
+
+  constructor(private readonly capacity: number) {}
+
+  async put(item: T): Promise&lt;void&gt; {
+    await this.lock.acquire();
+    try {
+      while (this.items.length === this.capacity) {
+        await this.notFull.wait(); // releases lock, blocks, reacquires
+      }
+      this.items.push(item);
+      this.notEmpty.signal();
+    } finally {
+      this.lock.release();
+    }
+  }
+
+  async take(): Promise&lt;T&gt; {
+    await this.lock.acquire();
+    try {
+      while (this.items.length === 0) {
+        await this.notEmpty.wait();
+      }
+      const item = this.items.shift()!;
+      this.notFull.signal();
+      return item;
+    } finally {
+      this.lock.release();
+    }
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="rw-lock"><a href="./rw-lock.html">Read-Write Lock</a><span class="rel-note">A read-write lock is a finer-grained monitor</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="actor-model"><a href="./actor-model.html">Actor Model</a><span class="rel-note">Message-passing vs. shared-state locking</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    MO["Monitor Object"]
+    MO --- AM["Actor Model"]
+    MO --- RW["Read-Write Lock"]
+    click AM "./actor-model.html"
+    click RW "./rw-lock.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./reactor.html">← Reactor</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./rw-lock.html">Read-Write Lock →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+</body>
+</html>
