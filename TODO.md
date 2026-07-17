@@ -4,30 +4,13 @@ Follow-ups that were consciously left out of the HTML5-knowledge-layer build. No
 blocks the KB; each is a distinct, self-contained piece of work. Ordered roughly by
 value-to-effort.
 
-## 1. Recover the 7 discarded per-side relation notes
+## 1. Recover the 7 discarded per-side relation notes — ✅ RESOLVED
 
-**What.** Seven relationships were originally authored twice — once from each side, with a
-*different* note per side — to work around the old builder, which allowed only one note per
-edge. The old dedupe silently kept the first and threw the second away, so both pages now
-show the **same** note. The pipeline was since inverted (each page declares its own relation),
-so per-side notes are now supported first-class — the richer notes just need re-adding.
-
-The pairs, each currently sharing one identical note where two were written:
-
-- `null-object` ↔ `strategy`
-- `event-sourcing` ↔ `write-ahead-log`
-- `retry-backoff` ↔ `timeout-deadline`
-- `gatekeeper` ↔ `intercepting-validator`
-- `cache-aside` ↔ `materialized-view`
-- `future-promise` ↔ `reactor`
-- `acl` ↔ `message-translator`
-
-**How.** The discarded notes are in git history — see the Phase 2 commit
-(`git show 790b11b`), which lists all seven pairs with both notes. For each pair, edit the
-`.rel-note` on one side so it reads from that page's perspective. `make check` still passes
-because only the edge and type must agree across sides, not the note.
-
-**Effort.** Small — 7 one-line prose edits.
+All seven pairs (`null-object`↔`strategy`, `event-sourcing`↔`write-ahead-log`,
+`retry-backoff`↔`timeout-deadline`, `gatekeeper`↔`intercepting-validator`,
+`cache-aside`↔`materialized-view`, `future-promise`↔`reactor`, `acl`↔`message-translator`)
+now carry a **distinct** note on each side — the inverted pipeline plus subsequent
+re-authoring gave every edge a per-side note. Verified: 0 pairs share an identical note.
 
 ## 2. Promote the 6 stub neighbours to real pages
 
