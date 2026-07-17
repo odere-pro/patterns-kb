@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Secure Session Manager · Patterns</title>
+  <meta name="description" content="Secure Session Manager — issue, track, and expire session state safely, so a stolen token stops being useful the moment it's caught.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-sec-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-sec-h">Security</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Secure Session Manager</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Security</p>
+      <h1 class="doc-title">Secure Session Manager</h1>
+      <p class="doc-essence">Issues an opaque session token at login, keeps its real state under server control, and forces it to expire, rotate, or die outright on logout — so carrying identity across stateless HTTP requests never means handing out a permanent key to the account.</p>
+      <div class="doc-metarow">
+        <span class="badge">Security</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="secure-session-manager">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>secure session manager</strong> issues a session identifier the moment a user authenticates, keeps the session's real state — who they are, what they're allowed to do, when it expires — on the server side (or inside a signed, tamper-evident token), and attaches that identifier to every subsequent request through a cookie or header. The client carries nothing but an opaque handle; the manager is the single place that creates, validates, renews, and kills it.</p>
+        <p>The force it resolves is that HTTP itself has no memory. Every request arrives with no notion of who sent the last one, so something has to carry identity forward without forcing a re-login on every call. Do that carelessly — a session ID that never expires, one that's guessable, one that survives logout — and you've built a standing key to the account that a network sniff, an XSS payload, or a shared machine can pick up and reuse indefinitely.</p>
+        <p>A secure session manager treats the session ID itself as a secret: generated from a cryptographically strong random source, sent only over TLS, marked <code>HttpOnly</code> and <code>Secure</code> so script and plaintext channels can't touch it, and regenerated whenever the user's privilege changes — most critically right after login, which closes the session-fixation hole where an attacker plants a known ID before the victim authenticates into it.</p>
+        <p>It sits downstream of authentication, not inside it — an <a href="../patterns/authentication-enforcer.html">Authentication Enforcer</a> decides who the caller is; the session manager decides how long that decision stays valid and how it travels between requests. Confuse the two and you either re-check credentials on every call, or trust a session that was never properly revoked.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Anonymous
+    Anonymous --> Active: login, session issued
+    Active --> Active: request, sliding renewal
+    Active --> Expired: idle timeout or max age reached
+    Active --> Revoked: logout or misuse detected
+    Expired --> [*]
+    Revoked --> [*]
+    note right of Active: server validates the token on every request
+    note right of Revoked: store entry deleted or token blacklisted
+        </pre>
+        <figcaption>A session is born at login, renewed on activity, and dies by timeout, revocation, or a hard cap on total lifetime — whichever comes first.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Opaque token, server-side store</dt>
+        <dd>The session ID is a random, unguessable string; all real state — user, roles, expiry — lives server-side in Redis or a database, so the ID alone reveals nothing if intercepted.</dd>
+        <dt>Stateless signed session (JWT)</dt>
+        <dd>Claims are encoded and signed directly into the token, so validation needs no store lookup — at the cost of being unable to revoke a single token before it expires without a separate denylist.</dd>
+        <dt>Sliding vs. fixed expiration</dt>
+        <dd>Sliding renews the timeout on every request, keeping active users signed in indefinitely; a fixed absolute expiry caps how long a hijacked session stays usable regardless of activity.</dd>
+        <dt>Session ID rotation on privilege change</dt>
+        <dd>Issue a fresh ID at login and again at any escalation, invalidating the old one immediately — the standard defense against session fixation.</dd>
+        <dt>Refresh token / access token pair</dt>
+        <dd>A short-lived access token authorizes each call; a longer-lived refresh token, stored more carefully, mints new ones — narrowing the blast radius of a leaked access token.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Confines identity state to one component instead of scattering ad hoc cookies across the app.</li>
+            <li>Expiration and revocation are enforced in one place, closing the window a stolen token stays useful.</li>
+            <li>Rotating the session ID at login defeats session fixation outright.</li>
+            <li>Server-side sessions can be revoked instantly; a compromised account can be locked out mid-session.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>A server-side session store adds a stateful dependency and a scaling and availability concern of its own.</li>
+            <li>Stateless signed tokens can't be revoked before expiry without an extra denylist, undermining "stateless."</li>
+            <li>Sliding expiration keeps a hijacked-but-active session alive indefinitely unless capped by an absolute max age.</li>
+            <li>Session data is a high-value target — a leaked store or signing key compromises every active session at once.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Any authenticated user needs their identity carried across multiple stateless HTTP requests.</li>
+            <li>You need central control to revoke sessions, force logout, or cap how long a session can live.</li>
+            <li>Several app instances must recognize the same session through a shared, server-side store.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>Every call is independently self-verifying — a signed request per call with no login step at all.</li>
+            <li>A single short-lived, unrevokable token is genuinely acceptable and pre-expiry revocation doesn't matter.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal server-side session store</summary>
+<pre><code>import { randomBytes } from "node:crypto";
+
+interface Session { userId: string; expiresAt: number }
+
+class SessionStore {
+  private sessions = new Map&lt;string, Session&gt;();
+  constructor(private readonly ttlMs = 30 * 60_000) {}
+
+  create(userId: string): string {
+    const id = randomBytes(32).toString("hex"); // opaque, unguessable
+    this.sessions.set(id, { userId, expiresAt: Date.now() + this.ttlMs });
+    return id;
+  }
+
+  validate(id: string): string | null {
+    const s = this.sessions.get(id);
+    if (!s || s.expiresAt &lt; Date.now()) {
+      this.sessions.delete(id);
+      return null;                        // expired or unknown
+    }
+    s.expiresAt = Date.now() + this.ttlMs; // sliding renewal
+    return s.userId;
+  }
+
+  rotate(oldId: string): string | null {
+    const s = this.sessions.get(oldId);
+    if (!s) return null;
+    this.sessions.delete(oldId);           // old id is now dead
+    return this.create(s.userId);          // defeats fixation
+  }
+
+  destroy(id: string): void {
+    this.sessions.delete(id);
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/authentication-enforcer.html">Authentication Enforcer</a><span class="rel-note">Authenticate, then carry a secure session</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    SSM["Secure Session Manager"]
+    SSM --- AE["Authentication Enforcer"]
+    click AE "../patterns/authentication-enforcer.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/auth-and-access.html">Auth &amp; Access</a><span>Carry identity safely across requests</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/authorization-enforcer.html">← Authorization Enforcer (RBAC)</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/intercepting-validator.html">Intercepting Validator →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

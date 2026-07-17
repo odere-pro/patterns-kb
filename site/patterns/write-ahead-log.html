@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Write-Ahead Log · Patterns</title>
+  <meta name="description" content="Write-Ahead Log — records the intent durably before applying the change, so a crash can always replay its way back to a consistent state.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Write-Ahead Log</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Write-Ahead Log</h1>
+      <p class="doc-essence">Appends every change to a durable, sequential log before it ever touches the real data structure — so a crash can always replay its way back to exactly the state it promised.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="write-ahead-log">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>write-ahead log</strong> (WAL) is an append-only, durable record of every change, written and fsynced <em>before</em> the change is applied to the actual data structure — a B-tree page, an in-memory table, a key-value store. Once the log record has survived on disk, the system is free to apply the change lazily, batch it, or even lose it from memory, because the log can always reconstruct it.</p>
+        <p>The force it resolves is durability without paying for a random write on every mutation. Applying updates directly to a data structure means writing scattered pages in place — slow, and if the process dies mid-write, a torn or partial page can corrupt the structure permanently. Appending a record to a log is a single sequential write, cheap on disks and SSDs alike, and it either lands whole or not at all once it's checksummed.</p>
+        <p>Recovery follows directly from that guarantee: after a crash, replay the log from the last known-consistent point, reapplying every committed record until the data structure catches up to where the log says it should be. Everything the system knows it did lives in the log; the data structure itself is just a cache of it that can always be rebuilt.</p>
+        <p>WAL is the mechanism behind the ACID "durability" of most relational databases (PostgreSQL's WAL, InnoDB's redo log), sits inside LSM-tree stores, and underlies consensus logs in distributed systems — anywhere "did this actually happen" has to survive a crash.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    C["Caller writes"] --> L["Append record to log"]
+    L --> F["fsync, durable"]
+    F --> K["Ack caller"]
+    F --> S["Apply to data structure"]
+    R["Crash, restart"] --> P["Replay log from checkpoint"]
+    P --> S
+        </pre>
+        <figcaption>A write is durable the moment its log record is fsynced — only then is it acknowledged or applied. Recovery replays the log to rebuild state after a crash.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Physical vs. logical logging</dt>
+        <dd>Physical records capture the exact bytes changed on a page, redone by copying; logical records capture the operation performed. Physical is simple and deterministic to replay; logical is more compact but replay must be idempotent.</dd>
+        <dt>Redo-only vs. redo/undo</dt>
+        <dd>A redo-only log lets recovery replay forward to the last durable state. A redo/undo log also records the before-image, so an in-flight transaction can be rolled back as cleanly as a committed one is replayed.</dd>
+        <dt>Checkpointing</dt>
+        <dd>Periodically flush the state the log implies into the data structure itself, then truncate everything before that point — bounding how far recovery ever has to replay.</dd>
+        <dt>Group commit</dt>
+        <dd>Batch several concurrent appends into one fsync instead of one per writer, trading a little added latency per write for far higher durable throughput.</dd>
+        <dt><a href="../patterns/replication.html">Log shipping</a></dt>
+        <dd>Ship the WAL itself to follower nodes and have them replay it, rather than transferring snapshots — continuous replication built directly on the durability log.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Turns random, in-place writes into a single sequential append — close to a disk or SSD's best case.</li>
+            <li>Durability is bounded to one fsync per commit, not one per touched page.</li>
+            <li>Recovery is deterministic: replay the log and the data structure converges to a known state.</li>
+            <li>The log doubles as a natural feed for replication, auditing, and point-in-time recovery.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>The log itself must be crash-safe — a torn write there defeats the whole scheme, so entries need checksums and length prefixes.</li>
+            <li>Unbounded logs slow recovery and burn disk; checkpointing and truncation are mandatory, not optional.</li>
+            <li>Every commit still pays for at least one fsync — a latency floor no batching fully removes.</li>
+            <li>Doubles the conceptual write path, log now, apply later, adding a second place logic can drift out of sync.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>You need durability across a crash, but writing directly to the primary structure would be slow or unsafe.</li>
+            <li>You want recovery to be a deterministic replay rather than bespoke per-structure recovery code.</li>
+            <li>The log itself is useful downstream — for replication, replay, or audit — not just for recovery.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The data is disposable or fully rebuildable from another durable source, so write-time durability isn't worth the overhead.</li>
+            <li>Writes are already inherently atomic and durable — a single fsync'd file write needs no second log on top.</li>
+            <li>Sub-microsecond latency matters more than survivability and losing recent writes is acceptable.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — append, fsync, replay</summary>
+<pre><code>interface LogEntry { seq: number; key: string; value: string; }
+
+class WriteAheadLog {
+  private seq = 0;
+  private readonly fd: number;
+
+  constructor(private readonly path: string) {
+    this.fd = fs.openSync(path, "a");
+  }
+
+  // Durable before the caller is told the write succeeded.
+  append(key: string, value: string): number {
+    const entry: LogEntry = { seq: ++this.seq, key, value };
+    fs.writeSync(this.fd, JSON.stringify(entry) + "\n");
+    fs.fsyncSync(this.fd);
+    return entry.seq;
+  }
+
+  *replay(): Generator&lt;LogEntry&gt; {
+    const text = fs.readFileSync(this.path, "utf8");
+    for (const line of text.split("\n")) {
+      if (line) yield JSON.parse(line) as LogEntry;
+    }
+  }
+}
+
+const wal = new WriteAheadLog("./wal.log");
+wal.append("balance:42", "100");
+store.set("balance:42", "100"); // safe: the log is already durable
+
+// On restart, the store is rebuilt purely from the log.
+for (const entry of wal.replay()) store.set(entry.key, entry.value);</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/quorum-consensus.html">Quorum &amp; Consensus</a><span class="rel-note">Replicate the log, commit on a quorum</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/replication.html">Replication</a><span class="rel-note">Ship the log to bring replicas up to date</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/event-sourcing.html">Event Sourcing</a><span class="rel-note">Domain events as truth vs. a durability log</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    WAL["Write-Ahead Log"]
+    WAL --- ES["Event Sourcing"]
+    WAL --- QC["Quorum &amp; Consensus"]
+    WAL --- RE["Replication"]
+    click ES "../patterns/event-sourcing.html"
+    click QC "../patterns/quorum-consensus.html"
+    click RE "../patterns/replication.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/cap-theorem.html">CAP Theorem</a><span>Durable ordering behind replicated state</span></div>
+        <div class="fluency-item"><a href="../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Order and ship changes durably</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/gossip-protocol.html">← Gossip Protocol</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/bloom-filter.html">Bloom Filter →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Health Endpoint Monitoring · Patterns</title>
+  <meta name="description" content="Health Endpoint Monitoring — expose a route that reports whether a service is healthy, so load balancers and orchestrators can route around instances that aren't.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Resilience</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Health Endpoint Monitoring</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Resilience</p>
+      <h1 class="doc-title">Health Endpoint Monitoring</h1>
+      <p class="doc-essence">Exposes a lightweight route — <code>/health</code> or <code>/ready</code> — that a service answers honestly about its own state, so load balancers, orchestrators, and on-call engineers can tell a live, working instance from one that's merely still listening.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Resilience</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="health-endpoint">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>health endpoint</strong> is a route a service exposes purely so machines can ask it a question: are you working? It answers cheaply and fast — a bare 200 for the simplest cut, or a small JSON body breaking down the state of the caches, queues, and downstream connections the service actually depends on. Nothing about the response is meant for a human eyeball first; it's built to be polled every few seconds by something that will act on the answer immediately.</p>
+        <p>The force it resolves is that an orchestrator or load balancer sitting outside a process has no way to see inside it. A socket accepting a TCP connection tells you the port is open, not that a request behind it will succeed — a process can keep listening long after its database pool is exhausted, its disk is full, or a background worker has wedged. Without an honest signal from the service itself, the infrastructure around it is left inferring health from proxies — uptime, CPU, whether the last deploy finished — none of which correlate reliably with whether a request sent right now will actually complete.</p>
+        <p>The pattern usually splits into two questions asked for different reasons. <em>Liveness</em> asks whether the process itself is still functioning, and a failure there means restart it. <em>Readiness</em> asks whether it should currently receive traffic, and a failure there means route around it without touching the process at all — an instance warming a cache or briefly starved of a downstream connection is very much alive, just not ready. Conflating the two turns a transient dependency hiccup into an unnecessary restart storm.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant LB as Orchestrator
+    participant S as Service Instance
+    participant Dep as Dependency
+    LB->>S: GET /healthz
+    S->>Dep: check connectivity
+    Dep-->>S: reachable or timeout
+    S-->>LB: 200 healthy or 503 unhealthy
+    LB->>LB: update routing table
+        </pre>
+        <figcaption>A poller queries the endpoint on an interval. The service checks its own dependencies and answers with a status the poller acts on directly — no polling of internals required.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Liveness vs. readiness probes</dt>
+        <dd>Two separate routes with different consequences — a failed liveness check restarts the process, a failed readiness check just pulls it out of rotation.</dd>
+        <dt>Shallow vs. deep checks</dt>
+        <dd>A shallow check confirms the process can respond at all; a deep check also pings its own dependencies. Deep checks catch more, but can themselves cascade if every instance hammers the same downstream at once.</dd>
+        <dt>Startup probe / grace period</dt>
+        <dd>A separate, more lenient check during boot so a slow-starting instance isn't killed by liveness before it has finished warming up.</dd>
+        <dt>Aggregated dependency health</dt>
+        <dd>The response body lists each dependency's status individually, so on-call engineers get a diagnosis, not just a single pass/fail bit.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Gives orchestrators and load balancers a real signal instead of guessing from an open socket.</li>
+            <li>Cheap and fast enough to poll every few seconds without meaningful load.</li>
+            <li>Separating liveness from readiness lets each control loop react the right way — restart vs. reroute.</li>
+            <li>Doubles as an operational tool — curl it during an incident and see what the orchestrator sees.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>A deep check that pings every dependency can itself become a cascading failure under load.</li>
+            <li>False positives: the process responds fine while a critical path it doesn't check is silently broken.</li>
+            <li>False negatives: one blip on a nonessential dependency trips readiness and yanks a healthy instance out.</li>
+            <li>Another endpoint to secure — unauthenticated deep checks can leak internal topology to anyone who asks.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Something external — a load balancer, orchestrator, or deploy pipeline — needs to know if an instance can take traffic.</li>
+            <li>You run behind a container platform that expects liveness and readiness probes to manage restarts and rollout.</li>
+            <li>On-call engineers need one fast, standard place to check an instance's status during an incident.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>There's no independent lifecycle to probe — a short-lived batch job has nothing to route around.</li>
+            <li>The check itself calls flaky dependencies with no timeout — that turns the health check into another failure point, and it needs a <a href="../patterns/circuit-breaker.html">Circuit Breaker</a> or timeout of its own.</li>
+            <li>Only one instance exists behind nothing — there's no load balancer or orchestrator to act on the signal yet.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — separate liveness and readiness routes</summary>
+<pre><code>let ready = false;
+export function markReady() { ready = true; } // called once boot finishes
+
+// Liveness: is the process itself still functioning?
+app.get("/healthz", (_req, res) =&gt; {
+  res.status(200).json({ status: "ok" });
+});
+
+// Readiness: should it currently receive traffic?
+app.get("/readyz", async (_req, res) =&gt; {
+  if (!ready) {
+    return res.status(503).json({ status: "starting" });
+  }
+  try {
+    await withTimeout(db.ping(), 500); // bounded — never hang the check
+    res.status(200).json({ status: "ok", db: "up" });
+  } catch {
+    res.status(503).json({ status: "degraded", db: "down" });
+  }
+});</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/circuit-breaker.html">Circuit Breaker</a><span class="rel-note">Health signals inform breaker state</span></div>
+          <div class="rel-item"><a href="../patterns/autoscaling.html">Autoscaling</a><span class="rel-note">Scale on health and load signals</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/load-balancer.html">Load Balancer</a><span class="rel-note">Load balancers route only to healthy instances</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    HE["Health Endpoint"]
+    HE --- CB["Circuit Breaker"]
+    HE --- LB["Load Balancer"]
+    HE --- AS["Autoscaling"]
+    click CB "../patterns/circuit-breaker.html"
+    click LB "../patterns/load-balancer.html"
+    click AS "../patterns/autoscaling.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/observability.html">Observability</a><span>Report liveness and readiness</span></div>
+        <div class="fluency-item"><a href="../themes/resilience.html">Resilience</a><span>Route around unhealthy instances</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/bulkhead.html">← Bulkhead</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/compensating-transaction.html">Compensating Transaction →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

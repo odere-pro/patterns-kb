@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Event Sourcing · Patterns</title>
+  <meta name="description" content="Event Sourcing — store every change as an immutable event and derive current state by replaying the log, never by overwriting it.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-arch-h">Architecture</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Event Sourcing</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Architecture</p>
+      <h1 class="doc-title">Event Sourcing</h1>
+      <p class="doc-essence">Every change to an entity is captured as an immutable event appended to a log, and current state is never stored on its own — it's derived by replaying that log and folding each event into whatever came before.</p>
+      <div class="doc-metarow">
+        <span class="badge">Architecture</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="event-sourcing">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>In <strong>event sourcing</strong>, an entity's state is never written directly — every change is captured as an immutable event and appended to a log in the order it happened. Current state is derived, not stored: it's rebuilt by replaying the log from the beginning (or from the last snapshot) and folding each event into a fresh copy of the state.</p>
+        <p>The problem it resolves is loss of history. A conventional CRUD store keeps only the latest row — an <code>UPDATE</code> overwrites whatever came before, and the reason a change happened survives, if at all, in a separate audit table that's easy to forget and easy to let drift out of sync. Event sourcing makes the history itself the system of record: nothing is ever deleted or overwritten, so the full sequence of what happened is always available.</p>
+        <p>That log unlocks what a snapshot can't: reconstruct any past state by replaying up to a point in time, answer "how did we get here" without bolting on auditing after the fact, and derive more than one read model from the same events. The cost is that "what is true right now" is no longer a single row read — it means folding a stream — so most real systems pair the log with periodic snapshots or projections.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    C["Command"] --> A["Aggregate, applies business rules"]
+    A -->|append| L["Event Log, append-only"]
+    L -->|replay, fold| S["Current State, folded on read"]
+    L -->|project| V["Read Model, a separate projection"]
+        </pre>
+        <figcaption>A command produces one event appended to the log. State is never stored directly — it is the fold of every event replayed in order; a read model is a separate projection built from the same log.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Snapshotting</dt>
+        <dd>Periodically persist the folded state so replay resumes from the latest snapshot instead of scanning the full log from event zero.</dd>
+        <dt>Per-aggregate stream vs. single log</dt>
+        <dd>One ordered stream per aggregate instance (per order, per account) scales writes and reads; a single global stream simplifies cross-aggregate ordering but becomes a bottleneck.</dd>
+        <dt>Event versioning / upcasting</dt>
+        <dd>Old event shapes are transformed to the current schema when read — upcast, not rewritten — since events must stay immutable forever.</dd>
+        <dt><a href="../patterns/materialized-view.html">Materialized View</a> projections</dt>
+        <dd>Fold the event stream into one or more read-optimized views instead of querying the log directly for every read.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Complete, tamper-evident audit trail — every change is recorded, not inferred after the fact.</li>
+            <li>State at any past point in time can be reconstructed by replaying up to that moment.</li>
+            <li>Multiple read models can be derived from the same log without touching the write side.</li>
+            <li>Append-only writes are simple and free of update-in-place races and lost updates.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Replaying a long stream from scratch is slow without snapshotting.</li>
+            <li>Schema evolution is harder — events are immutable, so shapes must be versioned or upcast forever.</li>
+            <li>Querying "current state" isn't a single row read; it needs a projection or a fold.</li>
+            <li>Read models built from the log are eventually consistent with the write side, not immediate.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>You need a reliable audit trail or a compliance record of every change, not just its result.</li>
+            <li>Business rules genuinely depend on the sequence of what happened, not just where things ended up.</li>
+            <li>You want to derive several independently evolvable read models from one write path.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The domain is simple CRUD with no real need for history, audit, or temporal queries.</li>
+            <li>The team can't yet operate the extra machinery — snapshotting, versioning, replay tooling.</li>
+            <li>Strong, immediate read-after-write consistency across the whole system is a hard requirement.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — rebuilding state by folding events</summary>
+<pre><code>type AccountEvent =
+  | { type: "AccountOpened"; id: string; openingBalance: number }
+  | { type: "MoneyDeposited"; id: string; amount: number }
+  | { type: "MoneyWithdrawn"; id: string; amount: number };
+
+interface AccountState { id: string; balance: number }
+
+function apply(state: AccountState, event: AccountEvent): AccountState {
+  switch (event.type) {
+    case "AccountOpened":
+      return { id: event.id, balance: event.openingBalance };
+    case "MoneyDeposited":
+      return { ...state, balance: state.balance + event.amount };
+    case "MoneyWithdrawn":
+      return { ...state, balance: state.balance - event.amount };
+  }
+}
+
+// Current state is never stored — it's a fold over the log.
+const log: AccountEvent[] = [
+  { type: "AccountOpened", id: "acc-1", openingBalance: 0 },
+  { type: "MoneyDeposited", id: "acc-1", amount: 100 },
+  { type: "MoneyWithdrawn", id: "acc-1", amount: 30 },
+];
+
+const state = log.reduce(apply, {} as AccountState);
+// { id: "acc-1", balance: 70 }</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/eda.html">Event-Driven Architecture</a><span class="rel-note">Sourced events can also drive reactions</span></div>
+          <div class="rel-item"><a href="../patterns/cqrs.html">CQRS</a><span class="rel-note">Often paired: write events, project read models</span></div>
+          <div class="rel-item"><a href="../patterns/outbox.html">Outbox</a><span class="rel-note">Append the event, publish reliably</span></div>
+          <div class="rel-item"><a href="../patterns/immutability.html">Immutability</a><span class="rel-note">Events are append-only and never mutated</span></div>
+          <div class="rel-item"><a href="../patterns/materialized-view.html">Materialized View</a><span class="rel-note">Project events into read views</span></div>
+          <div class="rel-item"><a href="../patterns/domain-event.html">Domain Event</a><span class="rel-note">Persist the events the domain emits</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Composed of</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/domain-event.html">Domain Event</a><span class="rel-note">The log is a sequence of domain events</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/cqrs.html">CQRS</a><span class="rel-note">Separate read/write models vs. store events — distinct ideas</span></div>
+          <div class="rel-item"><a href="../patterns/write-ahead-log.html">Write-Ahead Log</a><span class="rel-note">Domain events as truth vs. a durability log</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    ES["Event Sourcing"]
+    ES --- EDA["Event-Driven Architecture"]
+    ES --- CQ["CQRS"]
+    ES --- WAL["Write-Ahead Log"]
+    ES --- OB["Outbox"]
+    ES --- DE["Domain Event"]
+    ES --- IM["Immutability"]
+    ES --- MV["Materialized View"]
+    click EDA "../patterns/eda.html"
+    click CQ "../patterns/cqrs.html"
+    click WAL "../patterns/write-ahead-log.html"
+    click OB "../patterns/outbox.html"
+    click DE "../patterns/domain-event.html"
+    click IM "../patterns/immutability.html"
+    click MV "../patterns/materialized-view.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/streaming.html">Streaming</a><span>A durable, replayable stream of events</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/cqrs.html">← CQRS</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/pipe-filter.html">Pipe-and-Filter →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

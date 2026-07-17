@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Competing Consumers · Patterns</title>
+  <meta name="description" content="Competing Consumers — many consumers pull from one shared channel to divide the work and scale throughput.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-msg-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-msg-h">Messaging</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Competing Consumers</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Messaging</p>
+      <h1 class="doc-title">Competing Consumers</h1>
+      <p class="doc-essence">A pool of interchangeable consumers pulls from one shared channel, so a single message goes to exactly one worker and the pool's combined throughput — not any one consumer's — sets the pace.</p>
+      <div class="doc-metarow">
+        <span class="badge">Messaging</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="competing-consumers">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Competing consumers</strong> put several identical consumer instances on the same channel — a queue, a topic partition, a work stream — and let a broker hand each incoming message to whichever consumer is free. The consumers don't coordinate with each other and don't know how many siblings they have; they just pull, process, and ack. The broker's delivery guarantee is what keeps two consumers from processing the same message twice.</p>
+        <p>The force it resolves is a <strong>single-consumer throughput ceiling</strong>. One consumer reading a channel serially can only go as fast as one process, one CPU, one network connection allows — and if the producer outpaces it, the backlog grows without bound. Rewriting the producer or the message format to fix this is usually not on the table; the channel and its contract are fixed.</p>
+        <p>The pattern turns "add capacity" into "add a consumer instance." Because consumers are stateless and interchangeable, scaling out is a deployment decision, not a code change: start more workers pointed at the same channel and the broker starts spreading messages across all of them. Scaling back down is just as cheap.</p>
+        <p>This is a lens, not a single fixed mechanism — the same idea shows up as JMS queue listeners, Kafka consumer groups, RabbitMQ competing consumers on one queue, and SQS workers polling the same queue. What they share is one channel, many pullers, and exactly-once-per-message delivery to the group.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    Prod["Producer"] --> Q["Shared queue"]
+    Q -->|delivers to one| C1["Consumer A"]
+    Q -->|delivers to one| C2["Consumer B"]
+    Q -->|delivers to one| C3["Consumer C"]
+    C1 -.->|ack removes msg| Q
+        </pre>
+        <figcaption>One channel, many consumers pulling independently. The broker delivers each message to exactly one consumer and removes it on ack, so adding consumers adds throughput, not duplication.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Static pool</dt>
+        <dd>A fixed number of consumer instances, sized for expected peak load. Simple to operate, wasteful when load is bursty.</dd>
+        <dt>Partitioned / keyed consumption</dt>
+        <dd>Messages are hashed to a partition or shard by key, and each partition is owned by exactly one consumer at a time — preserves per-key order while still spreading unrelated keys across the pool (Kafka partitions, Kinesis shards).</dd>
+        <dt><a href="../patterns/pubsub.html">Publish-Subscribe</a></dt>
+        <dd>Layer competing consumers under pub/sub: each subscriber group receives every message once, but the consumers inside a group compete for it — fan-out across groups, load-sharing within one.</dd>
+        <dt>Exclusive delivery via lease / visibility timeout</dt>
+        <dd>The broker hides a delivered message from other consumers for a lease window; a consumer that crashes before acking lets it reappear for someone else to pick up.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Scales throughput horizontally by adding consumer instances, with no producer changes.</li>
+            <li>Consumers are stateless and interchangeable — any one can crash and restart without special handling.</li>
+            <li>The channel itself absorbs load spikes as a buffer while the pool catches up.</li>
+            <li>Failed processing just means the message goes back for another consumer to try.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>No ordering guarantee across the pool — two related messages can be processed out of sequence by different consumers.</li>
+            <li>Most brokers give at-least-once delivery, so a redelivered message must be handled safely, not processed twice.</li>
+            <li>A poison message that always fails can bounce between consumers until it's dead-lettered.</li>
+            <li>Uneven message cost means one consumer can be starved while another sits idle.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>A single consumer can't keep up with the rate messages arrive on a channel.</li>
+            <li>The work is naturally parallel — messages don't depend on each other's outcome.</li>
+            <li>You want to scale processing capacity by deployment, without touching the producer.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>Messages must be processed in strict global order — a single consumer, or per-key partitioning, fits better.</li>
+            <li>Every consumer needs to see every message — that's fan-out, not sharing; reach for <a href="../patterns/pubsub.html">Publish-Subscribe</a> instead.</li>
+            <li>Processing isn't safely repeatable — redelivery under at-least-once delivery will corrupt state.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a worker pulling from a shared queue</summary>
+<pre><code>interface Queue&lt;T&gt; {
+  receive(visibilityMs: number): Promise&lt;{ id: string; body: T } | null&gt;;
+  ack(id: string): Promise&lt;void&gt;;
+  nack(id: string): Promise&lt;void&gt;; // returns the message for another consumer
+}
+
+async function runConsumer&lt;T&gt;(
+  queue: Queue&lt;T&gt;,
+  handle: (msg: T) =&gt; Promise&lt;void&gt;,
+) {
+  while (true) {
+    const msg = await queue.receive(30_000); // hidden from others for 30s
+    if (!msg) continue;                      // nothing waiting, poll again
+    try {
+      await handle(msg.body);
+      await queue.ack(msg.id);               // done — remove from queue
+    } catch {
+      await queue.nack(msg.id);               // let a sibling retry it
+    }
+  }
+}
+
+// N interchangeable workers pulling from the same queue
+for (let i = 0; i &lt; workerCount; i++) {
+  runConsumer(queue, processOrder);
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">Many consumers drain the leveling queue</span></div>
+          <div class="rel-item"><a href="../patterns/pubsub.html">Publish-Subscribe</a><span class="rel-note">Fan out to groups, share within a group</span></div>
+          <div class="rel-item"><a href="../patterns/message-queue.html">Message Queue</a><span class="rel-note">Scale consumers off one queue</span></div>
+          <div class="rel-item"><a href="../patterns/idempotency.html">Idempotency</a><span class="rel-note">Parallel consumers must handle redelivery</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    CC["Competing Consumers"]
+    CC --- LL["Queue-Based Load Leveling"]
+    CC --- PS["Publish-Subscribe"]
+    CC --- MQ["Message Queue"]
+    CC --- ID["Idempotency"]
+    click LL "../patterns/load-leveling.html"
+    click PS "../patterns/pubsub.html"
+    click MQ "../patterns/message-queue.html"
+    click ID "../patterns/idempotency.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/streaming.html">Streaming</a><span>Scale a stream across parallel workers</span></div>
+        <div class="fluency-item"><a href="../themes/scalability.html">Scalability</a><span>Scale work across parallel consumers</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/aggregator.html">&larr; Aggregator</a>
+      <a class="up" href="../index.html">&uarr; The Map</a>
+      <a class="next" href="../patterns/dead-letter-channel.html">Dead Letter Channel &rarr;</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

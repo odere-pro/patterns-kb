@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Idempotency · Patterns</title>
+  <meta name="description" content="Idempotency — the same request, retried or redelivered any number of times, takes effect exactly once.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-msg-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-msg-h">Messaging</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Idempotency</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Messaging</p>
+      <h1 class="doc-title">Idempotency</h1>
+      <p class="doc-essence">The same request, retried once or replayed a hundred times over, lands exactly once in effect — so a timeout, a redelivered message, or a double-click can never double the outcome.</p>
+      <div class="doc-metarow">
+        <span class="badge">Messaging</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="idempotency">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>An operation is <strong>idempotent</strong> when applying it once, twice, or a thousand times produces the same effect as applying it exactly once. It's not about the response being identical — it's about the <em>state change</em> being stable under repetition, no matter how many times the request actually arrives.</p>
+        <p>The force it resolves is a fundamental ambiguity in distributed systems: a caller that times out waiting for a response cannot tell whether the server never received the request or received it, did the work, and just lost the reply on the way back. At-least-once delivery — the default in most messaging and network stacks — guarantees a request arrives, but never guarantees it arrives only once. Without idempotency, the only safe response to that ambiguity is to retry, and every retry risks a second charge, a second email, a second shipment.</p>
+        <p>Idempotency breaks the ambiguity instead of living with it. A read is idempotent for free; a write usually isn't, and needs help — either an idempotency key that tags one logical operation so duplicates are recognized and discarded, or a rewrite of the operation itself into a form that's naturally repeatable, like <em>set balance to 100</em> instead of <em>add 10</em>.</p>
+        <p>As a lens rather than a single structure, it has no one canonical diagram — it's a property you engineer into an API, a consumer, or a state transition, wherever retries or redelivery can happen. Messaging systems lean on it hardest, because at-least-once delivery is the norm there, not the exception.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+    Req["Request arrives with an idempotency key"] --> Check{"Key seen before"}
+    Check -->|Yes| Stored["Return the stored result, skip re-execution"]
+    Check -->|No| Exec["Execute the operation once"]
+    Exec --> Save["Atomically store key with its result"]
+    Save --> Return["Return the result"]
+        </pre>
+        <figcaption>A key identifies one logical request. The first arrival executes and records the result; every later arrival with the same key just replays it.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Idempotency key</dt>
+        <dd>The client generates a token for one logical operation and sends it on every attempt; the server persists key → result and returns the stored result on repeats.</dd>
+        <dt>Natural idempotency</dt>
+        <dd>Design the operation so repetition is harmless by construction — <code>PUT</code> that sets absolute state, or a <code>DELETE</code> where removing an already-absent thing is a no-op.</dd>
+        <dt>Bounded dedup window</dt>
+        <dd>Keep the key → result mapping only for a TTL, not forever, trading unlimited storage growth for a small risk of accepting a very late duplicate as new.</dd>
+        <dt>Idempotent consumer</dt>
+        <dd>A message consumer tracks processed message IDs instead of trusting the broker's delivery guarantee, so redelivery after a crash or rebalance never reprocesses an event.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Makes retries genuinely safe — clients can retry blindly on timeout instead of guessing.</li>
+            <li>Removes duplicate side effects from redelivered messages, replays, and double-clicks.</li>
+            <li>Underpins recovery techniques like Saga compensation and outbox replay that depend on re-running steps.</li>
+            <li>Shrinks the failure surface: "did it work?" no longer needs a special out-of-band check.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>A key/result store is another piece of infrastructure — schema, storage, and cleanup to maintain.</li>
+            <li>Turning a naturally non-idempotent operation (an increment, a "send once" email) into an idempotent one is real design work, not a flag to flip.</li>
+            <li>A dedup window trades off storage against risk: too short and late duplicates slip through, too long and the store grows unbounded.</li>
+            <li>Two duplicate requests racing before the first completes can still double-execute unless the check-and-record step is atomic.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Clients or infrastructure may retry the same request — timeouts, network blips, ambiguous failures.</li>
+            <li>The operation has a real-world cost if it runs twice: a payment, an order, a provisioning call.</li>
+            <li>Consumers read from a queue or broker whose delivery guarantee is at-least-once, not exactly-once.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The operation is already naturally idempotent — a plain read, or a write that only ever sets an absolute value.</li>
+            <li>Duplicates are cheap and harmless — a non-critical analytics ping, a log line.</li>
+            <li>You'd be adding a key/result store purely out of caution, with no retry path that could ever trigger a duplicate.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — an idempotency-key store</summary>
+<pre><code>interface StoredResult { status: number; body: unknown; }
+
+class IdempotencyStore {
+  private results = new Map&lt;string, StoredResult&gt;();
+
+  async execute(
+    key: string,
+    handler: () =&gt; Promise&lt;StoredResult&gt;,
+  ): Promise&lt;StoredResult&gt; {
+    const cached = this.results.get(key);
+    if (cached) return cached; // duplicate — skip re-execution
+
+    // In production this check-and-record step must be atomic
+    // (unique constraint, conditional put) so two concurrent
+    // duplicates can't both slip past the cache miss.
+    const result = await handler();
+    this.results.set(key, result);
+    return result;
+  }
+}
+
+// The client sends the same key on every retry of one logical request.
+const store = new IdempotencyStore();
+const key = req.headers["idempotency-key"];
+const result = await store.execute(key, () =&gt; chargeCard(order));
+res.status(result.status).json(result.body);</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/compensating-transaction.html">Compensating Transaction</a><span class="rel-note">Compensations must be safe to re-run</span></div>
+          <div class="rel-item"><a href="../patterns/outbox.html">Outbox</a><span class="rel-note">Consumers dedupe replayed outbox messages</span></div>
+          <div class="rel-item"><a href="../patterns/dead-letter-channel.html">Dead Letter Channel</a><span class="rel-note">Dedupe redeliveries; divert true failures</span></div>
+          <div class="rel-item"><a href="../patterns/competing-consumers.html">Competing Consumers</a><span class="rel-note">Parallel consumers must handle redelivery</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/retry-backoff.html">Retry with Backoff</a><span class="rel-note">Safe retries require idempotent operations</span></div>
+          <div class="rel-item"><a href="../patterns/saga.html">Saga</a><span class="rel-note">Steps and compensations must be replay-safe</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    ID["Idempotency"]
+    ID --- RB["Retry with Backoff"]
+    ID --- CT["Compensating Transaction"]
+    ID --- SG["Saga"]
+    ID --- OB["Outbox"]
+    ID --- DL["Dead Letter Channel"]
+    ID --- CC["Competing Consumers"]
+    click RB "../patterns/retry-backoff.html"
+    click CT "../patterns/compensating-transaction.html"
+    click SG "../patterns/saga.html"
+    click OB "../patterns/outbox.html"
+    click DL "../patterns/dead-letter-channel.html"
+    click CC "../patterns/competing-consumers.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/resilience.html">Resilience</a><span>Make retries and redelivery safe</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/claim-check.html">← Claim Check</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html">The Map →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

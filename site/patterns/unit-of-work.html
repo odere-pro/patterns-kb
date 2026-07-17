@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unit of Work · Patterns</title>
+  <meta name="description" content="Unit of Work — track every object touched during a business transaction and commit them all as one atomic write.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-ent-h">Application</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Unit of Work</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Application</p>
+      <h1 class="doc-title">Unit of Work</h1>
+      <p class="doc-essence">Keeps a running list of every object you create, change, or delete during a business transaction, then flushes them to the store in a single ordered, all-or-nothing commit.</p>
+      <div class="doc-metarow">
+        <span class="badge">Enterprise</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="unit-of-work">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>Unit of Work</strong> maintains a list of the objects affected by a business transaction and coordinates writing out their changes. As you load and mutate domain objects it quietly records which ones are <em>new</em>, which have gone <em>dirty</em>, and which are <em>removed</em>. Nothing touches the database until you tell it to commit.</p>
+        <p>The forces it resolves are chattiness and atomicity. Without it, persistence leaks into the business logic — every object saves itself the moment it changes. That means a swarm of small round trips, no say over the <em>order</em> writes happen in, and no single transactional boundary, so a failure halfway through leaves the store half-updated.</p>
+        <p>The Unit of Work acts as a buffer and a controller. It collects intended changes as they accrue, and on commit it opens one transaction, orders the writes to respect foreign-key and dependency constraints, sends them together, and commits or rolls back the lot. One business transaction becomes one database transaction.</p>
+        <p>It usually rides alongside an identity map, so each row maps to exactly one in-memory object, and it is the natural place to attach optimistic-locking version checks the moment the changes flush.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+    Client["Client mutates objects"] --> UoW["Unit of Work"]
+    UoW --> New["New — insert"]
+    UoW --> Dirty["Dirty — update"]
+    UoW --> Removed["Removed — delete"]
+    New --> Commit["commit as one transaction"]
+    Dirty --> Commit
+    Removed --> Commit
+        </pre>
+        <figcaption>Changes accumulate in three buckets — new, dirty, removed — then flush together in a single ordered commit.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Caller registration</dt>
+        <dd>The caller explicitly tells the unit of work when something changed — <code>registerDirty(order)</code>. Simple and explicit, but easy to forget a call and lose a write.</dd>
+        <dt>Object registration</dt>
+        <dd>Each object notifies its own unit of work from inside its setters, so callers can't forget. Couples the domain object to the unit of work.</dd>
+        <dt>Snapshot / dirty checking</dt>
+        <dd>The unit of work keeps a snapshot taken at load time and, on commit, diffs each object to infer what changed. This is how Hibernate and EF Core work — invisible to the caller, subtle to implement.</dd>
+        <dt>Session-per-request scope</dt>
+        <dd>One unit of work is opened per web request or message and disposed at the end, versus a unit explicitly scoped around a single use case.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>One transactional boundary — the whole business transaction commits or rolls back atomically.</li>
+            <li>Fewer round trips — writes are collected and sent together at commit, and can be batched.</li>
+            <li>Controls write order so inserts and deletes respect foreign-key constraints.</li>
+            <li>Decouples domain logic from persistence timing — business code just mutates objects.</li>
+            <li>A single place to apply optimistic-locking and concurrency checks.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Adds a stateful coordinator you must scope correctly and dispose reliably.</li>
+            <li>A long-lived unit of work accumulates memory and can serve stale objects.</li>
+            <li>Dirty tracking via snapshots or proxies is fiddly — it can miss or over-report changes.</li>
+            <li>Hides <em>when</em> writes actually happen, which surprises anyone expecting an immediate save.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>A single business transaction touches several objects or tables and must commit as one.</li>
+            <li>You want to collapse chatty per-object saves into one batched commit.</li>
+            <li>You already lean on a <a href="../patterns/repository.html">Repository</a> or ORM and need a clean transactional boundary.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The operation changes a single row — a direct save is simpler and clearer.</li>
+            <li>Writes must be visible immediately and independently, as with append-only event logging.</li>
+            <li>You're in a stateless, per-message style where no shared change set makes sense.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal unit of work</summary>
+<pre><code>type Entity = { id: string };
+
+class UnitOfWork {
+  private newObjects = new Set&lt;Entity&gt;();
+  private dirty = new Set&lt;Entity&gt;();
+  private removed = new Set&lt;Entity&gt;();
+
+  registerNew(e: Entity) { this.newObjects.add(e); }
+  registerDirty(e: Entity) { if (!this.newObjects.has(e)) this.dirty.add(e); }
+  registerRemoved(e: Entity) { this.dirty.delete(e); this.removed.add(e); }
+
+  async commit(db: Db) {
+    await db.transaction(async (tx) =&gt; {
+      for (const e of this.newObjects) await tx.insert(e);
+      for (const e of this.dirty)      await tx.update(e);
+      for (const e of this.removed)    await tx.delete(e);
+    });
+    this.clear(); // one atomic transaction, then reset
+  }
+
+  private clear() {
+    this.newObjects.clear();
+    this.dirty.clear();
+    this.removed.clear();
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/repository.html">Repository</a><span class="rel-note">The repo reads; the unit of work commits the changes.</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    UOW["Unit of Work"]
+    UOW --- REPO["Repository"]
+    click REPO "../patterns/repository.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/repository.html">← Repository</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/data-mapper.html">Data Mapper →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

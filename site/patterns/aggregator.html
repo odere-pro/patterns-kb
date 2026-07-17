@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aggregator · Patterns</title>
+  <meta name="description" content="Aggregator — combines a stream of correlated messages into one complete message, so downstream consumers see a single result instead of many fragments.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-msg-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-msg-h">Messaging</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Aggregator</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Messaging</p>
+      <h1 class="doc-title">Aggregator</h1>
+      <p class="doc-essence">Collects a stream of related messages that arrive independently over time and combines them into one complete message once every piece — or a deadline — has arrived.</p>
+      <div class="doc-metarow">
+        <span class="badge">Messaging</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="aggregator">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>An <strong>aggregator</strong> is a stateful filter that receives a stream of individual messages, recognizes which ones belong together, and combines them into a single aggregate message before passing it on. It leans on three pieces: a <em>correlation identifier</em> shared by every message in the set, an <em>aggregation strategy</em> that folds the payloads into one, and a <em>completeness condition</em> that decides when the set is done and the combined message should be released.</p>
+        <p>The force it resolves is that related data often doesn't arrive as one unit. A batch job emits one message per line item, a fan-out request gets one reply per recipient, a saga collects one event per step — and none of those senders knows or cares about the others. Without an aggregator, every consumer would have to re-implement the same bookkeeping: hold state, watch for the rest of the set, and decide when it's safe to act.</p>
+        <p>The aggregator centralizes that bookkeeping in one place. Producers stay simple — they just emit a message with a correlation id — and consumers downstream see one coherent result instead of a pile of fragments they'd otherwise have to reconcile themselves.</p>
+        <p>Its hardest problem isn't combining data, it's knowing when to stop waiting. A set that never completes because one message is lost will hold state forever unless the completeness condition accounts for that possibility.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+    A["Message A, corr 42"] --> STORE[(Correlation store)]
+    B["Message B, corr 42"] --> STORE
+    C["Message C, corr 42"] --> STORE
+    STORE --> CHECK{"Complete? count or timeout"}
+    CHECK -->|no, keep waiting| STORE
+    CHECK -->|yes| OUT["One aggregated message"]
+        </pre>
+        <figcaption>Related messages sharing a correlation id collect in the store until a completeness condition — a count or a timeout — releases one aggregated message.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Count-based completeness</dt>
+        <dd>Release once a known number of related messages has arrived — simplest when the set size is fixed or announced up front.</dd>
+        <dt>Timeout-based completeness</dt>
+        <dd>Release whatever has accumulated once a deadline passes, so one missing or late fragment can't block the aggregate forever.</dd>
+        <dt>Best-effort aggregation</dt>
+        <dd>Combine on timeout even when incomplete, marking the missing pieces rather than discarding a partial result outright.</dd>
+        <dt><a href="../patterns/scatter-gather.html">Scatter-Gather</a></dt>
+        <dd>Broadcast a request to several recipients and aggregate their replies into one — the aggregator is the gather half of that round trip.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Collapses a stream of related messages into one coherent result the rest of the system can consume simply.</li>
+            <li>Correlation id decouples producers — none of them needs to know about the others or about the aggregation itself.</li>
+            <li>Count- and timeout-based completeness make it resilient to slow, missing, or reordered fragments.</li>
+            <li>Centralizes reconstruction logic in one place instead of duplicating it in every downstream consumer.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Needs a durable correlation store — a crash mid-aggregation must not silently drop the partial state.</li>
+            <li>Choosing completeness is a real design problem: too strict waits forever, too loose emits partial data as if it were whole.</li>
+            <li>Adds latency — nothing downstream sees anything until the last piece, or the timeout, arrives.</li>
+            <li>Duplicate or out-of-order inputs complicate the aggregation strategy and must be handled explicitly.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Multiple independently-arriving messages share a correlation id and only make sense combined — line items, partial responses, sharded events.</li>
+            <li>Downstream consumers want a single coherent message per business event, not N fragments to reconcile themselves.</li>
+            <li>You're gathering replies from a fan-out and need one result from the set — the classic scatter-gather round trip.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>Messages don't share a natural, stable key to correlate on — there is nothing to group them by.</li>
+            <li>Each message must be processed independently and immediately; waiting for the rest of the set defeats that.</li>
+            <li>The transformation needed is stateless, one message in and one message out — a plain translation step is enough, with no collector required.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal count-based aggregator</summary>
+<pre><code>interface CorrelatedMessage&lt;T&gt; {
+  correlationId: string;
+  payload: T;
+}
+
+class Aggregator&lt;T, R&gt; {
+  private groups = new Map&lt;string, T[]&gt;();
+
+  constructor(
+    private readonly expectedSize: number,
+    private readonly combine: (parts: T[]) =&gt; R,
+    private readonly onComplete: (result: R) =&gt; void,
+  ) {}
+
+  add(msg: CorrelatedMessage&lt;T&gt;): void {
+    const parts = this.groups.get(msg.correlationId) ?? [];
+    parts.push(msg.payload);
+    this.groups.set(msg.correlationId, parts);
+
+    if (parts.length &gt;= this.expectedSize) {
+      this.groups.delete(msg.correlationId); // release and forget
+      this.onComplete(this.combine(parts));
+    }
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/splitter.html">Splitter</a><span class="rel-note">Split out, process, then recombine</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Part of</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/scatter-gather.html">Scatter-Gather</a><span class="rel-note">The gather step is an aggregator</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    AG["Aggregator"]
+    AG --- SP["Splitter"]
+    AG --- SG["Scatter-Gather"]
+    click SP "../patterns/splitter.html"
+    click SG "../patterns/scatter-gather.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/splitter.html">← Splitter</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/competing-consumers.html">Competing Consumers →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

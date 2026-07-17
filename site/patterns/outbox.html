@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Outbox · Patterns</title>
+  <meta name="description" content="Outbox — write the state change and the event that announces it in one local transaction, then publish reliably.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Outbox</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Outbox</h1>
+      <p class="doc-essence">Commits the state change and the event that announces it in a single local transaction, then hands the event to a relay that publishes it at least once — so the write and its notification can never drift apart, even if the broker is unreachable at the moment of commit.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="outbox">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>The <strong>outbox</strong> pattern adds a table to a service's own database that holds messages waiting to be published. When the service changes state, it writes both the business row and an outbox row — the event describing that change — inside the same local ACID transaction. A separate process then reads the outbox and delivers each message to a broker, marking it published once it's safely on its way.</p>
+        <p>It resolves the <strong>dual-write problem</strong>. A service's database and its message broker are two different systems with no shared transaction between them. Publish before committing and a rolled-back write leaves the world believing something happened that never did. Commit and then publish, and a crash or a broker outage between the two silently drops the event, with the database looking perfectly consistent and no error anywhere. There's no way to make "write to the database" and "send to the broker" atomic across two resource managers without something like distributed two-phase commit, which most message brokers don't support and most teams don't want to run.</p>
+        <p>Outbox sidesteps the problem instead of solving it head-on: it turns the publish into a second local write, which the database transaction already makes atomic with the first. The genuinely hard part — getting the message across the network exactly when it should go — is pushed onto a relay that can retry indefinitely against a table, rather than a request handler that gets one shot before the client hangs up.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant Svc as Service
+    participant DB as Local database
+    participant Rel as Relay
+    participant MQ as Broker
+    Svc-&gt;&gt;DB: insert order row and outbox row, one transaction
+    DB--&gt;&gt;Svc: commit
+    Rel-&gt;&gt;DB: poll unpublished outbox rows
+    Rel-&gt;&gt;MQ: publish message
+    Rel-&gt;&gt;DB: mark row published
+        </pre>
+        <figcaption>The service's write and its event commit together, in the same local transaction. A relay, running independently, drains the outbox to the broker and only then marks each row done.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Polling relay</dt>
+        <dd>A process periodically queries the outbox for unpublished rows and publishes them. Simple to build and reason about, at the cost of polling latency and steady read load on the table.</dd>
+        <dt>Transaction log tailing (CDC)</dt>
+        <dd>A connector like Debezium tails the database's write-ahead log or binlog directly and turns each outbox insert into a broker message with no polling and near-zero added latency.</dd>
+        <dt><a href="../patterns/event-sourcing.html">Event Sourcing</a></dt>
+        <dd>When every write is already an appended event, the event store doubles as the outbox — there's no separate table, because the write <em>is</em> the thing to publish.</dd>
+        <dt>Shared vs. per-aggregate outbox table</dt>
+        <dd>One outbox table serves the whole service, or each aggregate gets its own — the latter isolates hot tables and lets ordering guarantees stay scoped to one aggregate's stream.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Solves the dual-write problem with a single local ACID transaction — no distributed transaction coordinator needed.</li>
+            <li>Guarantees at-least-once delivery: an event is never lost because the broker happened to be down at commit time.</li>
+            <li>Recovery is just retrying unpublished rows — no special failure-handling logic in the request path.</li>
+            <li>Works with any relational database and any broker; it's a pattern, not a product.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Adds a table, a relay process, and one more moving part to deploy and monitor.</li>
+            <li>Delivers at-least-once, not exactly-once — consumers must dedupe or tolerate replays.</li>
+            <li>Polling relays add publish latency and load; log-tailing needs CDC infrastructure to run.</li>
+            <li>The outbox table grows unbounded without its own archiving or cleanup job.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>A service must update its own data and reliably announce that change to other services or a broker.</li>
+            <li>You need at-least-once delivery that survives a crash or a broker outage right after commit.</li>
+            <li>The database and the message broker are separate systems with no shared transaction between them.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>Nothing outside the service's own transaction needs to know about the change.</li>
+            <li>An occasional missed notification is acceptable and the extra table and relay aren't worth running.</li>
+            <li>Delivery volume and stakes are low enough that a direct, synchronous call is simpler and fast enough.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a write, an outbox row, and a relay</summary>
+<pre><code>// Same local transaction: state change + outbox row
+async function placeOrder(tx: Transaction, order: Order) {
+  await tx.query(
+    "insert into orders (id, status) values ($1, $2)",
+    [order.id, "placed"],
+  );
+  await tx.query(
+    `insert into outbox (id, topic, payload, published)
+     values ($1, $2, $3, false)`,
+    [randomUUID(), "order.placed", JSON.stringify(order)],
+  );
+  // Both rows commit together, or neither does.
+}
+
+// Relay: runs independently, drains unpublished rows
+async function relayOnce(db: Db, broker: Broker) {
+  const rows = await db.query(
+    "select * from outbox where published = false order by id limit 100",
+  );
+  for (const row of rows) {
+    await broker.publish(row.topic, row.payload);
+    await db.query(
+      "update outbox set published = true where id = $1",
+      [row.id],
+    );
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/event-sourcing.html">Event Sourcing</a><span class="rel-note">Append the event, publish reliably</span></div>
+          <div class="rel-item"><a href="../patterns/saga.html">Saga</a><span class="rel-note">Publish each saga step reliably via the outbox</span></div>
+          <div class="rel-item"><a href="../patterns/idempotency.html">Idempotency</a><span class="rel-note">Consumers dedupe replayed outbox messages</span></div>
+          <div class="rel-item"><a href="../patterns/message-queue.html">Message Queue</a><span class="rel-note">A relay drains the outbox to the broker</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/pubsub.html">Publish-Subscribe</a><span class="rel-note">The outbox makes publishing atomic with the write</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    OB["Outbox"]
+    OB --- ES["Event Sourcing"]
+    OB --- SG["Saga"]
+    OB --- PS["Publish-Subscribe"]
+    OB --- ID["Idempotency"]
+    OB --- MQ["Message Queue"]
+    click ES "../patterns/event-sourcing.html"
+    click SG "../patterns/saga.html"
+    click PS "../patterns/pubsub.html"
+    click ID "../patterns/idempotency.html"
+    click MQ "../patterns/message-queue.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Make the event and the write atomic</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/strangler-fig.html">&larr; Strangler Fig</a>
+      <a class="up" href="../index.html">&uarr; The Map</a>
+      <a class="next" href="../patterns/materialized-view.html">Materialized View &rarr;</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

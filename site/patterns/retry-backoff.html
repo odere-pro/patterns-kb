@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Retry with Backoff · Patterns</title>
+  <meta name="description" content="Retry with Backoff — waits a growing, jittered delay between attempts so transient failures resolve without hammering a struggling dependency.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Resilience</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Retry with Backoff</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Resilience</p>
+      <h1 class="doc-title">Retry with Backoff</h1>
+      <p class="doc-essence">Waits progressively longer between attempts — usually with a dash of randomness — so a fleeting failure gets a chance to clear instead of being hammered by an instant retry.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Resilience</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="retry-backoff">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Retry with Backoff</strong> wraps a call that can fail transiently and, on failure, waits before trying it again — each wait longer than the last, typically growing exponentially (<code>base × 2^attempt</code>) up to some ceiling. Control returns to the caller only on success, once attempts are exhausted, or the moment an error is recognized as non-transient and not worth retrying at all.</p>
+        <p>The force it resolves is a mismatch between failure and response speed. A dropped packet, a momentary overload, a lock held a beat too long — these clear on their own, and an immediate retry often succeeds. But immediate, synchronized retries from many clients at once do the opposite of helping: they pile onto a dependency at the exact moment it's already struggling, turning a brief blip into a self-inflicted retry storm. Backoff spreads that load out over time; adding jitter — randomizing the delay rather than following a fixed curve — desynchronizes clients further so they don't all retry in lockstep.</p>
+        <p>Backoff alone isn't sufficient. Each attempt still needs its own <a href="../patterns/timeout-deadline.html">Timeout / Deadline</a>, or a hung attempt stalls the whole retry loop instead of failing into it. And because retrying re-executes the call, safety depends on <a href="../patterns/idempotency.html">Idempotency</a> — a retried write that isn't idempotent can duplicate its effect the moment a response is lost after the operation actually succeeded.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+    A["Attempt the call"] --> B{"Succeeded?"}
+    B -->|yes| E["Return result"]
+    B -->|no, transient| C{"Attempts left?"}
+    C -->|yes| D["Wait backoff delay, with jitter"]
+    D --> A
+    C -->|no| F["Give up, propagate error"]
+        </pre>
+        <figcaption>Each failed attempt waits longer than the last before retrying. Jitter keeps many clients from retrying in lockstep; exhausted attempts propagate the error.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Fixed delay</dt>
+        <dd>Retry after the same interval every time. Simplest to reason about, but it doesn't ease off under sustained failure and can still synchronize a flood of retries.</dd>
+        <dt>Exponential backoff</dt>
+        <dd>Each retry's wait multiplies the last, usually doubling, capped at a maximum delay so the curve doesn't grow unbounded on a long outage.</dd>
+        <dt>Jittered backoff</dt>
+        <dd>Randomize the delay around the backoff curve — full jitter, equal jitter, or decorrelated jitter — so clients that failed at the same instant don't all retry at the same instant too.</dd>
+        <dt>Retry budgets</dt>
+        <dd>Cap total retry volume as a share of overall traffic, independent of any single caller's attempt count, so retries collectively can never outgrow the load they're meant to smooth over.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Resolves transient blips automatically, without ever surfacing an error to the caller.</li>
+            <li>Spaces out load over time, giving a struggling dependency room to recover instead of adding to the pile-up.</li>
+            <li>Jitter desynchronizes clients so a shared outage doesn't turn into a synchronized retry storm.</li>
+            <li>Drops into any call site with no changes required on the callee's side.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Only helps with transient failures — retrying a permanent error just delays it and wastes time.</li>
+            <li>Naive or unbounded retries under a real outage amplify load exactly when the dependency needs it least.</li>
+            <li>Requires idempotent operations, or a retried write can duplicate its side effects.</li>
+            <li>Adds latency variance — the failure path gets slower, and less predictably so, with every attempt.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>The failure is plausibly transient — network blips, brief overload, lock contention, rate limiting.</li>
+            <li>The operation is <a href="../patterns/idempotency.html">idempotent</a>, or safe to retry via a dedup key.</li>
+            <li>You control the client and can afford some extra latency on the failure path.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The failure is permanent — a bad request, an auth failure, a missing resource — retrying just delays the error.</li>
+            <li>The write isn't idempotent and there's no dedup mechanism to make a repeat safe.</li>
+            <li>The dependency is visibly down for a while — pair with a <a href="../patterns/circuit-breaker.html">Circuit Breaker</a> so retries stop adding to the pile-up.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — exponential backoff with full jitter</summary>
+<pre><code>type RetryOptions = {
+  maxAttempts?: number;
+  baseMs?: number;
+  maxMs?: number;
+};
+
+async function withRetry&lt;T&gt;(
+  fn: () =&gt; Promise&lt;T&gt;,
+  { maxAttempts = 5, baseMs = 200, maxMs = 8_000 }: RetryOptions = {},
+): Promise&lt;T&gt; {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt &gt;= maxAttempts || !isTransient(err)) throw err;
+      const backoff = Math.min(maxMs, baseMs * 2 ** attempt);
+      const jitteredMs = Math.random() * backoff; // full jitter
+      await sleep(jitteredMs);
+    }
+  }
+}
+
+const sleep = (ms: number) =&gt;
+  new Promise&lt;void&gt;((resolve) =&gt; setTimeout(resolve, ms));
+
+function isTransient(err: unknown): boolean {
+  return err instanceof NetworkError || err instanceof RateLimitError;
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/circuit-breaker.html">Circuit Breaker</a><span class="rel-note">Retry transient errors; trip the breaker on sustained ones</span></div>
+          <div class="rel-item"><a href="../patterns/timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">Bound each attempt, then back off</span></div>
+          <div class="rel-item"><a href="../patterns/dead-letter-channel.html">Dead Letter Channel</a><span class="rel-note">Exhausted retries go to the dead-letter channel</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Requires</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/idempotency.html">Idempotency</a><span class="rel-note">Safe retries require idempotent operations</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    RB["Retry with Backoff"]
+    RB --- CB["Circuit Breaker"]
+    RB --- ID["Idempotency"]
+    RB --- TD["Timeout / Deadline"]
+    RB --- DL["Dead Letter Channel"]
+    click CB "../patterns/circuit-breaker.html"
+    click ID "../patterns/idempotency.html"
+    click TD "../patterns/timeout-deadline.html"
+    click DL "../patterns/dead-letter-channel.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/resilience.html">Resilience</a><span>Ride out transient failures</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/circuit-breaker.html">&larr; Circuit Breaker</a>
+      <a class="up" href="../index.html">&uarr; The Map</a>
+      <a class="next" href="../patterns/bulkhead.html">Bulkhead &rarr;</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

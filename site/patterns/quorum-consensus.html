@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quorum &amp; Consensus · Patterns</title>
+  <meta name="description" content="Quorum &amp; Consensus — a majority of replicas must agree before a write counts, tolerating failure without demanding unanimity.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Quorum &amp; Consensus</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Quorum &amp; Consensus</h1>
+      <p class="doc-essence">A majority of nodes must acknowledge a write before it counts as durable — so no single replica, however fast or however wrong, gets to decide the outcome alone.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="quorum-consensus">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>In a system with <strong>N</strong> replicas of some data, a <strong>quorum</strong> is the minimum number of nodes that must take part in an operation for it to be trusted. A write commits once <strong>W</strong> replicas acknowledge it; a read is considered authoritative once <strong>R</strong> replicas agree. Choose W and R so that <code>W + R &gt; N</code>, and every possible read quorum is guaranteed to overlap with every possible write quorum on at least one replica — so a read can never miss the latest committed write.</p>
+        <p>The force it resolves is that no single node can be fully trusted alone. Machines crash, disks corrupt, networks partition, and any one replica can be stale or simply unreachable at the exact moment you need it. Waiting for <em>every</em> replica to agree makes the system unavailable the instant one node is slow. Trusting <em>any single</em> replica makes it wrong the instant that one lags or lies. Quorum sits between the two extremes: it tolerates a bounded number of failed or unreachable nodes without stalling, and a bounded number of stale nodes without being fooled, because a majority can't be wrong at the same time — so long as failures aren't correlated.</p>
+        <p>This same intersection math underlies two related but distinct problems. Dynamo-style <em>quorum systems</em> use only the overlap guarantee to keep reads and writes consistent, with no notion of global ordering. <em>Consensus protocols</em> like Paxos and Raft build further on the same majority arithmetic, adding a leader and a replicated log so that nodes agree not just that a write happened, but on the exact order every write happened in.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant C as Client
+    participant A as Node A
+    participant B as Node B
+    participant D as Node C
+    C->>A: write v
+    C->>B: write v
+    C->>D: write v
+    B-->>C: ack
+    D-->>C: ack
+    Note over C: 2 of 3 acked, W=2 reached, commit
+        </pre>
+        <figcaption>A write commits once a quorum of replicas acknowledge it — here two acks out of three is enough, without waiting on the third.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Read/write quorum tuning (W + R &gt; N)</dt>
+        <dd>Pick W and R so they sum past N — e.g. N=3, W=2, R=2 — guaranteeing every read touches at least one replica that saw the latest write.</dd>
+        <dt>Strict vs. sloppy quorum</dt>
+        <dd>A strict quorum only counts the N designated replicas. A sloppy quorum accepts acks from any reachable node and hands the write off later (hinted handoff), trading strict consistency for availability during a partition.</dd>
+        <dt>Majority vs. weighted quorum</dt>
+        <dd>Classic majority gives every replica one vote. A weighted quorum assigns more votes to reliable or well-connected nodes, so the outcome doesn't hinge on a single flaky one.</dd>
+        <dt>Flexible / asymmetric quorums</dt>
+        <dd>Decouple the quorum used to elect a leader from the quorum used to replicate entries, as long as the two still intersect — shrink one and the other can grow, cutting latency on the hot path.</dd>
+        <dt>Leader-based consensus (Paxos, Raft)</dt>
+        <dd>Layer a stable leader and an ordered log on top of the same majority arithmetic, so replicas agree not just that a write happened but in what order — quorum becomes full consensus.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Tolerates minority failures without stopping — up to floor((N-1)/2) nodes can be down or partitioned.</li>
+            <li>No single node is a single point of truth; a stale or bad replica gets outvoted.</li>
+            <li>Consistency and availability are tunable via W and R, not baked in as an all-or-nothing choice.</li>
+            <li>Correctness rests on simple, well-understood intersection math, not on trusting any one participant.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Majority requires reaching most of the cluster — a bad enough partition can leave every side short of quorum.</li>
+            <li>Adds write latency: the request isn't done until W replicas answer, not one.</li>
+            <li>Overlap alone gives no ordering — concurrent conflicting writes still need versioning or a real consensus protocol.</li>
+            <li>Changing cluster membership mid-flight is delicate; quorum math assumes a known, stable N.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Data is replicated across multiple nodes and no single copy can be trusted alone.</li>
+            <li>You need to survive node failure or a network partition without halting every write.</li>
+            <li>You can afford the latency of waiting on more than one acknowledgment per operation.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>A single authoritative source of truth already exists — there's nothing for a quorum to arbitrate.</li>
+            <li>You need strict, linearizable ordering and haven't paired quorum with a real consensus protocol.</li>
+            <li>The added round trips of touching multiple nodes per write blow your latency budget.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal quorum write</summary>
+<pre><code>async function quorumWrite&lt;T&gt;(
+  replicas: ReplicaClient[],
+  value: T,
+  w: number,
+): Promise&lt;void&gt; {
+  const n = replicas.length;
+  if (w &gt; n) throw new Error("quorum exceeds replica count");
+
+  return new Promise((resolve, reject) =&gt; {
+    let acked = 0;
+    let failed = 0;
+    for (const replica of replicas) {
+      replica.write(value).then(
+        () =&gt; {
+          if (++acked &gt;= w) resolve(); // quorum reached, stop waiting
+        },
+        () =&gt; {
+          if (++failed &gt; n - w) reject(new Error("quorum unreachable"));
+        },
+      );
+    }
+  });
+}
+
+// N=3, W=2: tolerate one slow or failed replica per write
+await quorumWrite(replicas, { key: "x", val: 42 }, 2);</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/leader-election.html">Leader Election</a><span class="rel-note">The group agrees on a leader via consensus</span></div>
+          <div class="rel-item"><a href="../patterns/write-ahead-log.html">Write-Ahead Log</a><span class="rel-note">Replicate the log, commit on a quorum</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Requires</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/replication.html">Replication</a><span class="rel-note">Quorums make replicated writes agree</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    QC["Quorum &amp; Consensus"]
+    QC --- LE["Leader Election"]
+    QC --- RP["Replication"]
+    QC --- WAL["Write-Ahead Log"]
+    click LE "../patterns/leader-election.html"
+    click RP "../patterns/replication.html"
+    click WAL "../patterns/write-ahead-log.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/cap-theorem.html">CAP Theorem</a><span>Tune the consistency/availability dial with read/write quorums</span></div>
+        <div class="fluency-item"><a href="../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Agree on writes across a majority</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/leader-election.html">← Leader Election</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/gossip-protocol.html">Gossip Protocol →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

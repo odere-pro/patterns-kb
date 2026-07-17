@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sharding · Patterns</title>
+  <meta name="description" content="Sharding — splits a dataset across independent nodes by a partition key, so no single machine has to store or serve all of it.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Routing &amp; Scale</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Sharding</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Routing &amp; Scale</p>
+      <h1 class="doc-title">Sharding</h1>
+      <p class="doc-essence">Splits a dataset across many independent nodes by a partition key, so each shard owns only a slice of the whole and no single machine has to store or serve it all.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Routing &amp; Scale</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="sharding">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Sharding</strong> (horizontal partitioning) splits a dataset into disjoint subsets — <em>shards</em> — and places each one on a different node. A shard key derived from each record (a user ID, a tenant ID, an order ID) decides which shard it lives on. No shard holds the whole dataset, and together the shards hold all of it exactly once.</p>
+        <p>The force it resolves is a <strong>single-node ceiling</strong>. A dataset can outgrow the disk of any one machine, and write throughput can outgrow what a single primary can absorb, no matter how it's tuned. Vertical scaling — bigger disks, more RAM, faster CPUs — always hits a wall and gets expensive fast. Sharding sidesteps the wall: add another node, give it a slice of the key space, and both storage capacity and write throughput grow with it. Unlike <a href="../patterns/replication.html">replication</a>, which copies the same data everywhere mainly to scale reads and add redundancy, sharding scales by spreading distinct data thinly.</p>
+        <p>The cost is that the dataset is no longer in one place. A query that used to be a single-node lookup can become a fan-out across shards, and a transaction that used to be local can span two of them. Picking the shard key is the single highest-leverage decision in the whole design — get it wrong and one shard runs hot while the others sit idle, and changing it later means moving live data.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    C["Client"] --> R["Router"]
+    R -->|key in A-M| S1["Shard 1"]
+    R -->|key in N-T| S2["Shard 2"]
+    R -->|key in U-Z| S3["Shard 3"]
+        </pre>
+        <figcaption>The router derives the shard key from the request, maps it to one shard, and sends the request only there — the other shards never see it.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Range-based sharding</dt>
+        <dd>Each shard owns a contiguous range of key values. Cheap range scans, but keys clustered in time (e.g. sequential IDs, timestamps) pile onto the newest shard.</dd>
+        <dt>Hash-based sharding</dt>
+        <dd>A hash function scatters keys evenly across shards regardless of their natural order. Kills hotspots and range scans alike — a query for "all of last week" now hits every shard.</dd>
+        <dt><a href="../patterns/consistent-hashing.html">Consistent hashing</a></dt>
+        <dd>Places shards and keys on the same hash ring so adding or removing a shard remaps only its neighbors' keys, not the whole dataset.</dd>
+        <dt>Directory-based (lookup service)</dt>
+        <dd>An explicit key-to-shard mapping table, looked up on every routing decision. Flexible and rebalance-friendly, but the directory itself becomes a critical, must-scale dependency.</dd>
+        <dt>Entity / tenant sharding</dt>
+        <dd>Shard by tenant ID or account ID so one customer's data never crosses shard boundaries — simplifies isolation, backup, and per-tenant data residency.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Scales storage and write throughput horizontally by adding more shards.</li>
+            <li>Each shard is smaller, so its working set and indexes fit in memory and queries stay local and fast.</li>
+            <li>A failure or maintenance window on one shard affects only its slice of the data, not the whole dataset.</li>
+            <li>Lets data be placed by geography or tenant to satisfy residency and isolation requirements.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Cross-shard joins, aggregations, and transactions become distributed and slow, if they're possible at all.</li>
+            <li>Rebalancing an unevenly loaded key space means moving live data between nodes without downtime.</li>
+            <li>The shard key is hard to change later — a poor early choice creates a permanently hot shard.</li>
+            <li>Adds a routing layer and more nodes to provision, monitor, back up, and upgrade.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Data volume or write throughput has outgrown what one node can hold or absorb.</li>
+            <li>Access is mostly keyed by a natural partition key, like a user ID or tenant ID.</li>
+            <li>You need to scale writes, not just reads — replication alone only helps read capacity.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The dataset comfortably fits and performs on a single, well-tuned node or replica set.</li>
+            <li>Queries routinely join or aggregate across entities that a shard key would split apart.</li>
+            <li>You don't yet have a stable, evenly-distributed shard key — sharding on the wrong one is costly to undo.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal hash-based shard router</summary>
+<pre><code>class ShardRouter&lt;T&gt; {
+  constructor(private readonly shards: readonly T[]) {}
+
+  private hash(key: string): number {
+    let h = 0;
+    for (let i = 0; i &lt; key.length; i++) {
+      h = (h * 31 + key.charCodeAt(i)) &gt;&gt;&gt; 0; // unsigned 32-bit
+    }
+    return h;
+  }
+
+  connectionFor(key: string): T {
+    const index = this.hash(key) % this.shards.length;
+    return this.shards[index];
+  }
+}
+
+// One router instance per process, wrapping live DB connections.
+const router = new ShardRouter([shardA, shardB, shardC]);
+
+async function ordersFor(userId: string) {
+  const conn = router.connectionFor(userId);
+  return conn.query("SELECT * FROM orders WHERE user_id = $1", [userId]);
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/replication.html">Replication</a><span class="rel-note">Partition for scale, replicate each shard for safety</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Requires</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/consistent-hashing.html">Consistent Hashing</a><span class="rel-note">Consistent hashing is how shards are placed</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/replication.html">Replication</a><span class="rel-note">Split data vs. copy data</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    SH["Sharding"]
+    SH --- CH["Consistent Hashing"]
+    SH --- RE["Replication"]
+    click CH "../patterns/consistent-hashing.html"
+    click RE "../patterns/replication.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/scalability.html">Scalability</a><span>Partition data to scale writes</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/consistent-hashing.html">&larr; Consistent Hashing</a>
+      <a class="up" href="../index.html">&uarr; The Map</a>
+      <a class="next" href="../patterns/gatekeeper.html">Gatekeeper &rarr;</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

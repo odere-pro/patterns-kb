@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Read-Write Lock · Patterns</title>
+  <meta name="description" content="Read-Write Lock — many readers may hold the lock at once, but a writer needs it exclusively, so reads never block each other while writes stay safe.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-conc-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Read-Write Lock</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Read-Write Lock</h1>
+      <p class="doc-essence">Lets any number of threads read shared data at once, but the instant one needs to write, every reader and every other writer is forced to wait — reads scale for free, writes stay exclusive and safe.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="rw-lock">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>read-write lock</strong> (also called a shared-exclusive lock, or RWLock) is a synchronization primitive with two acquisition modes instead of one. Any number of threads can hold it in <em>read</em> mode at the same time, but the moment a thread requests <em>write</em> mode it must wait for every current reader to release, and while it holds the write lock no other reader or writer can proceed. Readers share with readers; writers exclude everyone.</p>
+        <p>It resolves a shape of contention that a plain mutex handles badly. A mutex treats every critical-section entry identically, so on data that's read far more often than it's written, it serializes threads that never actually conflict — two readers blocking each other even though neither mutates anything. That's parallelism thrown away on hardware built to run many things at once.</p>
+        <p>The read-write lock buys that parallelism back by tracking readers and writers separately — typically a reader count plus a writer flag — so the acquisition logic can tell "shared, safe to join" from "exclusive, everyone else waits." The cost is a genuinely harder primitive than a mutex: starvation policy, fairness between the two roles, and upgrade semantics all become explicit design decisions instead of being handled for you.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant R1 as Reader 1
+    participant R2 as Reader 2
+    participant L as RWLock
+    participant W as Writer
+    R1-&gt;&gt;L: acquireRead
+    L--&gt;&gt;R1: granted, readers 1
+    R2-&gt;&gt;L: acquireRead
+    L--&gt;&gt;R2: granted, readers 2
+    W-&gt;&gt;L: acquireWrite
+    Note over W: blocked while readers active
+    R1-&gt;&gt;L: releaseRead
+    R2-&gt;&gt;L: releaseRead
+    L--&gt;&gt;W: granted, exclusive
+        </pre>
+        <figcaption>Two readers hold the lock together. A waiting writer blocks until both release, then gets the lock exclusively.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Reader-preference vs. writer-preference</dt>
+        <dd>Decide who wins when both roles are waiting. Naive reader-preference lets a steady stream of readers starve a writer indefinitely; writer-preference flips the risk onto readers instead.</dd>
+        <dt>Fair / ticket-queued</dt>
+        <dd>Queue read and write requests in arrival order so neither role starves the other, at the cost of extra bookkeeping and slightly lower peak read throughput.</dd>
+        <dt>Upgradeable read lock</dt>
+        <dd>Lets a thread already holding a read lock promote to a write lock without releasing it first, closing the gap where another writer could sneak in between release and re-acquire.</dd>
+        <dt>Recursive (reentrant) read-write lock</dt>
+        <dd>Allows the same thread to re-acquire a mode it already holds — needed when locked code calls other locked code — but doubles the accounting and can deadlock if reentry rules aren't precise.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Concurrent readers scale with core count instead of serializing behind one another.</li>
+            <li>Writes stay fully exclusive, so invariants hold exactly as they would under a plain mutex.</li>
+            <li>A natural drop-in for data that's read far more often than it's written — caches, config, routing tables.</li>
+            <li>Separates read and write contention, making which one is the bottleneck visible and tunable.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>More overhead per acquisition than a plain mutex — tracking a reader count and a wait queue costs cycles a simple lock doesn't pay.</li>
+            <li>Naive implementations starve writers under constant read traffic, or starve readers under writer-preference.</li>
+            <li>Not reentrant by default; recursive acquisition needs deliberate support and can deadlock if mishandled.</li>
+            <li>On workloads where reads and writes are roughly balanced, the bookkeeping outweighs any parallelism gained.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Reads vastly outnumber writes on the same shared structure.</li>
+            <li>Read operations hold the lock long enough that serializing them under a plain mutex would bottleneck throughput.</li>
+            <li>Correctness only requires writers see a consistent snapshot, not a specific interleaving with reads.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>Reads and writes arrive at roughly similar rates — the extra bookkeeping isn't repaid, use a plain mutex.</li>
+            <li>Critical sections are so short that lock overhead itself dominates, not contention.</li>
+            <li>Writes are frequent enough that readers rarely overlap anyway, so there's little concurrency left to win back.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal async read-write lock</summary>
+<pre><code>class RwLock {
+  private readers = 0;
+  private writerActive = false;
+  private queue: Array&lt;() =&gt; void&gt; = [];
+
+  async readLock(): Promise&lt;void&gt; {
+    while (this.writerActive) await this.park();
+    this.readers++;
+  }
+  readUnlock(): void {
+    if (--this.readers === 0) this.wakeAll();
+  }
+
+  async writeLock(): Promise&lt;void&gt; {
+    while (this.writerActive || this.readers &gt; 0) await this.park();
+    this.writerActive = true;
+  }
+  writeUnlock(): void {
+    this.writerActive = false;
+    this.wakeAll();
+  }
+
+  private park(): Promise&lt;void&gt; {
+    return new Promise((resolve) =&gt; this.queue.push(resolve));
+  }
+  private wakeAll(): void {
+    this.queue.splice(0).forEach((wake) =&gt; wake());
+  }
+}
+
+// usage
+await lock.readLock();
+try { /* read shared state */ } finally { lock.readUnlock(); }</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/monitor-object.html">Monitor Object</a><span class="rel-note">A read-write lock is a finer-grained monitor</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    RWL["Read-Write Lock"]
+    RWL --- MO["Monitor Object"]
+    click MO "../patterns/monitor-object.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/monitor-object.html">← Monitor Object</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/backpressure.html">Backpressure →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

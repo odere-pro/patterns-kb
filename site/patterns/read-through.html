@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Read-Through · Patterns</title>
+  <meta name="description" content="Read-Through — the cache loads on a miss itself, so the application never sees the gap underneath.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-cache-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-cache-h">Caching</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Read-Through</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Caching</p>
+      <h1 class="doc-title">Read-Through</h1>
+      <p class="doc-essence">On a cache miss, the cache reaches into the backing store itself, loads the value, populates the entry, and hands it back — the application only ever calls <code>get()</code> and never sees the gap underneath.</p>
+      <div class="doc-metarow">
+        <span class="badge">Caching</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="read-through">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>read-through</strong> cache sits directly in front of a backing store and takes on the job of loading data, not just holding it. The application calls a single <code>get(key)</code>; if the entry is present the cache returns it immediately, and if it's absent the cache itself invokes a loader bound to the backing store, populates the entry, and returns the result. The caller never branches on hit or miss — from where it stands, the cache simply always has the value.</p>
+        <p>The force it resolves is duplicated, drifting miss-handling logic. Against a plain cache, every caller that wants a value runs its own dance: check the cache, fall through to the database on a miss, write the result back, then return it — repeated at every call site, and prone to drifting apart across them (different TTLs, someone forgets to populate, two callers race and load twice). Read-through centralizes that logic once, inside the cache itself, so every caller gets identical, correct miss handling for free.</p>
+        <p>Because the cache owns the load path, it can also protect the backing store: concurrent misses for the same key can collapse into a single in-flight load instead of stampeding the database, and a key known to be absent can be cached negatively so repeated lookups stop hitting the store. The trade is coupling — the cache has to know how to load, wired to a loader function or a co-located data source, which is a tighter arrangement than a cache that's merely a dumb key-value store.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant App
+    participant Cache
+    participant Store
+    App->>Cache: get(key)
+    Cache->>Store: load(key), only on a miss
+    Store-->>Cache: value from source
+    Cache-->>App: value, entry now populated
+    Note over Cache: a hit skips the store call entirely
+        </pre>
+        <figcaption>The application only ever talks to the cache. A miss triggers a load from the store behind the scenes; a hit never reaches the store at all.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Synchronous load</dt>
+        <dd>The cache blocks the caller until the loader returns. Simplest to reason about, but every concurrent caller on a miss waits for the same round trip.</dd>
+        <dt>Request coalescing / single-flight</dt>
+        <dd>Concurrent misses for the same key share one in-flight load instead of each triggering its own call — the first caller loads, the rest await that same promise.</dd>
+        <dt>Negative caching</dt>
+        <dd>Cache a short-lived "not found" marker for missing keys, so a flood of lookups for absent data doesn't repeatedly round-trip the store.</dd>
+        <dt><a href="../patterns/refresh-ahead.html">Refresh-Ahead</a></dt>
+        <dd>Instead of waiting for a miss, proactively reload a hot key shortly before its entry expires, so the read-through load path stays cold for busy keys.</dd>
+        <dt>Multi-level read-through</dt>
+        <dd>A local in-process cache is itself read-through to a shared remote cache, which is read-through to the store — each tier only loads from the one behind it.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Application code just calls <code>get()</code> — no miss-handling branch scattered across callers.</li>
+            <li>Loading and population logic lives in one place, so TTLs, serialization, and coalescing stay consistent for everyone.</li>
+            <li>Can collapse concurrent misses into a single backing call, shielding the store from thundering herds.</li>
+            <li>Callers never talk to the store directly, so the store's shape can change behind the loader.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Needs a cache that supports a bound loader function — harder to bolt onto an existing dumb cache.</li>
+            <li>A cold cache or an evicted hot key still pays a synchronous load penalty on the next read.</li>
+            <li>Ties the cache to one backing store's shape, which is awkward when different callers want different fallback logic.</li>
+            <li>Solves reads only — writes still need a paired strategy or the cache goes stale silently.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Multiple services or call sites currently duplicate their own check-cache-else-load-else-populate logic.</li>
+            <li>Callers should be shielded entirely from cache misses and the loading mechanics behind them.</li>
+            <li>The backing store benefits from load coalescing under bursts of concurrent reads for the same key.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>Different callers need genuinely different loading or fallback logic for the same key — <a href="../patterns/cache-aside.html">Cache-Aside</a> keeps that control in application code.</li>
+            <li>Writes are frequent and must be reflected immediately — pair with <a href="../patterns/write-through.html">Write-Through</a> rather than leaving reads stale.</li>
+            <li>You don't control the cache client closely enough to wire in a loader function.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a coalescing read-through cache</summary>
+<pre><code>class ReadThroughCache&lt;K, V&gt; {
+  private entries = new Map&lt;K, V&gt;();
+  private inFlight = new Map&lt;K, Promise&lt;V&gt;&gt;();
+
+  constructor(
+    private readonly loader: (key: K) =&gt; Promise&lt;V&gt;,
+    private readonly ttlMs = 30_000,
+  ) {}
+
+  async get(key: K): Promise&lt;V&gt; {
+    const hit = this.entries.get(key);
+    if (hit !== undefined) return hit;          // no store call
+
+    const pending = this.inFlight.get(key);
+    if (pending) return pending;                 // coalesce concurrent misses
+
+    const load = this.loader(key).then((value) =&gt; {
+      this.entries.set(key, value);
+      this.inFlight.delete(key);
+      setTimeout(() =&gt; this.entries.delete(key), this.ttlMs);
+      return value;
+    });
+    this.inFlight.set(key, load);
+    return load;
+  }
+}
+
+// Caller never branches on hit vs. miss
+const users = new ReadThroughCache((id: string) =&gt; db.findUser(id));
+const u = await users.get("42");</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/replication.html">Replication</a><span class="rel-note">Read replicas serve cached-style reads</span></div>
+          <div class="rel-item"><a href="../patterns/write-through.html">Write-Through</a><span class="rel-note">Read-through paired with write-through keeps sync</span></div>
+          <div class="rel-item"><a href="../patterns/refresh-ahead.html">Refresh-Ahead</a><span class="rel-note">Refresh hot keys before they expire</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/cache-aside.html">Cache-Aside</a><span class="rel-note">App fills the cache vs. the cache fills itself</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    RT["Read-Through"]
+    RT --- RE["Replication"]
+    RT --- CA["Cache-Aside"]
+    RT --- WT["Write-Through"]
+    RT --- RA["Refresh-Ahead"]
+    click RE "../patterns/replication.html"
+    click CA "../patterns/cache-aside.html"
+    click WT "../patterns/write-through.html"
+    click RA "../patterns/refresh-ahead.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/performance.html">Performance</a><span>Cache reads transparently</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/cache-aside.html">← Cache-Aside</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/write-through.html">Write-Through →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Message Queue · Patterns</title>
+  <meta name="description" content="Message Queue — a point-to-point channel where each message is delivered to and consumed by exactly one consumer.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-msg-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-msg-h">Messaging</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Message Queue</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Messaging</p>
+      <h1 class="doc-title">Message Queue</h1>
+      <p class="doc-essence">A point-to-point channel that holds each message until exactly one consumer pulls and processes it — decoupling producer from consumer in both time and pace.</p>
+      <div class="doc-metarow">
+        <span class="badge">Messaging</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="message-queue">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>message queue</strong> is an ordered, durable channel sitting between a producer and one or more consumers. A producer enqueues a message and moves on; the queue holds it until a consumer dequeues and processes it. The defining trait is point-to-point delivery: even with several consumers attached to the same queue, each message is delivered to and consumed by exactly one of them — never broadcast to all.</p>
+        <p>The force it resolves is <strong>coupling to the consumer's uptime and pace</strong>. A producer that calls a consumer directly is at the mercy of that consumer being reachable, fast, and available right now — if it's down, slow, or already overloaded, the producer blocks or the work is simply lost. A queue breaks that dependency: the producer enqueues and returns immediately, the consumer drains at whatever rate it can sustain, and neither side needs the other online at the same instant.</p>
+        <p>It also absorbs bursts. Real traffic rarely arrives at a steady rate; a queue lets producers write as fast as they like while consumers pull at a sustainable pace, turning a spike that would overwhelm a consumer into a backlog that drains over the following seconds or minutes instead of failing outright.</p>
+        <p>Durability is what separates a queue from an in-process buffer. Messages are typically persisted to disk or replicated across broker nodes, so a crash between enqueue and processing doesn't silently drop the work — the message is still sitting there when a consumer, or its replacement, comes back to look.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant P as Producer
+    participant Q as Queue
+    participant C as Consumer
+    P->>Q: enqueue message
+    Q-->>P: stored, ack
+    C->>Q: poll for next message
+    Q->>C: deliver, mark invisible
+    C->>Q: ack, delete on success
+    Note over Q: unacked message reappears after its visibility timeout
+        </pre>
+        <figcaption>The producer never waits on the consumer. Delivery is typically at-least-once: a dequeued message stays hidden while a consumer works it, and comes back for redelivery if it's never acknowledged.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt><a href="../patterns/competing-consumers.html">Competing Consumers</a></dt>
+        <dd>Run a pool of consumer instances against the same queue to scale throughput horizontally — the queue still guarantees any one message reaches only one of them.</dd>
+        <dt>Visibility timeout / lease-based redelivery</dt>
+        <dd>A dequeued message is hidden rather than deleted until the consumer acknowledges it; if the lease expires without an ack, another consumer picks it up — the basis of at-least-once delivery.</dd>
+        <dt><a href="../patterns/dead-letter-channel.html">Dead Letter Channel</a></dt>
+        <dd>A message that fails processing past a retry limit is diverted to a separate channel instead of blocking the queue or being redelivered forever.</dd>
+        <dt>FIFO vs. standard queues</dt>
+        <dd>FIFO queues guarantee strict order and exactly-once processing within a group, at the cost of throughput; standard queues favor throughput and tolerate occasional reordering or duplicates.</dd>
+        <dt><a href="../patterns/claim-check.html">Claim Check</a></dt>
+        <dd>Store a large payload externally and put only a reference in the message, so broker size limits and throughput aren't spent moving bulk data around.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Decouples producer and consumer lifecycles — either can be down without losing submitted work.</li>
+            <li>Absorbs bursts, turning spiky arrival rates into a steady, sustainable consumer load.</li>
+            <li>Consumers scale horizontally against one queue without any change to producers.</li>
+            <li>Durable persistence protects in-flight work across crashes and restarts.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Introduces a broker as new infrastructure to run, monitor, and keep highly available.</li>
+            <li>Adds end-to-end latency versus a direct call — a message waits until something polls for it.</li>
+            <li>At-least-once delivery pushes idempotency onto every consumer, or duplicates cause real damage.</li>
+            <li>Flow becomes indirect: tracing a message's path is harder than following a synchronous call stack.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Producer and consumer run at different speeds, or shouldn't need to be online at the same time.</li>
+            <li>You need to absorb bursts and let consumers process at a controlled, sustainable rate.</li>
+            <li>Submitted work must survive a crash between being accepted and being processed.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The caller needs an immediate, synchronous response — a queue adds latency instead of removing it.</li>
+            <li>Every interested party must see every message — that's broadcast, reach for <a href="../patterns/pubsub.html">Publish-Subscribe</a> instead.</li>
+            <li>Producer and consumer are in the same process — a plain function call or in-memory channel is simpler.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal queue with visibility timeout</summary>
+<pre><code>interface Message&lt;T&gt; {
+  id: string;
+  body: T;
+  visibleAt: number; // 0 means visible now
+}
+
+class MessageQueue&lt;T&gt; {
+  private messages: Message&lt;T&gt;[] = [];
+  private inFlight = new Map&lt;string, Message&lt;T&gt;&gt;();
+
+  enqueue(body: T): void {
+    this.messages.push({ id: crypto.randomUUID(), body, visibleAt: 0 });
+  }
+
+  dequeue(visibilityMs = 30_000): Message&lt;T&gt; | undefined {
+    const now = Date.now();
+    const msg = this.messages.find((m) =&gt; m.visibleAt &lt;= now);
+    if (!msg) return undefined;
+    this.messages = this.messages.filter((m) =&gt; m !== msg);
+    msg.visibleAt = now + visibilityMs; // hidden until ack or lease expiry
+    this.inFlight.set(msg.id, msg);
+    return msg;
+  }
+
+  ack(id: string): void {
+    this.inFlight.delete(id); // processed successfully, gone for good
+  }
+
+  nack(id: string): void {
+    const msg = this.inFlight.get(id);
+    if (msg) {
+      this.messages.push(msg); // back on the queue for redelivery
+      this.inFlight.delete(id);
+    }
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/outbox.html">Outbox</a><span class="rel-note">A relay drains the outbox to the broker</span></div>
+          <div class="rel-item"><a href="../patterns/producer-consumer.html">Producer-Consumer</a><span class="rel-note">The queue is the buffer between them</span></div>
+          <div class="rel-item"><a href="../patterns/actor-model.html">Actor Model</a><span class="rel-note">Each actor has a mailbox queue</span></div>
+          <div class="rel-item"><a href="../patterns/competing-consumers.html">Competing Consumers</a><span class="rel-note">Scale consumers off one queue</span></div>
+          <div class="rel-item"><a href="../patterns/dead-letter-channel.html">Dead Letter Channel</a><span class="rel-note">Poison messages divert here</span></div>
+          <div class="rel-item"><a href="../patterns/claim-check.html">Claim Check</a><span class="rel-note">Keep large payloads out of the queue</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Part of</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">A queue is what levels the load</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/pubsub.html">Publish-Subscribe</a><span class="rel-note">Broadcast to many vs. one consumer per message</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    MQ["Message Queue"]
+    MQ --- QLL["Queue-Based Load Leveling"]
+    MQ --- OB["Outbox"]
+    MQ --- PC["Producer-Consumer"]
+    MQ --- AM["Actor Model"]
+    MQ --- PS["Publish-Subscribe"]
+    MQ --- CC["Competing Consumers"]
+    MQ --- DLC["Dead Letter Channel"]
+    click QLL "../patterns/load-leveling.html"
+    click OB "../patterns/outbox.html"
+    click PC "../patterns/producer-consumer.html"
+    click AM "../patterns/actor-model.html"
+    click PS "../patterns/pubsub.html"
+    click CC "../patterns/competing-consumers.html"
+    click DLC "../patterns/dead-letter-channel.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/streaming.html">Streaming</a><span>Buffer and decouple stream stages</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/pubsub.html">← Publish-Subscribe</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/message-router.html">Message Router →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

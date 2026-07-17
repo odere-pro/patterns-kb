@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backpressure · Patterns</title>
+  <meta name="description" content="Backpressure — a slow consumer signals upstream to slow down, so producers throttle or shed load instead of overwhelming it.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-conc-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Backpressure</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Backpressure</h1>
+      <p class="doc-essence">A slow consumer signals its own saturation back upstream, so the producer throttles, buffers within bounds, or sheds load — instead of blindly burying it.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="backpressure">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Backpressure</strong> is a feedback signal that travels against the direction of data flow. When a consumer — or any stage in a pipeline — can't keep up, it tells whoever is feeding it, and that upstream stage responds by slowing production, holding items in a bounded buffer, or dropping some of them, rather than pushing data at a rate the receiver can't absorb.</p>
+        <p>The force it resolves is a <strong>speed mismatch</strong> between stages that are otherwise wired together. A producer and a consumer rarely run at exactly the same rate, and the gap between them has to go <em>somewhere</em>. Without backpressure it goes into an ever-growing queue: memory climbs, latency for anything still in the queue balloons, and eventually the process runs out of memory or the whole pipeline falls over — often long after the mismatch actually started, which makes it hard to trace back to its source.</p>
+        <p>It's a lens rather than one fixed shape: the same idea recurs at every layer of a system — TCP's receive window, HTTP/2 and gRPC flow control, Reactive Streams' <code>request(n)</code> protocol, a bounded channel between goroutines, consumer lag driving a producer's send rate. Whatever the mechanism, the scheme only works end to end — every hop between producer and consumer has to honor the signal, or the one stage that ignores it becomes the new place the queue grows unbounded.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant P as Producer
+    participant B as Bounded buffer
+    participant C as Consumer
+    P->>B: push item
+    B->>C: deliver item
+    Note over C: consumer falls behind
+    C-->>B: demand paused
+    B-->>P: buffer full, slow down
+    Note over P: production rate drops
+        </pre>
+        <figcaption>The consumer's saturation propagates back through the buffer to the producer, which throttles instead of overflowing it.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt><a href="../patterns/producer-consumer.html">Producer-Consumer with a bounded queue</a></dt>
+        <dd>The simplest form: the producer blocks (or waits) once the queue hits capacity, and draining it is itself the signal to resume.</dd>
+        <dt>Credit / window-based flow control</dt>
+        <dd>The receiver advertises how much it can accept — TCP's window, HTTP/2 and gRPC's flow-control credits — and the sender never exceeds that budget.</dd>
+        <dt>Reactive pull (<code>request(n)</code>)</dt>
+        <dd>The consumer explicitly asks for a number of items before the producer emits them, inverting push into a demand-driven pull, as in Reactive Streams.</dd>
+        <dt>Load shedding as fallback</dt>
+        <dd>When there's no time to wait for the signal to propagate, drop the oldest or newest items instead of blocking — trades completeness for staying alive.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Keeps memory bounded — the producer slows instead of a queue growing without limit.</li>
+            <li>Surfaces the pipeline's real throughput instead of hiding it behind a swelling buffer.</li>
+            <li>Degrades gracefully under sustained load rather than failing catastrophically later.</li>
+            <li>Matches the whole pipeline's pace to its slowest stage instead of its fastest.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>Only works if every stage between producer and consumer honors the signal.</li>
+            <li>Pushing a slowdown upstream can turn one stage's local hiccup into a system-wide one.</li>
+            <li>Adds latency — producers now wait or throttle instead of firing and forgetting.</li>
+            <li>Badly tuned feedback loops can oscillate, stall, or deadlock across stages.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>Pipeline stages run at inherently different, variable speeds and the fast one can outrun the slow one.</li>
+            <li>You need bounded memory and predictable behavior under sustained load, not just short bursts.</li>
+            <li>You control (or can influence) the producer, so it can actually act on a slow-down signal.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>The producer is outside your control, like external clients — reject over-quota traffic with a <a href="../patterns/rate-limiter.html">Rate Limiter</a> instead of asking it to politely slow down.</li>
+            <li>The load is a short, bursty spike you'd rather absorb — a <a href="../patterns/load-leveling.html">Queue-Based Load Leveling</a> buffer can be simpler.</li>
+            <li>The consumer itself is the real bottleneck — fix that first instead of engineering flow control around it.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a bounded channel that pushes back</summary>
+<pre><code>class BoundedChannel&lt;T&gt; {
+  private readonly buffer: T[] = [];
+  private readonly consumers: Array&lt;(item: T) =&gt; void&gt; = [];
+  private readonly producerWaiters: Array&lt;() =&gt; void&gt; = [];
+
+  constructor(private readonly capacity: number) {}
+
+  // Producer blocks once the buffer is full — this IS the backpressure.
+  async send(item: T): Promise&lt;void&gt; {
+    if (this.buffer.length &gt;= this.capacity) {
+      await new Promise&lt;void&gt;((resolve) =&gt; this.producerWaiters.push(resolve));
+    }
+    this.buffer.push(item);
+    this.drain();
+  }
+
+  // Consumer pulls when ready, never faster than it can process.
+  receive(): Promise&lt;T&gt; {
+    return new Promise&lt;T&gt;((resolve) =&gt; {
+      this.consumers.push(resolve);
+      this.drain();
+    });
+  }
+
+  private drain(): void {
+    while (this.buffer.length &gt; 0 &amp;&amp; this.consumers.length &gt; 0) {
+      this.consumers.shift()!(this.buffer.shift()!);
+      this.producerWaiters.shift()?.(); // freed a slot, unblock a producer
+    }
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/pipe-filter.html">Pipe-and-Filter</a><span class="rel-note">Slow filters must push back upstream.</span></div>
+          <div class="rel-item"><a href="../patterns/autoscaling.html">Autoscaling</a><span class="rel-note">Push back while new capacity spins up.</span></div>
+          <div class="rel-item"><a href="../patterns/producer-consumer.html">Producer-Consumer</a><span class="rel-note">A full buffer must slow the producer.</span></div>
+          <div class="rel-item"><a href="../patterns/actor-model.html">Actor Model</a><span class="rel-note">Bounded mailboxes push back.</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">Absorb the burst vs. signal senders to slow down.</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/rate-limiter.html">Rate Limiter</a><span class="rel-note">Reject over-rate vs. ask upstream to slow.</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    BP["Backpressure"]
+    BP --- PF["Pipe-and-Filter"]
+    BP --- QL["Queue-Based Load Leveling"]
+    BP --- RL["Rate Limiter"]
+    BP --- AS["Autoscaling"]
+    BP --- PC["Producer-Consumer"]
+    BP --- AM["Actor Model"]
+    click PF "../patterns/pipe-filter.html"
+    click QL "../patterns/load-leveling.html"
+    click RL "../patterns/rate-limiter.html"
+    click AS "../patterns/autoscaling.html"
+    click PC "../patterns/producer-consumer.html"
+    click AM "../patterns/actor-model.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/streaming.html">Streaming</a><span>Keep a fast producer from drowning a slow consumer</span></div>
+        <div class="fluency-item"><a href="../themes/spike-handling.html">Handling Spikes</a><span>Signal upstream to slow down</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/rw-lock.html">← Read-Write Lock</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html">The Map →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

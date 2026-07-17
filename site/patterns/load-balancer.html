@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Load Balancer · Patterns</title>
+  <meta name="description" content="Load Balancer — spreads requests across many identical instances so no one is overwhelmed and the fleet can grow or shrink without callers noticing.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Routing &amp; Scale</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Load Balancer</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Routing &amp; Scale</p>
+      <h1 class="doc-title">Load Balancer</h1>
+      <p class="doc-essence">Sits in front of a fleet of interchangeable instances and spreads every incoming request across them, steering around any instance that health checks mark as down, so no single machine carries all the traffic and the fleet can grow or shrink without a caller ever noticing.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Routing &amp; Scale</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="load-balancer">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>load balancer</strong> sits between clients and a pool of identical backend instances, presenting one stable address to the outside world while deciding, request by request or connection by connection, which instance actually handles the work. Callers never address an instance directly — they address the balancer, and it picks for them.</p>
+        <p>The force it resolves is a hard ceiling on any single machine's capacity, paired with the fact that a lone instance is also a lone point of failure. Scaling past that ceiling means running many copies of the same service, but then something has to decide which copy answers each request and hide the churn as instances come and go — deploys, crashes, autoscaling. Leaving that choice to each client means every client needs a current view of the pool and has to redo the bookkeeping the balancer could do once, centrally.</p>
+        <p>A balancer answers this by owning the pool: it tracks which instances exist, watches which ones are healthy — usually by polling a health endpoint — and applies a routing algorithm to spread load across the survivors. Layer 4 balancers do this at the connection level, forwarding TCP or UDP packets by IP and port with no notion of what's inside them; Layer 7 balancers terminate and read the request itself, so they can route on path, header, or cookie as well as on load.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    C["Client"] --> LB["Load Balancer"]
+    LB --> A["Instance A"]
+    LB --> B["Instance B"]
+    LB --> D["Instance C"]
+    LB -.->|health check| A
+        </pre>
+        <figcaption>The balancer is the only party that knows the whole pool. It routes each request to a healthy instance and keeps polling to find out who's still alive.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Layer 4 vs. Layer 7</dt>
+        <dd>L4 balances raw TCP/UDP connections by IP and port; L7 reads the HTTP request itself, so it can route on path, header, or cookie, not just on load.</dd>
+        <dt>Round-robin / weighted round-robin</dt>
+        <dd>Cycle through instances in order, optionally weighting by declared capacity so a bigger instance is handed a proportionally bigger share.</dd>
+        <dt>Least connections / least response time</dt>
+        <dd>Send the next request to whichever instance currently holds the fewest open connections or answers fastest — adapts better than round-robin when request costs vary.</dd>
+        <dt><a href="../patterns/consistent-hashing.html">Consistent Hashing</a></dt>
+        <dd>Hash a request key — client IP, session id — so the same client lands on the same instance, trading perfectly even distribution for stickiness without central session state.</dd>
+        <dt>Sticky Session</dt>
+        <dd>Pin a client's whole session to one instance, typically via a cookie the balancer sets, so in-memory session state doesn't need to be shared or externalized.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Turns many small instances into one logical service — capacity scales by adding instances, not by upsizing one box.</li>
+            <li>Removes a single instance as a single point of failure; an unhealthy one is skipped, not fatal.</li>
+            <li>Centralizes health checking and instance discovery so callers never track the current pool themselves.</li>
+            <li>Enables zero-downtime deploys — roll instances out of and back into rotation one at a time.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>The balancer itself becomes a single point of failure unless it's made redundant in turn.</li>
+            <li>Naive algorithms ignore real load — round-robin can overload a slow instance as readily as a fast one.</li>
+            <li>Sticky sessions reintroduce affinity to one instance, undoing some of the flexibility scaling was meant to buy.</li>
+            <li>Adds a network hop, and at Layer 7 a place where TLS termination and request parsing add latency and bugs.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>You run more than one interchangeable instance of a service and need one stable entry point to it.</li>
+            <li>You need to scale horizontally past what a single instance can serve.</li>
+            <li>Instances can fail, redeploy, or be added and removed, and callers shouldn't see any of it.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>There is only ever one instance — the balancer is pure overhead with nothing to spread across.</li>
+            <li>Requests must be handled by one specific stateful process — route directly, or shard, instead of balancing.</li>
+            <li>What you actually need is request routing by path or tenant, not capacity spreading — that's closer to an <a href="../patterns/api-gateway.html">API Gateway</a>'s job.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — least-connections routing over a health-filtered pool</summary>
+<pre><code>interface Instance {
+  id: string;
+  healthy: boolean;
+  connections: number;
+}
+
+class LoadBalancer {
+  constructor(private readonly instances: Instance[]) {}
+
+  // Picks the healthy instance with the fewest open connections.
+  private next(): Instance {
+    const healthy = this.instances.filter((i) =&gt; i.healthy);
+    if (healthy.length === 0) throw new Error("no healthy instances");
+    return healthy.reduce((best, i) =&gt;
+      i.connections &lt; best.connections ? i : best
+    );
+  }
+
+  async route&lt;T&gt;(fn: (i: Instance) =&gt; Promise&lt;T&gt;): Promise&lt;T&gt; {
+    const inst = this.next();
+    inst.connections++;
+    try {
+      return await fn(inst);
+    } finally {
+      inst.connections--; // freed whether the call succeeded or not
+    }
+  }
+
+  markUnhealthy(id: string): void {
+    const inst = this.instances.find((i) =&gt; i.id === id);
+    if (inst) inst.healthy = false; // dropped from rotation, not removed
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/api-gateway.html">API Gateway</a><span class="rel-note">The gateway fronts, the balancer spreads</span></div>
+          <div class="rel-item"><a href="../patterns/consistent-hashing.html">Consistent Hashing</a><span class="rel-note">Hash to pin a client to an instance</span></div>
+          <div class="rel-item"><a href="../patterns/autoscaling.html">Autoscaling</a><span class="rel-note">Balance across the pool autoscaling resizes</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Has variant</p>
+        <div class="rel-list">
+          <div class="rel-item"><span>Sticky Session</span><span class="rel-note">Session affinity pins a user to one instance</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Requires</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/health-endpoint.html">Health Endpoint Monitoring</a><span class="rel-note">Load balancers route only to healthy instances</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    LB["Load Balancer"]
+    LB --- HE["Health Endpoint"]
+    LB --- AG["API Gateway"]
+    LB --- CH["Consistent Hashing"]
+    LB --- AS["Autoscaling"]
+    click HE "../patterns/health-endpoint.html"
+    click AG "../patterns/api-gateway.html"
+    click CH "../patterns/consistent-hashing.html"
+    click AS "../patterns/autoscaling.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/performance.html">Performance</a><span>Spread work across many instances</span></div>
+        <div class="fluency-item"><a href="../themes/scalability.html">Scalability</a><span>Distribute across a horizontal fleet</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/sidecar.html">← Sidecar</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/consistent-hashing.html">Consistent Hashing →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

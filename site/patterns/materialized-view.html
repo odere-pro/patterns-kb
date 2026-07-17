@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Materialized View · Patterns</title>
+  <meta name="description" content="Materialized View — precomputes a query's result into its own durable structure, so reads never recompute it.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+</head>
+<body class="doc">
+  <main class="doc-wrap">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Materialized View</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Materialized View</h1>
+      <p class="doc-essence">Precomputes an expensive query's result once and stores it as its own durable structure, so every read is a cheap lookup instead of a live recomputation from source data.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="materialized-view">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>materialized view</strong> is the result of a query computed once and persisted as its own structure — a table, index, or document — rather than re-derived on every read by re-running a join or aggregation live against source data. A plain database view is just a saved query, re-executed each time it's read; a materialized view instead stores the output and refreshes it later, on a schedule, on demand, or in response to upstream changes.</p>
+        <p>The problem it resolves is <strong>read/write asymmetry</strong>. Some queries — "total sales by region this month," "each user's follower count," a full-text search index — are expensive to compute and read far more often than their underlying rows actually change. Recomputing that join or aggregation on every request wastes CPU, adds latency to the hot path, and loads the transactional store with work it wasn't shaped for.</p>
+        <p>The materialized view pays the compute cost once, off the read path, at write or refresh time, and serves every subsequent read from a structure already shaped the way callers want it. The price is staleness: the view is only as fresh as its last refresh, and something has to own recomputing it when the source changes.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    W["Writes"] --> S["Source tables"]
+    S -->|CDC or trigger| R["Refresh process"]
+    R -->|recompute or apply delta| MV["Materialized view"]
+    Q["Reads"] --> MV
+        </pre>
+        <figcaption>Writes land in the source tables. A refresh process, driven by change data capture or a schedule, recomputes or updates the materialized view. Reads go straight to the view and never touch the source.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt>Database-native materialized view</dt>
+        <dd>Postgres, Oracle, and others support it as a first-class object, refreshed with <code>REFRESH MATERIALIZED VIEW</code> or a continuous-refresh mode — the engine tracks staleness for you.</dd>
+        <dt>Full vs. incremental refresh</dt>
+        <dd>Recompute the whole view from scratch each time — simple and correct, but expensive at scale — or apply only the delta of changed source rows, which is faster but harder to get right.</dd>
+        <dt><a href="../patterns/event-sourcing.html">Event Sourcing</a> projection</dt>
+        <dd>The view is built or incrementally updated by folding an event stream, so it's just another subscriber to history rather than a snapshot of current state.</dd>
+        <dt><a href="../patterns/cqrs.html">CQRS</a> read model</dt>
+        <dd>The view is the query side of a write/read split — denormalized and shaped specifically for the queries callers actually make.</dd>
+        <dt>Push vs. pull refresh</dt>
+        <dd>Writes push updates into the view synchronously as they happen, or a background job pulls source changes and recomputes on an interval.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li>Reads become cheap — a direct lookup instead of a live join or aggregation.</li>
+            <li>Decouples the read shape from the write/storage shape; the view is built for the query.</li>
+            <li>Shields the source-of-truth store from repeated, expensive analytical queries.</li>
+            <li>Refresh cost is paid once and amortized across every read that follows.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li>The view can be stale, lagging the source by the refresh interval or replication delay.</li>
+            <li>Another artifact to build, store, and keep in sync — extra storage and refresh infrastructure.</li>
+            <li>Incremental refresh logic is a real source of bugs: partial updates, ordering, replay.</li>
+            <li>Doesn't replace the source of truth — you still need somewhere to rebuild the view from.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li>A query is read far more often than the rows behind it actually change.</li>
+            <li>The read path needs a shape — aggregated, joined, denormalized — that's expensive to compute live.</li>
+            <li>Results that are seconds-to-minutes stale are acceptable, not strict real-time.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li>Reads must reflect every write immediately and staleness isn't tolerable.</li>
+            <li>The underlying query is already cheap — precomputing it only adds refresh overhead for no gain.</li>
+            <li>The read shape changes constantly; a new view per query shape becomes its own maintenance burden.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — an incrementally refreshed view</summary>
+<pre><code>// Materialized view: running totals per customer.
+// Reads never touch the orders table or recompute a SUM.
+class OrderTotalsView {
+  private totals = new Map&lt;string, number&gt;();
+
+  // Called for every committed order event — the "refresh" step.
+  apply(event: OrderPlaced): void {
+    const prior = this.totals.get(event.customerId) ?? 0;
+    this.totals.set(event.customerId, prior + event.amountCents);
+  }
+
+  totalFor(customerId: string): number {
+    return this.totals.get(customerId) ?? 0;
+  }
+}
+
+interface OrderPlaced {
+  customerId: string;
+  amountCents: number;
+}
+
+// Full rebuild — e.g. after a schema change or a corrupted view.
+async function rebuild(
+  view: OrderTotalsView,
+  events: AsyncIterable&lt;OrderPlaced&gt;,
+): Promise&lt;void&gt; {
+  for await (const event of events) view.apply(event);
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/cqrs.html">CQRS</a><span class="rel-note">The read side is a materialized projection</span></div>
+          <div class="rel-item"><a href="../patterns/event-sourcing.html">Event Sourcing</a><span class="rel-note">Project events into read views</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Part of</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/cqrs.html">CQRS</a><span class="rel-note">The read model is a materialized view</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item"><a href="../patterns/cache-aside.html">Cache-Aside</a><span class="rel-note">Precomputed projection vs. lazily-filled cache</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    MV["Materialized View"]
+    MV --- CQ["CQRS"]
+    MV --- CA["Cache-Aside"]
+    MV --- ES["Event Sourcing"]
+    click CQ "../patterns/cqrs.html"
+    click CA "../patterns/cache-aside.html"
+    click ES "../patterns/event-sourcing.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="../themes/performance.html">Performance</a><span>Precompute expensive reads</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../patterns/outbox.html">← Outbox</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../patterns/leader-election.html">Leader Election →</a>
+    </nav>
+
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>
