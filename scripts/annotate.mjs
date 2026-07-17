@@ -34,6 +34,16 @@ const HAZARD_BLOCK_BY_HEADING = {
 const stats = { pages: 0, sections: 0, rels: 0, notesNormalized: 0, idsFixed: 0, members: 0, fluency: 0 };
 const problems = [];
 
+/* Pattern order is editorial, not alphabetical (singleton → factory-method → ...), and
+ * it drives hub chip order and prev/next nav. It exists nowhere but the PATTERNS array,
+ * so each page has to carry its own ordinal or the sequence dies with the tuple table. */
+const ordinals = {};
+for (const kind of ["pattern", "hazard", "theme"]) {
+  Object.values(graph.nodes)
+    .filter((n) => n.kind === kind)
+    .forEach((n, i) => { ordinals[n.id] = i; });
+}
+
 for (const node of Object.values(graph.nodes)) {
   const file = join(ROOT, "site", node.dir, `${node.id}.html`);
   if (!existsSync(file)) { problems.push(`missing page: ${node.id}`); continue; }
@@ -47,6 +57,7 @@ for (const node of Object.values(graph.nodes)) {
   doc.setAttribute("data-kb-kind", node.kind);
   doc.setAttribute("data-kb-band", node.band);
   doc.setAttribute("data-kb-group", node.group);
+  doc.setAttribute("data-kb-order", String(ordinals[node.id]));
   // The terse essence lives only in the graph today — no page renders it. Without
   // this attribute it would be unrecoverable once the graph is derived from pages.
   doc.setAttribute("data-kb-essence", node.essence);

@@ -3,7 +3,7 @@
  * overview of the relationship web from graph.json — a relation-type legend, one mermaid
  * cluster per theme (theme + its member patterns), and a "most connected" index. A single
  * 137-node graph would be an unreadable hairball, so we show meaningful clusters instead. */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -86,7 +86,7 @@ const html = `<!doctype html>
       <p class="doc-essence">${graph.meta.patterns} patterns, ${graph.meta.hazards} hazards, and ${graph.meta.themes} themes, wired by ${graph.meta.renderedRelations} bidirectional relationships. Shown as one readable cluster per theme rather than a single hairball.</p>
       <div class="doc-metarow">
         <span class="badge">Overview</span>
-        <span class="badge muted">${graph.meta.authoredEdges} authored edges</span>
+        <span class="badge muted">${graph.meta.relationships} relationships</span>
       </div>
     </header>
 
@@ -119,5 +119,12 @@ ${rankedHtml}
 </html>
 `;
 
-writeFileSync(join(ROOT, "site", "map", "graph.html"), html);
+const OUT = join(ROOT, "site", "map", "graph.html");
+if (process.argv.includes("--check")) {
+  const cur = existsSync(OUT) ? readFileSync(OUT, "utf8") : "";
+  if (cur !== html) { console.error("map/graph.html is STALE — run: node scripts/build-graph-page.mjs"); process.exit(1); }
+  console.log("map/graph.html is up to date.");
+} else {
+  writeFileSync(OUT, html);
 console.log("site/map/graph.html written.");
+}
