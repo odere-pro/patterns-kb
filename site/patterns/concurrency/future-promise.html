@@ -7,6 +7,7 @@
   <meta name="description" content="Future / Promise — a placeholder for a result that isn't ready yet, so asynchronous work can be composed and awaited without blocking the caller.">
   <link rel="stylesheet" href="../../assets/tokens.css">
   <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -159,7 +160,7 @@ stateDiagram-v2
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
         <summary>TypeScript — a minimal future</summary>
-<pre><code>type State = "pending" | "fulfilled";
+<pre><code class="language-typescript" data-kb-lang="typescript">type State = "pending" | "fulfilled";
 
 class Future&lt;T&gt; {
   private state: State = "pending";
@@ -192,9 +193,51 @@ price.resolve(100);                           // fires the whole chain</code></p
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="js-promise"><strong>JavaScript Promise</strong><span>Standardized in ES2015 as the language-level settle-once handle that async/await desugars into, with all/race/allSettled as its combinators.</span></div>
-        <div class="wild-item" data-kb-example="completablefuture"><strong>java.util.concurrent.CompletableFuture</strong><span>Merges the read-only Future handle and the resolvable producer side into one type you can chain with thenApply and thenCompose.</span></div>
-        <div class="wild-item" data-kb-example="dotnet-task"><strong>.NET Task</strong><span>Task and Task&lt;T&gt; are the futures the C# async/await machinery is built on, resolved by the thread pool or by I/O completion.</span></div>
+        <div class="wild-item" data-kb-example="js-promise"><strong>JavaScript Promise</strong><span>Standardized in ES2015 as the language-level settle-once handle that async/await desugars into, with all/race/allSettled as its combinators. Continuations always run on the microtask queue — never synchronously, even when the promise is already settled — and the safety net for swallowed errors is the unhandledRejection event, which Node.js turned into a process-crashing default in v15 precisely because vanishing rejections were the ecosystem's chronic bug.</span></div>
+        <div class="wild-item" data-kb-example="completablefuture"><strong>java.util.concurrent.CompletableFuture</strong><span>Merges the read-only Future handle and the resolvable producer side into one type you can chain with thenApply and thenCompose. Which thread runs each stage is the operational knob: the non-Async methods may execute on whichever thread completed the previous stage, while the *Async variants default to the common ForkJoinPool unless you pass an explicit Executor — and orTimeout/completeOnTimeout (Java 9+) are how a pending chain gets a deadline.</span></div>
+        <div class="wild-item" data-kb-example="dotnet-task"><strong>.NET Task</strong><span>Task and Task&lt;T&gt; are the futures the C# async/await machinery is built on, resolved by the thread pool or by I/O completion. ConfigureAwait(false) is the dial that decides whether a continuation resumes on the captured context, cancellation flows through explicitly passed CancellationTokens rather than the handle itself, and blocking on .Result from a context the completion needs is the ecosystem's best-known deadlock.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>where continuations run</strong> — the completer's thread, a captured context, or an explicit executor — defaults differ per runtime (thenApply vs. thenApplyAsync, ConfigureAwait), and the wrong one runs your callback on a thread you did not expect</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>completion timeout</strong> — the deadline after which a pending future is failed or given a fallback value; without one, a lost response pends forever and quietly leaks everything awaiting it</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>cancellation propagation</strong> — whether cancelling the handle actually stops the underlying work — most implementations need explicit cooperation (a token, an interrupt check) or the work runs to completion anyway</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>fan-out width</strong> — how many joined futures are actually in flight at once; all/gather-style combinators start everything eagerly, so the downstream feels the entire collection unless you batch</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>pending-future age</strong> — how long handles stay unresolved; a growing tail means a stalled dependency or completions that were simply never written</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>unhandled rejection count</strong> — runtimes surface these as last-resort events or log lines — any nonzero rate means errors are disappearing between producer and consumer</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>continuation scheduling delay</strong> — the gap between a future settling and its callback running; on a single-threaded loop this is event-loop lag, on a pool it is queue time</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>forever-pending future</strong> — one branch of the producer returns without settling — no error, no timeout, just an await that never wakes and a caller that leaks</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>swallowed rejection</strong> — the future settles with an error but nothing is attached to observe it; the failure vanishes until a last-resort runtime event fires, or never</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>sync-over-async deadlock</strong> — blocking on the result from the very thread or context the completion needs; single-threaded contexts and small pools lock up instantly under load</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>unbounded fan-out</strong> — joining a future per item of a large collection starts them all at once — the dependency sees the whole burst, and sockets or memory run out before the join completes</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">settle on every code path — audit error branches for a return without a resolve or reject</li>
+            <li id="production-check-2" data-kb-polarity="check">attach a rejection handler to every future, including fire-and-forget ones</li>
+            <li id="production-check-3" data-kb-polarity="check">give every await a deadline; a future without a timeout is an unbounded wait</li>
+            <li id="production-check-4" data-kb-polarity="check">never block synchronously on a future from a context that is needed to complete it</li>
+            <li id="production-check-5" data-kb-polarity="check">bound fan-out when joining many futures — the combinator will not do it for you</li>
+          </ul>
+        </div>
       </div>
     </section>
 
@@ -233,5 +276,7 @@ flowchart LR
   <script src="../../assets/vendor/mermaid.min.js"></script>
   <script src="../../assets/diagram.js"></script>
   <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
 </body>
 </html>

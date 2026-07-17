@@ -7,6 +7,7 @@
   <meta name="description" content="Replication — keeps copies of data on multiple nodes for durability and read scale, at the cost of keeping every copy in agreement.">
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -201,7 +202,7 @@ flowchart LR
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
         <summary>TypeScript — a primary shipping a log to replicas</summary>
-<pre><code>interface LogEntry {
+<pre><code class="language-typescript" data-kb-lang="typescript">interface LogEntry {
   seq: number;
   key: string;
   value: string;
@@ -243,9 +244,53 @@ class Replica {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="postgresql-streaming-replication"><strong>PostgreSQL streaming replication</strong><span>Streams the WAL to hot standbys that serve reads and can be promoted when the primary fails.</span></div>
-        <div class="wild-item" data-kb-example="mongodb-replica-sets"><strong>MongoDB replica sets</strong><span>A set elects a primary, replicates its oplog to secondaries, and fails over automatically without an operator.</span></div>
-        <div class="wild-item" data-kb-example="apache-kafka"><strong>Apache Kafka</strong><span>Each partition has a leader and follower replicas, and the in-sync replica set defines what counts as durably committed.</span></div>
+        <div class="wild-item" data-kb-example="postgresql-streaming-replication"><strong>PostgreSQL streaming replication</strong><span>Streams the WAL to hot standbys that serve reads and can be promoted when the primary fails; synchronous_standby_names picks which standbys must acknowledge a commit, and replication slots hold WAL for a disconnected standby — famously filling the primary's disk when a slot is orphaned.</span></div>
+        <div class="wild-item" data-kb-example="mongodb-replica-sets"><strong>MongoDB replica sets</strong><span>A set elects a primary, replicates its oplog to secondaries, and fails over automatically without an operator; teams dial durability per write with a majority write concern and route reads with read preferences, accepting staleness on secondaries.</span></div>
+        <div class="wild-item" data-kb-example="apache-kafka"><strong>Apache Kafka</strong><span>Each partition has a leader and follower replicas, and the in-sync replica set defines what counts as durably committed; acks=all with min.insync.replicas sets the durability floor, and unclean.leader.election.enable decides whether availability may be bought with lost writes.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>acknowledgment level</strong> — how many replicas must confirm before a write returns — Kafka acks, Postgres synchronous_commit, Mongo write concern all dial the same trade: commit latency and availability against durability of the newest writes</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>replication factor</strong> — how many copies exist, and across which failure domains; three is the common floor because two means the first failure leaves you running unreplicated</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>read routing</strong> — whether reads may hit followers; replica reads buy throughput and pay in staleness — decide per query, not once per system</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>failover policy</strong> — automatic election recovers in seconds but must be paired with fencing of the old leader, or two nodes both believe they are primary</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>log retention for catch-up</strong> — how much log the leader keeps for lagging followers; too little and a slow replica must be rebuilt from scratch, too much — or pinned by a dead replica's slot — and the leader's own disk fills</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>replication lag per replica</strong> — in bytes or seconds — the one number that is both the staleness of follower reads and the size of your data-loss window on failover</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>in-sync replica count</strong> — how many copies are currently keeping up; when it drops to the acknowledgment threshold, the next failure either blocks writes or loses them</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>retained log size on the leader</strong> — grows when a follower falls behind or dies with a retention slot open; watch it before the disk does</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>leader elections per day</strong> — elections should be rare events you can explain; unexplained ones mean a flapping network or an overloaded leader</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>split brain</strong> — a partitioned old leader keeps accepting writes while a new one is elected; without fencing or quorum both sides diverge, and reconciliation throws someone's writes away</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>failover data loss under async</strong> — the leader dies with acknowledged writes not yet shipped; the promoted follower never saw them — clients were told committed about data that no longer exists</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>read-your-writes violation</strong> — a user writes to the leader and reads the change back from a lagging follower — it is not there; the bug reports say the save button is broken</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>disk-full from a pinned log</strong> — a decommissioned replica whose slot or position still pins retention; the leader hoards log for a follower that will never return until its own disk fills</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">measure and alert on replication lag — under async replication it is the size of your data-loss window</li>
+            <li id="production-check-2" data-kb-polarity="check">practice failover deliberately in business hours; the first promotion should not happen during the outage</li>
+            <li id="production-check-3" data-kb-polarity="check">fence the old leader before promoting a new one — never let two primaries live at once</li>
+            <li id="production-check-4" data-kb-polarity="check">decide explicitly which reads may go to replicas; a default of any-replica quietly breaks read-your-writes</li>
+            <li id="production-check-5" data-kb-polarity="check">clean up replication slots and offsets for decommissioned replicas, and monitor retained log on the leader</li>
+          </ul>
+        </div>
       </div>
     </section>
 
@@ -321,5 +366,7 @@ flowchart LR
   <script src="../../../assets/vendor/mermaid.min.js"></script>
   <script src="../../../assets/diagram.js"></script>
   <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
 </body>
 </html>

@@ -7,6 +7,7 @@
   <meta name="description" content="Thread Pool — reuse a fixed set of worker threads to run a stream of tasks without paying the cost of creating a thread per task.">
   <link rel="stylesheet" href="../../assets/tokens.css">
   <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -171,7 +172,7 @@ flowchart LR
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
         <summary>TypeScript — a minimal fixed-size pool</summary>
-<pre><code>type Task&lt;T&gt; = () =&gt; Promise&lt;T&gt;;
+<pre><code class="language-typescript" data-kb-lang="typescript">type Task&lt;T&gt; = () =&gt; Promise&lt;T&gt;;
 
 class ThreadPool {
   private queue: Array&lt;() =&gt; void&gt; = [];
@@ -208,9 +209,52 @@ const results = await Promise.all(items.map((i) =&gt; pool.submit(() =&gt; proce
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="java-executorservice"><strong>java.util.concurrent.ExecutorService</strong><span>ThreadPoolExecutor and the Executors factory methods are the canonical fixed, cached, and work-stealing pools on the JVM.</span></div>
-        <div class="wild-item" data-kb-example="dotnet-threadpool"><strong>.NET ThreadPool</strong><span>The runtime keeps a managed, self-tuning pool of workers that backs Task.Run and async continuations, so user code rarely creates threads directly.</span></div>
-        <div class="wild-item" data-kb-example="libuv"><strong>libuv</strong><span>Node.js offloads filesystem, DNS, and crypto work to libuv's fixed-size worker pool so blocking calls never stall the event loop.</span></div>
+        <div class="wild-item" data-kb-example="java-executorservice"><strong>java.util.concurrent.ExecutorService</strong><span>ThreadPoolExecutor and the Executors factory methods are the canonical fixed, cached, and work-stealing pools on the JVM. ThreadPoolExecutor exposes every knob directly — corePoolSize, maximumPoolSize, keepAliveTime, the BlockingQueue you hand it, and a pluggable RejectedExecutionHandler — which is why careful teams construct it explicitly rather than use Executors.newFixedThreadPool, whose convenience hides an unbounded queue.</span></div>
+        <div class="wild-item" data-kb-example="dotnet-threadpool"><strong>.NET ThreadPool</strong><span>The runtime keeps a managed, self-tuning pool of workers that backs Task.Run and async continuations, so user code rarely creates threads directly. It adjusts worker count with a hill-climbing heuristic and injects threads beyond the minimum only at a deliberately slow rate — so ThreadPool.SetMinThreads is the standard operational fix when bursts of blocking work make requests stall waiting for thread injection.</span></div>
+        <div class="wild-item" data-kb-example="libuv"><strong>libuv</strong><span>Node.js offloads filesystem, DNS lookups, and CPU-heavy crypto such as pbkdf2 to libuv's fixed-size worker pool so blocking calls never stall the event loop. The pool defaults to just 4 threads, sized once at startup via the UV_THREADPOOL_SIZE environment variable — the classic symptom of leaving it alone is fs and dns latency spiking together the moment a fifth blocking call queues.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>pool size</strong> — the real parallelism dial (corePoolSize/maximumPoolSize in JVM terms): near core count for CPU-bound work, larger for IO-bound — derived from the measured wait-to-compute ratio, not guessed</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>queue bound</strong> — an unbounded queue converts overload into silent memory growth and latency; a bounded one converts it into visible backpressure the caller must handle</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>rejection policy</strong> — what happens when the queue is full — throw, block the submitter, run on the caller's thread, or drop; each pushes the pain to a different place, and the default was chosen for you</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>idle keep-alive</strong> — how long an elastic pool retains an idle worker before retiring it; too short and every burst re-pays thread creation, too long and the pool never shrinks</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>queue depth</strong> — a burst that drains is fine; sustained growth means arrival rate exceeds service rate and latency is compounding</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>time-in-queue</strong> — the wait a task suffers before it even starts — under saturation it dwarfs execution time, and callers feel the sum</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>active workers vs. pool size</strong> — pinned at max for minutes is saturation; near zero with a deep queue means workers are blocked, not busy</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>rejection count</strong> — every rejection is load the pool refused; a count that is always zero may just mean the queue is unbounded</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>pool-induced deadlock</strong> — a task submits sub-tasks to the same pool and blocks waiting for them; once every worker is waiting, nothing can ever run</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>blocked-worker starvation</strong> — a few tasks stuck on slow I/O occupy all workers — throughput collapses to zero while the CPU sits idle</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>unbounded-queue creep</strong> — the pool looks healthy while the queue grows for hours; the symptom finally surfaces as memory exhaustion or timeouts far downstream</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>cross-task contamination</strong> — leftover thread-local state or an uncaught exception from one task poisons the worker the next task inherits</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">bound the queue and pick the rejection policy deliberately — the default is a decision either way</li>
+            <li id="production-check-2" data-kb-polarity="check">never block inside a task on work submitted to the same pool; give nested work its own pool or a work-stealing design</li>
+            <li id="production-check-3" data-kb-polarity="check">name every pool so it is identifiable in thread dumps and metrics</li>
+            <li id="production-check-4" data-kb-polarity="check">wrap tasks with a catch-all handler so one failure cannot silently kill or poison a worker</li>
+            <li id="production-check-5" data-kb-polarity="check">reset or avoid thread-local state between tasks — workers are shared, their memory is not private</li>
+          </ul>
+        </div>
       </div>
     </section>
 
@@ -261,5 +305,7 @@ flowchart LR
   <script src="../../assets/vendor/mermaid.min.js"></script>
   <script src="../../assets/diagram.js"></script>
   <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
 </body>
 </html>
