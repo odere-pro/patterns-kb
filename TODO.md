@@ -1,0 +1,86 @@
+# TODO — deferred work
+
+Follow-ups that were consciously left out of the HTML5-knowledge-layer build. None of them
+blocks the KB; each is a distinct, self-contained piece of work. Ordered roughly by
+value-to-effort.
+
+## 1. Recover the 7 discarded per-side relation notes
+
+**What.** Seven relationships were originally authored twice — once from each side, with a
+*different* note per side — to work around the old builder, which allowed only one note per
+edge. The old dedupe silently kept the first and threw the second away, so both pages now
+show the **same** note. The pipeline was since inverted (each page declares its own relation),
+so per-side notes are now supported first-class — the richer notes just need re-adding.
+
+The pairs, each currently sharing one identical note where two were written:
+
+- `null-object` ↔ `strategy`
+- `event-sourcing` ↔ `write-ahead-log`
+- `retry-backoff` ↔ `timeout-deadline`
+- `gatekeeper` ↔ `intercepting-validator`
+- `cache-aside` ↔ `materialized-view`
+- `future-promise` ↔ `reactor`
+- `acl` ↔ `message-translator`
+
+**How.** The discarded notes are in git history — see the Phase 2 commit
+(`git show 790b11b`), which lists all seven pairs with both notes. For each pair, edit the
+`.rel-note` on one side so it reads from that page's perspective. `make check` still passes
+because only the edge and type must agree across sides, not the note.
+
+**Effort.** Small — 7 one-line prose edits.
+
+## 2. Promote the 6 stub neighbours to real pages
+
+**What.** Six ids are referenced as relation targets or theme members but have no page of
+their own, so they render as plain (unlinked) text:
+
+`monostate`, `token-bucket`, `reverse-proxy`, `service-mesh`, `sticky-session`,
+`stateless-service`
+
+**Why deferred.** Whether each deserves a full page is a content decision, not a mechanical
+one. Some (`service-mesh`, `token-bucket`) clearly do; others (`monostate`) may be better left
+as a footnote on a related pattern.
+
+**How.** Use the `kb-add` skill. The links pointing at a stub already exist, so the moment its
+page lands, its inbound relationships light up — this is the cheapest kind of addition. Decide
+its band/group, copy the `circuit-breaker` exemplar, write the blocks, and declare the reverse
+of each relationship that already points at it. `make check` will tell you which those are.
+
+**Effort.** Medium per page — real content authoring.
+
+## 3. Pre-render mermaid diagrams to SVG
+
+**What.** Every one of the 148 pages loads the vendored `mermaid.min.js` (**3.4 MB**) to
+render ~2 small diagrams client-side. It is browser-cached, so the real-world cost is one
+download per visitor — but it dominates the page weight and runs script on every view.
+
+**How.** Add a build step that renders each `<pre class="mermaid">` to inline SVG at authoring
+time and drops the runtime dependency. The catch, and the reason it was deferred: a headless
+mermaid renderer reintroduces a real build-time dependency (a browser engine or the mermaid
+CLI), which the repo currently has none of. That trade-off — zero-dependency ethos vs. page
+weight — is the actual decision to make here.
+
+**Effort.** Medium-to-large, and it changes the project's dependency posture.
+
+## 4. Improve search ranking beyond lexical matching
+
+**What.** `kb.mjs find` and the hub search score by term overlap against essence, tags,
+`solves`, and full prose, with a naming-vs-symptom weighting and a relevance cut. It works
+well, but it is lexical: a symptom that shares no vocabulary with any `solves` phrase will
+miss, and near-synonyms ("stale" vs "outdated") are not related.
+
+**How.** Options, in increasing cost: expand `solves` coverage (cheapest, no code); add a
+curated synonym map in `kb.mjs`; or precompute embeddings into a static index the hub and CLI
+can both read (most capable, but reintroduces a build-time model dependency — weigh against
+the zero-dependency ethos).
+
+**Effort.** Small (synonyms) to large (embeddings).
+
+## Notes / non-tasks
+
+- **`mentions` / `mentionedBy`** are already derived into `graph.json` (prose links between
+  pages that are not typed relations). They are intentionally **not** surfaced as a visible
+  "what links here" block: of 344 non-relation links, only ~10 are genuine prose mentions —
+  the rest are navigation. Revisit only if that ratio changes materially.
+- **`elevation-map.html`** (the old prototype) was deleted, not deferred — it is recoverable
+  from git history if ever wanted.
