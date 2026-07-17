@@ -16,26 +16,10 @@
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "site", "assets", "graph.json");
-
-/* ---------------- relation vocabulary ---------------- */
-const RELATION_TYPES = {
-  "combines-with":       { label: "Combines with",     symmetric: true },
-  "alternative-to":      { label: "Alternative to",    symmetric: true },
-  "often-confused-with": { label: "Often confused with", symmetric: true },
-  "variant-of":          { label: "Variant of",   inverse: "has-variant" },
-  "has-variant":         { label: "Has variant",  inverse: "variant-of" },
-  "specializes":         { label: "Specializes",  inverse: "generalizes" },
-  "generalizes":         { label: "Generalizes",  inverse: "specializes" },
-  "prerequisite":        { label: "Requires",     inverse: "enables" },
-  "enables":             { label: "Enables",       inverse: "prerequisite" },
-  "composed-of":         { label: "Composed of",  inverse: "part-of" },
-  "part-of":             { label: "Part of",      inverse: "composed-of" },
-  "prevents-hazard":     { label: "Prevents",     inverse: "mitigated-by" },
-  "mitigated-by":        { label: "Mitigated by", inverse: "prevents-hazard" },
-};
 
 /* ---------------- nodes ----------------
  * [id, name, band, group, essence]   (patterns + hazards + themes below)
@@ -533,9 +517,6 @@ const THEME_MEMBERS = {
 };
 
 /* ---------------- assembly ---------------- */
-const ELEVATION_BANDS = new Set(["gof", "enterprise", "architecture", "distributed"]);
-const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes" };
-
 const nodes = {};
 function addNode(id, name, band, group, essence, kind) {
   if (nodes[id]) throw new Error(`duplicate node id: ${id}`);

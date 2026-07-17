@@ -8,13 +8,12 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { BANDS, THEME_ORDER, HAZARD_ORDER, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "site", "index.html");
 const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json"), "utf8"));
 const N = graph.nodes;
-
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 const patternsIn = (group) =>
   Object.values(N).filter((n) => n.kind === "pattern" && n.group === group);
@@ -30,46 +29,17 @@ function chips(group) {
 }
 
 /* ---- elevation bands ---- */
-const ELEVATION = [
-  {
-    band: "gof", numeral: "I", vlabel: "Objects &amp; Classes", anchor: "band-gof-h",
-    h2: "Objects &amp; Classes",
-    desc: "Gang of Four, 1994 — the 23 patterns everything else stands on, plus a few essentials the book missed",
-    groups: [
-      ["gof-creational", "Creational"],
-      ["gof-structural", "Structural"],
-      ["gof-behavioral", "Behavioral"],
-      ["gof-extra", "Also Essential"],
-    ],
-  },
-  {
-    band: "enterprise", numeral: "II", vlabel: "Application", anchor: "band-ent-h",
-    h2: "Application",
-    desc: "Organizing one app's business logic and data access (Fowler, PoEAA)",
-    groups: [["enterprise", null]],
-  },
-  {
-    band: "architecture", numeral: "III", vlabel: "Architecture", anchor: "band-arch-h",
-    h2: "Architecture",
-    desc: "Shaping how a whole system's components are arranged",
-    groups: [["architecture", null]],
-  },
-  {
-    band: "distributed", numeral: "IV", vlabel: "Network", anchor: "band-dist-h",
-    h2: "Network",
-    desc: "Keeping many services reliable, fast, and consistent across a network",
-    groups: [
-      ["distributed-resilience", "Resilience"],
-      ["distributed-routing", "Routing &amp; Scale"],
-      ["distributed-coordination", "Coordination &amp; Data"],
-    ],
-  },
-];
+/* Projected from the shared model. Labels there are plain text; escape at render. */
+const ELEVATION = BANDS.filter((b) => b.kind === "elevation").map((b) => ({
+  band: b.id, numeral: b.numeral, vlabel: b.label, anchor: b.anchor,
+  h2: b.label, desc: b.desc,
+  groups: b.groups.map((g) => [g.id, g.label]),
+}));
 
 function bandGroupHtml([group, title]) {
   const total = patternsIn(group).length;
   const head = title
-    ? `        <div class="group">\n          <h3>${title} <span class="count" data-count-group="${group}">0/${total}</span></h3>\n          <div class="chips">\n${chips(group)}\n          </div>\n        </div>`
+    ? `        <div class="group">\n          <h3>${esc(title)} <span class="count" data-count-group="${group}">0/${total}</span></h3>\n          <div class="chips">\n${chips(group)}\n          </div>\n        </div>`
     : `        <div class="group">\n          <div class="chips">\n${chips(group)}\n          </div>\n        </div>`;
   return head;
 }
@@ -79,12 +49,12 @@ function bandHtml(b) {
       <div class="marker" aria-hidden="true">
         <span class="numeral">${b.numeral}</span>
         <span class="rule"></span>
-        <span class="vlabel">${b.vlabel}</span>
+        <span class="vlabel">${esc(b.vlabel)}</span>
       </div>
       <div class="band-content">
         <div class="band-head">
-          <h2 id="${b.anchor}">${b.h2}</h2>
-          <p>${b.desc} <span class="count" data-count-band="${b.band}">0/${bandTotal(b.band)}</span></p>
+          <h2 id="${b.anchor}">${esc(b.h2)}</h2>
+          <p>${esc(b.desc)} <span class="count" data-count-band="${b.band}">0/${bandTotal(b.band)}</span></p>
         </div>
 ${b.groups.map(bandGroupHtml).join("\n")}
       </div>
@@ -92,19 +62,11 @@ ${b.groups.map(bandGroupHtml).join("\n")}
 }
 
 /* ---- lenses ---- */
-const LENSES = [
-  ["concurrency", "Concurrency", "lens-conc-h"],
-  ["messaging", "Messaging", "lens-msg-h"],
-  ["caching", "Caching", "lens-cache-h"],
-  ["ddd", "Domain-Driven Design", "lens-ddd-h"],
-  ["functional", "Functional", "lens-fp-h"],
-  ["testing", "Testing", "lens-test-h"],
-  ["security", "Security", "lens-sec-h"],
-];
+const LENSES = BANDS.filter((b) => b.kind === "lens").map((b) => [b.id, b.label, b.anchor]);
 function lensHtml([band, title, anchor]) {
   const total = bandTotal(band);
   return `        <div class="lens-card" data-band="${band}" aria-labelledby="${anchor}">
-          <h3 id="${anchor}">${title} <span class="count" data-count-band="${band}">0/${total}</span></h3>
+          <h3 id="${anchor}">${esc(title)} <span class="count" data-count-band="${band}">0/${total}</span></h3>
           <div class="chips">
 ${chips(band)}
           </div>
@@ -112,17 +74,12 @@ ${chips(band)}
 }
 
 /* ---- themes ---- */
-const THEME_ORDER = [
-  "cap-theorem", "streaming", "spike-handling", "performance", "auth-and-access",
-  "scalability", "consistency-and-replication", "observability", "resilience",
-];
 function themeCard(id) {
   const t = N[id];
   return `        <a class="theme-card" href="themes/${id}.html"><span class="theme-name">${esc(t.name)}</span><span class="theme-note">${esc(t.essence)}</span></a>`;
 }
 
 /* ---- hazards ---- */
-const HAZARD_ORDER = ["god-object", "spaghetti-code", "big-ball-of-mud", "anemic-domain-model", "golden-hammer", "boat-anchor"];
 function hazardChip(id) {
   const h = N[id];
   return `        <div class="chip chip--plain hazard-chip"><a class="chip-name" href="hazards/${id}.html">${esc(h.name)}</a><span class="chip-note">${esc(h.essence)}</span></div>`;
