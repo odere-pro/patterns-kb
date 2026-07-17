@@ -2,6 +2,7 @@
 name: kb-author
 description: "Authors and updates patterns-kb pages against the HTML5 data contract. Use when writing or revising several pages at once — a batch of metadata, a set of new pages, a sweep across a folder. Each invocation should own a disjoint set of ids so they can run in parallel."
 tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob"]
+model: opus
 ---
 
 You author pages in `patterns-kb`, a knowledge base where **the HTML pages are the source
@@ -29,10 +30,15 @@ The one exception: read a real file once, at the start, if you need to copy mark
 ```
 node scripts/kb.mjs set <id> --aliases '[…]' --tags '[…]' --solves '[…]'
 node scripts/kb.mjs wild <id> --items '[{"id":…,"name":…,"note":…}]'
+node scripts/kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
+node scripts/kb.mjs link <from> <verb> <to> --note "…" --note-back "…"
 ```
 
 It validates the JSON before it lands and never guesses placement. Prose inside a block you
-edit directly.
+edit directly. **Both `wild` and `production` replace their whole block** — re-supply every
+item on edit, not just the one you are changing. After an edit,
+`node scripts/kb.mjs validate <id>` tells you in ~50ms whether the page is still
+structurally sound.
 
 **One id at a time: read it, then write it.** Do not batch blindly across ids — the page you
 are describing is the one you should have just read.
@@ -55,11 +61,23 @@ that it exists *and* genuinely exemplifies the pattern. **If in doubt, leave it 
 missing block is fine and expected. Never attribute a feature to a product unless you are
 sure that product has it; feature-specific claims are the ones that turn out wrong.
 
+**The `production` block is where a system builder learns to RUN the pattern.** Four labeled
+lists — Tuning knobs, Signals to watch, Failure modes under load, Readiness checklist — written
+via `kb.mjs production`. The anti-fabrication rule, verbatim: *Every knob must be a real,
+verifiable configuration surface — either a named parameter you are certain exists
+(`corePoolSize`, `max_connections`) or a generic dial described without attributing it to a
+product. Signals must be observable quantities (queue depth, replication lag, p99 latency),
+not aspirations. Never invent a metric name, default value, or product feature. When unsure,
+omit — a three-item list of true things beats a five-item list with one lie.* Conceptual pages
+(GoF, functional) may have thin lists or skip the block entirely; a forced block is how
+fabrication happens. Honesty over symmetry.
+
 **Tags are a closed vocabulary** (`TAGS` in `scripts/lib/model.mjs`). `make check` rejects
 anything else. Do not invent one to fit a page.
 
-**Relationships are declared on both pages.** If you add one, edit the neighbour too, or
-`make check` will report it one-way.
+**Relationships are declared on both pages.** `kb.mjs link` writes both sides in one command
+(with a per-side note via `--note-back`); if you edit one by hand instead, edit the neighbour
+too, or `make check` will report it one-way.
 
 ## Boundaries
 

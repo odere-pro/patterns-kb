@@ -18,18 +18,24 @@ searches better than your paraphrase of it.
 
 ```
 node scripts/kb.mjs find "one slow dependency blocks my threads"
+node scripts/kb.mjs find "stale reads" --tag caching       # scope by tag, band or kind
+node scripts/kb.mjs find --tag resilience                  # filter alone = a listing
 ```
 
 Each hit prints the line that matched, so you can often judge relevance without opening
 anything. `find` weights differently depending on whether you are naming a pattern
 ("circuit breaker") or describing a symptom — so pass the whole sentence, not keywords.
+A small synonym map bridges near-misses ("outdated" reaches pages that say "stale"), at
+half weight so exact vocabulary still wins.
 
 **2. Open only the blocks you need.** Usually `usage` (when to reach for it, when not to)
-and `tradeoffs`. Rarely the whole page.
+and `tradeoffs`. For "how do I run this in production" questions, the `production` block
+carries knobs, signals, failure modes and a readiness checklist. Rarely the whole page.
 
 ```
 node scripts/kb.mjs get circuit-breaker --block usage
 node scripts/kb.mjs get bulkhead --block tradeoffs
+node scripts/kb.mjs get thread-pool --block production
 ```
 
 **3. Check the neighbours before answering.** Patterns are rarely the whole answer, and the

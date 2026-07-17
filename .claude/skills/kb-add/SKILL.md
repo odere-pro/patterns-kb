@@ -30,42 +30,45 @@ it works at (an object? one app? a whole system? a network?) or which lens it is
 (concurrency, messaging, caching, ddd, functional, testing, security). See `BANDS` in
 `scripts/lib/model.mjs`.
 
-## 3. Copy an exemplar
+## 3. Scaffold it
+
+```
+node scripts/kb.mjs new <id> --kind pattern --band <band> [--group <group>] --name "Name" --order <n>
+```
+
+This writes a structurally valid skeleton — every mandatory block in order, sketch pre-wired
+for highlighting — that already passes `kb.mjs validate --file`. Then study an exemplar for
+what good content looks like:
 
 ```
 node scripts/kb.mjs get circuit-breaker          # pattern
 node scripts/kb.mjs get cap-theorem              # theme
 node scripts/kb.mjs get god-object               # hazard
+node scripts/kb.mjs get thread-pool --block production   # the production block
 ```
-
-Then read the real file for its markup, once, to copy the shape:
-`site/patterns/distributed/resilience/circuit-breaker.html`. This is the **one** time
-opening a `.html` is right.
 
 ## 4. Write it
 
-- All blocks for its kind, in order (see the rules file). No missing, no extra.
-- `data-kb-id` must equal the filename; `data-kb-band`/`-group` must match the folder.
+- Replace every TODO the scaffold left: prose, diagram, sketch, essence (both the
+  `data-kb-essence` attribute — the terse hub-chip line — and the longer `.doc-essence`
+  sentence; they are different by design).
 - `data-kb-order` — pattern order is **editorial, not alphabetical**. It drives the hub and
   prev/next. Insert where it belongs pedagogically, and renumber the pages after it in the
   same band.
-- `data-kb-essence` — the terse hub-chip line, distinct from the longer `.doc-essence`
-  sentence on the page. Both exist.
 - Leave the JSON-LD out. It is generated.
+- `node scripts/kb.mjs validate <id>` at any point tells you what is still structurally wrong.
 
 ## 5. Wire the relationships — both sides
 
-This is the step that gets forgotten. A relationship must be declared on **both** pages, and
-`make check` fails otherwise. So adding a page means editing its neighbours too.
+A relationship must be declared on **both** pages, and `make check` fails otherwise. The
+`link` command does both sides in one step, with a per-side note:
 
-```html
-<div class="rel-item" data-kb-rel="combines-with" data-kb-to="bulkhead">
-  <a href="./bulkhead.html">Bulkhead</a><span class="rel-note">why they relate</span>
-</div>
+```
+node scripts/kb.mjs link <id> combines-with bulkhead --note "why, from this page's view" --note-back "why, from bulkhead's view"
 ```
 
-Each side may phrase its note from its own perspective. Only the edge and type must agree.
-Verbs are closed — see [site/vocab.html](../../../site/vocab.html).
+Verbs are closed — see [site/vocab.html](../../../site/vocab.html). Directional verbs
+(`variant-of`/`has-variant`) get the inverse written on the far side automatically.
 
 ## 6. Metadata
 
@@ -83,6 +86,14 @@ Optionally, real implementations — **only ones you are sure exist**:
 
 ```
 node scripts/kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"one sentence"}]'
+```
+
+And, where the pattern has real operational content, the system-builder block (see the
+anti-fabrication rule in the authoring contract — when unsure, omit):
+
+```
+node scripts/kb.mjs production <id> --knobs '[{"label":"…","note":"…"}]' \
+  --signals '[…]' --failures '[…]' --checklist '["…"]'
 ```
 
 ## 7. Build and verify

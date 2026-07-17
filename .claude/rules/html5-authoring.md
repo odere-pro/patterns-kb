@@ -87,12 +87,33 @@ Fixed vocabulary, fixed order, per kind — see `BLOCKS` in `scripts/lib/model.m
 
 | kind | blocks |
 |---|---|
-| pattern | `description` `structure` `variations` `tradeoffs` `usage` `sketch` `wild`* `relationships` `fluency`* |
+| pattern | `description` `structure` `variations` `tradeoffs` `usage` `sketch` `wild`* `production`* `relationships` `fluency`* |
 | hazard | `description` `causes` `cost` `mitigation` |
 | theme | `framing` `tradespace` `tour` `decide` `siblings` |
 
 `*` optional. Same question, same place, on every page — that is what makes block-level
 extraction possible.
+
+**`production`** (patterns only, optional) — the system-builder block: what it takes to *run*
+the pattern, written through the validated writer:
+
+```
+node scripts/kb.mjs production <id> \
+  --knobs '[{"label":"pool size","note":"…"}]' --signals '[…]' \
+  --failures '[…]' --checklist '["…"]'
+```
+
+Four labeled lists — **Tuning knobs** (the configuration surfaces), **Signals to watch**
+(observable quantities: queue depth, replication lag, p99 latency), **Failure modes under
+load** (what breaks first and how it looks), **Readiness checklist** (gates before shipping).
+Any list may be empty; its card is simply omitted. The writer replaces the whole block, so
+re-supply every list on edit. Anti-fabrication rule, same standard as "In the wild": every
+knob must be a real, verifiable configuration surface — either a named parameter you are
+certain exists (`corePoolSize`, `max_connections`) or a generic dial described without
+attributing it to a product. Signals must be observable quantities, not aspirations. Never
+invent a metric name, default value, or product feature. When unsure, omit — a three-item
+list of true things beats a five-item list with one lie. Conceptual pages (GoF, functional)
+may skip the block entirely; a forced block is how fabrication happens.
 
 ## Relationships
 

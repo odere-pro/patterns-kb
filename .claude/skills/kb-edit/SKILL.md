@@ -25,16 +25,22 @@ wrong", that is `#tradeoffs-con-2`, and you can quote it before changing it.
 | prose in a block | edit the HTML directly — it is authored |
 | aliases / tags / solves | `kb.mjs set` — **never** hand-edit the attribute |
 | "In the wild" examples | `kb.mjs wild --items '[…]'` — rewrites the whole list |
-| a relationship | edit **both** pages (see below) |
+| "In production" block | `kb.mjs production --knobs … --signals … --failures … --checklist …` — rewrites the whole block |
+| adding a relationship | `kb.mjs link <from> <verb> <to> --note … --note-back …` — writes both pages |
+| removing/changing a relationship | edit **both** pages by hand (see below) |
 | anything in `<!-- kb:generated -->` | **do not.** `make all` overwrites it |
 
 `kb.mjs set` validates the JSON before it lands and never guesses placement. Hand-editing a
-`data-kb-solves='[…]'` string is how you get an unparseable attribute.
+`data-kb-solves='[…]'` string is how you get an unparseable attribute. After any edit,
+`node scripts/kb.mjs validate <id>` (~50ms) names what broke, if anything — the hook runs it
+for you on every page edit.
 
 ## Relationships take two edits
 
-Every relationship is declared on both pages it joins. Removing one from Circuit Breaker
-without removing its inverse from Bulkhead fails `make check` with:
+Every relationship is declared on both pages it joins. `kb.mjs link` handles **adding** one
+(both sides, inverse verb derived, per-side notes). Removing or re-typing one is still two
+hand edits — removing it from Circuit Breaker without removing its inverse from Bulkhead
+fails `make check` with:
 
 ```
 one-way: bulkhead -combines-with-> circuit-breaker has no "combines-with" back
@@ -44,6 +50,7 @@ That error means you did half the edit. Check what exists first:
 
 ```
 node scripts/kb.mjs related <id>
+node scripts/kb.mjs backlinks <id>    # inbound edges as the OTHER side phrases them
 ```
 
 Directional verbs are paired (`variant-of` ↔ `has-variant`, `prevents-hazard` ↔
