@@ -15,7 +15,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { VOCAB_NS, KB_NAME, BLOCKS, OPTIONAL_BLOCKS } from "./lib/model.mjs";
+import { VOCAB_NS, KB_NAME } from "./lib/model.mjs";
+import { blockProblems } from "./lib/validate.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
  * the kb:generated markers (and any comment an author writes). */
@@ -34,6 +35,10 @@ const ITEMS = [
   { block: "usage", sel: ".when li", polarity: "when" },
   { block: "usage", sel: ".avoid li", polarity: "avoid" },
   { block: "variations", sel: "dl.variations dt", polarity: null },
+  { block: "production", sel: ".prod-knobs li", polarity: "knob" },
+  { block: "production", sel: ".prod-signals li", polarity: "signal" },
+  { block: "production", sel: ".prod-failures li", polarity: "failure" },
+  { block: "production", sel: ".prod-checklist li", polarity: "check" },
 ];
 
 /** Path from one page to another, site-relative in, page-relative out. */
@@ -93,16 +98,9 @@ for (const node of Object.values(graph.nodes)) {
   const src = readFileSync(file, "utf8");
   const root = parse(src, PARSE_OPTS);
 
-  /* ---- block vocabulary lint ---- */
+  /* ---- block vocabulary lint (shared with kb.mjs validate) ---- */
   const present = root.querySelectorAll("[data-kb-block]").map((s) => s.getAttribute("data-kb-block"));
-  const want = BLOCKS[node.kind];
-  for (const b of want) {
-    if (!present.includes(b) && !OPTIONAL_BLOCKS.has(b)) problems.push(`${node.id}: missing block "${b}"`);
-  }
-  for (const b of present) if (!want.includes(b)) problems.push(`${node.id}: unknown block "${b}"`);
-  const ordered = present.filter((b) => want.includes(b));
-  if (JSON.stringify(ordered) !== JSON.stringify(want.filter((b) => present.includes(b))))
-    problems.push(`${node.id}: blocks out of order: ${present.join(" ")}`);
+  for (const msg of blockProblems(present, node.kind)) problems.push(`${node.id}: ${msg}`);
 
   /* ---- element-level ids ---- */
   for (const { block, sel, polarity } of ITEMS) {

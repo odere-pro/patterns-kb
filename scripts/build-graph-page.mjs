@@ -2,19 +2,17 @@
 /* build-graph-page.mjs — AUTHORING-TIME tool. Emits site/map/graph.html: a readable
  * overview of the relationship web from graph.json — a relation-type legend, one mermaid
  * cluster per theme (theme + its member patterns), and a "most connected" index. A single
- * 137-node graph would be an unreadable hairball, so we show meaningful clusters instead. */
+ * all-nodes graph (146 and counting) would be an unreadable hairball, so we show
+ * meaningful clusters instead. */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { THEME_ORDER, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json"), "utf8"));
 const N = graph.nodes;
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const mid = (id) => "n_" + id.replace(/-/g, "_");
-
-const THEME_ORDER = ["cap-theorem", "streaming", "spike-handling", "performance", "auth-and-access",
-  "scalability", "consistency-and-replication", "observability", "resilience"];
 
 // From a page in site/map/, a sibling subpage is ../<dir>/<id>.html
 const pageHref = (id) => `../${N[id].path}`;
@@ -71,6 +69,7 @@ const html = `<!doctype html>
   <meta name="description" content="An overview of how the patterns relate — one cluster per systems-fluency theme, plus the relationship vocabulary.">
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
 </head>
 <body class="doc theme">
   <main class="doc-wrap">

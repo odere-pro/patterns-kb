@@ -52,6 +52,7 @@ const html = `<!doctype html>
   <meta name="description" content="The ${KB_NAME} ontology — the relation verbs, metadata properties, and block vocabulary that every page is described with.">
   <link rel="stylesheet" href="assets/tokens.css">
   <link rel="stylesheet" href="assets/pattern.css">
+  <script src="assets/theme.js"></script>
 </head>
 <body class="doc">
   <main class="doc-wrap">

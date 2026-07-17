@@ -96,6 +96,7 @@ const html = `<!doctype html>
   <meta name="description" content="An altitude-ordered, cross-linked map of ${totalPatterns} software and system-design patterns, with theme pages for CAP, streaming, spikes, performance, and auth.">
   <link rel="stylesheet" href="assets/tokens.css">
   <link rel="stylesheet" href="assets/hub.css">
+  <script src="assets/theme.js"></script>
 </head>
 <body>
 <div class="page">
