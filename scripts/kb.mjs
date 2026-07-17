@@ -11,14 +11,18 @@
  *   kb.mjs related <id>           what it combines with, replaces, is confused for
  *   kb.mjs ls [--band B] [--kind K]
  *
+ * Writing (authoring goes through here, so the data stays well-formed):
+ *   kb.mjs set <id> --aliases '["breaker","CB"]' --tags '[…]' --solves '[…]'
+ *   kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
+ *
  *   --json      structured output instead of text
  *   --diagrams  keep the mermaid source (omitted by default as noise)
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES } from "./lib/model.mjs";
+import { RELATION_TYPES, esc } from "./lib/model.mjs";
 
 const PARSE_OPTS = { comment: true };
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -84,6 +88,21 @@ function render(el, out = []) {
       }
       continue;
     }
+    // Name + note rows — relations, theme tie-ins, real-world examples. They share a
+    // shape: a label element followed by a note span, with no separator of their own,
+    // so rendering their raw text just welds the two together ("BulkheadIsolate the…").
+    if (/\b(rel-item|fluency-item|wild-item)\b/.test(cls)) {
+      const head = c.querySelector("a, strong");
+      const label = head
+        ? inline(head)
+        : (c.childNodes.find((n) => n.nodeType === 3 && n.text.trim())?.text.trim() ?? "");
+      const spans = c.querySelectorAll("span").filter((s) => s !== head);
+      const note = spans.length ? inline(spans[spans.length - 1]) : "";
+      const to = c.getAttribute("data-kb-to");
+      out.push(`- ${label}${to ? ` [${to}]` : ""}${note ? ` — ${note}` : ""}\n`);
+      continue;
+    }
+    if (/\brel-type\b/.test(cls)) { out.push(`\n${inline(c)}:\n`); continue; }
     if (tag === "h3") { out.push(`\n${inline(c).toUpperCase()}\n`); continue; }
     if (tag === "p") { out.push(`\n${inline(c)}\n`); continue; }
     if (tag === "li") {
@@ -222,8 +241,10 @@ if (cmd === "get") {
       if (hits) { score += Math.min(hits.n, 3) * W.body; why ||= hits.line; hit = true; }
       if (hit) matched++;
     }
-    // Covering more of what was asked beats mentioning one word a lot.
-    score *= 1 + matched / terms.length;
+    // Covering more of what was asked beats mentioning one word a lot. Guard the
+    // divisor: a query of only short words ("CB") leaves no terms, and NaN would
+    // silently drop an otherwise exact alias hit.
+    score *= 1 + matched / Math.max(terms.length, 1);
     return { n, score, why };
   }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, limit);
 
@@ -235,6 +256,75 @@ if (cmd === "get") {
       if (why) console.log(`    ↳ ${why.length > 150 ? why.slice(0, 150) + "…" : why}`);
     }
     console.log(`\n${scored.length} match(es). Next: kb.mjs get <id> [--block usage]`);
+  }
+} else if (cmd === "set" || cmd === "wild") {
+  /* Writing goes through here rather than hand-edited attribute strings: the JSON is
+   * validated before it lands, placement is never guessed, and it is idempotent. */
+  const graph = load("graph.json");
+  const node = graph.nodes[positional[1]];
+  if (!node) { console.error(`unknown id: ${positional[1]}`); process.exit(1); }
+  const file = join(SITE, node.path);
+  const root = parse(readFileSync(file, "utf8"), PARSE_OPTS);
+  const doc = root.querySelector("[data-kb-id]");
+  const src = readFileSync(file, "utf8");
+
+  const parseList = (name, validate) => {
+    const raw = opt(name);
+    if (raw == null) return null;
+    let v;
+    try { v = JSON.parse(raw); } catch (e) { console.error(`--${name} is not valid JSON: ${e.message}`); process.exit(1); }
+    const err = validate(v);
+    if (err) { console.error(`--${name}: ${err}`); process.exit(1); }
+    return v;
+  };
+  const strings = (v) =>
+    !Array.isArray(v) ? "must be a JSON array"
+    : v.some((x) => typeof x !== "string") ? "every item must be a string"
+    : v.some((x) => !x.trim()) ? "no empty strings" : null;
+
+  if (cmd === "set") {
+    let touched = [];
+    for (const key of ["aliases", "tags", "solves"]) {
+      const v = parseList(key, strings);
+      if (v === null) continue;
+      if (v.length) doc.setAttribute(`data-kb-${key}`, JSON.stringify(v));
+      else doc.removeAttribute(`data-kb-${key}`);
+      touched.push(`${key}=${v.length}`);
+    }
+    if (!touched.length) { console.error("nothing to set — pass --aliases / --tags / --solves"); process.exit(1); }
+    const out = root.toString();
+    if (out !== src) writeFileSync(file, out);
+    console.log(`${node.id}: ${touched.join(" ")}${out === src ? " (unchanged)" : ""}`);
+  } else {
+    const items = parseList("items", (v) =>
+      !Array.isArray(v) ? "must be a JSON array"
+      : v.some((x) => !x || typeof x !== "object") ? "every item must be an object"
+      : v.some((x) => !x.id || !x.name || !x.note) ? "every item needs id, name and note" : null);
+    if (items === null) { console.error("pass --items '[{\"id\":…,\"name\":…,\"note\":…}]'"); process.exit(1); }
+
+    const existing = root.querySelector('[data-kb-block="wild"]');
+    if (!items.length) {
+      if (existing) { writeFileSync(file, root.toString().replace(/ *<section class="doc-section" id="wild"[\s\S]*?<\/section>\n\n/, "")); }
+      console.log(`${node.id}: wild removed`);
+    } else {
+      const rows = items.map((i) =>
+        `        <div class="wild-item" data-kb-example="${i.id}"><strong>${esc(i.name)}</strong><span>${esc(i.note)}</span></div>`).join("\n");
+      const block = `    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+${rows}
+      </div>
+    </section>
+
+`;
+      let out = root.toString();
+      out = existing
+        ? out.replace(/ *<section class="doc-section" id="wild"[\s\S]*?<\/section>\n\n/, block)
+        : out.replace(/( *<section class="doc-section" id="relationships")/, block + "$1");
+      if (!out.includes('id="wild"')) { console.error(`${node.id}: could not place the block`); process.exit(1); }
+      writeFileSync(file, out);
+      console.log(`${node.id}: wild = ${items.length} example(s)`);
+    }
   }
 } else if (cmd === "ls") {
   const band = opt("band"), kind = opt("kind");

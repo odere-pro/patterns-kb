@@ -17,13 +17,13 @@ export const KB_NAME = "Patterns KB";
 /* Blocks each kind of page is expected to carry, in order. The section id doubles as
  * the anchor and the semantic key, so this is both a vocabulary and a lint rule. */
 export const BLOCKS = {
-  pattern: ["description", "structure", "variations", "tradeoffs", "usage", "sketch", "relationships", "fluency"],
+  pattern: ["description", "structure", "variations", "tradeoffs", "usage", "sketch", "wild", "relationships", "fluency"],
   hazard:  ["description", "causes", "cost", "mitigation"],
   theme:   ["framing", "tradespace", "tour", "decide", "siblings"],
 };
 /* Blocks that may legitimately be absent. `fluency` is only on patterns that a theme
  * tours; the rest are mandatory. */
-export const OPTIONAL_BLOCKS = new Set(["fluency"]);
+export const OPTIONAL_BLOCKS = new Set(["fluency", "wild"]);
 
 /* ---- ontology: the closed relation vocabulary ---- */
 export const RELATION_TYPES = {

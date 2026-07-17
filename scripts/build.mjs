@@ -30,6 +30,21 @@ const fail = (msg) => { console.error("ERROR: " + msg); process.exit(1); };
 const titleize = (id) =>
   id.split("-").map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
 
+/* aliases / tags / solves are lists, and solves are whole sentences — a delimiter would
+ * break on the first comma in the prose. JSON-valued attributes keep them exact. */
+function jsonAttrs(doc, id) {
+  const out = {};
+  for (const key of ["aliases", "tags", "solves"]) {
+    const raw = doc.getAttribute(`data-kb-${key}`);
+    if (!raw) continue;
+    let v;
+    try { v = JSON.parse(raw); } catch { fail(`${id}: data-kb-${key} is not valid JSON: ${raw}`); }
+    if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) fail(`${id}: data-kb-${key} must be an array of strings`);
+    out[key] = v;
+  }
+  return out;
+}
+
 /* ---------------- read every page ---------------- */
 function walk(rel) {
   const out = [];
@@ -77,6 +92,7 @@ for (const { kind, dir, root, doc, id } of raw) {
   nodes[id] = {
     id, name, kind, band, group,
     essence: doc.getAttribute("data-kb-essence"),
+    ...jsonAttrs(doc, id),
     docClass,
     dir,
     path: `${dir}/${id}.html`,   // site-relative; consumers relativize for their own depth
@@ -145,6 +161,18 @@ for (const node of Object.values(nodes)) {
   }
 }
 if (oneWay) fail(`${oneWay} one-way relationship(s)`);
+
+/* ---------------- in the wild ----------------
+ * Identity in the attribute, prose in the content — same split as relations. */
+for (const { root, id } of raw) {
+  for (const item of root.querySelectorAll("[data-kb-example]")) {
+    (nodes[id].examples ||= []).push({
+      id: item.getAttribute("data-kb-example"),
+      name: item.querySelector("strong")?.text.trim() ?? "",
+      note: item.querySelector("span")?.text.trim() ?? "",
+    });
+  }
+}
 
 /* ---------------- theme membership ---------------- */
 for (const { root, id, kind } of raw) {
