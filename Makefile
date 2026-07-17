@@ -1,7 +1,7 @@
 # patterns — a static, build-less knowledge base. These targets are dev conveniences.
 .DEFAULT_GOAL := help
 
-.PHONY: help serve check all graph pages vocab hub graph-page relations kb
+.PHONY: help serve check all graph pages vocab hub graph-page claude relations kb
 
 all: ## Regenerate every derived artifact from the pages
 	@node scripts/build.mjs
@@ -9,6 +9,7 @@ all: ## Regenerate every derived artifact from the pages
 	@node scripts/build-vocab.mjs
 	@node scripts/build-hub.mjs
 	@node scripts/build-graph-page.mjs
+	@node scripts/build-claude.mjs
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -25,6 +26,7 @@ check: ## Verify every generated artifact is in sync, no dangling links, relatio
 	@node scripts/build-vocab.mjs --check
 	@node scripts/build-hub.mjs --check
 	@node scripts/build-graph-page.mjs --check
+	@node scripts/build-claude.mjs --check
 	@node scripts/check-links.mjs
 	@node scripts/audit-relations.mjs
 
@@ -39,6 +41,9 @@ pages: ## Refresh the generated regions inside each page (JSON-LD, element ids)
 
 vocab: ## Regenerate the ontology page (site/vocab.html)
 	@node scripts/build-vocab.mjs
+
+claude: ## Regenerate the per-folder CLAUDE.md briefings
+	@node scripts/build-claude.mjs
 
 hub: ## Regenerate the hub (site/index.html) from the graph
 	@node scripts/build-hub.mjs
