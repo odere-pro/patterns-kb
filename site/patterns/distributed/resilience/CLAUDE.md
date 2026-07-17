@@ -1,9 +1,9 @@
 # patterns/distributed/resilience
 
-**IV · Network → Resilience** — 8 patterns.
+**IV · Network → Resilience** — 9 patterns.
 Keeping many services reliable, fast, and consistent across a network
 
-Pages here: bulkhead, circuit-breaker, compensating-transaction, health-endpoint, load-leveling, rate-limiter, retry-backoff, timeout-deadline
+Pages here: bulkhead, circuit-breaker, compensating-transaction, health-endpoint, load-leveling, rate-limiter, retry-backoff, timeout-deadline, token-bucket
 
 Every page in this folder declares `data-kb-band="distributed"` and
 `data-kb-group="distributed-resilience"`. The path is checked against them — `make check` fails if a
