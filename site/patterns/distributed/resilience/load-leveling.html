@@ -232,9 +232,53 @@ async function worker(queue: LevelingQueue, process: (j: Job) =&gt; Promise&lt;v
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="amazon-sqs"><strong>Amazon SQS</strong><span>The canonical buffer in front of workers — producers enqueue and return, while consumers drain the backlog at their own sustainable rate.</span></div>
-        <div class="wild-item" data-kb-example="kafka"><strong>Apache Kafka</strong><span>A durable, replayable log absorbs ingestion bursts while consumer groups read at whatever pace they can sustain.</span></div>
-        <div class="wild-item" data-kb-example="celery"><strong>Celery</strong><span>A Python web request hands a task to a broker and responds immediately; worker processes pick it up later.</span></div>
+        <div class="wild-item" data-kb-example="amazon-sqs"><strong>Amazon SQS</strong><span>The canonical buffer in front of workers: producers enqueue and return while consumers drain at their own rate. A VisibilityTimeout hides an in-flight message during processing, and a redrive policy with maxReceiveCount routes repeat failures to a dead-letter queue; standard queues are at-least-once, so consumers must be idempotent.</span></div>
+        <div class="wild-item" data-kb-example="kafka"><strong>Apache Kafka</strong><span>A durable, replayable partitioned log absorbs ingestion bursts while a consumer group reads at its own pace. Offsets track progress and enable replay, retention (by time or size) bounds how long messages persist, and consumer lag — log-end offset minus committed offset — is the backlog measure.</span></div>
+        <div class="wild-item" data-kb-example="celery"><strong>Celery</strong><span>A Python web request hands a task to a broker (Redis or RabbitMQ) and responds immediately; worker processes pick it up later. Workers prefetch tasks by a configurable multiplier, acks_late redelivers a task if the worker crashes mid-run, and time limits bound how long any one task may run.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Queue depth bound</strong> — A cap on backlog after which the producer sheds or redirects, so an unbounded queue does not itself become the outage.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Consumer concurrency</strong> — How many consumer instances drain the queue in parallel — the dial that sets sustained throughput against arrival rate.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Visibility / ack timeout</strong> — How long a dequeued message stays hidden from other consumers while being processed before it is redelivered (SQS VisibilityTimeout, ack deadline).</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Batch / prefetch size</strong> — How many messages a consumer pulls per fetch (SQS max messages, Kafka max.poll.records, Celery prefetch multiplier) — bigger batches raise throughput but risk redelivering more on a crash.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Dead-letter policy</strong> — After how many failed deliveries a message is moved aside (maxReceiveCount / redrive) so one poison message cannot block the backlog.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Queue depth / backlog</strong> — The primary observable and the leveling signal itself — a rising backlog means consumers are falling behind arrivals.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Age of oldest message</strong> — How long the head of the queue has waited (ApproximateAgeOfOldestMessage, consumer lag) — the real latency the buffer is adding.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Enqueue vs. dequeue rate</strong> — Producer rate against consumer rate; sustained divergence is overload the buffer only delays.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Dead-letter depth</strong> — Messages that exhausted retries and were parked — poison messages or a broken consumer path.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Backlog just delays the failure</strong> — Under sustained overload an unbounded queue grows without bound, adds latency, and can exhaust broker storage rather than preventing the outage.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Redelivery double-processing</strong> — Most queues are at-least-once: a failed or timed-out ack redelivers, so a non-idempotent consumer processes the same message twice.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Visibility timeout mistuned</strong> — Set below real processing time it hands the same message to a second consumer; set far above it, a crashed consumer's message sits unretried for that whole window.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Poison message with no dead-letter</strong> — A message that always fails, without a DLQ and max-receive cap, retries forever and can stall everything behind it.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Bound the queue and decide explicitly what happens when it is full.</li>
+            <li id="production-check-2" data-kb-polarity="check">Make consumers idempotent — assume at-least-once redelivery.</li>
+            <li id="production-check-3" data-kb-polarity="check">Configure a dead-letter queue with a max-receive count for poison messages.</li>
+            <li id="production-check-4" data-kb-polarity="check">Set the visibility / ack timeout above real processing time.</li>
+            <li id="production-check-5" data-kb-polarity="check">Alert on backlog depth and age of oldest message, not just consumer errors.</li>
+          </ul>
+        </div>
       </div>
     </section>
 

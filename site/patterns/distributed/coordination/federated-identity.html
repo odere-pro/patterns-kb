@@ -201,10 +201,54 @@ async function federatedLogin(idToken: string): Promise&lt;LocalSession&gt; {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="openid-connect"><strong>OpenID Connect</strong><span>The standard that layers a signed ID token on OAuth 2.0, and what every Sign in with Google or Apple button speaks.</span></div>
-        <div class="wild-item" data-kb-example="saml-2"><strong>SAML 2.0</strong><span>The long-standing XML assertion standard still required by most enterprise and government SSO integrations.</span></div>
-        <div class="wild-item" data-kb-example="keycloak"><strong>Keycloak</strong><span>Open-source identity provider and broker that fronts several upstream IdPs behind one OIDC or SAML endpoint.</span></div>
-        <div class="wild-item" data-kb-example="okta"><strong>Okta</strong><span>Commercial identity broker whose whole product is being the IdP that many unrelated services agree to trust.</span></div>
+        <div class="wild-item" data-kb-example="openid-connect"><strong>OpenID Connect</strong><span>The standard that layers a signed ID token on OAuth 2.0, and what every Sign in with Google or Apple button speaks; relying parties fetch the IdP keys from its .well-known/openid-configuration discovery document and JWKS endpoint to verify each token</span></div>
+        <div class="wild-item" data-kb-example="saml"><strong>SAML 2.0</strong><span>The long-standing XML assertion standard still required by most enterprise and government SSO integrations; trust is bootstrapped by exchanging metadata XML carrying the signing certificate, entity ID and supported redirect or POST bindings</span></div>
+        <div class="wild-item" data-kb-example="keycloak"><strong>Keycloak</strong><span>Open-source identity provider and broker that fronts several upstream IdPs behind one OIDC or SAML endpoint; organizes users into realms, each with its own clients, signing keys and token lifetimes</span></div>
+        <div class="wild-item" data-kb-example="okta"><strong>Okta</strong><span>Commercial identity broker whose whole product is being the IdP that many unrelated services agree to trust, brokering SAML and OIDC federations plus SCIM provisioning between them</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>token / assertion lifetime</strong> — how long an ID token or SAML assertion stays valid after the IdP mints it; short windows shrink the replay surface but force more round-trips to the IdP, long ones do the reverse</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>clock-skew tolerance</strong> — the leeway a relying party allows when checking exp, nbf and iat (the clockTolerance / leeway most JWT libraries expose); too tight and legitimate tokens fail on ordinary clock drift, too loose and an expired token lingers</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>JWKS cache TTL</strong> — how long the relying party caches the IdP signing keys before refetching; too long and a key rotation breaks every validation until the cache expires, too short and every login pays a fetch</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>accepted signing algorithms</strong> — the allowlist of algorithms a token signature may use — pin it to what the IdP actually issues (for example RS256) and reject the none algorithm and weaker downgrades outright</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>audience and issuer validation</strong> — the exact iss and aud values a token must carry; without a strict aud check a service will accept a valid token minted for a different relying party</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>login failure rate by reason</strong> — successful versus failed federated logins at the relying party, broken out by cause — signature, audience, expiry, unknown issuer — so a bad rotation or misconfiguration shows up as a specific spike rather than a vague dip</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>token validation latency</strong> — time to verify a token including any JWKS fetch on cache miss; a jump usually means the key cache is missing and every login is round-tripping to the IdP</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>IdP request error rate</strong> — errors and timeouts on calls to the identity provider — the health of the dependency that gates every single login across all relying services</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>certificate / key time-to-expiry</strong> — days remaining on the IdP signing certificate or key; it counts down silently and, unwatched, ends every login at once the moment it lapses</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>IdP outage locks everyone out</strong> — the single point of trust becomes a single point of failure — while the IdP is unreachable, no one can obtain a fresh token, so every relying service refuses new logins at once</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>key rotation without cache refresh</strong> — the IdP rolls its signing key but relying parties are still serving a stale JWKS cache; every token signed by the new key fails signature validation until the caches expire or are purged</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>clock skew rejects valid tokens</strong> — the IdP and relying-party clocks drift apart beyond the tolerance; freshly issued tokens are rejected as not-yet-valid or already-expired, and it fails cryptically across a whole fleet</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>global logout gap</strong> — killing the IdP session does not reliably end each relying party session, so a user who signed out at the IdP can still be live on an SP until that local session expires on its own</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Validate all four of issuer, audience, signature and expiry on every token — dropping any one opens a real hole</li>
+            <li id="production-check-2" data-kb-polarity="check">Pin the accepted signing algorithms and never accept the none algorithm or a weaker downgrade</li>
+            <li id="production-check-3" data-kb-polarity="check">Automate signing-certificate and key rotation with JWKS cache refresh, and alert well before any certificate expires</li>
+            <li id="production-check-4" data-kb-polarity="check">Bound the clock-skew tolerance and keep both sides on NTP so drift never silently rejects valid tokens</li>
+            <li id="production-check-5" data-kb-polarity="check">Decide what happens when the IdP is down — a break-glass path or graceful degradation — before it happens, since it gates every login</li>
+          </ul>
+        </div>
       </div>
     </section>
 

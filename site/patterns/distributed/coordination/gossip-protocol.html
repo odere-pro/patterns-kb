@@ -208,9 +208,52 @@ function pickRandom&lt;T&gt;(xs: T[], n: number): T[] {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="apache-cassandra"><strong>Apache Cassandra</strong><span>Every node gossips membership and heartbeat state each second, so the ring needs no coordinator to know who is up.</span></div>
-        <div class="wild-item" data-kb-example="hashicorp-serf"><strong>HashiCorp Serf</strong><span>A standalone SWIM-based gossip library for membership and failure detection, and the layer Consul builds its cluster on.</span></div>
-        <div class="wild-item" data-kb-example="redis-cluster"><strong>Redis Cluster</strong><span>Runs a separate gossip bus between nodes to propagate slot assignments and failure suspicions.</span></div>
+        <div class="wild-item" data-kb-example="cassandra"><strong>Apache Cassandra</strong><span>Every node gossips membership and heartbeat state each second, so the ring needs no coordinator to know who is up; it uses a phi-accrual failure detector whose sensitivity is tuned by phi_convict_threshold rather than a hard timeout</span></div>
+        <div class="wild-item" data-kb-example="serf"><strong>HashiCorp Serf</strong><span>A standalone SWIM-based gossip library for membership and failure detection, and the layer Consul builds its cluster on; the underlying memberlist library exposes GossipInterval, the fanout, and separate probe and suspicion timeouts as explicit dials</span></div>
+        <div class="wild-item" data-kb-example="redis-cluster"><strong>Redis Cluster</strong><span>Runs a separate gossip bus on a dedicated port between nodes to propagate slot assignments and failure suspicions; cluster-node-timeout sets how long a node may be unreachable before peers agree to mark it failed</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>fanout</strong> — the number of random peers each node exchanges with per round; higher fanout converges in fewer rounds but multiplies per-round bandwidth, and convergence scales as O(log N) so a large cluster needs surprisingly little</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>gossip interval</strong> — how often a round fires; shorter intervals cut convergence time and raise steady background chatter — the two costs you are always trading against each other</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>failure-detection timeout</strong> — how long a peer may be silent or unreachable before it is suspected and then declared dead (a probe timeout in SWIM-style protocols, the phi threshold in phi-accrual detectors); set it above the worst-case GC pause and network jitter or healthy nodes flap</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>indirect-probe count / suspicion timeout</strong> — in SWIM, how many other members are asked to probe a silent peer before it is convicted, and how long it stays merely suspect first; more indirect probes cut false positives from a single bad link at some extra traffic</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>convergence time</strong> — how long a fresh update takes to reach the whole cluster; it should track O(log N) rounds, and a steady climb means fanout or interval no longer suits the current cluster size</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>per-node gossip bandwidth</strong> — bytes per second of gossip traffic on each node — the steady background cost of anti-entropy, which grows with membership size and message payload</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>membership flap rate</strong> — how often nodes transition up and down in the membership view; repeated flapping on a node that is actually alive means the failure detector is firing false positives</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>membership view divergence</strong> — disagreement between nodes about who is currently alive; a persistent gap means some nodes are not converging and are acting on stale membership</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>false-positive death under load</strong> — a busy or GC-paused node misses its probes and is declared dead by peers, then reappears and flaps; downstream routing and rebalancing thrash on membership that never actually changed</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>straggler lag at scale</strong> — convergence is probabilistic, so a worst-case node can trail the rest by several rounds and keep acting on stale state long after everyone else has the update</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>gossip storm</strong> — fanout set too high or the interval too short, or membership payloads grown too large, saturates the network with reconciliation traffic even when nothing has changed</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>partition splits membership</strong> — a network partition lets each side converge to its own consistent view; when it heals the two views must be merged, and any conflicting state needs a reconciliation rule of its own</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Tune fanout and interval to the cluster size — convergence is O(log N) rounds, so resist over-gossiping</li>
+            <li id="production-check-2" data-kb-polarity="check">Set failure-detection timeouts above the worst-case GC pause and network jitter, or healthy nodes will flap dead and back</li>
+            <li id="production-check-3" data-kb-polarity="check">Bound gossip message size and prefer incremental deltas over full-state exchange as membership grows</li>
+            <li id="production-check-4" data-kb-polarity="check">Monitor convergence time and flap rate, and alert on a node that repeatedly transitions up and down</li>
+            <li id="production-check-5" data-kb-polarity="check">Define a reconciliation rule for conflicting state, since gossip merges views but orders nothing</li>
+          </ul>
+        </div>
       </div>
     </section>
 

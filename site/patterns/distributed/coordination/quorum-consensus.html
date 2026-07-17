@@ -216,9 +216,52 @@ await quorumWrite(replicas, { key: "x", val: 42 }, 2);</code></pre>
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="apache-cassandra"><strong>Apache Cassandra</strong><span>Per-query consistency levels let callers pick W and R directly, making the W + R &gt; N tradeoff a runtime knob.</span></div>
-        <div class="wild-item" data-kb-example="raft"><strong>Raft</strong><span>The consensus algorithm behind etcd and Consul, built on majority votes for both leader election and log commit.</span></div>
-        <div class="wild-item" data-kb-example="etcd"><strong>etcd</strong><span>Kubernetes stores all cluster state in it, and every write is committed only once a majority of members has it.</span></div>
+        <div class="wild-item" data-kb-example="cassandra"><strong>Apache Cassandra</strong><span>Per-query consistency levels (ONE, QUORUM, LOCAL_QUORUM, ALL) let callers dial W and R against a keyspace's replication_factor, making W + R &gt; N a runtime choice; LOCAL_QUORUM keeps the quorum inside one datacenter, and hinted handoff implements sloppy quorum during a partition.</span></div>
+        <div class="wild-item" data-kb-example="raft"><strong>Raft</strong><span>A leader-based consensus algorithm: a single elected leader appends to a replicated log, and an entry commits only once a majority of members has persisted it. Terms and randomized election timeouts prevent split votes. It backs etcd, Consul, and TiKV.</span></div>
+        <div class="wild-item" data-kb-example="etcd"><strong>etcd</strong><span>Kubernetes stores all cluster state here. Built on Raft, every write is committed only after a majority of members has it, so clusters are run with an odd membership (typically 3 or 5) to keep a clear majority and survive one or two node losses.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Replication factor N</strong> — How many replicas hold each key. Larger N tolerates more failures but makes every quorum wider and slower, and quorum math assumes N is known and stable.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Write / read quorum sizes (W, R)</strong> — Per-operation consistency levels. W + R &gt; N buys read-your-writes; shrinking one shifts latency and staleness onto the other. Set them for the guarantee you actually need, not the strongest available.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Election timeout vs. heartbeat interval</strong> — In leader-based consensus (Raft), the follower election timeout must sit comfortably above the leader heartbeat interval and network RTT, or followers time out and trigger needless elections.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Strict vs. sloppy quorum (hinted handoff)</strong> — Whether writes may be accepted by any reachable node and handed off later. Sloppy quorum keeps writing during a partition at the cost of temporary inconsistency and a hint backlog to drain afterward.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Write / read latency p99</strong> — An operation is not done until W (or R) replicas answer, so tail latency tracks the slowest replica in the quorum, not the average node.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Unreachable / lagging replica count</strong> — How many members are down, partitioned, or behind. Once this reaches floor((N-1)/2) the cluster is one failure away from losing quorum.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Leader elections per interval</strong> — In consensus systems, frequent leader changes mean the cluster is spending time electing instead of committing — often a symptom of a too-tight election timeout or a flaky node.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Replication / hint backlog</strong> — How far replicas trail the committed point, or how many hinted writes are queued for handoff. A growing backlog is unflushed inconsistency waiting to surface.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Split with no majority</strong> — A partition slices the cluster so no side holds a majority; every side is short of quorum and writes stall everywhere until the partition heals.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Election storm</strong> — An election timeout barely above RTT lets transient slowness unseat the leader repeatedly; the cluster flaps between leaders and commit throughput collapses.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stale reads from W + R &lt;= N</strong> — Quorums no longer guaranteed to overlap, so a read can land entirely on replicas that missed the latest write and return old data with no error.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Hint backlog overrun</strong> — A long partition under sloppy quorum piles up hinted writes faster than they can be handed back; the backlog pressures the coordinator and delays convergence when the partition ends.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">W + R &gt; N holds for every consistency level a client is allowed to request</li>
+            <li id="production-check-2" data-kb-polarity="check">N is odd, so a majority always exists and split-brain has no tie</li>
+            <li id="production-check-3" data-kb-polarity="check">Election timeout is set well above heartbeat interval and worst-case network RTT</li>
+            <li id="production-check-4" data-kb-polarity="check">Membership changes are applied one node at a time, never by editing N mid-flight</li>
+            <li id="production-check-5" data-kb-polarity="check">Leader-change rate and unreachable-replica count are monitored with alerts</li>
+          </ul>
+        </div>
       </div>
     </section>
 

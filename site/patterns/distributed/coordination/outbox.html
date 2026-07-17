@@ -219,8 +219,51 @@ async function relayOnce(db: Db, broker: Broker) {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="debezium"><strong>Debezium</strong><span>Its Outbox Event Router SMT tails the database log and turns outbox table inserts into Kafka messages.</span></div>
-        <div class="wild-item" data-kb-example="masstransit"><strong>MassTransit</strong><span>The .NET messaging library ships a transactional outbox that commits messages alongside the EF Core save.</span></div>
+        <div class="wild-item" data-kb-example="debezium"><strong>Debezium</strong><span>Its Outbox Event Router SMT (io.debezium.transforms.outbox.EventRouter) tails the database WAL/binlog and expands each outbox insert into a broker message, routing on the aggregatetype column and using aggregateid as the Kafka key so per-aggregate ordering is preserved — no polling, near-zero added latency.</span></div>
+        <div class="wild-item" data-kb-example="masstransit"><strong>MassTransit</strong><span>The .NET messaging library ships a transactional outbox: AddEntityFrameworkOutbox persists messages in an OutboxMessage table inside the same EF Core SaveChanges as the business write, and a delivery service sweeps and publishes them, with duplicate-detection to guard replays.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Relay poll interval</strong> — For a polling relay, how often it scans for unpublished rows. Shorter cuts publish latency but raises steady read load on the outbox table; log-tailing (CDC) sidesteps the tradeoff entirely.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Fetch batch size</strong> — Rows drained per relay iteration (the LIMIT in the poll query). Larger batches amortize round-trips but hold locks longer and enlarge the replay window on a mid-batch crash.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Cleanup / retention cadence</strong> — How aggressively a job deletes or archives already-published rows. Without it the table grows unbounded and the poll query slows as it scans dead rows.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Delivery retry / backoff</strong> — How the relay retries a row the broker rejected before moving on, and how long it backs off, so a broker blip does not spin the relay hot.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Outbox backlog depth</strong> — Count of rows with published = false. Steady growth means the relay is not keeping up with write volume.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Publish lag</strong> — Time between a row insert and its mark-published. The end-to-end latency other services see; dominated by poll interval for a polling relay.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Outbox table size / dead-row count</strong> — Total rows and un-vacuumed published rows. Rising size signals the cleanup job is behind and poll scans are getting more expensive.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Broker delivery error rate</strong> — Failed publishes per interval. A sustained rise is what precedes an exploding backlog.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Relay falls behind</strong> — Write bursts outrun the relay and backlog grows without bound; downstream services see ever-later events. Scale the relay or shard the outbox by aggregate.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Duplicate delivery</strong> — The relay crashes after publishing but before marking the row published; on restart it republishes. At-least-once is inherent — consumers must dedupe.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Table bloat stalls polling</strong> — Cleanup lags and the poll query scans millions of published rows, driving its own latency up and worsening the backlog it was meant to drain.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Concurrent relays double-publish</strong> — Two relay instances select the same unpublished rows. Use SELECT ... FOR UPDATE SKIP LOCKED or a single-owner lease so a row is claimed by exactly one relay.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">A partial index on published = false keeps the poll query fast as the table grows</li>
+            <li id="production-check-2" data-kb-polarity="check">A cleanup or archiving job removes published rows on a schedule</li>
+            <li id="production-check-3" data-kb-polarity="check">Consumers dedupe on message id — the pattern is at-least-once, never exactly-once</li>
+            <li id="production-check-4" data-kb-polarity="check">Only one relay can claim a given row (SKIP LOCKED, lease, or single instance)</li>
+            <li id="production-check-5" data-kb-polarity="check">Backlog depth and publish lag are monitored with an alert on sustained growth</li>
+          </ul>
+        </div>
       </div>
     </section>
 

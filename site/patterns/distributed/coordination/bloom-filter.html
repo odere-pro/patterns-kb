@@ -189,9 +189,49 @@ flowchart LR
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="apache-cassandra"><strong>Apache Cassandra</strong><span>Keeps a filter per SSTable so a read can skip files that definitely do not hold the partition key.</span></div>
-        <div class="wild-item" data-kb-example="rocksdb"><strong>RocksDB</strong><span>Attaches a per-SSTable filter block, turning most non-existent-key reads into a memory check instead of an I/O.</span></div>
-        <div class="wild-item" data-kb-example="postgresql-bloom"><strong>PostgreSQL bloom extension</strong><span>Ships a bloom index access method for tables queried on many arbitrary column combinations.</span></div>
+        <div class="wild-item" data-kb-example="cassandra"><strong>Apache Cassandra</strong><span>Keeps a filter per SSTable so a read can skip files that definitely do not hold the partition key; the target rate is the per-table bloom_filter_fp_chance, and the filters are held off-heap so they survive without pressuring the JVM heap</span></div>
+        <div class="wild-item" data-kb-example="rocksdb"><strong>RocksDB</strong><span>Attaches a per-SSTable filter block, turning most non-existent-key reads into a memory check instead of an I/O; the filter policy is configured in bits_per_key, and partitioned filters let only the needed slice be paged in on large tables</span></div>
+        <div class="wild-item" data-kb-example="postgresql-bloom"><strong>PostgreSQL bloom extension</strong><span>Ships a bloom index access method for tables queried on many arbitrary column combinations; the index stores a signature per row whose length and per-column bit counts are set at CREATE INDEX time, trading precision for a single compact index over an exact one per column</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>target false-positive rate</strong> — the primary design knob (Cassandra's bloom_filter_fp_chance, the effective target behind RocksDB's bits_per_key): a lower rate costs more bits per key. Pick it from the cost ratio of a wasted real lookup against the memory saved, not by reflex</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>expected element count (n)</strong> — the filter is sized for a key count you commit to upfront; load it past that n and the realized false-positive rate climbs above target, since m and k were fixed for the smaller set</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>bits per key (m/n)</strong> — memory footprint per key, which together with the target rate fixes the array size m; the optimal number of hash functions k follows from it as roughly (m/n)ln2 and is usually derived, not tuned by hand</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>deletion strategy</strong> — a plain filter cannot forget a key, so decide up front: periodically rebuild from the current source, or adopt a counting or cuckoo variant that supports removal at extra cost</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>realized false-positive rate</strong> — the fraction of filter positives that turn out absent on the real lookup — the only number that tells you the deployed filter still meets its design target rather than the target you sized for</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>fill ratio</strong> — the fraction of bits set to 1; it rises toward saturation as inserts accumulate, and a filter well past half its bits set has drifted above its designed false-positive rate</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>filter memory footprint</strong> — bytes resident for the array — the cost side of the trade, and what grows if you rebuild larger to hold more keys</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>saturation past design load</strong> — more keys inserted than the filter was sized for; the false-positive rate climbs until the cheap gate rejects almost nothing and every read pays the expensive path anyway</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>stale bits from removed keys</strong> — the source deletes a key but the plain filter cannot clear its bits, so it keeps answering maybe-present for something gone — a permanent false positive until the filter is rebuilt</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>undersized build</strong> — n guessed too low when the filter was created; it is over its target rate from day one, and the only fix is a full rebuild with a larger array</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Size for the real peak key count with headroom; a filter loaded past its design n silently exceeds its target rate</li>
+            <li id="production-check-2" data-kb-polarity="check">Choose the target false-positive rate from the cost of a wasted lookup against the memory saved, not a default</li>
+            <li id="production-check-3" data-kb-polarity="check">Decide the deletion story up front — periodic rebuild, or a counting or cuckoo variant — since a plain filter can never forget a key</li>
+            <li id="production-check-4" data-kb-polarity="check">Measure the realized false-positive rate in production, not just the designed one, and alert when it drifts up</li>
+          </ul>
+        </div>
       </div>
     </section>
 

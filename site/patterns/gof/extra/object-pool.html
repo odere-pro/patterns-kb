@@ -204,9 +204,53 @@ stateDiagram-v2
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="hikaricp"><strong>HikariCP</strong><span>The default JDBC connection pool in Spring Boot, handing out pre-opened database connections and capping how many are live.</span></div>
-        <div class="wild-item" data-kb-example="pgbouncer"><strong>PgBouncer</strong><span>Sits in front of PostgreSQL and multiplexes many client sessions onto a small pool of real backend connections.</span></div>
-        <div class="wild-item" data-kb-example="apache-commons-pool"><strong>Apache Commons Pool</strong><span>A general-purpose pooling library providing borrow/return semantics, validation, and eviction for any expensive object.</span></div>
+        <div class="wild-item" data-kb-example="hikaricp"><strong>HikariCP</strong><span>The default JDBC connection pool in Spring Boot. Key knobs are maximumPoolSize (the ceiling), minimumIdle (warm floor), connectionTimeout (acquire wait), idleTimeout and maxLifetime (eviction). It exposes ActiveConnections, IdleConnections, and PendingConnections as metrics and can log leak warnings via leakDetectionThreshold.</span></div>
+        <div class="wild-item" data-kb-example="pgbouncer"><strong>PgBouncer</strong><span>A lightweight connection pooler in front of PostgreSQL that multiplexes many client sessions onto a small set of real backend connections. Its pool_mode (session, transaction, or statement) controls how aggressively backends are shared; transaction mode returns a backend to the pool at each commit, letting far more clients share few server connections.</span></div>
+        <div class="wild-item" data-kb-example="commons-pool"><strong>Apache Commons Pool</strong><span>A general-purpose object-pooling library (the engine behind DBCP) with borrow/return semantics via a PooledObjectFactory. It offers testOnBorrow/testOnReturn/testWhileIdle validation, maxTotal and maxIdle sizing, maxWait on borrow, and a background evictor governed by minEvictableIdleTime.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Maximum pool size</strong> — The hard ceiling on live objects (HikariCP maximumPoolSize, generic max). Doubles as the cap on the scarce downstream resource; the sum across all app instances must stay under the resource limit (e.g. the database max_connections).</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Acquire timeout</strong> — How long acquire() blocks on an empty pool before failing (HikariCP connectionTimeout, Commons Pool maxWait). Bounds exhaustion into a fast error instead of an indefinite hang.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Validation on borrow / return</strong> — Test an object before lending it (Commons Pool testOnBorrow / testOnReturn, HikariCP connection validation / keepaliveTime) so a dead connection or socket is discarded rather than handed to a client.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Idle eviction and max lifetime</strong> — When to retire objects (HikariCP idleTimeout and maxLifetime, Commons Pool minEvictableIdleTime). Recycling long-lived objects avoids servers dropping connections the pool still believes are good.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Minimum idle / warm size</strong> — A floor of pre-created objects kept ready (HikariCP minimumIdle) so a burst after idle does not pay full construction cost on the first requests.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Pool utilization</strong> — Active versus idle versus total objects (HikariCP exposes ActiveConnections, IdleConnections, TotalConnections). Sustained near-100% active means the pool is the bottleneck.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Threads awaiting acquire</strong> — Callers blocked waiting for a free object — the pool queue depth (HikariCP PendingConnections). A rising value precedes acquire timeouts.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Acquire wait time</strong> — Time from acquire() to receiving an object. Near zero when warm; climbing wait time is the early sign of contention before outright exhaustion.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Acquire timeout / failure rate</strong> — Count of acquires that hit the timeout without getting an object — the direct symptom of exhaustion or a leak.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Pool exhaustion</strong> — Every object is leased; new callers block until the acquire timeout and then fail. Often a downstream slowdown holding objects longer, not more traffic.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Object / connection leak</strong> — A borrowed object is never returned (missing release in an error path). The available count decays toward zero and the pool eventually serves no one.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stale object handed out</strong> — With validation off, an object the far end has already closed (idle-killed connection, half-open socket) is lent out and fails on first use as a mystery error.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>State bleed between clients</strong> — Per-use state is not scrubbed on release — an uncommitted transaction, a set session variable, or leftover buffer contents — so the next borrower inherits it.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Maximum pool size is sized against the downstream limit, counting every app instance that shares it</li>
+            <li id="production-check-2" data-kb-polarity="check">Acquire has a bounded timeout so exhaustion fails fast instead of hanging</li>
+            <li id="production-check-3" data-kb-polarity="check">Objects are validated on borrow or bounded by a max lifetime so dead ones never reach callers</li>
+            <li id="production-check-4" data-kb-polarity="check">Per-use state is scrubbed on release and borrow/return is balanced, with leak detection enabled</li>
+            <li id="production-check-5" data-kb-polarity="check">Idle and max-lifetime eviction are configured to match how long the far end keeps objects alive</li>
+          </ul>
+        </div>
       </div>
     </section>
 

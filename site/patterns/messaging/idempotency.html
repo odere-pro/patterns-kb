@@ -220,9 +220,52 @@ res.status(result.status).json(result.body);</code></pre>
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="stripe"><strong>Stripe API</strong><span>Accepts an Idempotency-Key header on write requests and replays the stored response instead of charging a card a second time.</span></div>
-        <div class="wild-item" data-kb-example="http"><strong>HTTP methods (RFC 9110)</strong><span>Defines GET, PUT, and DELETE as idempotent so intermediaries and clients may safely repeat them after a failed response.</span></div>
-        <div class="wild-item" data-kb-example="kafka-idempotent-producer"><strong>Kafka idempotent producer</strong><span>Tags each batch with a producer id and sequence number so the broker discards duplicates from producer retries.</span></div>
+        <div class="wild-item" data-kb-example="stripe"><strong>Stripe API</strong><span>Accepts an Idempotency-Key header on POST requests, stores the result of the first call, and replays the same response for any retry carrying the same key instead of charging a card twice. Stripe retains idempotency keys for 24 hours, after which the same key is treated as new.</span></div>
+        <div class="wild-item" data-kb-example="http"><strong>HTTP methods (RFC 9110)</strong><span>Defines GET, HEAD, PUT, DELETE, OPTIONS, and TRACE as idempotent so intermediaries and clients may safely repeat them after a failed response; POST and PATCH are deliberately excluded, which is why write APIs bolt on an explicit idempotency key.</span></div>
+        <div class="wild-item" data-kb-example="kafka-idempotent-producer"><strong>Kafka idempotent producer</strong><span>With enable.idempotence=true, each batch is tagged with a producer id and a per-partition monotonic sequence number, so the broker discards duplicates from producer retries and preserves order within a single producer session.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Dedup window / key TTL</strong> — How long the key-to-result mapping is retained before it expires — must cover the maximum retry or redelivery window, traded against unbounded store growth.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Key scope / granularity</strong> — What one idempotency key spans — one logical operation — so distinct operations do not collide and retries of the same one always match.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Atomicity mechanism</strong> — The check-and-record primitive that makes the dedup safe: a unique constraint, a conditional put, or a compare-and-set, so two concurrent duplicates cannot both pass the cache-miss check.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Store durability</strong> — Where the key-to-result mapping lives and how durable it is; losing it reopens the door to duplicate side effects on the next retry.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Duplicate-hit rate</strong> — How often an incoming request matches an already-stored key — the retries and redeliveries the mechanism is actually catching.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Dedup store size / growth</strong> — Row or key count over time; unbounded growth points at a TTL that never fires or cleanup that is not running.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Concurrent-duplicate rate</strong> — Requests bearing the same key that arrive before the first has recorded its result — the race the atomic check must win.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Check-and-record latency</strong> — Time the dedup lookup and write add to every mutating request, since it sits on the critical path of each write.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Non-atomic check-and-record</strong> — If the read and the write are separate steps, two concurrent duplicates both see a cache miss and both execute — a double charge under load.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>TTL too short</strong> — A retry that arrives after the key has expired is treated as a brand-new request, re-applying the side effect the window was meant to suppress.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Unbounded store growth</strong> — A TTL set too long, or no cleanup at all, lets the key-to-result store grow until it becomes its own operational problem.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Result recorded out of step with the operation</strong> — Recording the key before the operation commits, or a crash between the two, can leave a stored key with no completed effect — or a completed effect with no key.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Make the check-and-record step atomic — a unique constraint or conditional write, not read-then-write.</li>
+            <li id="production-check-2" data-kb-polarity="check">Set the key TTL longer than the maximum retry and redelivery window.</li>
+            <li id="production-check-3" data-kb-polarity="check">Store the result with the key so a duplicate returns the original response instead of re-executing.</li>
+            <li id="production-check-4" data-kb-polarity="check">Scope each key to exactly one logical operation so distinct operations never collide.</li>
+            <li id="production-check-5" data-kb-polarity="check">Alert on dedup-store growth to catch a TTL or cleanup that stopped working.</li>
+          </ul>
+        </div>
       </div>
     </section>
 

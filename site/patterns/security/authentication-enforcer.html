@@ -221,9 +221,53 @@ function authenticationEnforcer(provider: AuthProvider) {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="spring-security"><strong>Spring Security</strong><span>Its FilterChainProxy runs a chain of filters that authenticate every incoming request and populate a SecurityContext before any controller method runs.</span></div>
-        <div class="wild-item" data-kb-example="django-auth-middleware"><strong>Django AuthenticationMiddleware</strong><span>Resolves the session cookie into request.user on every request so views never verify credentials themselves.</span></div>
-        <div class="wild-item" data-kb-example="envoy-ext-authz"><strong>Envoy ext_authz filter</strong><span>Delegates authentication of each proxied request to an external service and forwards only verified identity to the upstream.</span></div>
+        <div class="wild-item" data-kb-example="spring-security"><strong>Spring Security</strong><span>Its FilterChainProxy dispatches each request through an ordered SecurityFilterChain; an AuthenticationManager verifies the credential and the resulting Authentication is stored in the SecurityContextHolder (a ThreadLocal by default) so controllers read the principal without re-checking.</span></div>
+        <div class="wild-item" data-kb-example="django-auth-middleware"><strong>Django AuthenticationMiddleware</strong><span>Paired with SessionMiddleware, it lazily resolves the session key into request.user on every request via the configured auth backend, so views trust request.user instead of verifying credentials themselves.</span></div>
+        <div class="wild-item" data-kb-example="envoy-ext-authz"><strong>Envoy ext_authz filter</strong><span>An HTTP filter that calls an external authorization service (gRPC or HTTP) for each proxied request and forwards only the verified identity upstream. Its failure_mode_allow flag makes the fail-open/fail-closed choice an explicit configuration decision.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Credential/token lifetime (TTL)</strong> — How long a verified identity stays valid before re-verification is forced. Shorter limits exposure of a stolen token; longer cuts re-auth traffic to the IdP or session store.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Verification-result cache TTL</strong> — Cache introspection results, JWKS keys, or session lookups so every request is not a round trip. Trades staleness (a revoked token still accepted) against latency and load on the identity backend.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Clock-skew leeway</strong> — Tolerance applied when checking token exp/nbf across machines with unsynced clocks. Too tight rejects valid tokens near expiry; too loose extends a token past its intended life.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Failure policy (fail-open vs fail-closed)</strong> — What the enforcer does when the IdP or key endpoint is unreachable. Fail-closed rejects everything (availability hit); fail-open lets traffic through unauthenticated (security hole). Almost always fail closed.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Signing-key rotation / JWKS refresh interval</strong> — How often the enforcer refetches the provider public keys used to verify signatures. Must be short enough to pick up a rotated key before old ones expire, or valid tokens start failing verification.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>401 / authentication-failure rate</strong> — A spike means an expired key, a broken IdP, or an attack. A rate near zero on a public surface can mean a bypass path is skipping the check.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Added auth latency (p99)</strong> — Per-request time the enforcer adds — signature verify plus any introspection round trip. Watch p99, where cache misses and IdP slowness surface.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Verification cache hit ratio</strong> — Fraction of requests served from the token/session/JWKS cache versus hitting the identity backend. A falling ratio predicts rising IdP load and latency.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>IdP / introspection endpoint error rate and latency</strong> — Health of the upstream the enforcer depends on. Its degradation is what drives the fail-open/fail-closed decision.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Enforcer down or misconfigured</strong> — The single choke point becomes a single point of failure: a crash or bad config locks every request out (fail-closed) or exposes them (fail-open). Blast radius is the whole surface.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Bypass path</strong> — A debug route, health endpoint, or service call assumed internal is wired outside the filter chain and reaches business logic with no verified identity. The guarantee silently breaks for that path only.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Key-fetch / JWKS failure after rotation</strong> — The provider rotates signing keys and the enforcer cannot refresh them (network, cache too long); every otherwise-valid token fails signature verification and 401s surge.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Clock skew rejects valid tokens</strong> — Enforcer host drifts from the token issuer; tokens are seen as expired or not-yet-valid and rejected en masse until NTP or leeway is corrected.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Audit the route table: prove every reachable endpoint — including debug, health, and internal-to-internal calls — passes through the enforcer.</li>
+            <li id="production-check-2" data-kb-polarity="check">Confirm the failure policy is fail-closed unless a specific route has a documented reason to fail open.</li>
+            <li id="production-check-3" data-kb-polarity="check">Test signing-key rotation end to end: rotate a key and confirm tokens keep verifying without a restart.</li>
+            <li id="production-check-4" data-kb-polarity="check">Measure the per-request latency the enforcer adds under load and confirm it fits the budget with the cache cold.</li>
+            <li id="production-check-5" data-kb-polarity="check">Keep 401 (unauthenticated) distinct from 403 (unauthorized) so identity and permission failures are diagnosable separately.</li>
+          </ul>
+        </div>
       </div>
     </section>
 

@@ -195,9 +195,53 @@ class WriteBehindCache&lt;K, V&gt; {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="linux-page-cache"><strong>Linux page cache</strong><span>A write() returns as soon as the page is dirtied in memory, and kernel writeback threads flush it to the disk later unless fsync forces it sooner.</span></div>
-        <div class="wild-item" data-kb-example="cpu-writeback-cache"><strong>CPU write-back caches</strong><span>A store marks the cache line dirty and main memory is only updated when that line is evicted, collapsing repeated writes to the same address into one.</span></div>
-        <div class="wild-item" data-kb-example="hazelcast-mapstore"><strong>Hazelcast MapStore (write-behind mode)</strong><span>Configured with a write delay, the distributed map acks the put() immediately and batches coalesced entries to the backing store on a timer.</span></div>
+        <div class="wild-item" data-kb-example="linux-page-cache"><strong>Linux page cache</strong><span>A write() returns as soon as the page is marked dirty in memory; kernel writeback (flusher) threads drain dirty pages to disk later, tuned by vm.dirty_ratio and vm.dirty_writeback_centisecs, unless fsync forces the flush sooner.</span></div>
+        <div class="wild-item" data-kb-example="cpu-writeback-cache"><strong>CPU write-back caches</strong><span>A store marks the cache line dirty and main memory is updated only when the line is evicted or a coherence protocol like MESI demands it, collapsing repeated writes to one address into a single memory write.</span></div>
+        <div class="wild-item" data-kb-example="hazelcast-mapstore"><strong>Hazelcast MapStore (write-behind mode)</strong><span>With write-delay-seconds set above zero, the distributed IMap acks put() immediately and batches entries to the MapStore on that delay; write-coalescing merges repeated writes to a key and write-batch-size groups them.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Flush interval / write delay</strong> — How long acked writes wait in the queue before draining to the store; a longer delay coalesces more but widens the loss window (Hazelcast MapStore write-delay-seconds).</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Batch size</strong> — The dirty-set count that triggers a flush regardless of time, so the store sees fewer, larger writes under sustained load.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Queue capacity</strong> — The bound on pending unflushed writes; when full the cache must block writers or shed load, capping how far the store can fall behind.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Queue durability</strong> — Whether the pending-writes queue is memory-only or persisted and replicated (disk or a write-ahead log); durability trades write latency back for crash safety.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Flush retry and ordering</strong> — How failed store writes are retried and kept in order, so a transient store outage doesn't drop or reorder queued writes.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Queue depth</strong> — Unflushed entries waiting to drain; a steadily rising depth means the store can't keep up and the loss window is growing.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Flush throughput and latency</strong> — How many entries a drain moves and how long it takes; falling throughput against a rising queue signals the store is the bottleneck.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Flush failure rate</strong> — Store writes that error and re-queue; sustained failures mean acked data is stuck in a volatile queue and at risk.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Coalesce ratio</strong> — Writes accepted versus writes actually sent to the store; a high ratio confirms hot-key coalescing pays off, a low one means little gain over write-through.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Data loss on crash before flush</strong> — Anything acked but not yet drained lives only in the cache; a crash erases it unless the queue is durable.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Queue overflow under sustained write load</strong> — If writes arrive faster than flushes drain for long enough, the bounded queue fills and the cache must block writers or drop data.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stale reads straight from the store</strong> — A reader that bypasses the cache and hits the store directly sees pre-flush values; the record disagrees with itself until the drain.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Flush-failure backlog</strong> — A store outage stalls draining; the queue grows and the loss window widens until the store recovers or the queue overflows.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">The maximum data-loss window (flush interval times write rate) is quantified and acceptable, or the queue is made durable</li>
+            <li id="production-check-2" data-kb-polarity="check">The pending-writes queue is bounded with a defined full behavior — block writers or shed load</li>
+            <li id="production-check-3" data-kb-polarity="check">Flush failures retry with write ordering preserved and are never silently dropped</li>
+            <li id="production-check-4" data-kb-polarity="check">Queue depth and flush-failure rate are alerted on before the queue saturates</li>
+            <li id="production-check-5" data-kb-polarity="check">Readers that must see committed data go through the cache, not the store, until the flush completes</li>
+          </ul>
+        </div>
       </div>
     </section>
 

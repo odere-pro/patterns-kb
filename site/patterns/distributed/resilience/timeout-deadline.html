@@ -203,9 +203,51 @@ await deadline.run(signal =&gt; fetchServiceB(signal)); // shares what's left</c
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="grpc"><strong>gRPC</strong><span>Deadlines are first-class: the client sets one, it travels with the request, and every hop enforces the time actually remaining.</span></div>
-        <div class="wild-item" data-kb-example="go-context"><strong>Go context</strong><span>context.WithTimeout and WithDeadline thread a shared cancellation deadline through an entire call tree.</span></div>
-        <div class="wild-item" data-kb-example="envoy"><strong>Envoy</strong><span>Per-route timeouts bound every proxied request, so a hung upstream cannot hold the connection open indefinitely.</span></div>
+        <div class="wild-item" data-kb-example="grpc"><strong>gRPC</strong><span>Deadlines are first-class and absolute: the client sets one, it travels with the request as the grpc-timeout header, a server can read the time remaining from its context, and a breach surfaces as the DEADLINE_EXCEEDED status — propagating through chained calls when the context is forwarded.</span></div>
+        <div class="wild-item" data-kb-example="go-context"><strong>Go context</strong><span>context.WithTimeout and WithDeadline return a context whose Done channel closes when time runs out and whose Err reports context.DeadlineExceeded; threading it through a call tree gives every function a shared cancellation deadline to select on.</span></div>
+        <div class="wild-item" data-kb-example="envoy"><strong>Envoy</strong><span>A per-route timeout (default 15s) bounds the whole proxied request so a hung upstream cannot hold the connection open indefinitely; a separate per-try timeout bounds each retry attempt and an idle timeout reaps quiet connections.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Per-attempt timeout</strong> — The bound on a single call — how long this one attempt may run before the caller gives up and treats it as failed.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>End-to-end deadline / budget</strong> — An absolute time budget computed once at the top and propagated across every hop, so the total latency is capped exactly once rather than per hop.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Idle vs. total timeout</strong> — Separate dials for the gap between bytes on a connection (idle) and the whole operation (total) — a slow trickle can satisfy one while blowing through the other.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Propagation mechanism</strong> — How the remaining budget is carried forward — a gRPC deadline, a context value, or an HTTP header — so each hop shrinks its timeout to the time actually left.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Timeout rate</strong> — The fraction of calls aborted by hitting the timeout — rising when the limit is too tight or a dependency is degrading.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Latency headroom vs. the cutoff</strong> — How close p99/p99.9 latency runs to the timeout value; little headroom means normal slow calls are being aborted.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Resource occupancy</strong> — Threads, sockets, or connection-pool slots held waiting on in-flight calls — the resource an unbounded wait would exhaust.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Too tight</strong> — A timeout below real latency aborts calls that would have succeeded, converting slow responses into failures and often into extra retry load.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>No propagation</strong> — Without a shared deadline, each hop starts a fresh timeout and the waits stack, so the caller can wait far past the budget it set at the top.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Abandoned but still running</strong> — A timeout only stops the caller waiting; without real cancellation the remote side keeps working and may commit the operation after the caller gave up.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Clock skew on absolute deadlines</strong> — An absolute wall-clock deadline propagated across hosts with unsynchronized clocks can arrive early or late, mis-budgeting the remaining time.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Give every call that crosses a process, network, or disk boundary a timeout — no unbounded waits.</li>
+            <li id="production-check-2" data-kb-polarity="check">Propagate one end-to-end deadline and shrink each hop to the time remaining.</li>
+            <li id="production-check-3" data-kb-polarity="check">Pair the timeout with real cancellation so abandoned work actually stops.</li>
+            <li id="production-check-4" data-kb-polarity="check">Set the timeout from measured p99 latency with headroom, not a round guess.</li>
+            <li id="production-check-5" data-kb-polarity="check">Ensure retried attempts share the deadline rather than resetting it.</li>
+          </ul>
+        </div>
       </div>
     </section>
 
