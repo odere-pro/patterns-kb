@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, folderFor } from "./lib/model.mjs";
+import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, folderFor } from "./lib/model.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
  * the kb:generated markers (and any comment an author writes). */
@@ -40,6 +40,10 @@ function jsonAttrs(doc, id) {
     let v;
     try { v = JSON.parse(raw); } catch { fail(`${id}: data-kb-${key} is not valid JSON: ${raw}`); }
     if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) fail(`${id}: data-kb-${key} must be an array of strings`);
+    if (key === "tags") {
+      const unknown = v.filter((t) => !TAGS.has(t));
+      if (unknown.length) fail(`${id}: tag(s) not in the closed vocabulary: ${unknown.join(", ")}\n  add to TAGS in scripts/lib/model.mjs only if the tag will apply to 3+ pages`);
+    }
     out[key] = v;
   }
   return out;

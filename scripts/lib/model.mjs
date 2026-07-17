@@ -25,6 +25,25 @@ export const BLOCKS = {
  * tours; the rest are mandatory. */
 export const OPTIONAL_BLOCKS = new Set(["fluency", "wild"]);
 
+/* Tags are a CLOSED vocabulary, like the relation verbs. They exist to group and
+ * filter — a tag used on one page groups nothing. The first sweep of this KB was
+ * written by 18 agents with no shared list and produced 280 tags, 154 of them used
+ * exactly once; consolidating them yielded these. Adding one is a deliberate act:
+ * put it here first, and only if it will honestly apply to three or more pages. */
+export const TAGS = new Set([
+  "abstraction", "access-control", "api-design", "asynchrony", "authentication",
+  "availability", "backpressure", "batching", "boundaries", "buffering", "caching",
+  "code-smell", "composition", "concurrency", "consistency", "coordination", "data-access",
+  "data-modeling", "decoupling", "domain-modeling", "durability", "edge", "encapsulation",
+  "error-handling", "event-driven", "extensibility", "immutability", "instantiation-control",
+  "integration", "isolation", "latency", "legacy", "lifecycle", "load-balancing",
+  "maintainability", "messaging", "modularity", "observability", "partitioning", "performance",
+  "persistence", "polymorphism", "read-optimization", "readability", "replication",
+  "resilience", "resource-management", "routing", "scalability", "security",
+  "separation-of-concerns", "state-management", "test-doubles", "testability", "testing",
+  "throughput", "transactions", "transformation", "ui-architecture", "validation"
+]);
+
 /* ---- ontology: the closed relation vocabulary ---- */
 export const RELATION_TYPES = {
   "combines-with":       { label: "Combines with",      symmetric: true },
