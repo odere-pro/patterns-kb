@@ -12,24 +12,12 @@ All seven pairs (`null-object`↔`strategy`, `event-sourcing`↔`write-ahead-log
 now carry a **distinct** note on each side — the inverted pipeline plus subsequent
 re-authoring gave every edge a per-side note. Verified: 0 pairs share an identical note.
 
-## 2. Promote the 6 stub neighbours to real pages
+## 2. Promote the 6 stub neighbours to real pages — ✅ RESOLVED
 
-**What.** Six ids are referenced as relation targets or theme members but have no page of
-their own, so they render as plain (unlinked) text:
-
-`monostate`, `token-bucket`, `reverse-proxy`, `service-mesh`, `sticky-session`,
-`stateless-service`
-
-**Why deferred.** Whether each deserves a full page is a content decision, not a mechanical
-one. Some (`service-mesh`, `token-bucket`) clearly do; others (`monostate`) may be better left
-as a footnote on a related pattern.
-
-**How.** Use the `kb-add` skill. The links pointing at a stub already exist, so the moment its
-page lands, its inbound relationships light up — this is the cheapest kind of addition. Decide
-its band/group, copy the `circuit-breaker` exemplar, write the blocks, and declare the reverse
-of each relationship that already points at it. `make check` will tell you which those are.
-
-**Effort.** Medium per page — real content authoring.
+All six (`monostate`, `token-bucket`, `reverse-proxy`, `service-mesh`, `sticky-session`,
+`stateless-service`) are now full pattern pages with every block, a production block where the
+pattern is operational (`monostate` is conceptual and skips it), real "in the wild" examples,
+and bidirectional relationships. The corpus is now 137 patterns.
 
 ## 3. Pre-render mermaid diagrams to SVG
 
@@ -54,16 +42,14 @@ weight — is the actual decision to make here.
 well, but it is lexical: a symptom that shares no vocabulary with any `solves` phrase will
 miss.
 
-**Done so far.** A curated synonym map now lives in `kb.mjs find` (~25 entries, half-weight
-hits), so "outdated" reaches pages that only say "stale". The hub search is still
-synonym-blind — porting the map into `search.js`/`catalog.js` is the next cheap step.
+**Done.** A curated synonym map (~25 entries, half-weight hits) lives in `lib/model.mjs` as the
+single source: `kb.mjs find` imports it, and `build.mjs` projects it into `catalog.js`, so the
+offline hub search (`search.js`) expands the same synonyms — "outdated" reaches pages that only
+say "stale", identically in the CLI and the browser.
 
-**How (remaining).** Expand `solves` coverage (cheapest, no code); port the synonym map to
-the hub; or precompute embeddings into a static index the hub and CLI can both read (most
-capable, but reintroduces a build-time model dependency — weigh against the zero-dependency
-ethos).
-
-**Effort.** Small (hub synonyms) to large (embeddings).
+**Remaining (optional, larger).** Expand `solves` coverage (cheapest, no code); or precompute
+embeddings into a static index the hub and CLI can both read (most capable, but reintroduces a
+build-time model dependency — weigh against the zero-dependency ethos).
 
 ## 5. Slim the vendored highlighter — ✅ RESOLVED
 
