@@ -28,7 +28,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, REL_ORDER, esc, folderFor, band as bandOf } from "./lib/model.mjs";
+import { RELATION_TYPES, REL_ORDER, SYNONYMS, esc, folderFor, band as bandOf } from "./lib/model.mjs";
 import { validatePage } from "./lib/validate.mjs";
 import { pageSkeleton } from "./lib/template.mjs";
 
@@ -245,23 +245,8 @@ if (cmd === "get") {
   const terms = [...new Set(q.split(/\s+/).filter((t) => t.length > 2 && !STOP.has(t)))];
   const limit = Number(opt("n") ?? 8);
 
-  // A small curated synonym bridge: a symptom phrased as "stale" should still reach a
-  // page that only says "outdated". Synonym hits score at half weight so the author's
-  // own vocabulary still wins ties. (TODO.md §4's cheap option.)
-  const SYNONYMS = {
-    stale: ["outdated", "expired"], outdated: ["stale"],
-    slow: ["latency", "lag"], latency: ["slow", "delay"], delay: ["latency"],
-    crash: ["failure", "outage"], failure: ["crash", "fault", "outage"], outage: ["failure"],
-    queue: ["backlog", "buffer"], backlog: ["queue"],
-    timeout: ["deadline"], deadline: ["timeout"],
-    spike: ["burst", "surge"], burst: ["spike", "surge"], surge: ["spike"],
-    overload: ["saturated", "overwhelmed"], saturated: ["overload"],
-    throttle: ["rate", "limit"], concurrency: ["parallelism"], parallelism: ["concurrency"],
-    cache: ["caching", "cached"], caching: ["cache"],
-    duplicate: ["duplication", "dedupe"], config: ["configuration"],
-    auth: ["authentication", "authorization"], database: ["db"],
-    retry: ["retries", "reattempt"], hang: ["hangs", "block", "stuck"], stuck: ["hang", "block"],
-  };
+  // The synonym bridge (SYNONYMS) is the single source in lib/model.mjs — imported above,
+  // and projected into catalog.js so the offline hub search scores the same expansions.
 
   // Reading all 146 pages costs disk, not context — only the output is charged in
   // tokens. So search the full prose, not just the index, and return the line that

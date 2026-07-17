@@ -69,6 +69,25 @@ export const REL_ORDER = [
   "Often confused with", "Prevents", "Mitigated by",
 ];
 
+// A small curated synonym bridge for search: a symptom phrased as "stale" should still
+// reach a page that only says "outdated". Synonym hits score at half weight so the author's
+// own vocabulary still wins ties. The single source of truth — kb.mjs `find` imports it, and
+// build.mjs projects it into catalog.js so the offline hub search reads the same map.
+export const SYNONYMS = {
+  stale: ["outdated", "expired"], outdated: ["stale"],
+  slow: ["latency", "lag"], latency: ["slow", "delay"], delay: ["latency"],
+  crash: ["failure", "outage"], failure: ["crash", "fault", "outage"], outage: ["failure"],
+  queue: ["backlog", "buffer"], backlog: ["queue"],
+  timeout: ["deadline"], deadline: ["timeout"],
+  spike: ["burst", "surge"], burst: ["spike", "surge"], surge: ["spike"],
+  overload: ["saturated", "overwhelmed"], saturated: ["overload"],
+  throttle: ["rate", "limit"], concurrency: ["parallelism"], parallelism: ["concurrency"],
+  cache: ["caching", "cached"], caching: ["cache"],
+  duplicate: ["duplication", "dedupe"], config: ["configuration"],
+  auth: ["authentication", "authorization"], database: ["db"],
+  retry: ["retries", "reattempt"], hang: ["hangs", "block", "stuck"], stuck: ["hang", "block"],
+};
+
 export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes" };
 
 /* ---- taxonomy ----

@@ -19,9 +19,26 @@
   var byId = {};
   catalog.forEach(function (n) { byId[n.id] = n; });
 
+  // Synonym bridge, projected from lib/model.mjs into the catalog by build.mjs — the same map
+  // kb.mjs find uses, so the browser and the CLI agree. A term scores full weight, its
+  // synonyms half, so "outdated" still reaches a page that only says "stale".
+  var SYN = (window.KB_CATALOG && window.KB_CATALOG.synonyms) || {};
+
   var STOP = { the: 1, and: 1, for: 1, are: 1, but: 1, not: 1, you: 1, all: 1, any: 1,
     can: 1, with: 1, that: 1, this: 1, from: 1, into: 1, when: 1, what: 1, why: 1,
     how: 1, does: 1, has: 1, have: 1, its: 1, they: 1, was: 1, were: 1, will: 1 };
+
+  // Raw score for one term (or synonym variant) against a node's fields — no multiplier.
+  function termScore(n, t, naming, hay, solves, tags) {
+    var s = 0;
+    if (n.id.indexOf(t) >= 0) s += naming ? 6 : 2;
+    if (n.name.toLowerCase().indexOf(t) >= 0) s += naming ? 5 : 2;
+    if (solves.some(function (x) { return x.toLowerCase().indexOf(t) >= 0; })) s += naming ? 5 : 6;
+    if (tags.some(function (x) { return x.toLowerCase().indexOf(t) >= 0; })) s += 3;
+    if (n.essence.toLowerCase().indexOf(t) >= 0) s += 3;
+    else if (hay.indexOf(t) >= 0) s += 1;
+    return s;
+  }
 
   function score(n, q, terms, naming) {
     var s = 0, matched = 0;
@@ -31,14 +48,15 @@
 
     var hay = [n.id, n.name, n.essence].concat(aliases, tags, solves).join(" ").toLowerCase();
     for (var i = 0; i < terms.length; i++) {
-      var t = terms[i], hit = false;
-      if (n.id.indexOf(t) >= 0) { s += naming ? 6 : 2; hit = true; }
-      if (n.name.toLowerCase().indexOf(t) >= 0) { s += naming ? 5 : 2; hit = true; }
-      if (solves.some(function (x) { return x.toLowerCase().indexOf(t) >= 0; })) { s += naming ? 5 : 6; hit = true; }
-      if (tags.some(function (x) { return x.toLowerCase().indexOf(t) >= 0; })) { s += 3; hit = true; }
-      if (n.essence.toLowerCase().indexOf(t) >= 0) { s += 3; hit = true; }
-      else if (hay.indexOf(t) >= 0) { s += 1; hit = true; }
-      if (hit) matched++;
+      // Score the term at full weight, then each synonym at half; the term counts as
+      // matched once, on its best variant. Mirrors scripts/kb.mjs.
+      var variants = [terms[i]].concat(SYN[terms[i]] || []);
+      var best = 0;
+      for (var v = 0; v < variants.length; v++) {
+        var got = termScore(n, variants[v], naming, hay, solves, tags) * (v === 0 ? 1 : 0.5);
+        if (got > best) best = got;
+      }
+      if (best > 0) { s += best; matched++; }
     }
     return s * (1 + matched / Math.max(terms.length, 1));
   }

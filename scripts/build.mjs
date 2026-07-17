@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, folderFor } from "./lib/model.mjs";
+import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, folderFor } from "./lib/model.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
  * the kb:generated markers (and any comment an author writes). */
@@ -266,6 +266,7 @@ const out = {
  * the one file an agent should always read first. Kept deliberately small. */
 const catalog = {
   meta: { generator: "scripts/build.mjs", count: Object.keys(nodes).length },
+  synonyms: SYNONYMS,   // projected so the offline hub search scores the same expansions as kb.mjs find
   nodes: Object.values(nodes).map((n) => {
     const e = { id: n.id, name: n.name, kind: n.kind, band: n.band, essence: n.essence, path: n.path };
     if (n.aliases?.length) e.aliases = n.aliases;
