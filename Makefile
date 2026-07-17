@@ -1,7 +1,7 @@
 # patterns — a static, build-less knowledge base. These targets are dev conveniences.
 .DEFAULT_GOAL := help
 
-.PHONY: help serve check all graph pages vocab hub graph-page relations
+.PHONY: help serve check all graph pages vocab hub graph-page relations kb
 
 all: ## Regenerate every derived artifact from the pages
 	@node scripts/build.mjs
@@ -12,6 +12,9 @@ all: ## Regenerate every derived artifact from the pages
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
+
+kb: ## Read the KB without burning context — make kb ARGS='find slow dependency'
+	@node scripts/kb.mjs $(ARGS)
 
 serve: ## Serve site/ locally at http://localhost:8000
 	@cd site && python3 -m http.server 8000

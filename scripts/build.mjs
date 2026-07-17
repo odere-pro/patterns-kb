@@ -24,6 +24,7 @@ const PARSE_OPTS = { comment: true };
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = join(ROOT, "site");
 const OUT = join(SITE, "assets", "graph.json");
+const CATALOG = join(SITE, "assets", "catalog.json");
 
 const fail = (msg) => { console.error("ERROR: " + msg); process.exit(1); };
 const titleize = (id) =>
@@ -188,15 +189,36 @@ const out = {
   nodes,
 };
 
+/* ---------------- catalog: the cheap index ----------------
+ * graph.json is ~200KB — too expensive to read just to answer "which pattern for X?".
+ * The catalog is the same corpus reduced to what you need in order to CHOOSE, and it is
+ * the one file an agent should always read first. Kept deliberately small. */
+const catalog = {
+  meta: { generator: "scripts/build.mjs", count: Object.keys(nodes).length },
+  nodes: Object.values(nodes).map((n) => {
+    const e = { id: n.id, name: n.name, kind: n.kind, band: n.band, essence: n.essence, path: n.path };
+    if (n.aliases?.length) e.aliases = n.aliases;
+    if (n.tags?.length) e.tags = n.tags;
+    if (n.solves?.length) e.solves = n.solves;
+    return e;
+  }),
+};
+
 const json = JSON.stringify(out, null, 2) + "\n";
+const catJson = JSON.stringify(catalog) + "\n";   // minified: it is an index, not a document
 if (process.argv.includes("--check")) {
   const cur = existsSync(OUT) ? readFileSync(OUT, "utf8") : "";
   if (cur !== json) { console.error("graph.json is STALE — run: node scripts/build.mjs"); process.exit(1); }
+  const curCat = existsSync(CATALOG) ? readFileSync(CATALOG, "utf8") : "";
+  if (curCat !== catJson) { console.error("catalog.json is STALE — run: node scripts/build.mjs"); process.exit(1); }
   console.log("graph.json is up to date.");
+  console.log("catalog.json is up to date.");
 } else {
   writeFileSync(OUT, json);
+  writeFileSync(CATALOG, catJson);
   console.log(
     `graph.json written from pages: ${out.meta.patterns} patterns + ${out.meta.hazards} hazards + ` +
     `${out.meta.themes} themes, ${uniq.size} relationships → ${rendered} rendered.`,
   );
+  console.log(`catalog.json written: ${catalog.nodes.length} entries, ${(catJson.length / 1024).toFixed(1)}KB.`);
 }

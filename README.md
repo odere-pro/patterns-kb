@@ -67,6 +67,30 @@ a copy of what the HTML already says.
 > Data is never inferred from a class name or from prose position, so restyling cannot damage
 > knowledge and re-authoring prose cannot damage structure.
 
+## Reading it without reading it
+
+The corpus is ~490k tokens — more than fits in a context window — and half of any page is
+markup. `scripts/kb.mjs` is the way in for an agent (or you): it strips styles, scripts,
+diagrams and chrome and returns the metadata and prose.
+
+```
+node scripts/kb.mjs find "one slow dependency blocks my threads"
+node scripts/kb.mjs get circuit-breaker --block usage
+node scripts/kb.mjs related circuit-breaker
+node scripts/kb.mjs ls --band caching
+```
+
+`find` searches the full prose of all 146 pages — that costs disk, not context, so only the
+matches are charged — and prints the line that matched. It weights differently depending on
+whether you are naming a pattern ("circuit breaker") or describing a symptom ("one slow
+dependency blocks my threads"), because in the second case a name match is usually incidental.
+
+Add `--json` for structured output, `--diagrams` to keep the mermaid source.
+
+A grounded answer — search, then read two `usage` blocks and a relation list — costs about
+**750 tokens**, against ~490,000 to read the corpus and ~3,600 for a single raw page.
+`site/assets/catalog.json` is the index behind it.
+
 ## Conventions
 
 - **Relative links only** (no `<base>`, no root-absolute URLs) so the same files work on `file://`
