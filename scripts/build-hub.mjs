@@ -127,6 +127,7 @@ const html = `<!doctype html>
       <a href="#lens-sec-h">Security</a>
       <a href="#hazards-h">Hazards</a>
       <a href="map/graph.html">Graph ↗</a>
+      <a href="vocab.html">Vocabulary ↗</a>
     </nav>
   </header>
 

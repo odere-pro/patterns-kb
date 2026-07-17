@@ -16,6 +16,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 
+/* The parser drops HTML comments unless told otherwise, which would silently delete
+ * the kb:generated markers (and any comment an author writes). */
+const PARSE_OPTS = { comment: true };
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json"), "utf8"));
 
@@ -28,7 +32,7 @@ for (const node of Object.values(graph.nodes)) {
   if (!existsSync(file)) { problems.push(`MISSING FILE: ${rel}`); continue; }
   pages++;
 
-  const root = parse(readFileSync(file, "utf8"));
+  const root = parse(readFileSync(file, "utf8"), PARSE_OPTS);
   const rendered = new Set(
     root
       .querySelectorAll("[data-kb-rel]")

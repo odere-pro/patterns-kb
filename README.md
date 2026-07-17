@@ -15,6 +15,7 @@ site/                     # the deployable site — plain static HTML, no build 
   hazards/<id>.html       # anti-patterns to recognize
   themes/<id>.html        # systems-fluency narratives (CAP, streaming, spikes, performance, auth, …)
   map/graph.html          # global relationship overview — GENERATED
+  vocab.html              # the ontology, self-describing — GENERATED
   assets/graph.json       # the relationship graph — DERIVED from the pages
   assets/                 # shared CSS + JS + vendored mermaid
 scripts/                  # authoring-time tools (never needed to view the site)
@@ -52,8 +53,14 @@ metadata in a `data-kb-*` layer at three levels:
 | Block | `data-kb-block` on each `<section>` — the `id` is both anchor and semantic key |
 | Element | `data-kb-rel` / `data-kb-to` on relationships, `data-kb-member` / `data-kb-role` on theme tours, `data-kb-theme` on fluency links |
 
-`site/assets/graph.json` is **derived from the pages** by `make graph`, not authored. So is the hub
-and the relationship overview. Nothing hand-maintains a copy of what the HTML already says.
+Each page's `<head>` also carries a **JSON-LD** block projected from those attributes — generated,
+never hand-written, so it cannot disagree with the page. It uses schema.org's `DefinedTerm` plus the
+KB's own 13-verb vocabulary, published at [`site/vocab.html`](site/vocab.html) (schema.org's
+`isRelatedTo` is far too vague for a real ontology).
+
+`site/assets/graph.json` is **derived from the pages** by `make graph`, not authored. So are the hub,
+the relationship overview, and the vocabulary. `make all` regenerates everything; nothing hand-maintains
+a copy of what the HTML already says.
 
 > **`class` is presentation. `data-kb-*` is data. They never touch.**
 >

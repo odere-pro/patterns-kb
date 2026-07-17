@@ -17,6 +17,10 @@ import { dirname, join } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, folderFor } from "./lib/model.mjs";
 
+/* The parser drops HTML comments unless told otherwise, which would silently delete
+ * the kb:generated markers (and any comment an author writes). */
+const PARSE_OPTS = { comment: true };
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = join(ROOT, "site");
 const OUT = join(SITE, "assets", "graph.json");
@@ -38,7 +42,7 @@ function walk(rel) {
 const raw = [];
 for (const [kind, top] of Object.entries(KIND_DIR)) {
   for (const { dir, file } of walk(top)) {
-    const root = parse(readFileSync(join(SITE, dir, file), "utf8"));
+    const root = parse(readFileSync(join(SITE, dir, file), "utf8"), PARSE_OPTS);
     const doc = root.querySelector("[data-kb-id]");
     if (!doc) fail(`${dir}/${file}: no [data-kb-id] root`);
     const id = doc.getAttribute("data-kb-id");
