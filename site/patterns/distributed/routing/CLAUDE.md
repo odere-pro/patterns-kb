@@ -1,9 +1,9 @@
 # patterns/distributed/routing
 
-**IV · Network → Routing & Scale** — 15 patterns.
+**IV · Network → Routing & Scale** — 16 patterns.
 Keeping many services reliable, fast, and consistent across a network
 
-Pages here: ambassador, api-gateway, autoscaling, bff, cdn, consistent-hashing, gatekeeper, load-balancer, reverse-proxy, service-mesh, sharding, sidecar, stateless-service, sticky-session, valet-key
+Pages here: ambassador, api-gateway, autoscaling, bff, cdn, consistent-hashing, gatekeeper, load-balancer, object-storage, reverse-proxy, service-mesh, sharding, sidecar, stateless-service, sticky-session, valet-key
 
 Every page in this folder declares `data-kb-band="distributed"` and
 `data-kb-group="distributed-routing"`. The path is checked against them — `make check` fails if a
