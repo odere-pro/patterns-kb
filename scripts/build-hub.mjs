@@ -22,7 +22,9 @@ const bandTotal = (band) =>
 
 function chip(n) {
   // n.path is site-relative and the hub sits at site/, so it needs no adjustment.
-  return `            <div class="chip"><input class="chip-box" type="checkbox" data-id="${n.id}" data-band="${n.band}" data-group="${n.group}" aria-label="Mark ${esc(n.name)} practiced"><a class="chip-name" href="${n.path}">${esc(n.name)}</a><span class="chip-note">${esc(n.essence)}</span></div>`;
+  const favAttr = n.favourite ? ' data-fav="1"' : "";
+  const favStar = n.favourite ? '<span class="chip-fav" title="Favourite" aria-label="Favourite">★</span>' : "";
+  return `            <div class="chip"${favAttr}><input class="chip-box" type="checkbox" data-id="${n.id}" data-band="${n.band}" data-group="${n.group}" aria-label="Mark ${esc(n.name)} practiced"><a class="chip-name" href="${n.path}">${esc(n.name)}</a><span class="chip-note">${esc(n.essence)}</span>${favStar}</div>`;
 }
 function chips(group) {
   return patternsIn(group).map(chip).join("\n");
@@ -116,6 +118,7 @@ const html = `<!doctype html>
     <div class="controls">
       <span class="progress" id="global-progress">— practiced</span>
       <button class="reset-btn" id="reset-btn" type="button">Reset progress</button>
+      <button class="fav-filter-btn" id="fav-filter-btn" type="button" aria-pressed="false">★ Favourites</button>
     </div>
     <div class="legend">
       <span class="legend-item"><span class="swatch ladder"></span>Elevation — one rung to the next</span>
@@ -195,6 +198,7 @@ ${HAZARD_ORDER.map(hazardChip).join("\n")}
 <script src="assets/catalog.js"></script>
 <script src="assets/search.js"></script>
 <script src="assets/progress.js"></script>
+<script src="assets/favourites.js"></script>
 </body>
 </html>
 `;

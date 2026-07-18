@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inbox · Patterns</title>
+  <meta name="description" content="Inbox — receive a message and persist its effects in one local transaction, then acknowledge safely.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#inbox",
+  "identifier": "inbox",
+  "name": "Inbox",
+  "description": "Persists a received message and applies its effects in one local transaction, then acknowledges safely",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:combines-with": [
+    {
+      "@id": "../../messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "Handler must be idempotent; duplicate delivery is inherent"
+    },
+    {
+      "@id": "../../messaging/message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:note": "Source of messages; broker must support acknowledgement"
+    },
+    {
+      "@id": "./saga.html#saga",
+      "name": "Saga",
+      "kb:note": "Receive saga steps reliably via the inbox"
+    }
+  ],
+  "kb:enables": [
+    {
+      "@id": "../../messaging/pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "The inbox makes receiving atomic with processing"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "./outbox.html#outbox",
+      "name": "Outbox",
+      "kb:note": "Opposite direction: outbox publishes reliably, inbox receives reliably"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="inbox" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Persists a received message and applies its effects in one local transaction, then acknowledges safely" data-kb-order="68" data-kb-aliases="[&quot;received event log&quot;,&quot;inbound outbox&quot;,&quot;transactional inbox&quot;]" data-kb-tags="[&quot;messaging&quot;,&quot;consistency&quot;,&quot;buffering&quot;,&quot;decoupling&quot;]" data-kb-solves="[&quot;I received a message but my database commit rolled back and I cannot tell if I already processed it&quot;,&quot;a message arrived twice and both times updated my state so now I have duplicate orders&quot;,&quot;my service crashed mid-process and the message got redelivered but I have no way to know what I already applied&quot;,&quot;the broker confirmed delivery but my write failed and now I have lost or orphaned messages&quot;,&quot;I need the receipt and the write to happen together but they are two different systems&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Inbox</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Inbox</h1>
+      <p class="doc-essence">Persists a received message and applies its effects in the same local transaction, then safely acknowledges to the broker — so a message is never lost, never duplicated, even if the service crashes mid-processing, and the receipt and the write can never drift apart.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="inbox">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>The <strong>inbox</strong> pattern adds a table to a service's own database that holds messages received from a broker, waiting to be processed. When the service receives a message, it writes both the message row and the business row that applies the message's effects — inside the same local ACID transaction. Only after commit does it acknowledge the message back to the broker. A separate process then polls the inbox for unacknowledged messages and retries them, ensuring no message is lost.</p>
+        <p>It resolves the <strong>dual-write problem from the receiving side</strong>. A service's database and its message broker are two different systems with no shared transaction between them. Receive and process the message, then acknowledge, and a crash between the two leaves the broker believing the message was lost — it redelivers, but the service has no record that it already processed it, leading to duplication. Acknowledge and then process, and a crash or a processing failure leaves the service with orphaned messages that no one knows about. There's no way to make "read from the broker" and "write to the database" atomic across two resource managers without something like distributed two-phase commit, which most message brokers don't support and most teams don't want to run.</p>
+        <p>Inbox sidesteps the problem instead of solving it head-on: it turns the receipt into a second local write, which the database transaction already makes atomic with the first. The handler must be idempotent — because the broker's "at-least-once" guarantee means the same message can arrive multiple times — but idempotency is a small, local concern, not a distributed coordination nightmare. The genuinely hard part — not losing or duplicating messages — is pushed onto the pattern and the handler's idempotency contract.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant MB as Broker
+    participant Svc as Service
+    participant DB as Local database
+    participant Ack as Ack process
+    MB-&gt;&gt;Svc: deliver message
+    Svc-&gt;&gt;DB: insert inbox row and business row, one transaction
+    DB--&gt;&gt;Svc: commit
+    Svc-&gt;&gt;MB: ack message
+    Ack-&gt;&gt;DB: poll unacknowledged inbox rows
+    Ack-&gt;&gt;MB: re-ack message (idempotent)
+    Ack-&gt;&gt;DB: mark row acknowledged
+        </pre>
+        <figcaption>The service receives a message and its effects commit together, in the same local transaction. Only after commit does the service acknowledge back to the broker. An ack process, running independently, retries any unacknowledged rows so a crash doesn't lose the message.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Synchronous processing</dt>
+        <dd>The handler processes the message immediately, inside the same request. The message and result commit together. Fast and simple, but if processing is slow it blocks the connection and handler timeouts become hazardous.</dd>
+        <dt id="variations-item-2">Deferred processing</dt>
+        <dd>The handler writes the message to the inbox and returns immediately, delegating processing to a background job. The inbox row tracks progress; the job polls for unprocessed rows and applies them. Decouples latency and reduces timeout risk.</dd>
+        <dt id="variations-item-3">Per-aggregate inbox</dt>
+        <dd>Each aggregate (domain object) gets its own inbox table instead of a shared one. Ordering guarantees stay scoped to one aggregate's queue, and hot tables don't block each other.</dd>
+        <dt id="variations-item-4">CDC (Change Data Capture)</dt>
+        <dd>A tool like Debezium tails the database's write-ahead log and turns each inbox insert into a message to a processing topic or trigger, eliminating polling and visibility window timeouts.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Solves the dual-write problem from the receiving side with a single local ACID transaction — no distributed transaction coordinator needed.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Guarantees at-least-once reception: a message is never lost because the service crashed between receipt and acknowledgement.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Handler can be offline during broker visibility window; ack process retries indefinitely, so window pressure is eliminated.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Works with any relational database and any broker; it's a pattern, not a product.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Adds a table, an ack process, and one more moving part to deploy and monitor.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Delivers at-least-once, not exactly-once — handlers MUST be idempotent, not optional.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Polling ack processes add latency and load; CDC infrastructure (if used) adds operational complexity.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">The inbox table grows unbounded without its own archiving or cleanup job.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">A service must receive and reliably process messages from a broker or event stream.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You need to guarantee that a message is never lost or silently duplicated — and you can afford idempotent processing.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The database and the message broker are separate systems with no shared transaction between them.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Your handler's effects are already idempotent (e.g., reads, cache invalidations, queries with deduplication built in) and losing a message is acceptable.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Broker connectivity is always reliable and an occasional missed message is acceptable.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The extra table and ack process complexity outweigh the reliability benefit for your domain and scale.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — receiving, storing, and processing with idempotency</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// Handler receives message and stores it atomically
+async function handleMessage(tx: Transaction, message: Message) {
+  // Same local transaction: inbox row + business row
+  const idempotencyKey = message.id;
+  const existing = await tx.query(
+    "select id from inbox where idempotency_key = $1",
+    [idempotencyKey],
+  );
+  if (existing.rows.length > 0) {
+    // Already processed (broker retransmitted); return idempotently
+    return;
+  }
+
+  await tx.query(
+    `insert into inbox (id, idempotency_key, message, processed)
+     values ($1, $2, $3, false)`,
+    [randomUUID(), idempotencyKey, JSON.stringify(message)],
+  );
+
+  // Apply business logic
+  await tx.query(
+    "insert into orders (id, status) values ($1, $2)",
+    [message.orderId, "received"],
+  );
+  // Both rows commit together, or neither does.
+}
+
+// Ack process: polls inbox and safely acknowledges
+async function ackOnce(db: Db, broker: Broker) {
+  const rows = await db.query(
+    "select * from inbox where processed = false order by id limit 100",
+  );
+  for (const row of rows) {
+    try {
+      // Re-ack is idempotent on the broker's side
+      await broker.ack(row.idempotency_key);
+      await db.query(
+        "update inbox set processed = true where id = $1",
+        [row.id],
+      );
+    } catch (e) {
+      // Broker rejected; leave unprocessed and retry later
+      console.error(`Failed to ack ${row.id}:`, e);
+    }
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="masstransit"><strong>MassTransit Inbox Consumer</strong><span>The .NET messaging library ships a transactional inbox: AddEntityFrameworkInbox persists received messages in an InboxState table inside the same EF Core SaveChanges as the handler result, and a delivery service sweeps and completes them, with automatic deduplication by message ID.</span></div>
+        <div class="wild-item" data-kb-example="temporal"><strong>Temporal Activity Completion</strong><span>The workflow orchestration engine guarantees that an activity result is written and acknowledged in the same transaction. If a worker crashes mid-activity, the server retransmits; the activity SDK ensures idempotency via activity_id deduplication.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Handler timeout</strong> — For synchronous processing, how long the broker waits before timing out and redelivering. Longer reduces redelivery pressure but risks losing the connection; shorter is safer but may cause false timeouts on slow processing. Deferred processing sidesteps this entirely.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Broker visibility window</strong> — How long the broker hides a received message before auto-redelivering if not acknowledged. Must be longer than handler latency + ack latency. Shorter windows create thrashing; longer windows tolerate brief outages.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Ack process poll interval</strong> — For a polling ack process, how often it scans for unacknowledged rows. Shorter cuts ack latency but raises steady read load; CDC sidesteps polling entirely.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Cleanup / retention cadence</strong> — How aggressively a job deletes or archives acknowledged rows. Without it the table grows unbounded and the poll query slows as it scans dead rows.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Inbox backlog depth</strong> — Count of rows with processed = false. Steady growth means the ack process is not keeping up or handlers are failing.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Processing latency</strong> — Time between message arrival and processed = true. The end-to-end latency; dominated by handler latency and ack process poll interval.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Handler error rate</strong> — Failed processing attempts per interval. Rising errors stall the inbox and leave messages unacknowledged.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Broker redelivery rate</strong> — Messages the broker redelivered due to unacknowledged or visibility window timeout. High redelivery creates duplicate processing pressure on idempotent handlers.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Handler timeout cascade</strong> — Slow processing → visibility window expires → broker redelivers → duplicate processing pressure → handler slower → more timeouts. Deferred processing breaks this cycle.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Inbox backlog starvation</strong> — Handler failures or a rejecting downstream service stall the ack process; unacknowledged messages pile up and eventually cause broker memory pressure.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Idempotency key collision</strong> — Two different messages with the same id (broker bug, clock skew, key generation flaw) → second message silently dropped. Verify key uniqueness at generation time.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Table bloat stalls polling</strong> — Cleanup lags and the poll query scans millions of acknowledged rows, driving its own latency up and worsening the backlog it was meant to drain.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Handlers are demonstrably idempotent — same message id produces same result, no matter how many times delivered</li>
+            <li id="production-check-2" data-kb-polarity="check">A partial index on processed = false keeps the ack poll query fast as the table grows</li>
+            <li id="production-check-3" data-kb-polarity="check">A cleanup or archiving job removes acknowledged rows on a schedule</li>
+            <li id="production-check-4" data-kb-polarity="check">Visibility window is longer than handler latency + ack poll interval + network jitter</li>
+            <li id="production-check-5" data-kb-polarity="check">Inbox backlog depth and processing latency are monitored with alerts on sustained growth or degradation</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="idempotency"><a href="../../messaging/idempotency.html">Idempotency</a><span class="rel-note">Handler must be idempotent; duplicate delivery is inherent</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="message-queue"><a href="../../messaging/message-queue.html">Message Queue</a><span class="rel-note">Source of messages; broker must support acknowledgement</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="saga"><a href="./saga.html">Saga</a><span class="rel-note">Receive saga steps reliably via the inbox</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="enables" data-kb-to="pubsub"><a href="../../messaging/pubsub.html">Publish-Subscribe</a><span class="rel-note">The inbox makes receiving atomic with processing</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="outbox"><a href="./outbox.html">Outbox</a><span class="rel-note">Opposite direction: outbox publishes reliably, inbox receives reliably</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    IB["Inbox"]
+    IB --- ID["Idempotency"]
+    IB --- MQ["Message Queue"]
+    IB --- SG["Saga"]
+    IB --- PS["Publish-Subscribe"]
+    IB --- OB["Outbox"]
+    click ID "../../messaging/idempotency.html"
+    click MQ "../../messaging/message-queue.html"
+    click SG "./saga.html"
+    click PS "../../messaging/pubsub.html"
+    click OB "./outbox.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="consistency-and-replication"><a href="../../../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Make the receipt and the write atomic</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./outbox.html">&larr; Outbox</a>
+      <a class="up" href="../../../index.html">&uarr; The Map</a>
+      <a class="next" href="./materialized-view.html">Materialized View &rarr;</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

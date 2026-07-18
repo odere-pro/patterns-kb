@@ -100,6 +100,7 @@ for (const { kind, dir, root, doc, id } of raw) {
   nodes[id] = {
     id, name, kind, band, group,
     essence: doc.getAttribute("data-kb-essence"),
+    favourite: doc.getAttribute("data-kb-favourite") === "true",
     ...jsonAttrs(doc, id),
     docClass,
     dir,
@@ -270,6 +271,7 @@ const catalog = {
   synonyms: SYNONYMS,   // projected so the offline hub search scores the same expansions as kb.mjs find
   nodes: Object.values(nodes).map((n) => {
     const e = { id: n.id, name: n.name, kind: n.kind, band: n.band, essence: n.essence, path: n.path };
+    if (n.favourite) e.favourite = true;
     if (n.aliases?.length) e.aliases = n.aliases;
     if (n.tags?.length) e.tags = n.tags;
     if (n.solves?.length) e.solves = n.solves;
