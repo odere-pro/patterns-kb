@@ -143,6 +143,7 @@ export const BANDS = [
 export const THEME_ORDER = [
   "cap-theorem", "streaming", "spike-handling", "performance", "auth-and-access",
   "scalability", "consistency-and-replication", "observability", "resilience",
+  "genai-scale",
 ];
 export const HAZARD_ORDER = [
   "god-object", "spaghetti-code", "big-ball-of-mud", "anemic-domain-model",
