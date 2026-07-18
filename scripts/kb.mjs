@@ -456,7 +456,7 @@ ${rows}
       const p = join(dir, name);
       return statSync(p).isDirectory() ? walk(p) : p.endsWith(".html") ? [relative(SITE, p)] : [];
     });
-    for (const d of ["patterns", "hazards", "themes"]) targets.push(...walk(join(SITE, d)));
+    for (const d of ["patterns", "hazards", "themes", "principles"]) targets.push(...walk(join(SITE, d)));
   }
 
   const problems = [];
@@ -562,7 +562,7 @@ ${rows}
   const kind = opt("kind"), bandId = opt("band"), name = opt("name"), order = opt("order");
   const group = opt("group") ?? bandId;
   if (!id || !kind || !name || order == null || (kind === "pattern" && !bandId)) {
-    console.error('usage: kb.mjs new <id> --kind pattern|hazard|theme --band <b> [--group <g>] --name "…" --order <n>');
+    console.error('usage: kb.mjs new <id> --kind pattern|hazard|theme|principle --band <b> [--group <g>] --name "…" --order <n>');
     process.exit(1);
   }
   const band = kind === "pattern" ? bandId : kind;

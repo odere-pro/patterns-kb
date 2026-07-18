@@ -92,12 +92,33 @@ Read with \`node ../../scripts/kb.mjs get <id>\`. See the root CLAUDE.md for the
 `;
 }
 
+function forPrinciples(list) {
+  return `# site/principles
+
+**Principles** — ${list.length} design maxims. Not a rung, not a lens, not a pattern: each is a
+rule of thumb for writing good code at any elevation (SOLID, DRY, KISS, YAGNI, and friends).
+
+Pages here: ${list.map((n) => n.id).sort().join(", ")}
+
+Blocks, in order: ${BLOCKS.principle.map((b) => `\`${b}\``).join(" → ")}.
+
+A principle carries \`data-kb-solves\` (symptomatic search phrases) like a pattern, and links
+into the typed relationship graph — most often it \`combines-with\` a pattern that embodies it,
+or \`prevents-hazard\` an anti-pattern it guards against. The \`overreach\` block is mandatory:
+every principle has a way of being taken too far, and saying so is what keeps the KB out of
+dogma.
+
+Read with \`node ../../scripts/kb.mjs get <id>\`. See the root CLAUDE.md for the contract.
+`;
+}
+
 let written = 0;
 const stale = [];
 for (const [dir, list] of Object.entries(byDir)) {
   const body =
     dir === "hazards" ? forHazards(list)
     : dir === "themes" ? forThemes(list)
+    : dir === "principles" ? forPrinciples(list)
     : forPatternFolder(dir, list);
   const file = join(SITE, dir, "CLAUDE.md");
   const cur = existsSync(file) ? readFileSync(file, "utf8") : "";

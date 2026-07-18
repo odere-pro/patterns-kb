@@ -1,6 +1,6 @@
 ---
 name: kb-add
-description: Add a new pattern, hazard or theme page to patterns-kb. Use when someone wants to document a pattern the KB does not cover yet, promote one of the stub neighbours (monostate, reverse-proxy, service-mesh, token-bucket, sticky-session, stateless-service) into a real page, or asks how to add to this knowledge base.
+description: Add a new pattern, hazard, theme or principle page to patterns-kb. Use when someone wants to document a pattern, hazard, theme, or design principle (SOLID, DRY, KISS, YAGNI, …) the KB does not cover yet, promote one of the stub neighbours (monostate, reverse-proxy, service-mesh, token-bucket, sticky-session, stateless-service) into a real page, or asks how to add to this knowledge base.
 ---
 
 # Adding a page
@@ -36,14 +36,17 @@ it works at (an object? one app? a whole system? a network?) or which lens it is
 node scripts/kb.mjs new <id> --kind pattern --band <band> [--group <group>] --name "Name" --order <n>
 ```
 
-This writes a structurally valid skeleton — every mandatory block in order, sketch pre-wired
-for highlighting — that already passes `kb.mjs validate --file`. Then study an exemplar for
-what good content looks like:
+`--kind` is one of `pattern|hazard|theme|principle`. Only `pattern` needs a `--band`; hazards,
+themes and principles are flat (their band/group is just the kind). This writes a structurally
+valid skeleton — every mandatory block in order, sketch pre-wired for highlighting on patterns
+— that already passes `kb.mjs validate --file`. Then study an exemplar for what good content
+looks like:
 
 ```
 node scripts/kb.mjs get circuit-breaker          # pattern
 node scripts/kb.mjs get cap-theorem              # theme
 node scripts/kb.mjs get god-object               # hazard
+node scripts/kb.mjs get dry                       # principle
 node scripts/kb.mjs get thread-pool --block production   # the production block
 ```
 
@@ -69,6 +72,12 @@ node scripts/kb.mjs link <id> combines-with bulkhead --note "why, from this page
 
 Verbs are closed — see [site/vocab.html](../../../site/vocab.html). Directional verbs
 (`variant-of`/`has-variant`) get the inverse written on the far side automatically.
+
+One exception: a **hazard has no `relationships` block**, so `kb.mjs link` cannot write the
+hazard side of a `prevents-hazard`/`mitigated-by` edge (common when adding a principle that
+guards against an anti-pattern, e.g. `single-responsibility` → `god-object`). Run `link` to
+write the principle side, then hand-add the inverse `mitigated-by` rel-item inside the
+hazard's `mitigation` block's `.rel-list` (copy the shape of an existing item there).
 
 ## 6. Metadata
 

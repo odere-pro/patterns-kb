@@ -1,7 +1,7 @@
 # patterns-kb
 
-A knowledge base of 146 software design patterns, hazards and themes. **It is data that
-happens to render**, not a site that happens to hold data.
+A knowledge base of 163 software design patterns, hazards, themes and principles. **It is
+data that happens to render**, not a site that happens to hold data.
 
 ## The one thing to understand
 
@@ -29,7 +29,7 @@ node scripts/kb.mjs ls --band caching
 ```
 
 Add `--json` for structured output. A grounded answer costs ~600 tokens this way, against
-~3,600 for one raw page. `find` searches the full prose of all 146 pages — that costs disk,
+~3,600 for one raw page. `find` searches the full prose of all 163 pages — that costs disk,
 not context — and prints the line that matched.
 
 Cite precisely: every claim has a stable id (`…/circuit-breaker.html#tradeoffs-con-2`).
@@ -65,7 +65,7 @@ Each folder under `site/` has its own CLAUDE.md with local rules.
 
 ```
 site/patterns/<band>/[<group>/]<id>.html   the source of truth
-site/hazards/<id>.html · site/themes/<id>.html
+site/hazards/<id>.html · site/themes/<id>.html · site/principles/<id>.html
 site/assets/graph.json · catalog.json      DERIVED
 site/index.html · vocab.html · map/graph.html   DERIVED
 scripts/kb.mjs        the reader/writer — your interface to all of it

@@ -17,9 +17,10 @@ export const KB_NAME = "Patterns KB";
 /* Blocks each kind of page is expected to carry, in order. The section id doubles as
  * the anchor and the semantic key, so this is both a vocabulary and a lint rule. */
 export const BLOCKS = {
-  pattern: ["description", "structure", "variations", "tradeoffs", "usage", "sketch", "wild", "production", "relationships", "fluency"],
-  hazard:  ["description", "causes", "cost", "mitigation"],
-  theme:   ["framing", "tradespace", "tour", "decide", "siblings"],
+  pattern:   ["description", "structure", "variations", "tradeoffs", "usage", "sketch", "wild", "production", "relationships", "fluency"],
+  hazard:    ["description", "causes", "cost", "mitigation"],
+  theme:     ["framing", "tradespace", "tour", "decide", "siblings"],
+  principle: ["statement", "rationale", "applying", "overreach", "relationships"],
 };
 /* Blocks that may legitimately be absent. `fluency` is only on patterns that a theme
  * tours; `wild` and `production` only where honest content exists; the rest are
@@ -88,7 +89,7 @@ export const SYNONYMS = {
   retry: ["retries", "reattempt"], hang: ["hangs", "block", "stuck"], stuck: ["hang", "block"],
 };
 
-export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes" };
+export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes", principle: "principles" };
 
 /* ---- taxonomy ----
  * `kind: "elevation"` bands are the I-IV ladder; `kind: "lens"` bands cut across it.
@@ -146,6 +147,14 @@ export const THEME_ORDER = [
 export const HAZARD_ORDER = [
   "god-object", "spaghetti-code", "big-ball-of-mud", "anemic-domain-model",
   "golden-hammer", "boat-anchor",
+];
+/* Editorial order for the principle section: universal heuristics first, then SOLID,
+ * then the OO-structural maxims. Drives the hub's Principles grid. */
+export const PRINCIPLE_ORDER = [
+  "dry", "kiss", "yagni",
+  "single-responsibility", "open-closed", "liskov-substitution",
+  "interface-segregation", "dependency-inversion",
+  "composition-over-inheritance", "law-of-demeter", "separation-of-concerns",
 ];
 
 /* ---- derived lookups ---- */

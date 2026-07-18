@@ -108,6 +108,20 @@ const THEME_BLOCKS = () => [
   PROSE_SECTION("siblings", "h-siblings", "Sibling themes", "siblings"),
 ].join("\n\n");
 
+/* A principle is a maxim, not a mechanism: four prose blocks plus the standard (empty)
+ * relationships section, which `kb.mjs link` fills. `overreach` is mandatory on purpose —
+ * every principle has a way of being taken too far, and saying so is what keeps the KB
+ * out of dogma. */
+const PRINCIPLE_BLOCKS = () => [
+  PROSE_SECTION("statement", "h-statement", "What it says", "statement"),
+  PROSE_SECTION("rationale", "h-rationale", "Why it helps", "rationale"),
+  PROSE_SECTION("applying", "h-applying", "Applying it", "applying"),
+  PROSE_SECTION("overreach", "h-overreach", "Taken too far", "overreach"),
+  `    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+    </section>`,
+].join("\n\n");
+
 export function pageSkeleton({ id, name, kind, band, group, order }) {
   const dir = folderFor({ kind, band, group });
   const p = "../".repeat(dir.split("/").length);
@@ -115,13 +129,13 @@ export function pageSkeleton({ id, name, kind, band, group, order }) {
   const lens = b?.kind === "lens";
 
   const bodyClass = kind === "pattern" ? (lens ? "doc lens" : "doc") : `doc ${kind}`;
-  const kicker = kind === "pattern" ? (lens ? `Lens · ${b.label}` : b.label) : kind === "hazard" ? "Hazard" : "Theme";
-  const badge = kind === "pattern" ? b.short : kind === "hazard" ? "Hazard" : "Theme";
-  const crumbAnchor = kind === "pattern" ? `#${b.anchor}` : kind === "hazard" ? "#hazards-h" : "#themes-h";
-  const crumbLabel = kind === "pattern" ? b.label : kind === "hazard" ? "Hazards" : "Themes";
+  const kicker = kind === "pattern" ? (lens ? `Lens · ${b.label}` : b.label) : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : "Theme";
+  const badge = kind === "pattern" ? b.short : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : "Theme";
+  const crumbAnchor = kind === "pattern" ? `#${b.anchor}` : kind === "hazard" ? "#hazards-h" : kind === "principle" ? "#principles-h" : "#themes-h";
+  const crumbLabel = kind === "pattern" ? b.label : kind === "hazard" ? "Hazards" : kind === "principle" ? "Principles" : "Themes";
 
   const blocks =
-    kind === "pattern" ? PATTERN_BLOCKS() : kind === "hazard" ? HAZARD_BLOCKS() : THEME_BLOCKS();
+    kind === "pattern" ? PATTERN_BLOCKS() : kind === "hazard" ? HAZARD_BLOCKS() : kind === "principle" ? PRINCIPLE_BLOCKS() : THEME_BLOCKS();
 
   const patternScripts = kind === "pattern"
     ? `\n  <script src="${p}assets/vendor/highlight.min.js"></script>\n  <script src="${p}assets/sketch.js"></script>`

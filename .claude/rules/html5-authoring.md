@@ -51,17 +51,17 @@ a comma-delimited attribute would break on the first comma in the prose.
 page's `<p class="doc-essence">`, which is longer and reads as a definition. Both exist; do
 not collapse them.
 
-**`solves`** (patterns only, 3-5) — the single highest-value field, and the easy one to get
-wrong. It is **not** a restatement of the `usage` block's "Reach for it when", which is
-prescriptive and already exists. It is **symptomatic**: the words someone types when they
-have the problem and do not yet know this pattern exists.
+**`solves`** (patterns and principles, 3-5) — the single highest-value field, and the easy
+one to get wrong. It is **not** a restatement of the `usage` block's "Reach for it when",
+which is prescriptive and already exists. It is **symptomatic**: the words someone types when
+they have the problem and do not yet know this pattern (or principle) exists.
 
 - ✅ `"my thread pool is exhausted and every request hangs"`
 - ✅ `"adding a new export format means editing a giant switch statement"`
 - ❌ `"You call a remote service that can fail"` — prescriptive, useless for search
 - ❌ `"circuit breaker pattern"` — if they knew the name they would have searched it
 
-Avoid the pattern's own name and its jargon inside `solves`. Use the vocabulary of the
+Avoid the page's own name and its jargon inside `solves`. Use the vocabulary of the
 symptom, not of the solution. Hazards and themes carry no `solves`.
 
 **`tags`** (2-5) — a **closed vocabulary**: `TAGS` in [`scripts/lib/model.mjs`](../../scripts/lib/model.mjs).
@@ -90,9 +90,18 @@ Fixed vocabulary, fixed order, per kind — see `BLOCKS` in `scripts/lib/model.m
 | pattern | `description` `structure` `variations` `tradeoffs` `usage` `sketch` `wild`* `production`* `relationships` `fluency`* |
 | hazard | `description` `causes` `cost` `mitigation` |
 | theme | `framing` `tradespace` `tour` `decide` `siblings` |
+| principle | `statement` `rationale` `applying` `overreach` `relationships` |
 
 `*` optional. Same question, same place, on every page — that is what makes block-level
 extraction possible.
+
+A **principle** is a design maxim (SOLID, DRY, KISS, YAGNI, …), not a mechanism: `statement`
+says what it is, `rationale` why it helps, `applying` how to honour it, and `overreach` — a
+mandatory, honest block — how it fails when taken too far. Principles carry `solves` and link
+into the typed graph (usually `combines-with` a pattern that embodies them, or
+`prevents-hazard` an anti-pattern they guard against). Because a hazard has no `relationships`
+block, the hazard side of a `prevents-hazard`/`mitigated-by` edge is hand-authored inside its
+`mitigation` block — `kb.mjs link` can only write the principle side.
 
 **`production`** (patterns only, optional) — the system-builder block: what it takes to *run*
 the pattern, written through the validated writer:
@@ -134,10 +143,12 @@ and `make all` will overwrite anything you write there. `make check` fails if th
 
 ## Adding a page
 
-1. Copy the shape of an exemplar: **`circuit-breaker`** (pattern) or **`cap-theorem`** (theme).
-   Read it with `node scripts/kb.mjs get circuit-breaker`.
-2. File it at `site/patterns/<band>/[<group>/]<id>.html` — the path must match the band and
-   group it declares.
+1. Copy the shape of an exemplar: **`circuit-breaker`** (pattern), **`cap-theorem`** (theme),
+   or **`dry`** (principle). Read it with `node scripts/kb.mjs get circuit-breaker`. Or scaffold
+   directly: `node scripts/kb.mjs new <id> --kind principle --name "…" --order <n>` (a
+   non-pattern kind needs no `--band`).
+2. File it at `site/patterns/<band>/[<group>/]<id>.html` (patterns) or `site/<kind>s/<id>.html`
+   (hazards, themes, principles) — the path must match the band and group it declares.
 3. Give it a `data-kb-order`. Pattern order is editorial, not alphabetical: it drives the hub
    and prev/next. Insert it where it belongs pedagogically and renumber its neighbours.
 4. Add every block for its kind, in order.

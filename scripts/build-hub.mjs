@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { BANDS, THEME_ORDER, HAZARD_ORDER, esc } from "./lib/model.mjs";
+import { BANDS, THEME_ORDER, HAZARD_ORDER, PRINCIPLE_ORDER, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "site", "index.html");
@@ -79,6 +79,15 @@ function themeCard(id) {
   return `        <a class="theme-card" href="${t.path}"><span class="theme-name">${esc(t.name)}</span><span class="theme-note">${esc(t.essence)}</span></a>`;
 }
 
+/* ---- principles ---- */
+/* Reuses the theme-card styling; the ORDER is filtered to nodes that actually exist so the
+ * hub still builds while the section is being populated one page at a time. */
+function principleCard(id) {
+  const p = N[id];
+  return `        <a class="theme-card" href="${p.path}"><span class="theme-name">${esc(p.name)}</span><span class="theme-note">${esc(p.essence)}</span></a>`;
+}
+const PRINCIPLES = PRINCIPLE_ORDER.filter((id) => N[id]);
+
 /* ---- hazards ---- */
 function hazardChip(id) {
   const h = N[id];
@@ -119,6 +128,7 @@ const html = `<!doctype html>
       <a href="#band-arch-h">III · Architecture</a>
       <a href="#band-dist-h">IV · Network</a>
       <a href="#themes-h">Themes</a>
+      <a href="#principles-h">Principles</a>
       <a href="#lens-msg-h">Messaging</a>
       <a href="#lens-cache-h">Caching</a>
       <a href="#lens-conc-h">Concurrency</a>
@@ -143,6 +153,16 @@ ${ELEVATION.map(bandHtml).join("\n\n")}
       </div>
       <div class="theme-grid">
 ${THEME_ORDER.map(themeCard).join("\n")}
+      </div>
+    </section>
+
+    <section class="themes principles" aria-labelledby="principles-h">
+      <div class="themes-head">
+        <h2 id="principles-h">Principles — how to write it well</h2>
+        <p>Not a rung and not a lens: each principle is a rule of thumb that holds at every elevation — the maxims that keep code simple, decoupled, and cheap to change. Each page cross-links to the patterns that embody it and the hazards it guards against.</p>
+      </div>
+      <div class="theme-grid">
+${PRINCIPLES.map(principleCard).join("\n")}
       </div>
     </section>
 
@@ -185,5 +205,5 @@ if (process.argv.includes("--check")) {
   console.log("index.html is up to date.");
 } else {
   writeFileSync(OUT, html);
-  console.log(`index.html written: ${totalPatterns} pattern chips + ${THEME_ORDER.length} themes + ${HAZARD_ORDER.length} hazards.`);
+  console.log(`index.html written: ${totalPatterns} pattern chips + ${THEME_ORDER.length} themes + ${PRINCIPLES.length} principles + ${HAZARD_ORDER.length} hazards.`);
 }
