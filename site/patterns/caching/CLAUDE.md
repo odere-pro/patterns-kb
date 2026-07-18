@@ -1,9 +1,9 @@
 # patterns/caching
 
-**Caching (lens)** — 5 patterns.
+**Caching (lens)** — 8 patterns.
 A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
 
-Pages here: cache-aside, read-through, refresh-ahead, write-behind, write-through
+Pages here: cache-aside, client-side-cache, distributed-cache, in-process-cache, read-through, refresh-ahead, write-behind, write-through
 
 Every page in this folder declares `data-kb-band="caching"` and
 `data-kb-group="caching"`. The path is checked against them — `make check` fails if a

@@ -143,11 +143,12 @@ export const BANDS = [
 export const THEME_ORDER = [
   "cap-theorem", "streaming", "spike-handling", "performance", "auth-and-access",
   "scalability", "consistency-and-replication", "observability", "resilience",
-  "genai-scale",
+  "genai-scale", "caching",
 ];
 export const HAZARD_ORDER = [
   "god-object", "spaghetti-code", "big-ball-of-mud", "anemic-domain-model",
   "golden-hammer", "boat-anchor",
+  "cache-stampede", "hot-key", "stale-cache",
 ];
 /* Editorial order for the principle section: universal heuristics first, then SOLID,
  * then the OO-structural maxims. Drives the hub's Principles grid. */

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cache Stampede · Patterns</title>
+  <meta name="description" content="Cache Stampede — a popular cache entry expires and a herd of concurrent misses hits the source at once, turning one query into thousands.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#cache-stampede",
+  "identifier": "cache-stampede",
+  "name": "Cache Stampede",
+  "description": "A popular key expires and a herd of misses hits the source at once",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "hazard",
+  "kb:band": "hazard",
+  "kb:group": "hazard",
+  "kb:mitigated-by": [
+    {
+      "@id": "../patterns/caching/refresh-ahead.html#refresh-ahead",
+      "name": "Refresh-Ahead",
+      "kb:note": "Reload the hot key before its TTL expires, so it never goes cold under load"
+    },
+    {
+      "@id": "../patterns/caching/read-through.html#read-through",
+      "name": "Read-Through",
+      "kb:note": "One load path per key lets the cache coalesce concurrent misses into a single fetch"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc hazard">
+  <main class="doc-wrap" data-kb-id="cache-stampede" data-kb-kind="hazard" data-kb-band="hazard" data-kb-group="hazard" data-kb-essence="A popular key expires and a herd of misses hits the source at once" data-kb-order="6" data-kb-aliases="[&quot;thundering herd&quot;,&quot;dogpile&quot;,&quot;single-flight&quot;]" data-kb-tags="[&quot;caching&quot;,&quot;latency&quot;,&quot;resilience&quot;,&quot;throughput&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#hazards-h">Hazards</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Cache Stampede</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Hazard</p>
+      <h1 class="doc-title">Cache Stampede</h1>
+      <p class="doc-essence">A single hot cache entry expires, and the flood of concurrent requests that all miss at the same instant stampede straight through to the source of truth — turning one query into thousands and overwhelming the very database the cache was there to protect.</p>
+      <div class="doc-metarow">
+        <span class="badge">Hazard</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="cache-stampede">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>cache stampede</strong> — also called a <em>thundering herd</em> or <em>dogpile</em> — is what happens when one heavily-read cache entry expires and every request that wanted it misses at once. With the entry gone, there is nothing to serve them, so they all fall through to the source of truth simultaneously and try to rebuild the same value in parallel. A single expiry becomes a synchronized wave of identical, expensive queries.</p>
+        <p>The trap is that everything looks healthy right up to the moment it isn't. A cache with a 99% hit rate is doing its job; the source sees a trickle of traffic and is sized for that trickle. Then a popular key's time-to-live elapses, the hit rate for that key instantly drops to zero, and the source is asked to absorb the full unshielded read volume in the width of a single refresh window. The cache didn't fail — it did exactly what it was told, and the failure is in what happens the instant a hot entry is briefly absent.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="causes" aria-labelledby="h-causes" data-kb-block="causes">
+      <h2 class="doc-h" id="h-causes">How it happens</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+    A["Hot key cached with a fixed TTL"] --> B["TTL elapses; entry evicted"]
+    B --> C["N concurrent requests all miss"]
+    C --> D["Every miss independently queries the source"]
+    D --> E["One query becomes thousands at once"]
+    E --> F["Source saturates; latency climbs for everyone"]
+        </pre>
+        <figcaption>The herd is created by the gap between one entry expiring and any single request refilling it — every request that arrives in that gap misses.</figcaption>
+      </figure>
+      <div class="prose">
+        <ul>
+          <li>A fixed TTL on a popular key: the busier the key, the more requests land in the refill gap the instant it expires.</li>
+          <li>Cache-aside reads with no coordination — each caller that misses independently loads and repopulates, so nothing suppresses the duplicates.</li>
+          <li>Synchronized expiry: many keys sharing the same TTL, or a whole cache flushed or restarted at once, so a crowd of entries goes cold together (a cold-cache stampede after a deploy or scale-up).</li>
+          <li>A source expensive enough that rebuilding one value is slow, widening the window in which still more requests pile up behind the first.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="cost" aria-labelledby="h-cost" data-kb-block="cost">
+      <h2 class="doc-h" id="h-cost">What it costs</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>The source takes the full unshielded load.</strong> The database is provisioned for the post-cache trickle, not the raw request rate; a stampede hands it the raw rate with no warning.</li>
+          <li><strong>The work is almost entirely wasted.</strong> Thousands of requests compute the identical value at the same time; all but one of those computations is redundant.</li>
+          <li><strong>It cascades.</strong> A saturated source slows every query routed through it, not just the hot key's — so an expiry on one entry degrades unrelated traffic and can tip into a broader outage.</li>
+          <li><strong>It recurs on a clock.</strong> Left unaddressed, the stampede repeats every time that key's TTL elapses, making it a predictable, self-inflicted load spike rather than a one-off.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
+      <h2 class="doc-h" id="h-mitigation">How to avoid it</h2>
+      <div class="prose">
+        <p>Two moves defuse it. <strong>Request coalescing</strong> (single-flight): when several requests miss the same key at once, let only the first one rebuild the value while the rest wait for its result — collapsing the herd back into a single source query. And <strong>proactive refresh</strong> (cache warming): instead of waiting for a hot key to expire and miss, reload it in the background just before its TTL runs out, so the entry is never actually absent under load. A short jitter added to TTLs also helps, by desynchronizing entries that would otherwise expire together.</p>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Mitigated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="refresh-ahead"><a href="../patterns/caching/refresh-ahead.html">Refresh-Ahead</a><span class="rel-note">Reload the hot key before its TTL expires, so it never goes cold under load</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="read-through"><a href="../patterns/caching/read-through.html">Read-Through</a><span class="rel-note">One load path per key lets the cache coalesce concurrent misses into a single fetch</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    CS["Cache Stampede"]
+    CS --- RA["Refresh-Ahead"]
+    CS --- RT["Read-Through"]
+    click RA "../patterns/caching/refresh-ahead.html"
+    click RT "../patterns/caching/read-through.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#hazards-h">← Hazards</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#hazards-h">Hazards →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>
