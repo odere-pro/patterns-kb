@@ -122,19 +122,19 @@ flowchart LR
         <div class="col pros">
           <h3>Pros</h3>
           <ul>
-            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Slashes memory when many objects share the same invariant state.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Fewer allocations mean less GC pressure and better cache locality.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Centralizes creation in a factory — one place to cache and reuse.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Shared state is immutable, so it is inherently safe to read across threads.</li>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Cuts memory sharply when many objects share the same unchanging data.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Fewer allocations mean less garbage-collector work and better cache use.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Puts object creation in one factory — a single place to cache and reuse instances.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">The shared data never changes, so many threads can read it safely at once.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Splitting state complicates the API — callers must supply context on every call.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Extrinsic state is recomputed or passed each time, trading CPU for memory.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Only pays off at scale; for a few objects it is needless indirection.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">The shared part must stay immutable — one mutation corrupts every user of it.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Splitting the data complicates the API — callers must pass the per-use part on every call.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">The per-use part is recomputed or passed each time — you trade CPU for memory.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Only pays off at scale — for a few objects it's needless indirection.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">The shared part must stay immutable — one change corrupts every object using it.</li>
           </ul>
         </div>
       </div>
@@ -146,17 +146,17 @@ flowchart LR
         <div class="when">
           <h3>Reach for it when</h3>
           <ul>
-            <li id="usage-when-1" data-kb-polarity="when">You need a very large number of objects that mostly duplicate the same data.</li>
-            <li id="usage-when-2" data-kb-polarity="when">Memory, not CPU, is the binding constraint on the model.</li>
-            <li id="usage-when-3" data-kb-polarity="when">State splits cleanly into a shared invariant part and a per-use context.</li>
+            <li id="usage-when-1" data-kb-polarity="when">You need a very large number of objects that mostly repeat the same data.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Memory, not CPU, is the limiting constraint on the model.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The data splits cleanly into a shared, unchanging part and a small per-use part.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
-            <li id="usage-avoid-1" data-kb-polarity="avoid">You only have a handful of objects — the indirection is not worth it.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Most of each object is unique, so there is little to share.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The "shared" part actually needs to differ or mutate per instance.</li>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">You only have a handful of objects — the indirection isn't worth it.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Most of each object is unique, so there's little worth sharing.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The "shared" part actually needs to differ or change per instance.</li>
           </ul>
         </div>
       </div>
@@ -166,34 +166,36 @@ flowchart LR
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
         <summary>TypeScript — a forest of shared tree kinds</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">// intrinsic state — shared, immutable, context-free
+<pre><code class="language-typescript" data-kb-lang="typescript">// Intrinsic state — shared, immutable, context-free.
 class TreeKind {
   constructor(
     readonly name: string,
     readonly mesh: string,     // heavy geometry, shared
     readonly texture: string,  // heavy bitmap, shared
   ) {}
-  draw(x: number, y: number) {
-    // render the shared mesh at the given position
+  draw(x: number, y: number): void {
+    // render the shared mesh + texture at this position
   }
 }
 
-// the factory interns one TreeKind per distinct look
+// The factory hands back one TreeKind per distinct look.
 class TreeFactory {
-  private pool = new Map&lt;string, TreeKind&gt;();
-  of(name: string, mesh: string, texture: string): TreeKind {
-    const key = name + ":" + texture;
+  private readonly pool = new Map&lt;string, TreeKind&gt;();
+  kindOf(name: string, mesh: string, texture: string): TreeKind {
+    const key = `${name}|${mesh}|${texture}`;
     let kind = this.pool.get(key);
     if (!kind) this.pool.set(key, (kind = new TreeKind(name, mesh, texture)));
     return kind;
   }
 }
 
-// extrinsic state — position — stays with the client
+// Extrinsic state — position — stays with each lightweight tree.
+interface Tree { readonly x: number; readonly y: number; readonly kind: TreeKind; }
+
 const forest = new TreeFactory();
-const oak = forest.of("oak", "oak.mesh", "oak.png");
-const trees = [{ x: 1, y: 2 }, { x: 9, y: 4 }].map(p =&gt; ({ ...p, kind: oak }));
-// a million trees, one TreeKind in memory</code></pre>
+const oak = forest.kindOf("oak", "oak.mesh", "oak.png");
+const trees: Tree[] = [{ x: 1, y: 2 }, { x: 9, y: 4 }].map(p =&gt; ({ ...p, kind: oak }));
+// a million trees can share this one TreeKind in memory</code></pre>
       </details>
     </section>
 

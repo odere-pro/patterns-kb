@@ -126,19 +126,19 @@ stateDiagram-v2
         <div class="col pros">
           <h3>Pros</h3>
           <ul>
-            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Amortizes expensive construction across many uses.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Caps concurrent use of a scarce resource at a known ceiling.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Cuts allocation churn and garbage-collection pressure.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Delivers steady, predictable latency once the pool is warm.</li>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Spreads the cost of expensive construction across many uses instead of paying it every time.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Caps how many of a scarce resource are in use at once, at a fixed ceiling.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Cuts constant allocate-and-discard churn and the garbage-collection pressure it creates.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Delivers steady, predictable latency once the pool has warmed up.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Reused objects carry state — forget to reset one and it leaks between clients.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">A borrowed object that's never returned starves the whole pool.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Adds real complexity: sizing, validation, eviction, thread safety.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">For cheap objects a modern allocator or GC often beats a pool outright.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Reused objects keep their old state — forget to reset one and it leaks data between clients.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">An object borrowed and never returned is lost, and enough such leaks starve the whole pool.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Adds real machinery to build and maintain: sizing, validation, eviction, thread safety.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">For cheap objects, a modern allocator or garbage collector often beats a pool outright.</li>
           </ul>
         </div>
       </div>
@@ -150,17 +150,17 @@ stateDiagram-v2
         <div class="when">
           <h3>Reach for it when</h3>
           <ul>
-            <li id="usage-when-1" data-kb-polarity="when">Construction is genuinely expensive — connections, threads, sockets, large buffers.</li>
-            <li id="usage-when-2" data-kb-polarity="when">The objects are used briefly but reacquired at high frequency.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You need a hard cap on how many of a scarce resource are live at once.</li>
+            <li id="usage-when-1" data-kb-polarity="when">Building the object is genuinely expensive — connections, threads, sockets, large buffers.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Each object is used briefly but acquired again and again at high frequency.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You need a hard cap on how many of a scarce resource are alive at once.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
-            <li id="usage-avoid-1" data-kb-polarity="avoid">The objects are cheap to allocate — pooling adds cost and buys nothing.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Their state is large or awkward to reset cleanly on return.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">Lifetimes are long or unpredictable, so there is little churn to amortize.</li>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The objects are cheap to create — pooling adds overhead and buys nothing.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Their state is large or awkward to wipe clean before the object is reused.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Objects live long or for unpredictable spans, so there's little churn to spread out.</li>
           </ul>
         </div>
       </div>
@@ -169,33 +169,40 @@ stateDiagram-v2
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — a bounded generic pool</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">class ObjectPool&lt;T&gt; {
-  private readonly free: T[] = [];
+        <summary>TypeScript — a bounded generic pool with a borrow-and-return helper</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface PoolOptions&lt;T&gt; {
+  readonly create: () =&gt; T;   // build a fresh object (the expensive step)
+  readonly reset: (obj: T) =&gt; void;  // wipe per-use state before reuse
+  readonly max: number;       // hard ceiling on live objects
+}
+
+class ObjectPool&lt;T&gt; {
+  private readonly idle: T[] = [];
   private live = 0;
 
-  constructor(
-    private readonly make: () =&gt; T,
-    private readonly scrub: (obj: T) =&gt; void,
-    private readonly max = 10,
-  ) {}
+  constructor(private readonly opts: PoolOptions&lt;T&gt;) {}
 
   acquire(): T {
-    const obj = this.free.pop() ?? this.grow();
-    return obj;
+    const reused = this.idle.pop();
+    if (reused !== undefined) return reused;
+    if (this.live &gt;= this.opts.max) throw new Error("pool exhausted");
+    this.live++;
+    return this.opts.create();
   }
 
   release(obj: T): void {
-    this.scrub(obj);          // wipe per-use state before reuse
-    this.free.push(obj);
+    this.opts.reset(obj);
+    this.idle.push(obj);
   }
 
-  private grow(): T {
-    if (this.live &gt;= this.max) {
-      throw new Error("pool exhausted");
+  // Borrow, run, and always return — even if the work throws.
+  use&lt;R&gt;(work: (obj: T) =&gt; R): R {
+    const obj = this.acquire();
+    try {
+      return work(obj);
+    } finally {
+      this.release(obj);
     }
-    this.live++;
-    return this.make();
   }
 }</code></pre>
       </details>

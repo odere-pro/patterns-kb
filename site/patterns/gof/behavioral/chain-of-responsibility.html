@@ -109,19 +109,19 @@ flowchart LR
         <div class="col pros">
           <h3>Pros</h3>
           <ul>
-            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Decouples the sender from the concrete handler that serves the request.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Each handler stays small and single-purpose — easy to test in isolation.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The chain is assembled at runtime: reorder, add, or drop handlers without touching callers.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Honors open/closed — a new handler slots in without editing the existing ones.</li>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">The sender never names the handler that answers, so the two can change independently.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Each handler does one small job, so you can test it on its own.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Reorder, add, or drop handlers at runtime without touching the callers.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Adding a handler means slotting one in, not editing the ones already there (the open/closed principle).</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">No guarantee a request is handled; it can silently fall off the end.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Behavior is spread across a dynamic list, so flow is harder to trace and debug.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">A long chain adds call-stack depth and latency to every request.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">A bad order — or a handler that forgets to forward — breaks the chain quietly.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A request can slip past every handler and go unanswered — nothing guarantees a match.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">The logic is scattered across a runtime list, so the flow is harder to trace and debug.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Every extra handler adds another call and a little latency to each request.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">One wrong order — or a handler that forgets to pass the request on — silently breaks the chain.</li>
           </ul>
         </div>
       </div>
@@ -133,17 +133,17 @@ flowchart LR
         <div class="when">
           <h3>Reach for it when</h3>
           <ul>
-            <li id="usage-when-1" data-kb-polarity="when">More than one object can handle a request and the right one isn't known until runtime.</li>
-            <li id="usage-when-2" data-kb-polarity="when">You want to issue a request to one of several handlers without naming the receiver.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The set of handlers, and their order, should be configurable.</li>
+            <li id="usage-when-1" data-kb-polarity="when">Several objects could handle a request and you only learn which one fits at runtime.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You want to fire a request at a group of handlers without hard-coding which one receives it.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The handlers, and the order they run in, need to be configurable.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
-            <li id="usage-avoid-1" data-kb-polarity="avoid">Exactly one object always handles the request — a direct call is clearer.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Every request must be handled — a chain's fall-through becomes a silent bug.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The ordering never changes — an explicit sequence beats the indirection.</li>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">One object always handles the request — call it directly; that reads clearer.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Every request must be handled — here a request that falls through becomes a silent bug.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The order never changes — a plain, explicit sequence beats the extra indirection.</li>
           </ul>
         </div>
       </div>
@@ -152,38 +152,55 @@ flowchart LR
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — an abstract handler and two links</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">abstract class Handler {
-  private next?: Handler;
+        <summary>TypeScript — an expense-approval chain, each approver forwarding what it can't sign off</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface ExpenseRequest {
+  readonly employee: string;
+  readonly amountUsd: number;
+  readonly reason: string;
+}
 
-  setNext(handler: Handler): Handler {
-    this.next = handler;        // return it for fluent chaining
-    return handler;
+type Decision =
+  | { readonly outcome: "approved"; readonly by: string }
+  | { readonly outcome: "denied"; readonly reason: string };
+
+abstract class Approver {
+  private next?: Approver;
+
+  linkTo(next: Approver): Approver {
+    this.next = next;          // return next so links read left-to-right
+    return next;
   }
 
-  handle(req: Request): Response | null {
-    return this.next ? this.next.handle(req) : null;
+  review(req: ExpenseRequest): Decision {
+    if (this.canApprove(req)) return { outcome: "approved", by: this.role };
+    if (this.next) return this.next.review(req);   // over my limit — pass it up
+    return { outcome: "denied", reason: "exceeds every approval limit" };
+  }
+
+  protected abstract readonly role: string;
+  protected abstract canApprove(req: ExpenseRequest): boolean;
+}
+
+class TeamLead extends Approver {
+  protected readonly role = "team lead";
+  protected canApprove(req: ExpenseRequest): boolean {
+    return req.amountUsd &lt;= 1_000;
   }
 }
 
-class AuthHandler extends Handler {
-  handle(req: Request): Response | null {
-    if (!req.token) return { status: 401 };   // consumed here
-    return super.handle(req);                  // otherwise pass on
+class Director extends Approver {
+  protected readonly role = "director";
+  protected canApprove(req: ExpenseRequest): boolean {
+    return req.amountUsd &lt;= 10_000;
   }
 }
 
-class RateLimitHandler extends Handler {
-  handle(req: Request): Response | null {
-    if (overLimit(req.ip)) return { status: 429 };
-    return super.handle(req);
-  }
-}
+// build the chain, then let a request walk it
+const chain = new TeamLead();
+chain.linkTo(new Director());
 
-// wire the chain, then feed it a request
-const chain = new AuthHandler();
-chain.setNext(new RateLimitHandler());
-chain.handle(incoming);</code></pre>
+chain.review({ employee: "Mara", amountUsd: 4_200, reason: "conference" });
+// → { outcome: "approved", by: "director" }</code></pre>
       </details>
     </section>
 

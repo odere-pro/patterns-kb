@@ -119,19 +119,19 @@ sequenceDiagram
         <div class="col pros">
           <h3>Pros</h3>
           <ul>
-            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Loose coupling — the subject knows only an interface, not its concrete dependents.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Observers can be added and removed at runtime without touching the subject.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">One change broadcasts to many listeners with a single call.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Open/closed: new observer types plug in without editing the source.</li>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">The subject stays loosely coupled — it knows only an interface, never the concrete objects listening to it.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">You can add or drop listeners while the program runs, without changing the subject.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A single call fans one change out to every listener at once.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">New listener types plug in without editing the subject (the open/closed principle).</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Notification order is unspecified — observers can't assume they run in sequence.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Cascading updates: one notify triggers another, and the chain is hard to trace.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Lapsed listeners that never unsubscribe leak memory and fire on dead state.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Implicit, indirect control flow makes stepping through the code harder.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The order listeners run in is not guaranteed, so no listener can rely on running before another.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Updates can cascade — one notification triggers another — and the chain is hard to follow.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Listeners that forget to unsubscribe (lapsed listeners) leak memory and keep firing on state nobody uses.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Control flow is indirect and implicit, so stepping through it in a debugger is harder.</li>
           </ul>
         </div>
       </div>
@@ -143,17 +143,17 @@ sequenceDiagram
         <div class="when">
           <h3>Reach for it when</h3>
           <ul>
-            <li id="usage-when-1" data-kb-polarity="when">Several objects must react whenever another object's state changes.</li>
-            <li id="usage-when-2" data-kb-polarity="when">You want the subject decoupled from the concrete set of dependents.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The set of listeners varies at runtime — they come and go.</li>
+            <li id="usage-when-1" data-kb-polarity="when">Several objects need to react each time one object's state changes.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You want the source to stay independent of exactly which objects depend on it.</li>
+            <li id="usage-when-3" data-kb-polarity="when">Listeners come and go while the program is running.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
-            <li id="usage-avoid-1" data-kb-polarity="avoid">There is exactly one dependent that never changes — a direct call is simpler and clearer.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Update ordering or transactional consistency across listeners matters.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">Notifications must cross process boundaries — reach for <a href="../../messaging/pubsub.html">Publish-Subscribe</a> and a broker instead.</li>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">There is only one dependent and it never changes — a direct call is simpler and clearer.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">You need listeners to run in a fixed order, or to update all-or-nothing as one transaction.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Notifications must travel between separate processes or machines — use <a href="../../messaging/pubsub.html">Publish-Subscribe</a> with a message broker instead.</li>
           </ul>
         </div>
       </div>
@@ -162,30 +162,38 @@ sequenceDiagram
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — a minimal subject</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">interface Observer&lt;T&gt; {
-  update(value: T): void;
+        <summary>TypeScript — a price feed notifying its subscribers</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type Unsubscribe = () =&gt; void;
+
+interface PriceObserver {
+  onPrice(symbol: string, price: number): void;
 }
 
-class Subject&lt;T&gt; {
-  private observers = new Set&lt;Observer&lt;T&gt;&gt;();
-  private value: T;
+class PriceFeed {
+  readonly #observers = new Set&lt;PriceObserver&gt;();
+  readonly #last = new Map&lt;string, number&gt;();
 
-  constructor(initial: T) { this.value = initial; }
-
-  subscribe(o: Observer&lt;T&gt;): () =&gt; void {
-    this.observers.add(o);
-    return () =&gt; this.observers.delete(o); // disposer to unsubscribe
+  subscribe(observer: PriceObserver): Unsubscribe {
+    this.#observers.add(observer);
+    return () =&gt; this.#observers.delete(observer); // caller owns teardown
   }
 
-  get state(): T { return this.value; }
-
-  set state(next: T) {
-    if (next === this.value) return;       // no change, no notify
-    this.value = next;
-    for (const o of this.observers) o.update(next);
+  publish(symbol: string, price: number): void {
+    if (this.#last.get(symbol) === price) return;  // skip unchanged ticks
+    this.#last.set(symbol, price);
+    for (const observer of this.#observers) {
+      observer.onPrice(symbol, price);
+    }
   }
-}</code></pre>
+}
+
+const feed = new PriceFeed();
+const stop = feed.subscribe({
+  onPrice: (symbol, price) =&gt; console.log(`${symbol} -&gt; ${price}`),
+});
+
+feed.publish("ACME", 41.2);
+stop(); // unsubscribed: no further callbacks</code></pre>
       </details>
     </section>
 
