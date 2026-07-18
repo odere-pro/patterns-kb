@@ -77,13 +77,18 @@
       "@id": "../../themes/resilience.html#resilience",
       "name": "Resilience",
       "kb:role": "Make retries and redelivery safe"
+    },
+    {
+      "@id": "../../themes/api-design.html#api-design",
+      "name": "API Design",
+      "kb:role": "Make retries safe so an ambiguous timeout can't double an effect"
     }
   ]
 }
   </script>
 </head>
 <body class="doc">
-  <main class="doc-wrap" data-kb-id="idempotency" data-kb-kind="pattern" data-kb-band="messaging" data-kb-group="messaging" data-kb-essence="The same request applied twice has the same effect as once" data-kb-order="99" data-kb-aliases="[&quot;idempotent receiver&quot;,&quot;idempotency key&quot;]" data-kb-tags="[&quot;resilience&quot;,&quot;messaging&quot;]" data-kb-solves="[&quot;a customer got charged twice because the request timed out and they clicked again&quot;,&quot;my consumer picked up the same message after a crash and sent the confirmation email twice&quot;,&quot;I do not know whether the first attempt went through so I am scared to retry anything&quot;,&quot;double-clicking submit creates two orders and support has to clean it up by hand&quot;,&quot;replaying the queue after the outage duplicated every side effect downstream&quot;]">
+  <main class="doc-wrap" data-kb-id="idempotency" data-kb-kind="pattern" data-kb-band="messaging" data-kb-group="messaging" data-kb-essence="The same request applied twice has the same effect as once" data-kb-order="99" data-kb-aliases="[&quot;idempotent receiver&quot;,&quot;idempotency key&quot;]" data-kb-tags="[&quot;resilience&quot;,&quot;messaging&quot;,&quot;api-design&quot;]" data-kb-solves="[&quot;a customer got charged twice because the request timed out and they clicked again&quot;,&quot;my consumer picked up the same message after a crash and sent the confirmation email twice&quot;,&quot;I do not know whether the first attempt went through so I am scared to retry anything&quot;,&quot;double-clicking submit creates two orders and support has to clean it up by hand&quot;,&quot;replaying the queue after the outage duplicated every side effect downstream&quot;]">
 
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../index.html">Map</a>
@@ -140,11 +145,13 @@ flowchart TD
         <dt id="variations-item-1">Idempotency key</dt>
         <dd>The client generates a token for one logical operation and sends it on every attempt; the server persists key → result and returns the stored result on repeats.</dd>
         <dt id="variations-item-2">Natural idempotency</dt>
-        <dd>Design the operation so repetition is harmless by construction — <code>PUT</code> that sets absolute state, or a <code>DELETE</code> where removing an already-absent thing is a no-op.</dd>
+        <dd>Design the operation so repetition is harmless by construction — <code>PUT</code> that sets absolute state, or a <code>DELETE</code> where removing an already-absent thing is a no-op. It is the same contract HTTP already gives: <code>GET</code>, <code>HEAD</code>, <code>PUT</code>, and <code>DELETE</code> are idempotent by the spec (RFC 9110), while <code>POST</code> and <code>PATCH</code> are not — which is exactly why write APIs bolt an explicit key onto those two.</dd>
         <dt id="variations-item-3">Bounded dedup window</dt>
         <dd>Keep the key → result mapping only for a TTL, not forever, trading unlimited storage growth for a small risk of accepting a very late duplicate as new.</dd>
         <dt id="variations-item-4">Idempotent consumer</dt>
         <dd>A message consumer tracks processed message IDs instead of trusting the broker's delivery guarantee, so redelivery after a crash or rebalance never reprocesses an event.</dd>
+        <dt id="variations-item-5">Request fingerprinting</dt>
+        <dd>Persist a hash of the request payload alongside the key. A repeat carrying the same key but a <em>different</em> body is a client mistake, not a genuine retry, so reject it (a <code>409</code>/<code>422</code>) instead of silently replaying the first result — catching an accidentally reused key before it returns the wrong answer.</dd>
       </dl>
     </section>
 
@@ -201,6 +208,9 @@ flowchart TD
 <pre><code class="language-typescript" data-kb-lang="typescript">interface StoredResult { status: number; body: unknown; }
 
 class IdempotencyStore {
+  // A Map stands in for the real backing store. In production this must be a
+  // shared, durable store (Redis, DynamoDB) with a TTL — a process-local Map
+  // is not seen by other instances and is lost on restart, so duplicates slip through.
   private results = new Map&lt;string, StoredResult&gt;();
 
   async execute(
@@ -210,18 +220,20 @@ class IdempotencyStore {
     const cached = this.results.get(key);
     if (cached) return cached; // duplicate — skip re-execution
 
-    // In production this check-and-record step must be atomic
-    // (unique constraint, conditional put) so two concurrent
-    // duplicates can't both slip past the cache miss.
+    // The check-and-record step must be atomic (unique constraint, conditional
+    // put) so two concurrent duplicates can't both slip past the cache miss.
     const result = await handler();
     this.results.set(key, result);
     return result;
   }
 }
 
-// The client sends the same key on every retry of one logical request.
+// The client sends the same key on every retry of one logical request. Scope the
+// stored key per tenant + endpoint so a client-supplied token can't collide across
+// users; store a body fingerprint too, and reject a reuse whose body differs.
 const store = new IdempotencyStore();
-const key = req.headers["idempotency-key"];
+const clientKey = req.headers["idempotency-key"];
+const key = `${tenantId}:${req.path}:${clientKey}`;
 const result = await store.execute(key, () =&gt; chargeCard(order));
 res.status(result.status).json(result.body);</code></pre>
       </details>
@@ -230,7 +242,7 @@ res.status(result.status).json(result.body);</code></pre>
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="stripe"><strong>Stripe API</strong><span>Accepts an Idempotency-Key header on POST requests, stores the result of the first call, and replays the same response for any retry carrying the same key instead of charging a card twice. Stripe retains idempotency keys for 24 hours, after which the same key is treated as new.</span></div>
+        <div class="wild-item" data-kb-example="stripe"><strong>Stripe API</strong><span>Accepts an Idempotency-Key header on POST requests, stores the result of the first call, and replays the same response for any retry carrying the same key instead of charging a card twice. Reusing a key with different request parameters returns an error rather than a stale replay, and keys are retained for 24 hours, after which the same key is treated as new.</span></div>
         <div class="wild-item" data-kb-example="http"><strong>HTTP methods (RFC 9110)</strong><span>Defines GET, HEAD, PUT, DELETE, OPTIONS, and TRACE as idempotent so intermediaries and clients may safely repeat them after a failed response; POST and PATCH are deliberately excluded, which is why write APIs bolt on an explicit idempotency key.</span></div>
         <div class="wild-item" data-kb-example="kafka-idempotent-producer"><strong>Kafka idempotent producer</strong><span>With enable.idempotence=true, each batch is tagged with a producer id and a per-partition monotonic sequence number, so the broker discards duplicates from producer retries and preserves order within a single producer session.</span></div>
       </div>
@@ -243,9 +255,9 @@ res.status(result.status).json(result.body);</code></pre>
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Dedup window / key TTL</strong> — How long the key-to-result mapping is retained before it expires — must cover the maximum retry or redelivery window, traded against unbounded store growth.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Key scope / granularity</strong> — What one idempotency key spans — one logical operation — so distinct operations do not collide and retries of the same one always match.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Key scope / granularity</strong> — What one idempotency key spans — one logical operation. A client-supplied key is not globally unique, so compose the stored key from tenant/user + endpoint/path + the client token, so keys cannot collide across users or endpoints and retries of the same operation always match.</li>
             <li id="production-knob-3" data-kb-polarity="knob"><strong>Atomicity mechanism</strong> — The check-and-record primitive that makes the dedup safe: a unique constraint, a conditional put, or a compare-and-set, so two concurrent duplicates cannot both pass the cache-miss check.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Store durability</strong> — Where the key-to-result mapping lives and how durable it is; losing it reopens the door to duplicate side effects on the next retry.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Store durability</strong> — Where the key-to-result mapping lives and how durable it is. It must be a shared, distributed store — a process-local one does not survive multiple instances or a restart. Losing it reopens the door to duplicate side effects on the next retry.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
@@ -261,19 +273,23 @@ res.status(result.status).json(result.body);</code></pre>
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Non-atomic check-and-record</strong> — If the read and the write are separate steps, two concurrent duplicates both see a cache miss and both execute — a double charge under load.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>TTL too short</strong> — A retry that arrives after the key has expired is treated as a brand-new request, re-applying the side effect the window was meant to suppress.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Unbounded store growth</strong> — A TTL set too long, or no cleanup at all, lets the key-to-result store grow until it becomes its own operational problem.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Result recorded out of step with the operation</strong> — Recording the key before the operation commits, or a crash between the two, can leave a stored key with no completed effect — or a completed effect with no key.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Process-local dedup store</strong> — An in-memory key store behind a load balancer, or lost on restart, is not shared across instances, so a retry routed elsewhere sees no key and re-applies the side effect.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Key reused with a different payload</strong> — Treating a reused key as a replay when the request body differs returns the wrong stored result; without a fingerprint check the mismatch goes unnoticed.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>TTL too short</strong> — A retry that arrives after the key has expired is treated as a brand-new request, re-applying the side effect the window was meant to suppress.</li>
+            <li id="production-failure-5" data-kb-polarity="failure"><strong>Unbounded store growth</strong> — A TTL set too long, or no cleanup at all, lets the key-to-result store grow until it becomes its own operational problem.</li>
+            <li id="production-failure-6" data-kb-polarity="failure"><strong>Result recorded out of step with the operation</strong> — Recording the key before the operation commits, or a crash between the two, can leave a stored key with no completed effect — or a completed effect with no key.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Make the check-and-record step atomic — a unique constraint or conditional write, not read-then-write.</li>
-            <li id="production-check-2" data-kb-polarity="check">Set the key TTL longer than the maximum retry and redelivery window.</li>
-            <li id="production-check-3" data-kb-polarity="check">Store the result with the key so a duplicate returns the original response instead of re-executing.</li>
-            <li id="production-check-4" data-kb-polarity="check">Scope each key to exactly one logical operation so distinct operations never collide.</li>
-            <li id="production-check-5" data-kb-polarity="check">Alert on dedup-store growth to catch a TTL or cleanup that stopped working.</li>
+            <li id="production-check-2" data-kb-polarity="check">Keep keys in a shared, durable store — not in-process memory — so every instance and a restart see the same keys.</li>
+            <li id="production-check-3" data-kb-polarity="check">Set the key TTL longer than the maximum retry and redelivery window.</li>
+            <li id="production-check-4" data-kb-polarity="check">Store the result with the key so a duplicate returns the original response instead of re-executing.</li>
+            <li id="production-check-5" data-kb-polarity="check">Scope each key to one logical operation, keyed per tenant and endpoint, so distinct operations never collide.</li>
+            <li id="production-check-6" data-kb-polarity="check">Validate a request fingerprint so a key reused with a different body is rejected, not replayed.</li>
+            <li id="production-check-7" data-kb-polarity="check">Alert on dedup-store growth to catch a TTL or cleanup that stopped working.</li>
           </ul>
         </div>
       </div>
@@ -327,6 +343,7 @@ flowchart LR
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="system-design-interview"><a href="../../themes/system-design-interview.html">System Design Interview</a><span>Make retried requests safe</span></div>
         <div class="fluency-item" data-kb-theme="resilience"><a href="../../themes/resilience.html">Resilience</a><span>Make retries and redelivery safe</span></div>
+        <div class="fluency-item" data-kb-theme="api-design"><a href="../../themes/api-design.html">API Design</a><span>Make retries safe so an ambiguous timeout can't double an effect</span></div>
       </div>
     </section>
 

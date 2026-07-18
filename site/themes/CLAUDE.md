@@ -1,9 +1,9 @@
 # site/themes
 
-**Themes** — 10 guided tours. Not a rung and not a lens: each one answers a single
+**Themes** — 12 guided tours. Not a rung and not a lens: each one answers a single
 systems question by walking through the patterns that combine to address it.
 
-Pages here: auth-and-access, cap-theorem, consistency-and-replication, observability, performance, resilience, scalability, spike-handling, streaming, system-design-interview
+Pages here: api-design, auth-and-access, cap-theorem, consistency-and-replication, genai-scale, observability, performance, resilience, scalability, spike-handling, streaming, system-design-interview
 
 Blocks, in order: `framing` → `tradespace` → `tour` → `decide` → `siblings`.
 
