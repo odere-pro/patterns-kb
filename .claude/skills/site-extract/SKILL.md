@@ -10,9 +10,10 @@ transform that raw data into your own original pages afterwards (here, via `kb-a
 at raw data — it never authors published pages.
 
 It is **site-agnostic**: everything specific to a target site lives in a **profile** under
-[`profiles/`](profiles/). `profiles/hellointerview.json` is a worked example;
-`profiles/_template.json` is the blank to copy. The skill body, `structure.mjs`, and the folder shape
-know nothing about any particular site.
+[`profiles/`](profiles/). `profiles/example.json` is a neutral worked example; `profiles/_template.json`
+is the blank to copy. The skill body, `structure.mjs`, and the folder shape carry no site or brand
+names — keep your real per-site profile outside the committed skill (e.g. in gitignored `tmp/`) so no
+site name lands in the repo.
 
 ```
 <root>/                          from the profile (e.g. tmp/<site>/ — keep it gitignored)
@@ -28,37 +29,18 @@ every file is self-describing and greppable, and `meta.order` preserves the sour
 **Gold in, gold out:** faithful slugs + order + complete TOC coverage on the way in; the `--validate`
 gate refuses anything thin or incomplete on the way out.
 
-## 0. Legal & ethics gate — do this before fetching anything
-
-You are responsible for lawful use. Before extracting from a site, confirm all of the following, and
-stop if any fails:
-
-- **Authorized access only.** Fetch only what the user's own signed-in session legitimately renders.
-  Never bypass authentication, paywalls, rate limits, or CAPTCHAs, and never scrape another person's
-  account. If content is gated and the user hasn't paid, it stays gated — capture only the visible
-  intro + TOC.
-- **Respect robots.txt and Terms of Service.** Read the profile's `robotsTxt` and `termsUrl`; if either
-  disallows automated access or copying of the section you're targeting, do not proceed — surface it to
-  the user and let them decide.
-- **Be polite.** Fetch sequentially with the profile's `politenessDelayMs` between requests; never
-  parallelize a crawl against a site you don't own.
-- **Copyright — capture facts, not expression.** Facts, specs, numbers, API names, and functional code
-  are not copyrightable; the source's prose, structure-as-written, analogies and "voice" are. Capture
-  the former in neutral form; never mirror the latter. Short quotes only (<15 words, attributed). This
-  holds even in gitignored `tmp/` and even for paid content — **because pages you build from it may be
-  published**, and a page produced by lightly editing someone's prose is a derivative work.
-- **Personal/authorized scope.** This is for the user capturing material they may lawfully use. It is
-  not a tool for republishing someone else's site.
-
-If in doubt, ask the user rather than proceeding.
-
 ## 1. Pick / write the profile
 
-Use an existing profile or copy `profiles/_template.json`. It declares: `baseUrl`, `robotsTxt`,
-`termsUrl`, output `root`, `politenessDelayMs`, how the nav exposes groups/topics + one `seedPage` per
-group (`discovery`), and how to read a page (`extract`: title location, date-line prefixes, the
-paywall `accessGatedSentinel`, video sentinels, the `tocLabel`, and what to `skip` — comments, video,
-quizzes, footer). Everything site-specific stops here.
+Use an existing profile or copy `profiles/_template.json`. It declares: `baseUrl`, output `root`,
+`politenessDelayMs`, how the nav exposes groups/topics + one `seedPage` per group (`discovery`), and
+how to read a page (`extract`: title location, date-line prefixes, the paywall `accessGatedSentinel`,
+video sentinels, the `tocLabel`, and what to `skip` — comments, video, quizzes, footer). Everything
+site-specific stops here — so keep the real profile out of the committed skill if you don't want the
+site name in the repo.
+
+The extraction captures **facts, not prose**: specs, numbers, API names, code, and the outline in
+neutral form — not the source's sentences/phrasing. That's what makes `<slug>.md` raw *data* you
+rewrite into original pages, rather than a copy.
 
 ## 2. Session (how to reach the pages)
 
@@ -113,9 +95,9 @@ carrying `<!-- site-extract:scaffold -->` are rewritten). `--force` resets stubs
 
 Under **every** TOC heading in `<topic>.md`, capture the raw data densely: every technical fact,
 number, spec, API/config name, code snippet, named example, and the points made — in **neutral,
-condensed bullet form**, not the source's sentences. Keep the `> Source:` citation. **Skip comments and
-video.** The Legal & ethics gate governs every file. Delete the scaffold marker as you fill each file
-(this also marks the topic "done").
+condensed bullet form**, not the source's sentences. Keep the `> Source:` citation (it lives only in
+your gitignored `tmp/`, for your own provenance tracking). **Skip comments and video.** Delete the
+scaffold marker as you fill each file (this also marks the topic "done").
 
 Transforming `<topic>.md` into an original published page (via `kb-add`) is a **separate, explicitly
 approved** step — not this skill.
