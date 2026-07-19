@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Distributed Lock · Patterns</title>
+  <meta name="description" content="Distributed Lock — hold mutual exclusion as a lease with its own TTL that any server can read, so exactly one holder acts across a fleet; guard the resource with a fencing token against a stalled holder's double grant.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#distributed-lock",
+  "identifier": "distributed-lock",
+  "name": "Distributed Lock",
+  "description": "Hold exclusivity as a lease with a TTL that any server can see",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:combines-with": [
+    {
+      "@id": "./quorum-consensus.html#quorum-consensus",
+      "name": "Quorum & Consensus",
+      "kb:note": "A fault-tolerant lock stores its lease in a consensus-backed store (etcd/ZooKeeper)"
+    }
+  ],
+  "kb:prerequisite": [
+    {
+      "@id": "./conditional-write.html#conditional-write",
+      "name": "Conditional Write",
+      "kb:note": "A single-instance lock is acquired by a conditional write (SET NX) with an expiry"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "./leader-election.html#leader-election",
+      "name": "Leader Election",
+      "kb:note": "Both grant a single owner — a lock guards a resource, election picks a role holder"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/dealing-with-contention.html#dealing-with-contention",
+      "name": "Dealing with Contention",
+      "kb:role": "Hold exclusivity across servers and across time as a self-expiring lease"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="distributed-lock" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Hold exclusivity as a lease with a TTL that any server can see" data-kb-order="80" data-kb-aliases="[&quot;lease lock&quot;,&quot;Redlock&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;coordination&quot;,&quot;consistency&quot;,&quot;isolation&quot;]" data-kb-solves="[&quot;I need exactly one server in the fleet to run this job&quot;,&quot;a resource is held across many requests or minutes and a DB transaction cannot span that&quot;,&quot;two workers both believe they own the same task&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Distributed Lock</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Distributed Lock</h1>
+      <p class="doc-essence">Represent a lock as a lease — who holds it and when it expires — stored where every server can read it, so mutual exclusion can span many machines and outlive any single database transaction.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="distributed-lock">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A distributed lock provides mutual exclusion across many independent processes — not within one database transaction, but across a whole fleet. Instead of a transaction-scoped row lock, it is a small record that says <em>who holds the lock and until when</em>, kept somewhere every server can read: a key in Redis, a node in ZooKeeper, a lease in etcd. Acquiring is an atomic "create only if absent"; releasing is deleting your own entry; and a time-to-live means a holder that crashes without releasing does not wedge the lock forever.</p>
+        <p>The force it resolves is exclusivity that a database transaction cannot reach. Some critical sections are longer or wider than a single transaction: a scheduled job that must run once across a dozen replicas; a ten-minute seat hold while a user finishes checkout; a migration only one instance should perform. <code>SELECT … FOR UPDATE</code> cannot span that — it would pin a connection for ten minutes, and it is invisible to other stateless app servers anyway. A lease any server can inspect is what makes fleet-wide, time-bounded exclusivity possible.</p>
+        <p>The hard part is that a distributed lock is <em>not</em> airtight. If the holder stalls — a long GC pause, a slow disk, a network blip — past the TTL, the lease expires and a second process acquires it while the first still believes it holds it. Now two holders run the critical section at once: a <strong>double grant</strong>. A TTL set too short causes exactly this; set too long, a crashed holder blocks everyone for that duration. The robust fix is not a better TTL but a <strong>fencing token</strong>: every acquisition hands out a monotonically increasing number, the holder stamps it on each write, and the protected resource rejects any write carrying a token older than the highest it has seen — turning a stale holder's writes into rejected writes rather than silent corruption. Martin Kleppmann's well-known critique of Redis's Redlock algorithm makes this exact point: under GC pauses and clock skew a lock service alone cannot guarantee mutual exclusion for correctness, so the resource itself must fence. Treat a distributed lock as safe for correctness only when the work is idempotent, the lock is a soft reservation where a rare double grant is tolerable, or a fencing token backs it.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant S1 as Server 1
+    participant Lock as Lock store (TTL)
+    participant Res as Protected resource
+    participant S2 as Server 2
+    S1->>Lock: SET lock NX EX 30 (token 41)
+    Lock-->>S1: acquired
+    Note over S1: GC pause &gt; TTL
+    Lock-->>Lock: lease expires
+    S2->>Lock: SET lock NX EX 30 (token 42)
+    Lock-->>S2: acquired
+    S2->>Res: write, fence 42
+    Res-->>S2: ok
+    S1->>Res: write, fence 41
+    Res-->>S1: rejected — stale token
+        </pre>
+        <figcaption>A stalled holder's lease expires and Server 2 acquires the lock; the monotonic fencing token lets the resource reject Server 1's late, stale write instead of corrupting data.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Single-instance Redis lock</dt>
+        <dd><code>SET key owner NX EX ttl</code> creates a self-expiring key in one atomic command; a small Lua script does the owner-checked release. Fast and simple, but the single node is a point of failure, and it offers no correctness guarantee across the TTL boundary — good for soft reservations, not for guarding data a double grant would corrupt.</dd>
+        <dt id="variations-item-2">Redlock (multi-node Redis)</dt>
+        <dd>Acquire the same lock on a majority of independent Redis nodes to survive one node failing. Genuinely contested for correctness — Martin Kleppmann argues it still cannot guarantee mutual exclusion under GC pauses or clock skew — so reserve it for reservations, not for a resource that a double grant would corrupt.</dd>
+        <dt id="variations-item-3">Ephemeral-node locks (ZooKeeper / etcd)</dt>
+        <dd>The lock is tied to a client session. ZooKeeper uses ephemeral sequential znodes, and each waiter watches only the node just ahead of it, so a holder's crash ends its session, auto-deletes its node, and wakes exactly the next waiter. Strongly consistent through partitions, at the cost of running a coordination cluster; not built for very high acquisition rates.</dd>
+        <dt id="variations-item-4">Database-column lease</dt>
+        <dd>Two columns — <code>locked_by</code>, <code>locked_until</code> — and a conditional <code>UPDATE</code> that succeeds only if the row is free or the lease has expired. No new infrastructure and the same durability as your data, but the lock row becomes a write hotspot and DB writes are slower than a cache.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Mutual exclusion that spans processes, machines, and time — it works where a transaction-scoped lock cannot reach.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">A TTL means a crashed holder self-heals: the lease expires and the lock frees with no cleanup job.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Lets a critical section outlive a single request — a reservation held for minutes while a user acts.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Coordinates a whole fleet down to one actor (run-once jobs, singleton workers) with off-the-shelf stores — Redis, ZooKeeper, etcd.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Not airtight: a holder that stalls past the TTL can be double-granted the lock — the defining hazard of the pattern.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Correctness needs a fencing token checked by the resource; the lock service alone cannot guarantee it.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">TTL tuning is a bind — too short risks double grants, too long makes a single crash block everyone.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Clock skew across nodes and network partitions undermine the TTL and quorum assumptions the lock rests on.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con">Adds infrastructure and a new failure domain; the lock store itself can become a bottleneck or a point of failure.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Exactly one process in a fleet must do something — run a scheduled job once, own a partition, perform a one-time migration.</li>
+            <li id="usage-when-2" data-kb-polarity="when">The critical section outlives a single database transaction — a multi-minute reservation, a wait on a human or an external step.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The exclusivity has to be visible to many stateless servers, not just one database connection.</li>
+            <li id="usage-when-4" data-kb-polarity="when">A short lease can shrink the contention window — hold a seat for the instant of selection, not the whole checkout.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">A single-row guard inside one transaction already covers it — a conditional write or <code>FOR UPDATE</code> is simpler and safer.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">A double grant would corrupt data and you cannot add a fencing token at the resource — rethink the design first.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The work is naturally idempotent or can be sharded so two workers never contend — you may not need a lock at all.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid">You would be standing up Redis or ZooKeeper purely for this — the extra failure domain can cost more than the problem.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — Redis SET NX EX to acquire, Lua check-and-delete to release</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// Acquire with SET NX EX: the value is a unique owner token, so only
+// the real holder can release. NX = create only if absent; PX = TTL.
+async function acquire(redis: Redis, key: string, ttlMs: number) {
+  const token = crypto.randomUUID();
+  const ok = await redis.set(key, token, "PX", ttlMs, "NX");
+  return ok === "OK" ? token : null;   // null = someone else holds it
+}
+
+// Release only if we still own it. A GET-then-DEL would race, so the
+// check-and-delete runs atomically as a single Lua script.
+const RELEASE = `
+  if redis.call("get", KEYS[1]) == ARGV[1]
+  then return redis.call("del", KEYS[1]) else return 0 end`;
+
+async function release(redis: Redis, key: string, token: string) {
+  await redis.eval(RELEASE, 1, key, token);
+}
+
+// This bounds a crash, not a stall. If the holder pauses past the TTL,
+// a second caller can acquire — so the protected resource must still
+// reject any write stamped with a stale fencing token.
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="redis"><strong>Redis</strong><span>The canonical single-instance lock: SET key owner NX EX ttl creates a self-expiring key in one atomic command, and a small Lua script does the owner-checked release. Redis also documents the multi-node Redlock algorithm, which is contested for correctness — Martin Kleppmann argued it cannot guarantee mutual exclusion under GC pauses or clock skew, and Redis has no built-in fencing tokens — so it best suits soft reservations rather than data a double grant would corrupt.</span></div>
+        <div class="wild-item" data-kb-example="zookeeper"><strong>Apache ZooKeeper</strong><span>Ephemeral sequential znodes implement a lock where the lowest sequence number holds it and each waiter watches only the node just ahead of it; a holder crash ends its session, auto-deletes its node, and wakes the next waiter. Strongly consistent, but not built for high-frequency (hundreds per second) locking.</span></div>
+        <div class="wild-item" data-kb-example="etcd"><strong>etcd</strong><span>A Lease with a TTL the client keeps alive, plus a transactional compare-and-swap (Txn on the key create-revision), gives an atomic acquire; the key mod-revision is a natural monotonically increasing fencing token. Its clientv3 concurrency package packages this as a Mutex recipe.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>lease TTL</strong> — how long the lock lives before it self-expires — too short risks a double grant when the holder stalls, too long makes a crashed holder block everyone for that duration</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>renewal / heartbeat interval</strong> — how often the holder extends its lease or keeps its session alive (etcd lease keep-alive, ZooKeeper session heartbeat); it must sit well under the TTL so ordinary jitter does not cost the lock</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>acquire retry &amp; backoff</strong> — how a waiter that fails to acquire retries — fixed interval, capped exponential backoff, or blocking on a watch; jitter avoids a thundering herd the instant the lock frees</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>fencing-token issuance</strong> — the monotonically increasing number handed out on each grant (etcd key revision, ZooKeeper zxid or sequence) that the resource checks — the surface that makes the lock safe rather than merely likely-correct</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>lock hold time</strong> — how long holders keep the lock; the critical section should stay comfortably under the TTL, and a creeping hold time predicts expirations mid-work</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>contention / wait time</strong> — how long acquirers queue for the lock; sustained growth means the lock is a bottleneck and the resource is effectively single-threaded</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>renewal / keep-alive failures</strong> — heartbeats or lease renewals that miss; each one is a holder one step from losing its lock while still working</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>expired-while-held count</strong> — leases that expired before the holder released — the direct precursor to a double grant, and the number to alert on</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>stalled holder, expired lease</strong> — a GC pause or slow disk carries the holder past the TTL; a second process acquires and both run the critical section at once (the double grant) — only a fencing token at the resource stops the stale write</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>clock skew across nodes</strong> — TTL and Redlock quorum reasoning assume comparable clocks; a fast or slow clock on one node makes a lease expire earlier or later than expected and undermines the safety argument</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>thundering herd on release</strong> — when a popular lock frees, every waiter retries at once and hammers the lock store; without jittered backoff or watch-based single-waiter wakeups this spikes load</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>split-brain under partition</strong> — a network partition can let two sides each believe they may grant the lock (especially a single-node or poorly-quorumed store), producing concurrent holders until it heals</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Always set a TTL so a crashed holder cannot hold the lock forever</li>
+            <li id="production-check-2" data-kb-polarity="check">Put a fencing token at the protected resource — never trust an I-hold-the-lock flag alone for correctness</li>
+            <li id="production-check-3" data-kb-polarity="check">Make release owner-checked and atomic (Lua compare-and-delete, or a CAS on the lease) so you cannot delete a lock you no longer hold</li>
+            <li id="production-check-4" data-kb-polarity="check">Keep the critical section shorter than the TTL, and renew the lease if the work might run long</li>
+            <li id="production-check-5" data-kb-polarity="check">Alert on renewal failures and expired-while-held — they are the early warning for a double grant</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="quorum-consensus"><a href="./quorum-consensus.html">Quorum &amp; Consensus</a><span class="rel-note">A fault-tolerant lock stores its lease in a consensus-backed store (etcd/ZooKeeper)</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Requires</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prerequisite" data-kb-to="conditional-write"><a href="./conditional-write.html">Conditional Write</a><span class="rel-note">A single-instance lock is acquired by a conditional write (SET NX) with an expiry</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="leader-election"><a href="./leader-election.html">Leader Election</a><span class="rel-note">Both grant a single owner — a lock guards a resource, election picks a role holder</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="dealing-with-contention"><a href="../../../themes/dealing-with-contention.html">Dealing with Contention</a><span>Hold exclusivity across servers and across time as a self-expiring lease</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./pessimistic-locking.html">← Pessimistic Locking</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./mapreduce.html">MapReduce →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

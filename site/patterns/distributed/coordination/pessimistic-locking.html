@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pessimistic Locking · Patterns</title>
+  <meta name="description" content="Pessimistic Locking — take an explicit row lock with SELECT … FOR UPDATE so no other transaction can read-for-update or write those rows until you commit; conflicts are prevented, not detected.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#pessimistic-locking",
+  "identifier": "pessimistic-locking",
+  "name": "Pessimistic Locking",
+  "description": "Lock the row up front so no one else can touch it until you're done",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:alternative-to": [
+    {
+      "@id": "./optimistic-concurrency-control.html#optimistic-concurrency-control",
+      "name": "Optimistic Concurrency Control",
+      "kb:note": "Lock up front when collisions are frequent; go optimistic when they're rare"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../../hazards/race-condition.html#race-condition",
+      "name": "Race Condition",
+      "kb:note": "Only the lock holder can touch the row, so check-then-act can't interleave"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/dealing-with-contention.html#dealing-with-contention",
+      "name": "Dealing with Contention",
+      "kb:role": "Lock the contended rows up front when collisions are frequent"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="pessimistic-locking" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Lock the row up front so no one else can touch it until you're done" data-kb-order="79" data-kb-aliases="[&quot;SELECT FOR UPDATE&quot;,&quot;row locking&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;consistency&quot;,&quot;transactions&quot;,&quot;isolation&quot;]" data-kb-solves="[&quot;conflicts on this row are frequent and optimistic retries just thrash&quot;,&quot;I must guarantee only one transaction mutates this record at a time&quot;,&quot;two transfers hit the same account and the balance ends up wrong&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Pessimistic Locking</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Pessimistic Locking</h1>
+      <p class="doc-essence">Take an explicit lock on the rows you're about to change before you read them, so competing transactions block until you commit — a collision is prevented outright, not detected after the fact.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="pessimistic-locking">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>Pessimistic locking takes the pessimistic bet — it assumes two transactions <em>will</em> collide, so it grabs an explicit lock on the rows it is about to touch before doing anything with them. In SQL that is <code>SELECT … FOR UPDATE</code> inside a transaction: every row the select returns is locked until you commit or roll back, and any other transaction that asks for those same rows — to update them, or to select them for update — blocks and waits its turn.</p>
+        <p>The force it resolves is the lost-update race: the gap between reading a value and writing it back. You read a row, decide something in application code, then write — and a second transaction slips in between your read and your write, so one of the two updates silently clobbers the other. A conditional write closes that gap when the safety rule is a simple predicate the database can evaluate inside the statement (<code>WHERE available_seats &gt; 0</code>). But once the decision is real application logic — <em>find four contiguous open seats</em>, <em>pick the cheapest unit still in stock</em> — there is no single <code>WHERE</code> clause that expresses it, and you have to hold the rows still while you think. Pessimistic locking holds them still.</p>
+        <p>Its defining choice is prevention over detection. Optimistic concurrency control makes the opposite bet: let everyone proceed, catch the collision at write time, and retry the loser — cheaper when conflicts are rare, but it thrashes when they are common. Pessimistic locking pays the lock cost on every transaction, collision or not, and in return never retries and never surprises anyone with a clobbered write. Reach for it when contention is genuinely high; stay optimistic when it is not.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant A as Txn A
+    participant Row as Row (seat A15)
+    participant B as Txn B
+    A->>Row: BEGIN; SELECT … FOR UPDATE
+    Row-->>A: row locked
+    B->>Row: SELECT … FOR UPDATE (same row)
+    Note over B,Row: blocks — waits for the lock
+    A->>Row: UPDATE …; COMMIT
+    Row-->>B: lock released
+    Row-->>B: returns the post-commit value
+    B->>Row: re-decide; UPDATE; COMMIT
+        </pre>
+        <figcaption>Txn B blocks at <code>FOR UPDATE</code> until Txn A commits, then reads A's committed value — the read-modify-write gap is closed by serializing the two writers.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Exclusive vs. shared locks</dt>
+        <dd><code>FOR UPDATE</code> takes an exclusive lock — no other transaction may read-for-update or write the row. <code>FOR SHARE</code> (MySQL's <code>LOCK IN SHARE MODE</code>) takes a shared lock: others may also read-for-share, but writers still block. Use shared when you only need a row to stay stable while you read related data, exclusive when you intend to write it.</dd>
+        <dt id="variations-item-2">Claim-and-skip for work queues</dt>
+        <dd><code>SELECT … FOR UPDATE SKIP LOCKED</code> steps over rows another transaction has already locked instead of waiting, so N workers each grab a different unclaimed row. This is the standard way to pull jobs off a database-backed queue without two workers claiming the same job.</dd>
+        <dt id="variations-item-3">Wait, fail fast, or time out</dt>
+        <dd>By default the lock request waits (up to a lock-wait timeout). <code>NOWAIT</code> fails immediately if the row is already locked, letting the caller back off rather than queue. Picking one is a policy choice: queue behind contention, or shed it.</dd>
+        <dt id="variations-item-4">Lock granularity and scope</dt>
+        <dd>Row-level is the default and the finest. A broad <code>SELECT</code> — or a missing index that forces a scan — can lock far more rows than you intended, and some engines escalate to page or table locks under pressure. Lock the narrowest set that makes the decision safe, and no more.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Prevents lost updates outright — no retry loop, no clobbered writes; the winner is whoever acquires the lock, decided deterministically.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Handles arbitrary read-decide-write logic that no single conditional <code>WHERE</code> clause could express.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Predictable under high contention — where optimistic retries would thrash, a lock queue simply serializes the work.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Uses the database's own battle-tested locking and deadlock detection — no new infrastructure to run.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The lock is held for the whole transaction, so a long or slow one — an external API call mid-transaction — stalls everyone queued behind it.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Reduced concurrency: contending writers are serialized, and every transaction pays the lock cost even when it would never have collided.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Deadlock risk when transactions acquire locks in inconsistent order; the database aborts one side and the app must catch and retry it.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Lock-wait timeouts surface as errors the caller must handle, and a forgotten <code>COMMIT</code> on a held connection can block others indefinitely.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con">Does not span connections, services, or time — it lives and dies with one transaction, so it is not a distributed lock.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Collisions on the same rows are frequent, so optimistic retries would just thrash.</li>
+            <li id="usage-when-2" data-kb-polarity="when">The decision between reading and writing is real application logic, not a predicate the database can check inside the <code>UPDATE</code>.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You must guarantee exactly one transaction mutates a record at a time — balances, inventory, seat selection.</li>
+            <li id="usage-when-4" data-kb-polarity="when">The whole operation fits inside a single, short database transaction.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Contention is low — optimistic concurrency or a plain conditional write is cheaper and never blocks.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The safety rule is a single <code>WHERE</code> predicate — one conditional <code>UPDATE</code> already closes the gap.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The critical section must span more than one transaction, wait on a human, or cross services — reach for a distributed lock or a saga instead.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid">The transaction would hold the lock across slow I/O such as a payment gateway or third-party call.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — SELECT … FOR UPDATE inside a transaction</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// Claim one specific seat safely: lock the row, verify, then sell it.
+async function reserveSeat(db: Client, seatId: string, userId: string) {
+  await db.query("BEGIN");
+  try {
+    // FOR UPDATE locks this row until COMMIT. A concurrent reserveSeat
+    // for the same seat blocks on this line until we finish.
+    const { rows } = await db.query(
+      `SELECT status FROM seats WHERE id = $1 FOR UPDATE`,
+      [seatId],
+    );
+    if (rows[0]?.status !== "available") {
+      await db.query("ROLLBACK");        // someone got here first
+      return { ok: false, reason: "taken" };
+    }
+    await db.query(
+      `UPDATE seats SET status = 'sold', sold_to = $2 WHERE id = $1`,
+      [seatId, userId],
+    );
+    await db.query("COMMIT");            // lock released, decision durable
+    return { ok: true };
+  } catch (err) {
+    await db.query("ROLLBACK");          // release the lock on any failure
+    throw err;
+  }
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="postgresql"><strong>PostgreSQL</strong><span>Row-level locking reads: SELECT … FOR UPDATE (and FOR SHARE) lock the returned rows until the transaction ends. FOR UPDATE SKIP LOCKED, added in 9.5, lets many workers each claim a distinct unlocked row; NOWAIT fails fast instead of waiting on a held lock.</span></div>
+        <div class="wild-item" data-kb-example="mysql-innodb"><strong>MySQL / InnoDB</strong><span>Locking reads via FOR UPDATE and LOCK IN SHARE MODE (spelled FOR SHARE since 8.0, which also added SKIP LOCKED and NOWAIT). InnoDB holds the row locks to the end of the transaction and detects deadlocks, rolling one transaction back with an error the app must retry.</span></div>
+        <div class="wild-item" data-kb-example="skip-locked-queues"><strong>Database-backed job queues</strong><span>Postgres-backed queue libraries such as graphile-worker build a work queue on an ordinary table and claim the next job with SELECT … FOR UPDATE SKIP LOCKED, so concurrent pollers each atomically grab a different row and no two workers run the same task.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="optimistic-concurrency-control"><a href="./optimistic-concurrency-control.html">Optimistic Concurrency Control</a><span class="rel-note">Lock up front when collisions are frequent; go optimistic when they're rare</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="race-condition"><a href="../../../hazards/race-condition.html">Race Condition</a><span class="rel-note">Only the lock holder can touch the row, so check-then-act can't interleave</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="dealing-with-contention"><a href="../../../themes/dealing-with-contention.html">Dealing with Contention</a><span>Lock the contended rows up front when collisions are frequent</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./optimistic-concurrency-control.html">← Optimistic Concurrency Control</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./distributed-lock.html">Distributed Lock →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>
