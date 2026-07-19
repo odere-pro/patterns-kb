@@ -143,7 +143,7 @@ export const BANDS = [
 export const THEME_ORDER = [
   "system-design-interview",
   "cap-theorem", "streaming", "realtime-updates", "spike-handling", "long-running-tasks",
-  "multi-step-processes", "performance", "auth-and-access",
+  "multi-step-processes", "performance", "auth-and-access", "api-design",
   "scalability", "scaling-reads", "scaling-writes", "consistency-and-replication",
   "observability", "resilience", "genai-scale", "caching",
   "dealing-with-contention", "proximity-search",
