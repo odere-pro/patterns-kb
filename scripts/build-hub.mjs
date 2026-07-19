@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { BANDS, THEME_ORDER, HAZARD_ORDER, PRINCIPLE_ORDER, esc } from "./lib/model.mjs";
+import { BANDS, THEME_ORDER, ML_CASE_STUDIES, HAZARD_ORDER, PRINCIPLE_ORDER, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "site", "index.html");
@@ -131,6 +131,8 @@ const html = `<!doctype html>
       <a href="#band-arch-h">III · Architecture</a>
       <a href="#band-dist-h">IV · Network</a>
       <a href="#themes-h">Themes</a>
+      <a href="#ml-cases-h">ML Case Studies</a>
+      <a href="#lens-ml-h">Machine Learning</a>
       <a href="#principles-h">Principles</a>
       <a href="#lens-msg-h">Messaging</a>
       <a href="#lens-cache-h">Caching</a>
@@ -156,6 +158,16 @@ ${ELEVATION.map(bandHtml).join("\n\n")}
       </div>
       <div class="theme-grid">
 ${THEME_ORDER.map(themeCard).join("\n")}
+      </div>
+    </section>
+
+    <section class="themes ml-cases" aria-labelledby="ml-cases-h">
+      <div class="themes-head">
+        <h2 id="ml-cases-h">ML System Design — Case Studies</h2>
+        <p>Full applied-ML walkthroughs: each takes one ambiguous product problem from business objective to a working system, with a diagram of how the pieces fit. The <a href="#lens-ml-h">Machine Learning</a> lens holds the concepts they build on.</p>
+      </div>
+      <div class="theme-grid">
+${ML_CASE_STUDIES.map(themeCard).join("\n")}
       </div>
     </section>
 

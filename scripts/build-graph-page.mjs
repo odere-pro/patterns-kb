@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { THEME_ORDER, esc } from "./lib/model.mjs";
+import { THEME_ORDER, ML_CASE_STUDIES, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json"), "utf8"));
@@ -97,6 +97,8 @@ ${legend}
     </section>
 
 ${THEME_ORDER.map(themeSection).join("\n\n")}
+
+${ML_CASE_STUDIES.map(themeSection).join("\n\n")}
 
     <section class="doc-section">
       <h2 class="doc-h">Most connected patterns</h2>
