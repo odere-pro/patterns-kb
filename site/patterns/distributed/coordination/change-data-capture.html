@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Change Data Capture · Patterns</title>
+  <meta name="description" content="Change Data Capture — capture row-level changes from a database's replication log and stream them, in commit order, to search indexes, caches, warehouses, and other services without the application dual-writing.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#change-data-capture",
+  "identifier": "change-data-capture",
+  "name": "Change Data Capture",
+  "description": "Stream a database's row-level changes from its log to other systems",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:alternative-to": [
+    {
+      "@id": "./outbox.html#outbox",
+      "name": "Outbox",
+      "kb:note": "Tail the DB's own log instead of writing an events table in the same transaction"
+    }
+  ],
+  "kb:enables": [
+    {
+      "@id": "./materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "A change stream keeps a derived view continuously in sync with its source"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="change-data-capture" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Stream a database's row-level changes from its log to other systems" data-kb-order="82" data-kb-aliases="[&quot;CDC&quot;,&quot;log tailing&quot;]" data-kb-tags="[&quot;event-driven&quot;,&quot;replication&quot;,&quot;integration&quot;,&quot;consistency&quot;]" data-kb-solves="[&quot;my search index and cache keep drifting out of sync with the database&quot;,&quot;I need to react to every row change without dual-writing from the application&quot;,&quot;I want an event stream of changes without adding and maintaining an outbox table&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Change Data Capture</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Change Data Capture</h1>
+      <p class="doc-essence">Tails a database's own replication log and streams every row-level insert, update, and delete, in commit order, to search indexes, caches, warehouses, and other services — so downstreams stay in sync without the application dual-writing.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="change-data-capture">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Change data capture</strong> (CDC) turns a database's stream of row-level changes into an event feed other systems can subscribe to. Every insert, update, and delete the database commits is captured — typically with before and after images — and delivered, in commit order, to downstream consumers: a search index, a cache, a data warehouse, another service. The application keeps writing to its database as usual; the change stream is a byproduct, not something the request path has to produce.</p>
+        <p>The force it resolves is keeping derived data in sync without <em>dual writes</em>. The naive fix is to have the application update the database and then also update the search index, the cache, and the message broker. But those are separate systems with no shared transaction: a crash between the writes, or one call failing, leaves them silently disagreeing, and every new consumer means more fan-out wired into the write path. CDC moves that responsibility out of the application entirely.</p>
+        <p>Log-based CDC does it by tailing the database's own durable replication log — Postgres's write-ahead log, MySQL's binlog, MongoDB's oplog. Because that log is the same record the database uses to recover and to feed its replicas, a change physically cannot be missed once committed, and reading it adds no query load to the primary the way polling a table would. An initial <em>snapshot</em> captures existing rows, then the stream takes over from the log position where the snapshot ended.</p>
+        <p>It is close kin to the <a href="./outbox.html">transactional outbox</a>: the outbox has the application write an events table inside its own transaction, whereas CDC reads the log the database already keeps, needing no extra table or application change. Delivery is ordered but <em>at-least-once</em> — a consumer can see a change twice after a restart — so consumers must be <a href="../../messaging/idempotency.html">idempotent</a>.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    App["Application"] -->|"writes"| DB[("Primary database")]
+    DB --> Log["Replication log (WAL / binlog / oplog)"]
+    Log --> C["CDC connector: snapshot, then tail the log"]
+    C -->|"ordered change events"| Q["Stream / broker"]
+    Q --> Idx["Search index"]
+    Q --> Cache["Cache"]
+    Q --> Wh["Warehouse / service"]
+        </pre>
+        <figcaption>The application only writes to its database; the CDC connector tails the durable log and fans ordered change events out to indexes, caches, and other systems.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Log-based vs. query-based</dt>
+        <dd>Log-based CDC tails the database's replication log, so it captures every committed change — including deletes — in order, with no load on the primary. Query-based CDC instead polls for rows whose <code>updated_at</code> changed since last time: simpler and needing no log access, but it misses deletes, misses intermediate states between polls, and adds query load. Prefer log-based when the source database supports it.</dd>
+        <dt id="variations-item-2">Trigger-based capture</dt>
+        <dd>Database triggers fire on insert/update/delete and write change rows to an audit or event table that a consumer then reads. It works without log access and captures deletes, but the triggers run inside every write transaction, adding latency and coupling to the schema.</dd>
+        <dt id="variations-item-3">Snapshot then stream</dt>
+        <dd>For an initial load, take a consistent snapshot of existing rows, record the log position it corresponds to, then switch to tailing the log from there — so a new consumer gets the full current state before it starts receiving live changes, with no gap and no double-count at the handoff.</dd>
+        <dt id="variations-item-4">CDC vs. the transactional outbox</dt>
+        <dd>The <a href="./outbox.html">outbox</a> has the application write an explicit events table in the same transaction as the business change, giving it full control over event shape at the cost of a table and relay to maintain. CDC reads the log the database already keeps, needing neither — but the events mirror raw row changes rather than domain intent. Debezium's outbox router blends the two: CDC that reads an outbox table.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">No dual writes: the application only touches its database, so derived stores cannot silently diverge from a half-completed multi-system write.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Log-based capture cannot miss a committed change and adds no query load to the primary the way polling would.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Changes arrive in commit order with before/after images — enough to rebuild indexes, caches, and warehouses from the same feed.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">New consumers attach to the existing stream without any change to the application or its write path.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Delivery is at-least-once — a restart can redeliver a change — so every consumer must be idempotent.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">A stalled or slow consumer pins the replication slot, and the database retains WAL it cannot recycle — bloating disk until it runs out.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Source schema changes (a dropped column, a type change) can break the stream or downstream consumers if not handled deliberately.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Events mirror raw row changes, not domain intent; consumers must reconstruct meaning, and the CDC pipeline is one more thing to run and monitor.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">A search index, cache, or read replica must stay in sync with a source database and keeps drifting when kept in sync by hand.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Other systems need to react to every row change, and you want that decoupled from the application's write path.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You want an ordered event stream of changes but would rather not add and maintain an outbox table and relay.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">You need full control over event shape and semantics — the outbox emits domain events, CDC emits raw row diffs.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The database offers no accessible replication log and query- or trigger-based capture would cost more than it is worth.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Only one consumer needs the change and a direct synchronous update is simpler than standing up a streaming pipeline.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — an idempotent CDC consumer that keeps an index in sync</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type Op = "insert" | "update" | "delete";
+
+interface ChangeEvent {
+  lsn: string;   // log position — monotonic; doubles as the consumer offset
+  op: Op;
+  key: string;
+  after: Record&lt;string, unknown&gt; | null; // null on a delete
+}
+
+// Tail the ordered change stream, apply each event to a downstream store,
+// then commit the log position. Consumers must survive redelivery.
+async function consume(
+  stream: AsyncIterable&lt;ChangeEvent&gt;,
+  index: SearchIndex,
+  offsets: OffsetStore,
+) {
+  for await (const e of stream) {
+    // At-least-once: the same event may arrive twice after a restart.
+    // Upsert-by-key and delete-by-key are idempotent, so a replay is a no-op.
+    if (e.op === "delete") {
+      await index.remove(e.key);
+    } else {
+      await index.upsert(e.key, e.after!);
+    }
+    // Commit the offset only AFTER the apply succeeds, so a crash resumes
+    // from the last durably-applied change rather than skipping one.
+    await offsets.commit(e.lsn);
+  }
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="debezium"><strong>Debezium</strong><span>An open-source CDC platform, usually run as Kafka Connect source connectors. It tails Postgres logical replication (pgoutput/decoderbufs), the MySQL binlog, and the MongoDB change stream/oplog among others, emitting each row change as a record with before/after state. Its Outbox Event Router turns an outbox table's inserts into routed events.</span></div>
+        <div class="wild-item" data-kb-example="dynamodb-streams"><strong>Amazon DynamoDB Streams</strong><span>A built-in change feed: each item-level insert, modify, or remove is published as an ordered stream record with a configurable view (keys only, new image, or old and new images), consumed by Lambda or through the Kinesis adapter — commonly used to keep an OpenSearch index or analytics pipeline in sync.</span></div>
+        <div class="wild-item" data-kb-example="postgres-logical-replication"><strong>PostgreSQL logical replication</strong><span>Postgres exposes committed changes through logical decoding: a replication slot streams row changes in commit order via an output plugin such as the built-in pgoutput or wal2json. The slot retains WAL until the consumer acknowledges it, guaranteeing no change is skipped.</span></div>
+        <div class="wild-item" data-kb-example="mysql-binlog"><strong>MySQL binary log (binlog)</strong><span>MySQL's row-based binary log records every committed change and is the foundation of its native replication. CDC tools tail the binlog from a saved position or GTID to reconstruct inserts, updates, and deletes as an ordered change stream.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Snapshot vs. streaming mode</strong> — Whether the connector takes an initial consistent snapshot of existing rows before it starts tailing the log, or begins from the current position. Snapshotting a large table is expensive but gives a new downstream the full current state before live changes arrive.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Replication slot / log retention</strong> — How much log the database keeps for the consumer — a Postgres replication slot pins WAL until acknowledged, binlog has an expiry, DynamoDB Streams retains records for 24 hours. Too little and a lagging consumer loses its position and must re-snapshot.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Batch / fetch size</strong> — How many change events the connector fetches and the consumer applies per round. Larger batches raise throughput but enlarge the redelivery window on a crash and hold more in memory.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Consumer offset commit</strong> — How often, and after which step, the consumer commits its log position. For at-least-once safety, commit only after the change is applied downstream; the interval sets how much is re-read on restart.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Replication slot lag / retained log bytes</strong> — How far behind the slowest consumer is and how much WAL/binlog the database is holding for it — the number that predicts disk exhaustion on the primary</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>End-to-end CDC lag</strong> — Time from a database commit to the change landing downstream — the freshness other systems actually see</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Consumer offset lag</strong> — Events between the log head and the consumer's committed position; sustained growth means the consumer cannot keep up with write volume</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Connector error / restart rate</strong> — Failed or restarting connectors — often the first sign of an incompatible schema change or a downstream outage</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Stalled consumer pins the slot</strong> — A down or slow consumer stops acknowledging, so the database cannot recycle WAL/binlog; the retained log grows until the disk fills and the primary itself is at risk</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Schema change breaks the stream</strong> — An incompatible DDL — a dropped or renamed column, a type change — makes events undeserializable or breaks the downstream mapping, halting the pipeline until handled</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Duplicate delivery on redelivery</strong> — After a crash the connector re-reads from its last committed offset and re-emits changes; a non-idempotent consumer double-applies them</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Snapshot storm</strong> — An initial snapshot of a huge table floods the stream and downstream all at once, and long-running snapshots can hold resources or locks on the source</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Make every consumer idempotent — upsert by key, or dedupe on a change id / log position — because delivery is at-least-once</li>
+            <li id="production-check-2" data-kb-polarity="check">Alert on replication-slot lag and retained-log bytes before they can fill the database disk</li>
+            <li id="production-check-3" data-kb-polarity="check">Plan schema-change handling (a schema registry or compatibility rules) so DDL does not silently break the stream</li>
+            <li id="production-check-4" data-kb-polarity="check">Size log retention (WAL keep / binlog expiry / stream retention) for the slowest consumer's worst-case downtime</li>
+            <li id="production-check-5" data-kb-polarity="check">Have a re-snapshot / reseed procedure to rebuild a downstream from scratch after corruption or a long outage</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="outbox"><a href="./outbox.html">Outbox</a><span class="rel-note">Tail the DB's own log instead of writing an events table in the same transaction</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="enables" data-kb-to="materialized-view"><a href="./materialized-view.html">Materialized View</a><span class="rel-note">A change stream keeps a derived view continuously in sync with its source</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

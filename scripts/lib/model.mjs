@@ -151,7 +151,7 @@ export const HAZARD_ORDER = [
   "god-object", "spaghetti-code", "big-ball-of-mud", "anemic-domain-model",
   "golden-hammer", "boat-anchor",
   "cache-stampede", "hot-key", "stale-cache",
-  "race-condition", "deadlock", "unbounded-queue", "resource-leak",
+  "race-condition", "deadlock", "unbounded-queue", "resource-leak", "n-plus-1-query",
 ];
 /* Editorial order for the principle section: universal heuristics first, then SOLID,
  * then the OO-structural maxims. Drives the hub's Principles grid. */
