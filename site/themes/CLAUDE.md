@@ -1,11 +1,11 @@
 # site/themes
 
-**Themes** — 21 guided tours. Not a rung and not a lens: each one answers a single
+**Themes** — 25 guided tours. Not a rung and not a lens: each one answers a single
 systems question by walking through the patterns that combine to address it.
 
-Pages here: api-design, auth-and-access, caching, cap-theorem, consistency-and-replication, dealing-with-contention, frontend-architecture, genai-scale, long-running-tasks, multi-step-processes, observability, performance, proximity-search, realtime-updates, resilience, scalability, scaling-reads, scaling-writes, spike-handling, streaming, system-design-interview
+Pages here: api-design, auth-and-access, bot-detection, caching, cap-theorem, consistency-and-replication, dealing-with-contention, frontend-architecture, genai-scale, harmful-content, long-running-tasks, ml-system-design, multi-step-processes, observability, performance, proximity-search, realtime-updates, resilience, scalability, scaling-reads, scaling-writes, spike-handling, streaming, system-design-interview, video-recommendations
 
-Blocks, in order: `framing` → `tradespace` → `tour` → `decide` → `siblings`.
+Blocks, in order: `framing` → `architecture` → `tradespace` → `tour` → `decide` → `siblings`.
 
 A theme's `tour` block is the **source of truth for theme membership**. Each
 `.tour-step` carries `data-kb-member` (which pattern) and `data-kb-role` (its terse role in

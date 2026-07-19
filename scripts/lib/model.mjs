@@ -19,13 +19,14 @@ export const KB_NAME = "Patterns KB";
 export const BLOCKS = {
   pattern:   ["description", "structure", "variations", "tradeoffs", "usage", "sketch", "wild", "production", "relationships", "fluency"],
   hazard:    ["description", "causes", "cost", "mitigation"],
-  theme:     ["framing", "tradespace", "tour", "decide", "siblings"],
+  theme:     ["framing", "architecture", "tradespace", "tour", "decide", "siblings"],
   principle: ["statement", "rationale", "applying", "overreach", "relationships"],
 };
 /* Blocks that may legitimately be absent. `fluency` is only on patterns that a theme
- * tours; `wild` and `production` only where honest content exists; the rest are
- * mandatory. */
-export const OPTIONAL_BLOCKS = new Set(["fluency", "wild", "production"]);
+ * tours; `wild` and `production` only where honest content exists; `architecture` is
+ * only on themes that walk a concrete system (the ML case studies) and carry a diagram
+ * of how it is built; the rest are mandatory. */
+export const OPTIONAL_BLOCKS = new Set(["fluency", "wild", "production", "architecture"]);
 
 /* Tags are a CLOSED vocabulary, like the relation verbs. They exist to group and
  * filter — a tag used on one page groups nothing. The first sweep of this KB was
@@ -43,7 +44,8 @@ export const TAGS = new Set([
   "persistence", "polymorphism", "read-optimization", "readability", "replication",
   "resilience", "resource-management", "routing", "scalability", "security",
   "separation-of-concerns", "state-management", "test-doubles", "testability", "testing",
-  "throughput", "transactions", "transformation", "ui-architecture", "validation"
+  "throughput", "transactions", "transformation", "ui-architecture", "validation",
+  "machine-learning"
 ]);
 
 /* ---- ontology: the closed relation vocabulary ---- */
@@ -139,16 +141,23 @@ export const BANDS = [
   { id: "testing",     kind: "lens", label: "Testing",              short: "Testing",     anchor: "lens-test-h",  groups: [{ id: "testing",     label: null }] },
   { id: "security",    kind: "lens", label: "Security",             short: "Security",    anchor: "lens-sec-h",   groups: [{ id: "security",    label: null }] },
   { id: "frontend",    kind: "lens", label: "Frontend",             short: "Frontend",    anchor: "lens-fe-h",    groups: [{ id: "frontend",    label: null }] },
+  { id: "ml",          kind: "lens", label: "Machine Learning",     short: "ML",          anchor: "lens-ml-h",    groups: [{ id: "ml",          label: null }] },
 ];
 
 export const THEME_ORDER = [
-  "system-design-interview",
+  "system-design-interview", "ml-system-design",
   "cap-theorem", "streaming", "realtime-updates", "spike-handling", "long-running-tasks",
   "multi-step-processes", "performance", "auth-and-access", "api-design",
   "frontend-architecture",
   "scalability", "scaling-reads", "scaling-writes", "consistency-and-replication",
   "observability", "resilience", "genai-scale", "caching",
   "dealing-with-contention", "proximity-search",
+];
+/* ML System Design case studies. Kept OUT of THEME_ORDER so they render as their own
+ * dedicated hub + graph section ("ML System Design — Case Studies") rather than in the
+ * general themes grid. They are ordinary theme-kind pages in every other respect. */
+export const ML_CASE_STUDIES = [
+  "harmful-content", "bot-detection", "video-recommendations",
 ];
 export const HAZARD_ORDER = [
   "god-object", "spaghetti-code", "big-ball-of-mud", "anemic-domain-model",
