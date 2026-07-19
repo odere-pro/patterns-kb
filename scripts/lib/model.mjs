@@ -48,6 +48,64 @@ export const TAGS = new Set([
   "machine-learning"
 ]);
 
+/* Quick-filter facets for the hub search. A CLOSED, authored mapping — like TAGS and the
+ * relation verbs, this is the ONE place the FE/BE/DB/AI and goal groupings are defined.
+ * build.mjs resolves each chip's predicate against every node and ships the resulting id
+ * lists into catalog.js, so search.js only intersects id sets and never re-derives meaning.
+ *
+ * A chip matches a node if its band is in `bands`, OR any of its tags is in `tags`, OR its
+ * kind is in `kinds`, OR (`hasExample` and the node carries real-world examples). Fields are
+ * OR-ed within a chip; the UI ANDs across rails and unions within a rail.
+ *
+ * Backend and Database have no band of their own, so they are expressed here as a mapping
+ * over existing bands + tags. No page is re-tagged and nothing moves. */
+export const FACETS = [
+  { rail: "Layer", chips: [
+    { id: "fe", label: "Frontend", bands: ["frontend"] },
+    { id: "be", label: "Backend",
+      bands: ["enterprise", "architecture", "distributed", "messaging", "concurrency"] },
+    { id: "db", label: "Database", bands: ["caching"],
+      tags: ["persistence", "data-access", "transactions", "replication", "partitioning", "data-modeling", "read-optimization"] },
+    { id: "ai", label: "AI / ML", bands: ["ml"], tags: ["machine-learning"] },
+  ] },
+  { rail: "Goal", chips: [
+    { id: "scalability",   label: "Scale",         tags: ["scalability", "throughput"] },
+    { id: "resilience",    label: "Resilience",    tags: ["resilience", "availability"] },
+    { id: "performance",   label: "Performance",   tags: ["performance", "latency"] },
+    { id: "consistency",   label: "Consistency",   tags: ["consistency", "transactions"] },
+    { id: "security-goal", label: "Security",      tags: ["security", "access-control", "authentication"] },
+    { id: "observability", label: "Observability", tags: ["observability"] },
+  ] },
+  { rail: "Lens", chips: [
+    { id: "distributed", label: "Distributed", bands: ["distributed"] },
+    { id: "caching",     label: "Caching",     bands: ["caching"] },
+    { id: "messaging",   label: "Messaging",   bands: ["messaging"] },
+    { id: "concurrency", label: "Concurrency", bands: ["concurrency"] },
+    { id: "testing",     label: "Testing",     bands: ["testing"] },
+    { id: "ddd",         label: "DDD",         bands: ["ddd"] },
+    { id: "functional",  label: "Functional",  bands: ["functional"] },
+  ] },
+  { rail: "Kind", chips: [
+    { id: "pattern",   label: "Patterns",   kinds: ["pattern"] },
+    { id: "hazard",    label: "Hazards",    kinds: ["hazard"] },
+    { id: "theme",     label: "Themes",     kinds: ["theme"] },
+    { id: "principle", label: "Principles", kinds: ["principle"] },
+  ] },
+  { rail: "Extras", chips: [
+    { id: "has-example", label: "Has real-world example", hasExample: true },
+  ] },
+];
+
+/** Does a facet chip's predicate match a node? Fields are OR-ed. The single definition of
+ *  chip membership — build.mjs uses it to project resolved id lists into the catalog. */
+export function chipMatches(chip, node) {
+  if (chip.bands && chip.bands.includes(node.band)) return true;
+  if (chip.tags && (node.tags || []).some((t) => chip.tags.includes(t))) return true;
+  if (chip.kinds && chip.kinds.includes(node.kind)) return true;
+  if (chip.hasExample && (node.examples || []).length > 0) return true;
+  return false;
+}
+
 /* ---- ontology: the closed relation vocabulary ---- */
 export const RELATION_TYPES = {
   "combines-with":       { label: "Combines with",      symmetric: true },

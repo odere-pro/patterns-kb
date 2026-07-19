@@ -81,10 +81,58 @@
     return hits;
   }
 
+  // ---- facets ----
+  // Chips resolved to id lists by build.mjs. Rail groups AND together; chips within a rail
+  // union. The active set intersects with the free-text hits before anything is shown.
+  var FACETS = (window.KB_CATALOG && window.KB_CATALOG.facets) || [];
+  var chipIds = {};   // chipId -> Set(nodeId)
+  FACETS.forEach(function (rail) {
+    rail.chips.forEach(function (c) {
+      var set = {};
+      (c.ids || []).forEach(function (id) { set[id] = 1; });
+      chipIds[c.id] = set;
+    });
+  });
+  var active = {};    // chipId -> true, for every pressed chip
+
+  // The id-set the facets allow: union within each rail, intersection across rails. Returns
+  // null when no chip is pressed (no facet constraint at all).
+  function facetHits() {
+    var railSets = [];
+    FACETS.forEach(function (rail) {
+      var on = rail.chips.filter(function (c) { return active[c.id]; });
+      if (!on.length) return;
+      var union = {};
+      on.forEach(function (c) { for (var id in chipIds[c.id]) union[id] = 1; });
+      railSets.push(union);
+    });
+    if (!railSets.length) return null;
+    var acc = railSets[0];
+    for (var i = 1; i < railSets.length; i++) {
+      var next = {};
+      for (var id in acc) if (railSets[i][id]) next[id] = 1;
+      acc = next;
+    }
+    return acc;
+  }
+
   var input, status;
 
-  function apply(q) {
-    var hits = matches(q);
+  // Combine free-text hits with facet hits: a node is visible only if it passes BOTH active
+  // constraints. Either being null means "no constraint from that source".
+  function visibleSet() {
+    var text = matches(input ? input.value : "");
+    var facet = facetHits();
+    if (!text && !facet) return null;         // nothing active — show everything
+    if (text && !facet) return text;
+    if (facet && !text) return facet;
+    var both = {};
+    for (var id in text) if (facet[id]) both[id] = 1;
+    return both;
+  }
+
+  function apply() {
+    var hits = visibleSet();
     var shown = 0;
 
     document.querySelectorAll("[data-id]").forEach(function (box) {
@@ -124,6 +172,46 @@
     status.textContent = hits ? shown + " match" + (shown === 1 ? "" : "es") : "";
   }
 
+  var facetBtns = {};   // chipId -> button element, so clearFacets can reset aria-pressed
+
+  // Build the facet bar: one labelled group per rail, one aria-pressed toggle per chip.
+  // Injected after .controls, mirroring how the search box is injected rather than authored.
+  function renderFacets(controls) {
+    if (!FACETS.length) return;
+    var bar = document.createElement("div");
+    bar.className = "facetbar";
+    bar.setAttribute("aria-label", "Quick filters");
+    FACETS.forEach(function (rail) {
+      var group = document.createElement("div");
+      group.className = "facet-rail";
+      var label = document.createElement("span");
+      label.className = "facet-rail-label";
+      label.textContent = rail.rail;
+      group.appendChild(label);
+      rail.chips.forEach(function (c) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "facet-chip";
+        btn.setAttribute("aria-pressed", "false");
+        btn.textContent = c.label;
+        btn.addEventListener("click", function () {
+          if (active[c.id]) delete active[c.id]; else active[c.id] = true;
+          btn.setAttribute("aria-pressed", active[c.id] ? "true" : "false");
+          apply();
+        });
+        facetBtns[c.id] = btn;
+        group.appendChild(btn);
+      });
+      bar.appendChild(group);
+    });
+    controls.parentNode.insertBefore(bar, controls.nextSibling);
+  }
+
+  function clearFacets() {
+    active = {};
+    for (var id in facetBtns) facetBtns[id].setAttribute("aria-pressed", "false");
+  }
+
   function mount() {
     var host = document.querySelector(".controls");
     if (!host) return;
@@ -138,13 +226,15 @@
     input = wrap.querySelector("input");
     status = wrap.querySelector(".search-status");
 
+    renderFacets(host);
+
     var t;
     input.addEventListener("input", function () {
       clearTimeout(t);
-      t = setTimeout(function () { apply(input.value); }, 90);
+      t = setTimeout(apply, 90);
     });
     input.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") { input.value = ""; apply(""); input.blur(); }
+      if (e.key === "Escape") { input.value = ""; clearFacets(); apply(); input.blur(); }
       if (e.key === "Enter") {
         var first = document.querySelector(".chip:not([hidden]) .chip-name, .theme-card:not([hidden])");
         if (first) first.click();

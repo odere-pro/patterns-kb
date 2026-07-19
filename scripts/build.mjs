@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, folderFor } from "./lib/model.mjs";
+import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, FACETS, chipMatches, folderFor } from "./lib/model.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
  * the kb:generated markers (and any comment an author writes). */
@@ -275,8 +275,19 @@ const catalog = {
     if (n.aliases?.length) e.aliases = n.aliases;
     if (n.tags?.length) e.tags = n.tags;
     if (n.solves?.length) e.solves = n.solves;
+    if (n.examples?.length) e.hasExample = true;
     return e;
   }),
+  // Facet chips resolved to id lists here, so the offline search only intersects sets and
+  // never re-implements the FE/BE/DB/AI + goal mapping authored in lib/model.mjs.
+  facets: FACETS.map((r) => ({
+    rail: r.rail,
+    chips: r.chips.map((c) => ({
+      id: c.id,
+      label: c.label,
+      ids: Object.values(nodes).filter((n) => chipMatches(c, n)).map((n) => n.id),
+    })),
+  })),
 };
 
 const json = JSON.stringify(out, null, 2) + "\n";
