@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Elevator · Patterns</title>
+  <meta name="description" content="Low-level design of an elevator control system — where movement logic lives, how a car sweeps its stops in one direction, and which car answers a hall call.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#elevator",
+  "identifier": "elevator",
+  "name": "Elevator",
+  "description": "Route a hall call to the right car and sweep it through its stops in one direction — an OOP design about a direction state machine and a swappable dispatch policy",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/gof/behavioral/state.html#state",
+      "name": "State",
+      "kb:note": "a car's direction is an explicit IDLE/UP/DOWN state machine whose value alone decides whether step() stops, reverses, or advances"
+    },
+    {
+      "@id": "../patterns/gof/behavioral/strategy.html#strategy",
+      "name": "Strategy",
+      "kb:note": "selectBestElevator is a dispatch policy behind a fixed signature — wait-time for a busy tower, energy-saving for a quiet building — swapped without touching movement"
+    },
+    {
+      "@id": "../patterns/ddd/value-object.html#value-object",
+      "name": "Value Object",
+      "kb:note": "Request is immutable and compared by (floor, type), so PICKUP_UP and PICKUP_DOWN at one floor are distinct stops"
+    },
+    {
+      "@id": "../principles/separation-of-concerns.html#separation-of-concerns",
+      "name": "Separation of Concerns",
+      "kb:note": "the controller coordinates dispatch while each car owns its own movement and knows nothing of the others"
+    },
+    {
+      "@id": "../principles/single-responsibility.html#single-responsibility",
+      "name": "Single Responsibility Principle",
+      "kb:note": "the controller changes only for dispatch policy and the car only for movement — one axis of change each"
+    },
+    {
+      "@id": "../principles/yagni.html#yagni",
+      "name": "You Aren't Gonna Need It (YAGNI)",
+      "kb:note": "immediate dispatch is chosen over a pending-request queue, and no shared IRequestHandler interface is forced where there is no real polymorphism"
+    },
+    {
+      "@id": "../principles/open-closed.html#open-closed",
+      "name": "Open/Closed Principle",
+      "kb:note": "an express car drops in via an isExpress flag and a restricted addRequest without editing Request or step()"
+    },
+    {
+      "@id": "../patterns/concurrency/producer-consumer.html#producer-consumer",
+      "name": "Producer-Consumer",
+      "kb:note": "concurrent hall calls are handled by writers enqueueing onto a thread-safe queue that step() drains at the top of each tick"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="elevator" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Route a hall call to the right car and sweep it through its stops in one direction — an OOP design about a direction state machine and a swappable dispatch policy" data-kb-order="32" data-kb-aliases='["elevator control system","lift"]' data-kb-tags='["low-level-design","state-management","coordination","separation-of-concerns","domain-modeling"]' data-kb-solves='["I have a fleet of machines and something has to pick which one answers each incoming request efficiently","my scheduler thrashes — it keeps reversing direction and re-seeking instead of sweeping through pending work in one pass","I stored each pending stop as a plain number and now cannot tell apart two requests that want opposite directions at the same position","the coordinator class keeps growing because it also knows the internal movement rules of every unit it manages","I want to swap the policy that assigns work — optimize for wait time here, energy there — without touching the code that carries it out"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Elevator</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Elevator</h1>
+      <p class="doc-essence">An elevator control system moves several cars across a fixed set of floors: a hall call names a direction, the system dispatches a car, and riders inside pick destination floors. As a low-level design it is almost entirely about placement — which object owns movement, which owns the choice of car, and how a single pending stop is represented so a car never picks up a rider going the wrong way.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="elevator">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Someone on a floor presses <em>up</em> or <em>down</em> — a hall call, which carries a direction — and the system must choose one of several cars to answer it. Once aboard, riders press destination buttons, which carry no direction. Many such requests arrive at once, and the cars have to serve them without lurching randomly between floors. The first question worth asking out loud is whether this is a <strong>simulation</strong> whose time the caller advances with a <code>step()</code> function, or the real control software wired to motor controllers and floor sensors firing interrupts. Real hardware has no <code>step()</code>; a low-level design almost always wants the simulation, because discrete ticks keep the logic deterministic and testable. With hardware abstracted away, the whole exercise is object modelling: name the right classes and put movement, dispatch, and the shape of a request each exactly where they belong.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Three cars serve floors 0–9; a hall call from any floor names a direction, and the system decides which car answers.</li>
+            <li>Riders inside a car select one or more destination floors, which carry no direction.</li>
+            <li>Time advances in discrete steps — one <code>step()</code> moves every car by one tick.</li>
+            <li>Handle many concurrent pickup requests spread across floors.</li>
+            <li>Reject a request for a non-existent floor (return <code>false</code>); a request for the floor a car already sits on is a no-op.</li>
+          </ol>
+          <p class="prose">Out of scope, named explicitly: weight and capacity limits, door open/close mechanics, emergency stop, dynamic floor/car reconfiguration, and any UI or rendering.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional (constraints)</h3>
+          <ul>
+            <li><strong>Efficient movement</strong> — a car sweeps through its stops rather than bouncing back and forth.</li>
+            <li><strong>Direction-correct pickups</strong> — a car heading up must not scoop a rider who pressed down.</li>
+            <li><strong>Determinism</strong> — the same inputs produce the same trace, so the simulation is testable and no hash-set iteration order leaks in.</li>
+            <li><strong>Encapsulation</strong> — one public entry point; a car's movement rules stay inside the car.</li>
+            <li><strong>Evolvability</strong> — express cars, request cancellation, and truly concurrent hall calls should slot in without a rewrite.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three classes, two enums, and one deliberate omission:</p>
+        <ul>
+          <li><strong>ElevatorController</strong> — the orchestrator and the only public surface. Holds the list of cars, receives hall calls, decides which car answers, and owns the <code>step()</code> that advances the whole simulation one tick. Beyond the car list it keeps no state — hall calls are dispatched the instant they arrive.</li>
+          <li><strong>Elevator</strong> — one car. Owns its <code>currentFloor</code>, its <code>direction</code>, and a set of pending stops. Executes movement one floor per tick and knows nothing about the other cars.</li>
+          <li><strong>Request</strong> — a single stop: a <code>floor</code> plus a <code>RequestType</code>. It is an immutable value compared by both fields, so a pickup-up, a pickup-down, and a destination at the same floor are three distinct stops.</li>
+          <li><strong>Direction / RequestType</strong> — enums. <code>Direction</code> is <code>UP</code>, <code>DOWN</code>, or <code>IDLE</code>; the explicit <code>IDLE</code> matters, because a car with no work needs to represent "not moving" rather than drift up or down forever.</li>
+          <li><strong>Floor — not a class.</strong> It is just an integer index with no state or behaviour of its own; modelling it as a class would be state with no owner.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>The controller exposes two operations — issue a hall call and advance time — while destinations reach a specific car through the car's own <code>addRequest</code>:</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — the public API</summary>
+<pre><code class="language-python" data-kb-lang="python">class ElevatorController:
+    requestElevator(floor, type) -&gt; bool   # hall call; false if floor invalid or type is DESTINATION
+    step()                       -&gt; void   # advance every car by one tick
+
+class Elevator:
+    addRequest(request)          -&gt; bool   # queue a stop (used by hall calls and destinations alike)
+    step()                       -&gt; void   # one tick of movement
+    getCurrentFloor()            -&gt; int
+    getDirection()               -&gt; Direction</code></pre>
+      </details>
+      <div class="prose">
+        <p><code>requestElevator</code> takes a <code>RequestType</code> (<code>PICKUP_UP</code> / <code>PICKUP_DOWN</code>), <strong>not</strong> a <code>Direction</code>. A hall call is never <code>IDLE</code>, so accepting a <code>Direction</code> would admit a value the code then has to validate at runtime; the narrower type makes the illegal state unrepresentable. <code>addRequest</code> is deliberately one method for both callers — the car does not care <em>why</em> it is stopping, so a hall call and a destination flow through the same door.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Two classes carry the weight. The <strong>controller</strong> is a thin, near-stateless coordinator: on a hall call it validates the floor, picks the best car, and hands that car a <code>Request</code>; on <code>step()</code> it simply forwards the tick to each car and stays out of the way. Each <strong>Elevator</strong> is a self-contained state machine over its direction and its set of stops — all the movement logic lives here, so the controller never needs to know <em>how</em> a car moves. Each class thus has one reason to change — the controller for dispatch policy, the car for movement — a clean <a href="../principles/single-responsibility.html">single-responsibility</a> split, and that <a href="../principles/separation-of-concerns.html">separation of concerns</a> is what lets the two evolve independently. The small <code>Request</code> value in the middle is what makes a car stop only for riders travelling its way.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+classDiagram
+    class ElevatorController {
+        -List~Elevator~ elevators
+        +requestElevator(floor, type) bool
+        +step() void
+        -selectBestElevator(request) Elevator
+    }
+    class Elevator {
+        -int currentFloor
+        -Direction direction
+        -Set~Request~ requests
+        +addRequest(request) bool
+        +step() void
+        +getCurrentFloor() int
+        +getDirection() Direction
+    }
+    class Request {
+        -int floor
+        -RequestType type
+        +getFloor() int
+        +getType() RequestType
+    }
+    class Direction {
+        &lt;&lt;enumeration&gt;&gt;
+        UP
+        DOWN
+        IDLE
+    }
+    class RequestType {
+        &lt;&lt;enumeration&gt;&gt;
+        PICKUP_UP
+        PICKUP_DOWN
+        DESTINATION
+    }
+    ElevatorController "1" o-- "3" Elevator : dispatches to
+    Elevator "1" o-- "*" Request : queues
+    Elevator ..> Direction : state
+    Request ..> RequestType : typed by
+        </pre>
+        <figcaption>The controller coordinates and dispatches; each car owns its own movement as a direction state machine; a Request is an immutable (floor, type) value.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · How is a pending stop represented?</h3>
+        <p>The tempting shortcut is a <code>Set&lt;Integer&gt;</code> — store only <em>which</em> floors to visit. It is simple and dedups naturally when several people want the same floor. But it throws away direction, and that turns out to be the whole game. A car at floor 5 going up with stops at 7 and 8 will stop at floor 7 for someone who pressed <em>down</em> and carry them the wrong way to 8 before coming back — not merely inefficient but a broken promise, since riders trust the up/down indicator.</p>
+        <ul>
+          <li><strong>Store just floor numbers.</strong> A <code>Set&lt;Integer&gt;</code> cannot tell a down-waiter from an up-waiter at the same floor. Acceptable only for a junior-level answer.</li>
+          <li><strong>A Request value (chosen).</strong> Wrap floor + <code>RequestType</code> and base equality on both, so <code>Request(7, PICKUP_UP)</code>, <code>Request(7, PICKUP_DOWN)</code>, and <code>Request(7, DESTINATION)</code> are three different stops. Now a car going up checks only for <code>PICKUP_UP</code> and <code>DESTINATION</code> at its floor, correctly passes the down-waiter, and catches them on the return sweep.</li>
+        </ul>
+        <p><code>Request</code> is an immutable <a href="../patterns/ddd/value-object.html">value object</a> — set once, read-only, compared by content — and the entire stopping algorithm hinges on this one small modelling decision.</p>
+
+        <h3>2 · How does a car move?</h3>
+        <p>Three algorithms, tested on the same set of stops — 8, 3, 7 — with the car at floor 5:</p>
+        <ul>
+          <li><strong>FIFO.</strong> Serve stops in arrival order: 5&nbsp;→&nbsp;8&nbsp;→&nbsp;3&nbsp;→&nbsp;7, which is 12 floors of travel and two reversals. A rider at floor 7 watches the car climb to 8, plunge all the way to 3, then return. Feels random and unfair.</li>
+          <li><strong>Nearest stop.</strong> Always head to the closest queued stop: 5&nbsp;→&nbsp;3&nbsp;→&nbsp;7&nbsp;→&nbsp;8, only 7 floors — but it still reverses needlessly, diving down to 3 before sweeping the 7 and 8 it was already positioned for.</li>
+          <li><strong>SCAN (chosen).</strong> Keep going one direction, serving every matching stop, and reverse only when nothing remains ahead — the same "elevator algorithm" used for disk-arm scheduling. Going up from 5: 7, 8, reverse, 3 — 8 floors and a single reversal. It travels a floor further than nearest-stop but changes direction far less, and a waiting rider always sees the car approaching rather than fleeing.</li>
+        </ul>
+        <p>SCAN lives entirely inside <code>Elevator.step()</code>, driven by <code>direction</code> as an explicit three-value <a href="../patterns/gof/behavioral/state.html">state machine</a>. One tick is five cases: no requests → go <code>IDLE</code>; <code>IDLE</code> with work → pick a direction toward the nearest stop (ties broken by the lower floor, because a <code>HashSet</code>'s iteration order is not stable and the simulation must be deterministic); at a matching stop → remove those requests and <code>return</code> without moving (a car never moves on the tick it stops — forgetting that <code>return</code> is the classic bug); nothing ahead → flip direction and <code>return</code>; otherwise advance one floor. A subtlety worth naming: <em>stopping</em> is direction-aware, but <em>travelling</em> is not — <code>hasRequestsAhead</code> steers the car toward <em>any</em> stop, even one it will only serve after reversing. And there are no floor-0 or floor-9 boundary checks: once no stop remains ahead the reverse case fires on its own, so hardcoding "if floor == 9 then go down" is an anti-pattern that misfires the instant a stop is added at floor 9.</p>
+
+        <h3>3 · Which car answers a hall call?</h3>
+        <p>Dispatch lives in the controller's <code>selectBestElevator</code>, and there is a ladder of answers:</p>
+        <ul>
+          <li><strong>Nearest car, ignoring direction.</strong> Thirty seconds to write and fine under light traffic, but it will send the closest car even when it is heading away — the rider watches the nearest car recede and wait for it to come back.</li>
+          <li><strong>Direction-aware (chosen for the interview).</strong> Three priorities in order: a car already moving the right way and positioned to reach the floor; else the nearest idle car; else the nearest car of any kind. A known gap remains — a car going up whose highest stop is <em>below</em> the requested floor still looks like a match though it will reverse first. The honest fix inspects the car's queue (<code>hasRequestsAtOrBeyond</code>) to confirm its committed stops actually carry it to or past the floor; worth flagging even when there is no time to code it.</li>
+        </ul>
+        <p>Whichever rule you land on, <code>selectBestElevator</code> sits behind a fixed signature — which is exactly a <a href="../patterns/gof/behavioral/strategy.html">strategy</a>: a wait-time-minimizing policy for a busy office tower and an energy-saving policy for a quiet overnight building are swappable without touching a line of movement code. The controller also keeps <em>no</em> queue of unassigned requests; a hall call is assigned immediately. Holding pending requests for cars to pull from is the more general design, but it only earns its keep once "what if every car is busy?" is a real requirement — deferring it is a <a href="../principles/yagni.html">YAGNI</a> call. In the same spirit, <code>requestElevator</code> and <code>addRequest</code> both read like "add a request," yet forcing them under one shared <code>IRequestHandler</code> interface would invent polymorphism that is not there: the controller is not a kind of car, and no code ever needs to treat them interchangeably.</p>
+
+        <h3>4 · Extending it without a rewrite</h3>
+        <p>The follow-ups are where the placement pays off:</p>
+        <ul>
+          <li><strong>Express cars.</strong> Rather than bolt a <code>priority</code> field onto <code>Request</code> and feed a priority queue — which would wreck the single-direction sweep — keep the normal movement and add an <code>isExpress</code> flag plus an <code>expressFloors</code> set. The express car's <code>addRequest</code> simply rejects non-express floors, and dispatch prefers it for those floors. <code>Request</code> and <code>step()</code> never change: new behaviour by extension, not by surgery, in the spirit of <a href="../principles/open-closed.html">open–closed</a>.</li>
+          <li><strong>Cancelling a request.</strong> Mirror <code>addRequest</code> with a <code>removeRequest</code> that just drops the <code>Request</code> from the set; <code>step()</code> is untouched, and cancelling after arrival is a harmless no-op. (In the real world elevators do not cancel, because a lit button is a promise to other waiting riders — a good caveat to raise.)</li>
+          <li><strong>Concurrent hall calls.</strong> The simulation is single-threaded — enqueue, <code>step()</code>, repeat — but a real building fires hall calls concurrently, exposing two hazards: two dispatches racing to claim the same idle car, and <code>step()</code> mutating a car's request set while <code>addRequest</code> writes to it. A coarse lock around <code>requestElevator</code> and <code>step()</code> is correct but makes them block each other. The cleaner move is a <a href="../patterns/concurrency/producer-consumer.html">producer–consumer</a> handoff: writers append to a thread-safe queue, and <code>step()</code> drains it into the working set at the top of each tick, so the writers and the mover never touch the same structure.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Direction-correct pickups and thrash-free travel: the Request value plus SCAN mean a car never scoops a rider going the wrong way and rarely reverses.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Movement and dispatch are separately ownable and separately testable — the car is a self-contained state machine, the dispatch rule a swappable strategy.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A deterministic simulation: the explicit IDLE state and the lowest-floor tiebreak make every run reproducible from the same inputs.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">SCAN optimizes direction changes, not distance — it can travel a floor or two more than nearest-stop, and a rider just behind the sweep waits a whole pass.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">The chosen dispatch check trusts a car's current direction and position, not whether its queued stops actually carry it past the floor, so it can still pick a car that reverses before arriving.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Immediate dispatch and single-threaded ticks are simplifications: there is no pending queue to reconsider a call later, and truly concurrent hall calls need a lock or a queue bolted on.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Junior</strong> — a working simulation: a car tracking floor and direction, a controller over several cars, simple nearest-car dispatch, and basic up/down movement. Inefficient bouncing is tolerated as long as every floor is eventually served, and invalid floors are rejected. May need a nudge to reach "continue one direction, then reverse when clear."</li>
+          <li><strong>Mid-level</strong> — SCAN implemented correctly with few hints; a clean IDLE/UP/DOWN state machine with the subtle rules (no move on the tick you stop, reverse only after removing the current stop, go idle when empty); and dispatch that at least recognizes naive nearest-car is flawed. Can say where a change lives — hall-call direction touches the request representation, not the whole algorithm.</li>
+          <li><strong>Senior</strong> — proactively asks the simulation-vs-hardware question (a senior tell), designs a near-stateless controller and a well-encapsulated car, handles boundary, idle, and stop-then-reverse edges unprompted, reaches the priority-tier dispatch while flagging its remaining limitation, and sketches the express, cancel, and concurrency extensions without restructuring the classes.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="state"><a href="../patterns/gof/behavioral/state.html">State</a><span class="rel-note">a car's direction is an explicit IDLE/UP/DOWN state machine whose value alone decides whether step() stops, reverses, or advances</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="strategy"><a href="../patterns/gof/behavioral/strategy.html">Strategy</a><span class="rel-note">selectBestElevator is a dispatch policy behind a fixed signature — wait-time for a busy tower, energy-saving for a quiet building — swapped without touching movement</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="value-object"><a href="../patterns/ddd/value-object.html">Value Object</a><span class="rel-note">Request is immutable and compared by (floor, type), so PICKUP_UP and PICKUP_DOWN at one floor are distinct stops</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="separation-of-concerns"><a href="../principles/separation-of-concerns.html">Separation of Concerns</a><span class="rel-note">the controller coordinates dispatch while each car owns its own movement and knows nothing of the others</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="single-responsibility"><a href="../principles/single-responsibility.html">Single Responsibility Principle</a><span class="rel-note">the controller changes only for dispatch policy and the car only for movement — one axis of change each</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="yagni"><a href="../principles/yagni.html">You Aren't Gonna Need It (YAGNI)</a><span class="rel-note">immediate dispatch is chosen over a pending-request queue, and no shared IRequestHandler interface is forced where there is no real polymorphism</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="open-closed"><a href="../principles/open-closed.html">Open/Closed Principle</a><span class="rel-note">an express car drops in via an isExpress flag and a restricted addRequest without editing Request or step()</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="producer-consumer"><a href="../patterns/concurrency/producer-consumer.html">Producer-Consumer</a><span class="rel-note">concurrent hall calls are handled by writers enqueueing onto a thread-safe queue that step() drains at the top of each tick</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

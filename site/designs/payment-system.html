@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payment System · Patterns</title>
+  <meta name="description" content="Design a Stripe-style payment system — durable, auditable records and no double-charges even when the money moves over an external network you don't control.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#payment-system",
+  "identifier": "payment-system",
+  "name": "Payment System",
+  "description": "Charge cards at 10,000 TPS with a durable, auditable record of every state change and no double-charge when the external network times out",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/coordination/change-data-capture.html#change-data-capture",
+      "name": "Change Data Capture",
+      "kb:note": "CDC tails the DB write-ahead log so every committed change becomes an event with no reliance on application code remembering to log"
+    },
+    {
+      "@id": "../patterns/architecture/event-sourcing.html#event-sourcing",
+      "name": "Event Sourcing",
+      "kb:note": "the immutable ordered event stream is the source of truth for audit, reconciliation and history, not just the current DB row"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "a unique constraint on (merchant_id, idempotency_key) makes a retried charge return the existing record instead of charging twice"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "audit, analytics, reconciliation and webhook consumers each build their own view off the same event stream without touching the operational DB"
+    },
+    {
+      "@id": "../patterns/distributed/routing/api-gateway.html#api-gateway",
+      "name": "API Gateway",
+      "kb:note": "a single gateway authenticates the merchant, rate-limits and routes to the PaymentIntent and Transaction services"
+    },
+    {
+      "@id": "../patterns/security/authentication-enforcer.html#authentication-enforcer",
+      "name": "Authentication Enforcer",
+      "kb:note": "the gateway verifies an HMAC-SHA256 request signature plus timestamp and nonce before any handler runs"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/timeout-deadline.html#timeout-deadline",
+      "name": "Timeout / Deadline",
+      "kb:note": "a bounded timeout on the external network call is treated as a distinct pending state to reconcile, never as a failure"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/retry-backoff.html#retry-backoff",
+      "name": "Retry with Backoff",
+      "kb:note": "webhook delivery to merchant callback URLs retries on failure with exponential backoff (5s, 25s, 125s, up to an hour)"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "the operational DB is sharded by merchant_id to push past the ~10k writes/sec ceiling of a single node"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="payment-system" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Charge cards at 10,000 TPS with a durable, auditable record of every state change and no double-charge when the external network times out" data-kb-order="28" data-kb-aliases='["payment processor","Stripe-style payments","card processing"]' data-kb-tags='["system-design","durability","transactions","event-driven","security"]' data-kb-solves='["a network timeout made my customer get charged twice for the same order","I need a tamper-proof record of every state change to survive a financial audit","my provider timed out and I have no idea whether the money actually moved","sensitive card numbers keep landing on my own servers and I do not want the liability","auditing and analytics queries are fighting my live transactions for the same database"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Payment System</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Payment System</h1>
+      <p class="doc-essence">A payment system lets merchants charge a customer's card without building their own payment infrastructure. The happy path is easy; the guarantees around it are the whole problem. Never lose a transaction record, never charge twice, and stay correct even though the money actually moves on an external network — Visa, Mastercard, a bank — that answers asynchronously and that you do not control.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="payment-system">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A customer enters card details on a merchant's checkout, the merchant forwards them to us, and we charge the card and report the outcome. The surface is small, but two properties dominate every decision downstream. First, this is money, so every attempt, success and failure has to be recorded durably and auditably — a lost record is a legal problem, not a bug. Second, the actual authorization happens on a payment network we don't own, over links that can time out or drop a response, so the system is fundamentally asynchronous: a "timed out" charge may still be mid-flight. The engineering is less about the request path and more about staying correct in the gap between "we asked" and "we know".</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>A merchant can initiate a payment request — charge a specific amount to a customer.</li>
+            <li>A customer can pay with a credit or debit card.</li>
+            <li>A merchant can read the status of a payment (pending, succeeded, failed).</li>
+          </ol>
+          <p class="prose">Out of scope, and named to keep the design narrow: refunds, saved payment methods, transaction reporting, alternative rails (bank transfer, wallets), subscriptions, and payouts to merchants.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Security</strong> — the caller is provably the merchant, and card data is protected end to end.</li>
+            <li><strong>Durability &amp; auditability</strong> — no transaction data is ever lost, even under failure; the full event history survives, not just the current state.</li>
+            <li><strong>Financial integrity</strong> — transaction-safe despite the async payment network: no double-charges, no silent successes.</li>
+            <li><strong>Scale</strong> — ~10,000 transactions/sec at peak, including bursts (holiday sales).</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Throughput.</strong> Peak is ~10,000 transactions/sec. Every charge is a write, so the operational store must absorb roughly <strong>10k writes/sec</strong> — right at the edge of a single well-tuned relational instance, and the reason the write path gets its own scaling story below.</p>
+        <p><strong>Event volume.</strong> Each committed write also becomes one change event. A single Kafka partition comfortably sustains ~5,000–10,000 messages/sec, so <strong>3–5 partitions</strong> at a replication factor of 3 cover 10k TPS with fault-tolerant headroom.</p>
+        <p><strong>Storage.</strong> A transaction row is ~500 bytes. 10,000 rows/sec × 500 bytes ≈ 5&nbsp;MB/sec ≈ 500&nbsp;GB/day ≈ <strong>180&nbsp;TB/year</strong>. That figure, not the request rate, is what forces a retention-and-archival plan: hot data stays in the operational DB, anything past a few months moves to cold storage.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three entities, with one deliberate simplification:</p>
+        <ul>
+          <li><strong>Merchant</strong> — the business: identity details, bank account, and the API keys used to authenticate every request.</li>
+          <li><strong>PaymentIntent</strong> — a merchant's intention to collect a specific amount. It owns the lifecycle state machine (<code>created → authorized → captured</code>, plus <code>canceled</code> / <code>refunded</code>) and is the anchor for idempotency: a retry keys off the same intent rather than starting a new charge.</li>
+          <li><strong>Transaction</strong> — a money-movement record under one PaymentIntent, one intent to many transactions. In production it splits into discrete types (Charge, Refund, Dispute, Payout) plus double-entry <code>LedgerEntry</code> rows that actually move balances; here it collapses to a single polymorphic record scoped to <strong>Charge</strong>. A failed attempt (insufficient funds) simply creates a new Transaction under the same intent on retry.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>One endpoint per requirement — create an intent, attach a charge, read status:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — create, charge, and check status</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /payment-intents
+{ "amountInCents": 2499, "currency": "usd", "description": "Order #1234" }
+&rarr; 200 { "paymentIntentId": "pi_123" }
+
+POST /payment-intents/{paymentIntentId}/transactions
+{ "type": "charge", "card": { ... } }   # illustrative only — see note
+
+GET /payment-intents/{paymentIntentId}
+&rarr; 200 { "status": "succeeded", "error": null }   # created | processing | succeeded | failed</code></pre>
+      </details>
+      <div class="prose">
+        <p>The raw card fields on the charge endpoint are shown only to illustrate the shape — sending raw card data to the backend is exactly what the security deep dive forbids; the real client tokenizes and encrypts it before it ever reaches us. For real-time updates, a merchant can register a callback URL and receive <strong>webhooks</strong> instead of polling <code>GET</code> — a substantial enough sub-system that it is scoped down here and sketched at the end.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Requests enter through an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> that authenticates the merchant, rate-limits, and routes. The <strong>PaymentIntent Service</strong> creates and reads intents; the <strong>Transaction Service</strong> takes the card, drives the transaction through its lifecycle, and is the one component that speaks to the <strong>external payment network</strong> — deliberately combined so PCI scope stays in a single service. Both write to one operational database. The durability spine sits underneath: <a href="../patterns/distributed/coordination/change-data-capture.html">change data capture</a> tails the database's write-ahead log and publishes every committed change onto an event stream, which specialized consumers (audit, reconciliation, webhooks) read independently.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Merchant["Merchant server"]
+    Merchant -->|"POST /payment-intents"| Gateway["API Gateway (auth, rate limit)"]
+    Merchant -->|"POST .../transactions"| Gateway
+    Gateway -->|"create / read intent"| PI["PaymentIntent Service"]
+    Gateway -->|"charge card"| Tx["Transaction Service"]
+    PI -->|"read / write"| DB[("Operational DB")]
+    Tx -->|"read / write"| DB
+    Tx -.->|"authorize / capture"| Network["External Payment Network"]
+    DB -->|"tail write-ahead log"| CDC["Change Data Capture"]
+    CDC -->|"publish change events"| Kafka[("Event stream")]
+    Kafka --> Audit["Audit Service"]
+    Kafka --> Recon["Reconciliation Service"]
+    Kafka --> Webhook["Webhook Service"]
+    Webhook -.->|"POST callback"| Merchant
+        </pre>
+        <figcaption>The request path (gateway → services → DB → network) stays lean; every committed change is captured out of band and fanned out to independent consumers.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Proving who's calling, and protecting the card</h3>
+        <p>"Be secure" hides two questions: is the caller really this merchant, and is the customer's card data safe.</p>
+        <p>A static API key sent on every request is a good-not-great answer — sniff it once and it replays forever, and keys have a habit of ending up hard-coded in a client repo. The stronger scheme keeps a public key for identity and a private secret that never leaves the merchant's server, and signs each request: an HMAC-SHA256 over the method, path, body, a timestamp and a nonce, carried in headers. The <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> is the single <a href="../patterns/security/authentication-enforcer.html">authenticated</a> entry point — it recomputes the signature and rejects a mismatch, rejects a timestamp outside a 5–15 minute window, and rejects a nonce it has seen before. That buys authenticity and integrity and closes the replay window.</p>
+        <p>Card data should never touch the merchant's servers — that is a PCI-DSS requirement, not a nicety, and every server it touches becomes an attack surface the merchant is liable for. An iframe served from our own domain collects the card directly, so the browser's same-origin policy keeps merchant JavaScript out of it. Better still, the SDK encrypts the card with our public key the moment it is entered, before it leaves the device; the matching private key lives in a hardware security module server-side, and HTTPS then carries data that is already encrypted. The layers are the point — a single compromised iframe still does not expose the number.</p>
+        <h3>2 · Never losing a transaction record</h3>
+        <p>Losing a payment record is a legal event: PCI-DSS, SOX and financial auditors want the full sequence of every attempt, success and failure — not just the current row, but who changed what and when, to defend chargebacks and reconstruct account state.</p>
+        <p>Mutating rows in place (<code>UPDATE ... SET status = 'captured'</code>) throws that history away and can be silently corrupted by a bad deploy with no trace of the prior value. Writing an append-only audit row inside the same transaction is better, but it leans on every code path remembering to write <em>both</em> — one missed insert and the history is gone — and it welds an ever-growing audit table onto the hot 10k-TPS operational store, so neither can be tuned in isolation.</p>
+        <p>The durable answer moves capture below the application. <a href="../patterns/distributed/coordination/change-data-capture.html">Change data capture</a> tails the database's write-ahead log and publishes every committed change — full before/after state, keyed by <code>payment_intent_id</code> — onto an immutable <a href="../patterns/architecture/event-sourcing.html">event stream</a>. Nothing depends on application code remembering: anything that commits appears in the log. From that one stream, specialized consumers build whatever they need without touching the operational DB — a compliance-grade audit history, denormalized analytics, reconciliation, webhook delivery — each a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of the same ordered events. The stream keeps a few weeks on disk at replication factor 3 and archives everything to object storage for audits years later. Merchants still get sub-10ms responses from the lean operational DB; the history is captured entirely out of band.</p>
+        <h3>3 · Staying correct when the network answers late</h3>
+        <p>The payment network is an external system with its own retries, queues and batch windows. A "timed out" charge might still be mid-flight; a "success" might be lost on the way back. Treating a <a href="../patterns/distributed/resilience/timeout-deadline.html">timeout</a> as a failure is precisely how a customer gets charged twice — the bank debited $200, the response was lost, we said "failed", the merchant asked the customer to retry, and now there are two $200 charges for one order.</p>
+        <p>Two mechanisms fix it. First, <a href="../patterns/messaging/idempotency.html">idempotency</a>: a unique constraint on <code>(merchant_id, idempotency_key)</code> means a retried request returns the existing charge instead of creating a second one. Second, a timeout becomes its own state rather than a verdict. Before calling the network the system writes an attempt record — which itself becomes a change event — then branches on the outcome: success and explicit decline update the record, while a timeout writes a <code>pending</code> state that the reconciliation consumer picks up and resolves by querying the network with the recorded reference id, falling back to the network's daily batch files as the definitive record. The design target is eventual consistency, not a fight against asynchrony: whenever the network's answer arrives, that is the truth, and the durability spine already tracks every attempt on the way there.</p>
+        <h3>4 · Scaling to 10,000 TPS</h3>
+        <p>With the system designed, scale is mostly mechanical. Services are stateless and scale horizontally behind load balancers. The event stream is partitioned by <code>payment_intent_id</code>, which keeps every transition of one intent ordered (<code>created → authorized → captured</code> processed in sequence) while letting different intents run in parallel; 3–5 partitions at replication factor 3 cover the load, with a consumer group per service. The operational DB is the pressure point — ~10k writes/sec is the edge of one node — so <a href="../patterns/distributed/routing/sharding.html">shard</a> by <code>merchant_id</code>, add read replicas for the status-check reads that dominate the workload, and put a Redis cache in front of recent statuses. Storage grows ~180&nbsp;TB/year, so a scheduled job moves anything past the retention window to cold object storage, still queryable for compliance but off the operational path.</p>
+        <h3>5 · Pushing status instead of polling</h3>
+        <p>Polling <code>GET /payment-intents/{id}</code> works, but merchants usually want to be told so they can fulfil an order the moment a charge succeeds. A webhook service consumes the same event stream; when a merchant has subscribed to an event type, it signs a payload with a shared secret and POSTs it to their callback URL. Delivery is server-to-server and inherently unreliable, so every attempt is recorded and failures <a href="../patterns/distributed/resilience/retry-backoff.html">retry with exponential backoff</a> — 5s, 25s, 125s, up to about an hour — until the merchant returns a 2xx. It reuses the durability spine rather than standing up a parallel one, which is why webhooks, reconciliation and audit all read from the same log.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Merchants get sub-10ms responses from a lean operational DB while every change is still captured independently in the event stream.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">No transaction record can be silently lost — capture happens below the application, so a forgotten audit write is impossible.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A timeout is a state to resolve, not a lost payment: idempotency plus reconciliation against the network's own record kills double-charges.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Audit, reconciliation and webhooks are all eventually consistent — a merchant may see <code>processing</code> for seconds while the stream catches up.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">CDC is a single logical choke point: if it stalls, DB writes continue but events stop, so it needs redundant instances and second-level lag alerting.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Correctness ultimately depends on an external network answering — reconciliation can only converge as fast as the network's batch files and query APIs allow.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end flow (create intent → charge → status), recognising that card data must not touch merchant servers. A plain "timeout means failure" consistency answer is acceptable if the reasoning is spoken aloud; the interviewer will drive the harder parts.</li>
+          <li><strong>Senior</strong> — moves through the basics quickly and steers to the non-functional core early. Proposes iframe isolation and explains why it beats server-side collection; sees that a timeout is not a failure and reaches for idempotent charges with pending-state resolution, naming the double-charge race; talks confident horizontal scaling, with a nudge for partitioning strategy.</li>
+          <li><strong>Staff+</strong> — judges whether the complexity is warranted, framing event-driven reconciliation as matching how financial systems actually work rather than a reflex. Explains defense-in-depth for card data (tokenization plus client-side encryption) and volunteers the hard edges: payment-network outages with fallback paths, and reconciliation that guarantees eventual consistency with a system it does not control.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="change-data-capture"><a href="../patterns/distributed/coordination/change-data-capture.html">Change Data Capture</a><span class="rel-note">CDC tails the DB write-ahead log so every committed change becomes an event with no reliance on application code remembering to log</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="event-sourcing"><a href="../patterns/architecture/event-sourcing.html">Event Sourcing</a><span class="rel-note">the immutable ordered event stream is the source of truth for audit, reconciliation and history, not just the current DB row</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">a unique constraint on (merchant_id, idempotency_key) makes a retried charge return the existing record instead of charging twice</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">audit, analytics, reconciliation and webhook consumers each build their own view off the same event stream without touching the operational DB</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="api-gateway"><a href="../patterns/distributed/routing/api-gateway.html">API Gateway</a><span class="rel-note">a single gateway authenticates the merchant, rate-limits and routes to the PaymentIntent and Transaction services</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="authentication-enforcer"><a href="../patterns/security/authentication-enforcer.html">Authentication Enforcer</a><span class="rel-note">the gateway verifies an HMAC-SHA256 request signature plus timestamp and nonce before any handler runs</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="timeout-deadline"><a href="../patterns/distributed/resilience/timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">a bounded timeout on the external network call is treated as a distinct pending state to reconcile, never as a failure</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="retry-backoff"><a href="../patterns/distributed/resilience/retry-backoff.html">Retry with Backoff</a><span class="rel-note">webhook delivery to merchant callback URLs retries on failure with exponential backoff (5s, 25s, 125s, up to an hour)</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">the operational DB is sharded by merchant_id to push past the ~10k writes/sec ceiling of a single node</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

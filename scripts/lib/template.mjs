@@ -108,6 +108,71 @@ const THEME_BLOCKS = () => [
   PROSE_SECTION("siblings", "h-siblings", "Sibling themes", "siblings"),
 ].join("\n\n");
 
+/* A design is a worked case study. The scaffold carries every block for the kind,
+ * including the optional ones (estimation / interface / levels) so the author has the
+ * full frame to fill and can delete any that don't apply. The `architecture` block
+ * holds the primary mermaid diagram; `tradeoffs` reuses the pattern two-column shape so
+ * build-pages stamps citable ids; `relationships` starts empty and is filled by
+ * `kb.mjs link <id> demonstrates <pattern>`. */
+const DESIGN_BLOCKS = () => [
+  PROSE_SECTION("problem", "h-problem", "Understanding the problem", "problem"),
+  `    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>TODO — what a user must be able to do.</li>
+          </ol>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li>TODO — scale, latency, availability, consistency the design must meet.</li>
+          </ul>
+        </div>
+      </div>
+    </section>`,
+  PROSE_SECTION("estimation", "h-est", "Back-of-envelope", "estimation"),
+  PROSE_SECTION("entities", "h-entities", "Core entities", "entities"),
+  PROSE_SECTION("interface", "h-interface", "The interface", "interface"),
+  `    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>TODO — walk the request and data flow, requirement by requirement.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client"] --> API["TODO"]
+        </pre>
+        <figcaption>TODO — one sentence on what the diagram shows.</figcaption>
+      </figure>
+    </section>`,
+  PROSE_SECTION("deepdives", "h-deep", "Deep dives", "deepdives"),
+  `    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li>TODO</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li>TODO</li>
+          </ul>
+        </div>
+      </div>
+    </section>`,
+  PROSE_SECTION("levels", "h-levels", "What's expected at each level", "levels"),
+  `    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+    </section>`,
+].join("\n\n");
+
 /* A principle is a maxim, not a mechanism: four prose blocks plus the standard (empty)
  * relationships section, which `kb.mjs link` fills. `overreach` is mandatory on purpose —
  * every principle has a way of being taken too far, and saying so is what keeps the KB
@@ -129,15 +194,17 @@ export function pageSkeleton({ id, name, kind, band, group, order }) {
   const lens = b?.kind === "lens";
 
   const bodyClass = kind === "pattern" ? (lens ? "doc lens" : "doc") : `doc ${kind}`;
-  const kicker = kind === "pattern" ? (lens ? `Lens · ${b.label}` : b.label) : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : "Theme";
-  const badge = kind === "pattern" ? b.short : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : "Theme";
-  const crumbAnchor = kind === "pattern" ? `#${b.anchor}` : kind === "hazard" ? "#hazards-h" : kind === "principle" ? "#principles-h" : "#themes-h";
-  const crumbLabel = kind === "pattern" ? b.label : kind === "hazard" ? "Hazards" : kind === "principle" ? "Principles" : "Themes";
+  const kicker = kind === "pattern" ? (lens ? `Lens · ${b.label}` : b.label) : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : kind === "design" ? "Case study" : "Theme";
+  const badge = kind === "pattern" ? b.short : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : kind === "design" ? "Design" : "Theme";
+  const crumbAnchor = kind === "pattern" ? `#${b.anchor}` : kind === "hazard" ? "#hazards-h" : kind === "principle" ? "#principles-h" : kind === "design" ? "#design-cases-h" : "#themes-h";
+  const crumbLabel = kind === "pattern" ? b.label : kind === "hazard" ? "Hazards" : kind === "principle" ? "Principles" : kind === "design" ? "Case studies" : "Themes";
 
   const blocks =
-    kind === "pattern" ? PATTERN_BLOCKS() : kind === "hazard" ? HAZARD_BLOCKS() : kind === "principle" ? PRINCIPLE_BLOCKS() : THEME_BLOCKS();
+    kind === "pattern" ? PATTERN_BLOCKS() : kind === "hazard" ? HAZARD_BLOCKS() : kind === "principle" ? PRINCIPLE_BLOCKS() : kind === "design" ? DESIGN_BLOCKS() : THEME_BLOCKS();
 
-  const patternScripts = kind === "pattern"
+  /* Designs may carry a small code sketch (an API shape, a low-level-design class), so
+   * they load the highlighter too. */
+  const patternScripts = (kind === "pattern" || kind === "design")
     ? `\n  <script src="${p}assets/vendor/highlight.min.js"></script>\n  <script src="${p}assets/sketch.js"></script>`
     : "";
 

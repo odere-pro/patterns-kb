@@ -18,7 +18,7 @@ const OUT = join(ROOT, "site", "vocab.html");
 
 /* The kb: properties the pages emit, beyond the relation verbs. */
 const PROPS = [
-  ["kind", "Which of the four page kinds this is — <code>pattern</code>, <code>hazard</code>, <code>theme</code>, or <code>principle</code>."],
+  ["kind", "Which of the five page kinds this is — <code>pattern</code>, <code>hazard</code>, <code>theme</code>, <code>principle</code>, or <code>design</code> (a worked case study)."],
   ["band", "The elevation band or lens the pattern belongs to. Also its folder."],
   ["group", "The subdivision within a band, where one exists. Also its folder."],
   ["note", "Why two things relate, from <em>this</em> side. Each side may phrase it its own way."],

@@ -21,12 +21,19 @@ export const BLOCKS = {
   hazard:    ["description", "causes", "cost", "mitigation"],
   theme:     ["framing", "architecture", "tradespace", "tour", "decide", "siblings"],
   principle: ["statement", "rationale", "applying", "overreach", "relationships"],
+  /* A design is a worked case study — a whole system broken down the way a strong
+   * interview answer would: requirements, a diagram of how it is built, the hard
+   * sub-problems argued out, and the patterns it puts to work (via the typed
+   * `relationships` block, so `kb.mjs link … demonstrates …` wires both sides). */
+  design:    ["problem", "requirements", "estimation", "entities", "interface", "architecture", "deepdives", "tradeoffs", "levels", "relationships"],
 };
 /* Blocks that may legitimately be absent. `fluency` is only on patterns that a theme
  * tours; `wild` and `production` only where honest content exists; `architecture` is
  * only on themes that walk a concrete system (the ML case studies) and carry a diagram
- * of how it is built; the rest are mandatory. */
-export const OPTIONAL_BLOCKS = new Set(["fluency", "wild", "production", "architecture"]);
+ * of how it is built. On a design, `estimation` (back-of-envelope math) and `interface`
+ * (the API surface) lean system-design and a low-level-design page may skip them, and
+ * `levels` (the Mid/Senior/Staff rubric) is optional everywhere; the rest are mandatory. */
+export const OPTIONAL_BLOCKS = new Set(["fluency", "wild", "production", "architecture", "estimation", "interface", "levels"]);
 
 /* Tags are a CLOSED vocabulary, like the relation verbs. They exist to group and
  * filter — a tag used on one page groups nothing. The first sweep of this KB was
@@ -45,7 +52,7 @@ export const TAGS = new Set([
   "resilience", "resource-management", "routing", "scalability", "security",
   "separation-of-concerns", "state-management", "test-doubles", "testability", "testing",
   "throughput", "transactions", "transformation", "ui-architecture", "validation",
-  "machine-learning"
+  "machine-learning", "system-design", "low-level-design"
 ]);
 
 /* Quick-filter facets for the hub search. A CLOSED, authored mapping — like TAGS and the
@@ -86,10 +93,11 @@ export const FACETS = [
     { id: "functional",  label: "Functional",  bands: ["functional"] },
   ] },
   { rail: "Kind", chips: [
-    { id: "pattern",   label: "Patterns",   kinds: ["pattern"] },
-    { id: "hazard",    label: "Hazards",    kinds: ["hazard"] },
-    { id: "theme",     label: "Themes",     kinds: ["theme"] },
-    { id: "principle", label: "Principles", kinds: ["principle"] },
+    { id: "pattern",   label: "Patterns",     kinds: ["pattern"] },
+    { id: "hazard",    label: "Hazards",      kinds: ["hazard"] },
+    { id: "theme",     label: "Themes",       kinds: ["theme"] },
+    { id: "principle", label: "Principles",   kinds: ["principle"] },
+    { id: "design",    label: "Case studies", kinds: ["design"] },
   ] },
   { rail: "Extras", chips: [
     { id: "has-example", label: "Has real-world example", hasExample: true },
@@ -121,6 +129,11 @@ export const RELATION_TYPES = {
   "part-of":             { label: "Part of",      inverse: "composed-of" },
   "prevents-hazard":     { label: "Prevents",     inverse: "mitigated-by" },
   "mitigated-by":        { label: "Mitigated by", inverse: "prevents-hazard" },
+  /* A worked design puts a pattern to use; the pattern is shown at work by that design.
+   * The design side is written by `kb.mjs link <design> demonstrates <pattern>`; the
+   * inverse gives every pattern a "Demonstrated by" list of the real systems that use it. */
+  "demonstrates":        { label: "Demonstrates",    inverse: "demonstrated-by" },
+  "demonstrated-by":     { label: "Demonstrated by", inverse: "demonstrates" },
 };
 
 /* Canonical display order of relation groups on a page. */
@@ -128,6 +141,7 @@ export const REL_ORDER = [
   "Combines with", "Alternative to", "Has variant", "Variant of", "Generalizes",
   "Specializes", "Enables", "Requires", "Composed of", "Part of",
   "Often confused with", "Prevents", "Mitigated by",
+  "Demonstrates", "Demonstrated by",
 ];
 
 // A small curated synonym bridge for search: a symptom phrased as "stale" should still
@@ -149,7 +163,7 @@ export const SYNONYMS = {
   retry: ["retries", "reattempt"], hang: ["hangs", "block", "stuck"], stuck: ["hang", "block"],
 };
 
-export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes", principle: "principles" };
+export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes", principle: "principles", design: "designs" };
 
 /* ---- taxonomy ----
  * `kind: "elevation"` bands are the I-IV ladder; `kind: "lens"` bands cut across it.
@@ -216,6 +230,29 @@ export const THEME_ORDER = [
  * general themes grid. They are ordinary theme-kind pages in every other respect. */
 export const ML_CASE_STUDIES = [
   "harmful-content", "bot-detection", "video-recommendations",
+];
+/* System-design case studies — the `design` kind. Worked end-to-end solutions (the
+ * HelloInterview katas) that break a real system down and `demonstrates` the patterns
+ * they use. Kept in their own array (like ML_CASE_STUDIES) so they render as a dedicated
+ * hub + graph section rather than in the themes grid. Editorial order runs roughly
+ * simple → hard, then the low-level-design (OOP) katas, which carry the
+ * `low-level-design` tag; the system-design katas carry `system-design`. The two ids
+ * `design-distributed-cache` and `design-rate-limiter` are prefixed to avoid colliding
+ * with the existing `distributed-cache` / `rate-limiter` pattern pages (ids are a global
+ * key). The hub filters this list to pages that exist, so it can be populated one at a time. */
+export const DESIGN_ORDER = [
+  // system design (30)
+  "bitly", "design-distributed-cache", "distributed-rate-limiter", "web-crawler",
+  "top-k", "ad-click-aggregator", "metrics-monitoring",
+  "fb-news-feed", "instagram", "fb-post-search", "google-news",
+  "yelp", "gopuff", "uber", "tinder", "strava",
+  "whatsapp", "fb-live-comments", "google-docs", "online-chess", "leetcode",
+  "dropbox", "youtube", "chatgpt",
+  "ticketmaster", "online-auction", "robinhood", "payment-system",
+  "camelcamelcamel", "job-scheduler",
+  // low-level design (9)
+  "parking-lot", "elevator", "amazon-locker", "connect-four", "file-system",
+  "logging-service", "inventory-management", "bookmyshow", "design-rate-limiter",
 ];
 export const HAZARD_ORDER = [
   "god-object", "spaghetti-code", "big-ball-of-mud", "anemic-domain-model",

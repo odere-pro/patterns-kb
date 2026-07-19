@@ -19,7 +19,7 @@
  *   kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
  *   kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
  *   kb.mjs link <from> <verb> <to> [--note "…"] [--note-back "…"]   both sides at once
- *   kb.mjs new <id> --kind pattern --band <b> [--group <g>] --name "…" --order <n>
+ *   kb.mjs new <id> --kind pattern|hazard|theme|principle|design --band <b> [--group <g>] --name "…" --order <n>
  *
  *   --json      structured output instead of text
  *   --diagrams  keep the mermaid source (omitted by default as noise)
@@ -562,7 +562,7 @@ ${rows}
   const kind = opt("kind"), bandId = opt("band"), name = opt("name"), order = opt("order");
   const group = opt("group") ?? bandId;
   if (!id || !kind || !name || order == null || (kind === "pattern" && !bandId)) {
-    console.error('usage: kb.mjs new <id> --kind pattern|hazard|theme|principle --band <b> [--group <g>] --name "…" --order <n>');
+    console.error('usage: kb.mjs new <id> --kind pattern|hazard|theme|principle|design --band <b> [--group <g>] --name "…" --order <n>\n  (--band is required only for --kind pattern)');
     process.exit(1);
   }
   const band = kind === "pattern" ? bandId : kind;

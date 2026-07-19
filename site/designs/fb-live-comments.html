@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Facebook Live Comments · Patterns</title>
+  <meta name="description" content="Design a live comment feed — broadcast thousands of comments a second to millions of concurrent viewers in under 200 ms, favouring availability over consistency.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#fb-live-comments",
+  "identifier": "fb-live-comments",
+  "name": "Facebook Live Comments",
+  "description": "Broadcast thousands of comments a second to millions of live viewers in under 200 ms, favouring availability over consistency",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/messaging/pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "the Comment Management Service publishes each comment onto a partitioned bus that messaging servers subscribe to per video"
+    },
+    {
+      "@id": "../patterns/messaging/fan-out.html#fan-out",
+      "name": "Fan-Out",
+      "kb:note": "a single posted comment must be delivered to every viewer of that video, from a handful to hundreds of millions"
+    },
+    {
+      "@id": "../patterns/distributed/routing/consistent-hashing.html#consistent-hashing",
+      "name": "Consistent Hashing",
+      "kb:note": "the L7 load balancer hashes on liveVideoId so same-video viewers converge on the same messaging server, keeping subscription sets small"
+    },
+    {
+      "@id": "../patterns/distributed/routing/load-balancer.html#load-balancer",
+      "name": "Load Balancer",
+      "kb:note": "a Layer 7 load balancer inspects the request and routes by liveVideoId rather than blindly round-robining connections"
+    },
+    {
+      "@id": "../patterns/distributed/routing/cdn.html#cdn",
+      "name": "CDN",
+      "kb:note": "mega-streams snapshot recent comments to the edge every second and clients poll the CDN instead of holding a live push connection"
+    },
+    {
+      "@id": "../patterns/caching/distributed-cache.html#distributed-cache",
+      "name": "Distributed Cache",
+      "kb:note": "recent comments live in a shared Redis cache so any messaging server can replay them when a reconnecting viewer lands elsewhere"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "on reconnect the same comment can arrive via both SSE replay and the live stream, so the client dedupes by comment id"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="fb-live-comments" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Broadcast thousands of comments a second to millions of live viewers in under 200 ms, favouring availability over consistency" data-kb-order="18" data-kb-aliases='["live comments"]' data-kb-tags='["system-design","event-driven","scalability","latency","availability"]' data-kb-solves='["thousands of people are watching the same live stream and every new message has to reach all of them within a fraction of a second","my clients poll for updates every few seconds and it hammers the database with requests that almost always come back empty","a viewer who joins late needs to scroll back through older messages without the pages shifting as new ones keep arriving","one viral broadcast has hundreds of millions of watchers and holding an open connection for each one melts my servers","a phone drops off wifi for ten seconds and the user comes back to a gap in the conversation they cannot recover"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Facebook Live Comments</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Facebook Live Comments</h1>
+      <p class="doc-essence">Live Comments streams a running feed of viewer comments beneath a live video: everyone watching sees each new comment within a fraction of a second, and late joiners can scroll back through what they missed. Almost all the load is broadcast — one comment fanned out to every viewer — so this is a real-time delivery problem, not a storage one.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="fb-live-comments">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Viewers of a live video type comments; those comments appear, near-instantly, on every other viewer's screen. The write is trivial — a short string, saved once — but each write must reach an audience that can range from a handful to hundreds of millions. That asymmetry decides everything: the engineering is not in storing comments, it is in <em>broadcasting</em> them, keeping the end-to-end delay below the threshold at which a human stops perceiving it as live. Two things are explicitly not the job here: deciding who is allowed to post (authorization) and deciding what may be posted (moderation). The design that remains is a study in real-time distribution at scale.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>A viewer can post a comment on a live video.</li>
+            <li>A viewer sees new comments appear as they are posted, while watching.</li>
+            <li>A viewer who joins late can load comments made before they arrived.</li>
+          </ol>
+          <p class="prose">Out of scope: replies and reactions to comments — named explicitly so the feed stays a flat, append-only stream.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Latency</strong> — a comment reaches watching viewers in under 200&nbsp;ms end-to-end, the point past which people no longer perceive a delay.</li>
+            <li><strong>Availability</strong> — favoured over consistency; eventual consistency is fine, since a briefly-missing comment is harmless while a stalled feed is not.</li>
+            <li><strong>Scale</strong> — millions of concurrent videos, and thousands of comments per second on a single hot video.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Writes are cheap.</strong> Even a busy stream at a few thousand comments/sec is a modest ingest load for a wide-column store — the write path is never the bottleneck. What matters is the <em>multiplier</em> on the other side.</p>
+        <p><strong>Fan-out is the load.</strong> A stream with 50k concurrent viewers running at 100 comments/sec must push 50k × 100 ≈ <strong>5M messages/sec</strong> — for one video. Multiply by the number of live videos and the delivery tier, not the database, is what the architecture has to survive.</p>
+        <p><strong>Connections are the wall.</strong> Real-time delivery means one long-lived connection held open per viewer. A well-tuned server sustains on the order of <strong>~100k concurrent connections</strong> before file descriptors, CPU and memory — not any TCP port limit — cap it. Millions of viewers therefore imply tens to hundreds of delivery servers, and a single mega-stream can demand more connections than a whole fleet has.</p>
+        <p><strong>Storage is an afterthought.</strong> A comment is a few hundred bytes; even a million of them is well under a gigabyte. Retention policy, not disk, is the only real question.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three entities, and one of them belongs to someone else:</p>
+        <ul>
+          <li><strong>User</strong> — a viewer or the broadcaster. Identified from the session token on every request; never trusted from the request body.</li>
+          <li><strong>Live Video</strong> — the broadcast a comment attaches to. Owned and run by a different team; this system integrates with it by <code>liveVideoId</code> rather than managing the video itself.</li>
+          <li><strong>Comment</strong> — one message: a <code>commentId</code>, the <code>liveVideoId</code> it belongs to, the author's <code>userId</code>, the <code>message</code> text, and a <code>createdAt</code> timestamp. Append-only; never edited once written.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Three surfaces, one per requirement: post a comment, load history, and subscribe to the live tail. The author is never in the request body — the server derives <code>userId</code> from the token, so a client cannot post as someone else.</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — create, page history, subscribe</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /comments/:liveVideoId
+Authorization: Bearer &lt;JWT&gt;                 # userId comes from the token, not the body
+{ "message": "Cool video!" }
+&rarr; 201 { "commentId": "c_8fa1", "createdAt": 1739479200 }
+
+GET /comments/:liveVideoId?cursor={last_comment_id}&amp;pageSize=10&amp;sort=desc
+&rarr; 200 { "comments": [ … ], "nextCursor": "c_8f90" }   # history, cursor-paginated
+
+GET /comments/:liveVideoId/stream            # the live tail (Server-Sent Events)
+Last-Event-ID: c_8fa1                         # browser sets this on auto-reconnect
+&rarr; text/event-stream
+   id: c_8fa2
+   event: comment
+   data: { "userId": "u_17", "message": "Goal!" }</code></pre>
+      </details>
+      <div class="prose">
+        <p>History uses a <strong>cursor</strong>, not an <code>offset</code>. Offset pagination degrades as the feed grows — the store must count through every preceding row — and it is unstable: a comment inserted or removed mid-scroll shifts every offset, so viewers see duplicates or gaps. A cursor points at a specific comment id; with an index on that field there is no counting, and concurrent writes never move the cursor's target.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Write traffic and read traffic have nothing in common in shape or volume, so they run on separate tiers. The <strong>Comment Management Service</strong> takes a <code>POST</code>, persists the comment to a wide-column store (DynamoDB — fast, highly available, and these records need no joins or transactions), and publishes it onto a message bus. A pool of <strong>Realtime Messaging Servers</strong> hold the open SSE connections; each subscribes only to the bus channels for the videos its viewers are watching, and pushes matching comments straight down the wire. A Layer&nbsp;7 load balancer hashes on <code>liveVideoId</code> so that viewers of the same video land on the same server, keeping each server's subscription set small. Mega-streams break out of this push model entirely and are served from the edge.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Viewer["Viewer / commenter client"]
+    LB["L7 load balancer — hashes liveVideoId"]
+    Write["Comment Management Service"]
+    DB[("Comments DB — DynamoDB")]
+    Bus["Redis pub/sub — partitioned by hash(liveVideoId)"]
+    RT["Realtime Messaging Servers — hold SSE connections"]
+    Cache[("Shared Redis — recent-comment cache")]
+    CDN["CDN snapshot — mega-streams"]
+    Viewer -->|"POST /comments/:id"| Write
+    Write -->|"persist"| DB
+    Write -->|"publish"| Bus
+    Bus -->|"deliver to subscribed channel"| RT
+    RT -->|"SSE stream"| Viewer
+    Viewer -->|"open live tail via"| LB
+    LB -->|"co-locate same-video viewers"| RT
+    RT -->|"replay recent on reconnect"| Cache
+    Write -.->|"snapshot every 1s"| CDN
+    CDN -.->|"poll for mega-streams"| Viewer
+        </pre>
+        <figcaption>The write path (persist &rarr; publish) is small; the read path fans one comment out across the messaging tier to every subscribed viewer. Mega-streams switch from push (SSE) to pull (CDN snapshots).</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Delivering comments in real time</h3>
+        <p>The obvious first cut is polling: the client asks <code>GET /comments/:id?since={last}</code> every few seconds and appends whatever is new. It works as a starting point and fails at scale — to feel live you would have to poll every few milliseconds, and almost every one of those requests comes back empty, burning the database on questions with no answer. The fix is to invert the direction: the server pushes.</p>
+        <ul>
+          <li><strong>WebSockets.</strong> A full-duplex channel per viewer. Right for balanced chat, where both sides talk constantly — but here the ratio is lopsided: a viewer reads far more than they write. Paying for a two-way socket per viewer is overhead the workload does not justify.</li>
+          <li><strong>Server-Sent Events (chosen).</strong> A one-way server-to-client stream over ordinary HTTP; the rare write is a plain <code>POST</code>. It matches the imbalance exactly — cheap frequent reads, occasional writes — and comes with built-in reconnection (see dive&nbsp;3). The warts are operational: some proxies buffer streaming responses in ways that are miserable to debug, browsers cap concurrent SSE connections per domain, and long-lived connections are harder to monitor than request/response.</li>
+        </ul>
+        <p>With SSE chosen, a new comment is persisted, handed to the messaging tier, and streamed to every connected viewer of that video — a <a href="../patterns/messaging/fan-out.html">fan-out</a> from one write to many readers.</p>
+
+        <h3>2 · Scaling the broadcast to millions</h3>
+        <p>One server cannot hold millions of connections, so delivery spreads across a fleet — and now viewers of the same video sit on different servers. A comment arriving at server&nbsp;1 reaches its local viewers but has no path to viewers of the same video parked on server&nbsp;2. Something has to carry the comment across the fleet.</p>
+        <ul>
+          <li><strong>Broadcast every comment to every server.</strong> Publish to one channel; every messaging server subscribes and forwards to whichever of its viewers care. Dead simple, and wasteful — every server processes every comment for every video whether or not it has a single viewer for it. Impractical at this scale.</li>
+          <li><strong>Partitioned pub/sub with viewer co-location (chosen).</strong> Split the stream into N channels by <code>hash(liveVideoId) % N</code> — bounded channels, not one per video, which a broker like Kafka could not sustain — and have each server subscribe only to the channels it needs. To stop a server from accumulating every channel under round-robin, the Layer&nbsp;7 load balancer applies <a href="../patterns/distributed/routing/consistent-hashing.html">consistent hashing</a> on <code>liveVideoId</code> so same-video viewers converge on the same server. This is <a href="../patterns/messaging/pubsub.html">publish/subscribe</a> with intelligent routing done by the <a href="../patterns/distributed/routing/load-balancer.html">load balancer</a>.</li>
+          <li><strong>A dispatcher service.</strong> Invert pub/sub: instead of servers subscribing to topics, a dispatcher keeps a live map of which servers hold viewers for each video and routes each comment to exactly those servers. It centralises routing and enables load-aware rules, at the cost of keeping that map accurate as viewers churn — extra machinery most designs do not need.</li>
+        </ul>
+        <p>On technology: Redis pub/sub suits this better than Kafka, which struggles with the constantly-changing subscription patterns of viewers hopping between videos. Redis is low-latency and fire-and-forget — acceptable precisely because comments are already persisted, so a message dropped during a blip is recovered by the catch-up path below.</p>
+        <p><strong>Mega-streams.</strong> A World-Cup-final stream — hundreds of millions of viewers, thousands of comments a second — breaks even the co-located design. At 5,000 comments/sec each on-screen comment lasts a few milliseconds; nobody is reading individual comments, they are feeling a crowd. That reframes the goal, and two moves follow. <em>Sampling</em> pushes a representative fraction — the rate adapting to velocity, biased toward followed or verified authors — giving each viewer a steady, readable trickle. The most scalable move drops push entirely: keep a ring buffer of the last ~200 comments, snapshot it to a <a href="../patterns/distributed/routing/cdn.html">CDN</a> every second, and let clients poll the edge — a comment snapshot is just cacheable content, like a thumbnail. A stream auto-flips from SSE to CDN once it crosses a threshold (say 100k viewers or 500 comments/sec), trading ~1–2s of latency, which the "vibe" reframing makes acceptable, for effectively unbounded reach. Hysteresis around the threshold keeps a stream hovering near the line from flapping between modes.</p>
+
+        <h3>3 · Surviving disconnects without losing the thread</h3>
+        <p>Mobile networks drop — tunnels, backgrounding, wifi-to-cellular hand-offs. A viewer must be able to reconnect and recover what they missed without the feed silently skipping ahead.</p>
+        <ul>
+          <li><strong>Ignore it.</strong> On reconnect, just resume from now; anything posted during the gap is gone. A five-second drop during a tense moment loses exactly the reactions the viewer came for. Rejected.</li>
+          <li><strong>Last-Event-ID plus client tracking (chosen).</strong> Every SSE message carries the comment id as its event id; on an auto-reconnect the browser resends the last one it saw in the <code>Last-Event-ID</code> header, and the server replays what came after before resuming the live stream. The client also stores that id locally, so it can ask for catch-up explicitly (<code>GET …?cursor={last}&amp;limit=100</code>) and animate the gap smoothly or show "you missed 47 comments". Because a reconnect usually lands on a <em>different</em> server, replay reads from a <a href="../patterns/caching/distributed-cache.html">shared Redis cache</a> of recent comments that any server can serve. The subtlety is the seam between the replayed history and the resumed live stream: comments can arrive on both paths at once, so the client dedupes by comment id — receiving the same comment twice is a no-op, which keeps the merge <a href="../patterns/messaging/idempotency.html">idempotent</a>. Replay is bounded (the last few minutes, not the last hour) with graceful degradation beyond that.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Sub-200&nbsp;ms delivery with far less overhead than a full socket per viewer, matched to a read-heavy, write-light workload.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Consistent-hash co-location keeps each messaging server's subscription set small, so the fleet scales by adding servers rather than broadcasting everything everywhere.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Mega-streams degrade gracefully to a cacheable CDN pull instead of melting the push tier.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">SSE carries real operational cost: proxy buffering, per-domain connection caps, and hard-to-monitor long-lived streams.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Redis pub/sub is fire-and-forget — no-loss delivery leans entirely on the persisted store and a bounded replay cache.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The CDN path abandons per-comment delivery for a sampled "vibe" and adds 1–2s of latency; the SSE↔CDN threshold needs hysteresis to avoid mode-flapping.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end flow (post → store → show), and the instinct to see that polling cannot be near-real-time and to start reasoning toward server push; reaches a pub/sub broadcast with a nudge and scales it with help.</li>
+          <li><strong>Senior</strong> — moves briskly through the high-level design to spend real time on scaling, reaches pub/sub with viewer co-location with minimal hints, and argues the trade-offs — SSE vs WebSockets, partitioning the channels, Redis vs Kafka — on their own.</li>
+          <li><strong>Staff+</strong> — treats the design as a delivery problem from the first minute, names concrete technologies from experience, and volunteers the failure edges unprompted: mega-stream CDN fallback, reconnect replay and dedup, bounded catch-up, and mode-flip hysteresis.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pubsub"><a href="../patterns/messaging/pubsub.html">Publish-Subscribe</a><span class="rel-note">the Comment Management Service publishes each comment onto a partitioned bus that messaging servers subscribe to per video</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="fan-out"><a href="../patterns/messaging/fan-out.html">Fan-Out</a><span class="rel-note">a single posted comment must be delivered to every viewer of that video, from a handful to hundreds of millions</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="consistent-hashing"><a href="../patterns/distributed/routing/consistent-hashing.html">Consistent Hashing</a><span class="rel-note">the L7 load balancer hashes on liveVideoId so same-video viewers converge on the same messaging server, keeping subscription sets small</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="load-balancer"><a href="../patterns/distributed/routing/load-balancer.html">Load Balancer</a><span class="rel-note">a Layer 7 load balancer inspects the request and routes by liveVideoId rather than blindly round-robining connections</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cdn"><a href="../patterns/distributed/routing/cdn.html">CDN</a><span class="rel-note">mega-streams snapshot recent comments to the edge every second and clients poll the CDN instead of holding a live push connection</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="distributed-cache"><a href="../patterns/caching/distributed-cache.html">Distributed Cache</a><span class="rel-note">recent comments live in a shared Redis cache so any messaging server can replay them when a reconnecting viewer lands elsewhere</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">on reconnect the same comment can arrive via both SSE replay and the live stream, so the client dedupes by comment id</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

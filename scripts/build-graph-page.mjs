@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { THEME_ORDER, ML_CASE_STUDIES, esc } from "./lib/model.mjs";
+import { THEME_ORDER, ML_CASE_STUDIES, DESIGN_ORDER, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json"), "utf8"));
@@ -43,6 +43,36 @@ ${themeCluster(themeId)}
         </figure>
       </section>`;
 }
+
+/* A design case study clusters with the patterns it `demonstrates` (its typed edges),
+ * the case-study analogue of a theme's member patterns. */
+function designCluster(designId) {
+  const d = N[designId];
+  const used = d.relations.filter((r) => r.type === "demonstrates" && r.href);
+  const lines = [`flowchart LR`, `    ${mid(designId)}(["${esc(d.name)}"])`];
+  for (const r of used) {
+    lines.push(`    ${mid(r.to)}["${esc(r.name)}"]`);
+    lines.push(`    ${mid(designId)} --- ${mid(r.to)}`);
+    lines.push(`    click ${mid(r.to)} "${pageHref(r.to)}"`);
+  }
+  lines.push(`    click ${mid(designId)} "${pageHref(designId)}"`);
+  return lines.join("\n");
+}
+
+function designSection(designId) {
+  const d = N[designId];
+  return `      <section class="doc-section">
+        <h2 class="doc-h"><a href="${pageHref(designId)}" style="color:inherit;text-decoration:none">${esc(d.name)}</a></h2>
+        <p class="prose">${esc(d.essence)}.</p>
+        <figure class="diagram">
+          <pre class="mermaid">
+${designCluster(designId)}
+          </pre>
+          <figcaption>${esc(d.name)} and the patterns it demonstrates — click any node to open its page.</figcaption>
+        </figure>
+      </section>`;
+}
+const DESIGNS = DESIGN_ORDER.filter((id) => N[id]);
 
 // relation-type legend
 const legend = Object.entries(graph.relationTypes)
@@ -98,7 +128,7 @@ ${legend}
 
 ${THEME_ORDER.map(themeSection).join("\n\n")}
 
-${ML_CASE_STUDIES.map(themeSection).join("\n\n")}
+${ML_CASE_STUDIES.map(themeSection).join("\n\n")}${DESIGNS.length ? "\n\n" + DESIGNS.map(designSection).join("\n\n") : ""}
 
     <section class="doc-section">
       <h2 class="doc-h">Most connected patterns</h2>

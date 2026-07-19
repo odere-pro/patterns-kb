@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web Crawler · Patterns</title>
+  <meta name="description" content="Design a web crawler that fetches and extracts text from 10 billion pages in under five days — pipelined queues, politeness, and fault tolerance.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#web-crawler",
+  "identifier": "web-crawler",
+  "name": "Web Crawler",
+  "description": "Fetch and extract text from 10 billion web pages in under five days — without losing progress or overloading any site",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/architecture/pipe-filter.html#pipe-filter",
+      "name": "Pipe-and-Filter",
+      "kb:note": "splits the fragile single-process crawler into independently retryable fetch and parse stages"
+    },
+    {
+      "@id": "../patterns/messaging/claim-check.html#claim-check",
+      "name": "Claim Check",
+      "kb:note": "the queue message carries only the Metadata DB row id while the multi-megabyte HTML sits in blob storage"
+    },
+    {
+      "@id": "../patterns/messaging/competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:note": "pools of interchangeable fetchers and parser workers pull from shared queues, adding machines to add throughput"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/retry-backoff.html#retry-backoff",
+      "name": "Retry with Backoff",
+      "kb:note": "failed fetches back off via the SQS visibility timeout extended by ApproximateReceiveCount"
+    },
+    {
+      "@id": "../patterns/messaging/dead-letter-channel.html#dead-letter-channel",
+      "name": "Dead Letter Channel",
+      "kb:note": "a redrive policy moves a URL to a DLQ after maxReceiveCount receives, marking the site offline"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/rate-limiter.html#rate-limiter",
+      "name": "Rate Limiter",
+      "kb:note": "a central Redis sliding window caps requests to ~1/sec/domain across all fetchers"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/distributed-lock.html#distributed-lock",
+      "name": "Distributed Lock",
+      "kb:note": "Redis SET NX with a crawl-delay TTL gives one fetcher an atomic per-domain claim, closing the stale-timestamp race"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/bloom-filter.html#bloom-filter",
+      "name": "Bloom Filter",
+      "kb:note": "content hashes of crawled pages are checked in a probabilistic set to skip re-parsing duplicates cheaply"
+    },
+    {
+      "@id": "../patterns/distributed/routing/object-storage.html#object-storage",
+      "name": "Object Storage",
+      "kb:note": "raw HTML and extracted text live in S3 for durability and low cost at hundreds of terabytes"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="web-crawler" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Fetch and extract text from 10 billion web pages in under five days — without losing progress or overloading any site" data-kb-order="4" data-kb-aliases='["spider","web spider"]' data-kb-tags='["system-design","scalability","resilience","throughput","coordination"]' data-kb-solves='["I need to download and extract text from billions of web pages and finish within days, not months","one worker does the whole fetch-and-parse job, so when it dies mid-page I lose all of its progress","my fetchers keep hammering the same site and getting throttled or blocked","different links keep handing me the exact same page and I waste time re-processing duplicates","a page full of self-referential links keeps my fetchers looping forever on one site"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Web Crawler</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Web Crawler</h1>
+      <p class="doc-essence">A web crawler starts from a handful of seed URLs, downloads each page, keeps the text worth keeping, harvests the links it finds, and follows them outward across the web — here, to gather raw training text for a language model. At ten billion pages the design is dominated by three forces pulling against each other: finish fast, never lose work when a fetch fails, and stay a polite guest on every site it touches.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="web-crawler">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A crawler fetches a page, extracts the parts worth keeping, discovers the outbound links, and repeats — walking the web link by link. What "extract" means depends on the goal: a search engine indexes and ranks pages; the framing here is harvesting raw text at massive scale to train a language model, so extraction means pulling out the readable text and discarding the markup. The web has on the order of <strong>10 billion</strong> reachable pages, far too many for one machine to visit in a sensible window, so nearly every decision downstream falls out of one tension: crawl quickly and cheaply, resume cleanly when a fetch dies, and never hammer a site hard enough to get blocked. Complete coverage is a fiction — the realistic target is the vast majority of the web, not literally every page.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Start from a given set of seed URLs and crawl outward by following the links on each page.</li>
+            <li>Extract the text from every page and store it for later processing.</li>
+          </ol>
+          <p class="prose">Out of scope: actually training the model on the text, non-text media (images, video), JavaScript-rendered content, and login-gated pages — named so the design stays narrow.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Fault tolerance</strong> — a failure anywhere resumes without discarding crawled progress.</li>
+            <li><strong>Politeness</strong> — honour <code>robots.txt</code> and never overload a site's servers.</li>
+            <li><strong>Efficiency</strong> — the whole crawl completes in under 5 days.</li>
+            <li><strong>Scalability</strong> — handle roughly 10B pages.</li>
+          </ul>
+          <p class="prose">Out of scope: defending against malicious actors, cost/budget limits, and legal or privacy compliance.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>The work.</strong> ~10B pages, and for bandwidth planning budget a pessimistic <strong>2&nbsp;MB</strong> of transfer per page (worst case with inline resources — the raw HTML alone is closer to 30&nbsp;KB). The text must be ready <strong>5 days</strong> after the crawl starts.</p>
+        <p><strong>Required rate.</strong> 10B pages over 5 days (≈432,000&nbsp;s) is about <strong>23,000 pages/sec</strong>, sustained every second for five days straight. That number sets the whole scaling problem.</p>
+        <p><strong>What one machine does.</strong> A network-optimised instance (~200&nbsp;Gbps — AWS <code>c6in.32xlarge</code> or <code>c7gn.16xlarge</code>) can in theory pull 200&nbsp;Gbps ÷ 8 bits ÷ 2&nbsp;MB ≈ <strong>12,500 pages/sec</strong>. Real utilisation is far lower — call it 30% once DNS, server latency, politeness waits and retries are paid — so ≈ <strong>3,750 pages/sec</strong> per machine.</p>
+        <p><strong>Machine count.</strong> One machine needs 10B ÷ 3,750 ≈ 2.7M&nbsp;s ≈ <strong>31 days</strong>; run <strong>eight</strong> in parallel and it drops to ≈ 3.9 days, comfortably inside the window. The math is assumption-laden — its value is the reasoning, and a real deployment would load-test.</p>
+        <p><strong>Storage.</strong> Raw HTML at ~30&nbsp;KB × 10B ≈ <strong>300&nbsp;TB</strong>; the extracted text is a fraction of that. Both land in blob storage — never in the queue or the database.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>A handful of pieces of state, split by what they hold:</p>
+        <ul>
+          <li><strong>Frontier queue</strong> — the set of URLs still to crawl; primed with the seeds and constantly growing as new links are discovered.</li>
+          <li><strong>URL record</strong> (Metadata DB) — one row per URL: the URL itself, its status, a reference to its raw-HTML blob and its extracted-text blob, a content hash, and a crawl <code>depth</code>.</li>
+          <li><strong>Domain record</strong> (Metadata DB) — per domain: the parsed <code>robots.txt</code> rules (disallowed paths, crawl-delay) and the timestamp of the last crawl.</li>
+          <li><strong>Blob storage</strong> — the actual bytes: raw HTML written by the fetch stage, extracted text written by the parse stage.</li>
+          <li><strong>Extraction queue</strong> — carries fetched pages from the fetch stage to the parser workers, one message per URL.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>This is not a user-facing system, so the "interface" is the system boundary itself — seed URLs in, text blobs out — plus the loop that runs between them. Sketching that loop first makes the components fall out naturally:</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — the system boundary and the crawl loop</summary>
+<pre><code class="language-python" data-kb-lang="python"># boundary
+input:  seedUrls: [URL]          # prime the frontier
+output: text blobs in object storage, indexed by the Metadata DB
+
+# fetch stage — one URL pulled from the frontier
+def fetch(url):
+    ip   = dns.resolve(host(url))
+    html = http_get(url, ip)
+    ref  = blob.put(html)                 # raw HTML to blob storage
+    id   = db.record(url, html_ref=ref)   # a row in the Metadata DB
+    extraction_queue.send(id)             # just the id — never the HTML
+
+# parse stage — parser workers
+def extract(id):
+    html        = blob.get(db.html_ref(id))
+    text, links = parse(html)
+    blob.put(text)
+    for l in links:                       # after URL + content dedup
+        frontier.enqueue(l)</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The naïve shape — one crawler that resolves DNS, fetches, extracts text and extracts links in a single process — is where the design begins and immediately gets refactored, because a failure in any step throws away the whole unit of work. The built system pulls those responsibilities apart into two queue-separated stages. A pool of interchangeable <strong>URL Fetchers</strong> pull URLs off the frontier, download the HTML and drop it in blob storage; a pool of <strong>Parser Workers</strong> read that HTML back, extract the text, and feed newly discovered links to the frontier. Because every worker in a pool is stateless and pulls from a shared queue, they are <a href="../patterns/messaging/competing-consumers.html">competing consumers</a> — add machines to add throughput, and a dead worker just leaves its message for the next one. The frontier and the extraction hand-off are managed queues (SQS is the choice, argued below); the raw HTML and extracted text live in <a href="../patterns/distributed/routing/object-storage.html">object storage</a> (S3) for its durability and cost at this volume; a Metadata DB (DynamoDB, or Postgres/MySQL) tracks every URL and domain.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Seeds["Seed URLs"] --> Frontier[("Frontier queue")]
+    Frontier -->|"URL"| Fetcher["URL Fetchers"]
+    Fetcher -->|"resolve host"| DNS["DNS"]
+    Fetcher -->|"GET page"| Web["External sites"]
+    Fetcher -->|"raw HTML"| Blob[("Blob storage")]
+    Fetcher -->|"record"| Meta[("Metadata DB")]
+    Fetcher -->|"row id"| Extract[("Extraction queue")]
+    Extract -->|"id"| Parser["Parser Workers"]
+    Parser -->|"read HTML / write text"| Blob
+    Parser -->|"new links"| Frontier
+    Parser -->|"hash, depth"| Meta
+        </pre>
+        <figcaption>Two pipelined stages pass work through queues; raw HTML and extracted text land in blob storage, the queue messages carry only ids, and discovered links loop back into the frontier.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Staying fault-tolerant without losing progress</h3>
+        <p>The single-process crawler is fragile: DNS lookup, fetch, text extraction and link extraction all share one fate, and the fetch — dead servers, slow connections, oversized responses — is by far the flakiest step. Split the work into a <a href="../patterns/architecture/pipe-filter.html">pipe-and-filter</a> pipeline of independently retryable stages: the fetcher only downloads and stores HTML; the parser only reads HTML and pulls out text and links (kept as one stage because both are cheap and CPU-bound). Now a failure is isolated to a single URL, each stage scales on its own, and the text-extraction logic can change — say, to also grab image alt-text — without redoing the expensive fetch. The state that ties the stages together is the Metadata DB row, which points at the HTML and text blobs.</p>
+        <p>One anti-pattern to call out: never put the multi-megabyte HTML in the queue message. Queues are built for small payloads, and stuffing bytes through them is slow and costly. The message carries only the row's id; the payload sits in blob storage and the worker fetches it by reference — the <a href="../patterns/messaging/claim-check.html">claim-check</a> pattern.</p>
+        <p>Fetches <em>will</em> fail, so retry with backoff. An in-memory timer is the naïve answer and loses its state the moment the worker dies. Kafka has no native retry — you would hand-roll a failed-URLs topic carrying a next-retry time. SQS gives it almost for free: its visibility timeout (default 30&nbsp;s, extendable to 12&nbsp;h) hides an un-acked message and makes it reappear when the timer expires, and calling <code>ChangeMessageVisibility</code> keyed on the message's <code>ApproximateReceiveCount</code> turns that into <a href="../patterns/distributed/resilience/retry-backoff.html">exponential backoff</a>. Cap the failures with a redrive policy: after <code>maxReceiveCount</code> receives (say 5) the message moves to a <a href="../patterns/messaging/dead-letter-channel.html">dead-letter queue</a> and the site is treated as offline. Crash recovery falls out of the same mechanism — a message is deleted only after its HTML is safely in blob storage, so a fetcher that dies mid-download simply lets the message resurface for another worker.</p>
+
+        <h3>2 · Being a polite guest</h3>
+        <p>Two obligations. First, <code>robots.txt</code>: fetch it once per domain, parse its <code>Disallow</code> paths and any <code>Crawl-delay</code>, and store the rules plus a last-crawl timestamp on the Domain row. On dequeue, if the URL is disallowed, acknowledge it and move on; if the crawl-delay hasn't elapsed, don't crawl — defer the message with <code>ChangeMessageVisibility</code> (SQS's <code>DelaySeconds</code> only applies to newly-sent messages, so for an in-flight one the visibility timeout is the deferral knob). <code>Crawl-delay</code> isn't part of the official protocol and some big crawlers ignore it, but respecting it is good etiquette.</p>
+        <p>Second, cap the request rate per domain — the industry rule of thumb is ~1 request/second/domain, aggregated across <em>every</em> fetcher. A central store (Redis) tracks per-domain request counts in a sliding window, and each fetcher checks before it hits the origin: a distributed <a href="../patterns/distributed/resilience/rate-limiter.html">rate limiter</a>. This doesn't throttle aggregate throughput because the crawl spans millions of domains at once — the limit is per-domain, and there are millions of domains in flight.</p>
+        <p>The subtle bug is a race: several fetchers can read the same stale last-crawl time simultaneously and all conclude it's their turn — a classic check-then-act. Fix it with an atomic per-domain claim before crawling: <code>Redis SET domain NX</code> with a TTL equal to the crawl delay, a lightweight <a href="../patterns/distributed/coordination/distributed-lock.html">distributed lock</a>. Whoever wins the key crawls; the losers defer their message. And when a rate-limit window resets, every waiting fetcher can retry in lockstep — a thundering herd — so add per-fetcher jitter to spread the retries out.</p>
+
+        <h3>3 · Hitting 10 billion pages in five days</h3>
+        <p>The throughput math (above) says eight ~200&nbsp;Gbps machines at 30% real utilisation clear 10B pages in ≈3.9 days. Parser workers scale more simply — they only read HTML and write text — so autoscale them on the extraction queue's depth rather than provisioning a fixed count (Lambda or Fargate). The real surprise is DNS: at thousands of requests per second across millions of unique domains, resolution becomes the bottleneck. The classic Mercator crawler paper found DNS could eat up to 70% of a thread's time before they built a custom resolver. Mitigate with a DNS cache in each fetcher (repeat lookups for a domain are free) and round-robin across multiple DNS providers to spread load and dodge per-resolver limits.</p>
+        <p>Efficiency also means not crawling the same thing twice. Two layers of deduplication: <strong>URL-level</strong> — check the Metadata DB before enqueueing and skip URLs already seen; and <strong>content-level</strong> — different URLs can serve identical bytes (<code>example.com</code> vs <code>www.example.com</code>, mirrors, syndicated pages), so hash the fetched content and check membership before the expensive parse. Either index the hash column in the Metadata DB (simple, and modern indexes handle the scale fine) or keep a <a href="../patterns/distributed/coordination/bloom-filter.html">bloom filter</a> of seen hashes — a probabilistic set that says "definitely never seen" or "probably seen," trading a small false-positive rate (occasionally skipping a page you didn't actually crawl) for tiny memory. RedisBloom's <code>BF.ADD</code>/<code>BF.EXISTS</code> is the ready-made tool, though for this case the indexed column is arguably enough.</p>
+        <p>Finally, crawler traps — self-linking loops and link farms — can hold a fetcher on one site forever. Cap the crawl <em>depth</em> (link hops from a seed, not URL path segments) by carrying a <code>depth</code> field per URL and abandoning a branch once it passes a threshold (~15–20). Beyond the core, a few natural extensions: a <code>HEAD</code> request to read <code>Content-Length</code> and skip oversized files before downloading them; a headless browser (Puppeteer) for JavaScript-rendered pages; and, if the one-time crawl becomes a recurring one, a URL Scheduler that decides what to re-crawl from last-crawl-time and popularity instead of parsers writing links straight to the frontier.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Pipelined stages isolate the fragile fetch — a crash retries one URL, not the whole unit of work, and each stage scales independently.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Politeness and rate limits are enforced centrally, so the crawl fans across millions of domains without getting any single site to block it.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A managed queue supplies backoff (visibility timeout) and a failure cap (dead-letter queue) almost for free, and URL + content dedup keeps the 5-day budget realistic.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The throughput plan rests on assumption-laden estimates (30% utilisation, 2&nbsp;MB/page); the real numbers need load testing.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Content-hash dedup and bloom filters risk false positives — a page never actually crawled can be silently skipped.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Blunt heuristics leak: treating <code>robots.txt</code> as a one-time download leaves rules stale, and offline-after-5-retries plus a fixed max depth can drop legitimately reachable pages.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — lays out the high-level data flow (seed → frontier → fetch → extract → store → enqueue links) and a simple working crawl, can explain what a queue does, and covers the basics of politeness and <code>robots.txt</code>; not expected to go deep on queue technology or rate limiting.</li>
+          <li><strong>Senior</strong> — drives the fault-tolerance framing, splits the monolith into pipelined stages unprompted, goes deep on politeness (robots.txt, per-domain rate limiting, and the check-then-act race with its lock), and shows the crawl fits the five-day window with real throughput math.</li>
+          <li><strong>Staff+</strong> — reaches for concrete technology from experience (SQS visibility timeout and DLQ, <code>Redis SET NX</code>, RedisBloom), anticipates bottlenecks like DNS resolution and crawler traps and pre-empts them (DNS caching, multi-provider round-robin, max depth), and treats dedup, monitoring, and a continual re-crawl scheduler as operational realities.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pipe-filter"><a href="../patterns/architecture/pipe-filter.html">Pipe-and-Filter</a><span class="rel-note">splits the fragile single-process crawler into independently retryable fetch and parse stages</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="claim-check"><a href="../patterns/messaging/claim-check.html">Claim Check</a><span class="rel-note">the queue message carries only the Metadata DB row id while the multi-megabyte HTML sits in blob storage</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="competing-consumers"><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a><span class="rel-note">pools of interchangeable fetchers and parser workers pull from shared queues, adding machines to add throughput</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="retry-backoff"><a href="../patterns/distributed/resilience/retry-backoff.html">Retry with Backoff</a><span class="rel-note">failed fetches back off via the SQS visibility timeout extended by ApproximateReceiveCount</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="dead-letter-channel"><a href="../patterns/messaging/dead-letter-channel.html">Dead Letter Channel</a><span class="rel-note">a redrive policy moves a URL to a DLQ after maxReceiveCount receives, marking the site offline</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="rate-limiter"><a href="../patterns/distributed/resilience/rate-limiter.html">Rate Limiter</a><span class="rel-note">a central Redis sliding window caps requests to ~1/sec/domain across all fetchers</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="distributed-lock"><a href="../patterns/distributed/coordination/distributed-lock.html">Distributed Lock</a><span class="rel-note">Redis SET NX with a crawl-delay TTL gives one fetcher an atomic per-domain claim, closing the stale-timestamp race</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="bloom-filter"><a href="../patterns/distributed/coordination/bloom-filter.html">Bloom Filter</a><span class="rel-note">content hashes of crawled pages are checked in a probabilistic set to skip re-parsing duplicates cheaply</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-storage"><a href="../patterns/distributed/routing/object-storage.html">Object Storage</a><span class="rel-note">raw HTML and extracted text live in S3 for durability and low cost at hundreds of terabytes</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

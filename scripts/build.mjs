@@ -78,7 +78,7 @@ for (const [kind, top] of Object.entries(KIND_DIR)) {
 
 /* ---------------- nodes ---------------- */
 const nodes = {};
-const KIND_SEQ = ["pattern", "hazard", "theme", "principle"];
+const KIND_SEQ = ["pattern", "hazard", "theme", "principle", "design"];
 raw.sort((a, b) =>
   KIND_SEQ.indexOf(a.kind) - KIND_SEQ.indexOf(b.kind) ||
   Number(a.doc.getAttribute("data-kb-order")) - Number(b.doc.getAttribute("data-kb-order")),
@@ -91,6 +91,7 @@ for (const { kind, dir, root, doc, id } of raw) {
   if (!name) fail(`${id}: no .doc-title`);
   const docClass =
     kind === "hazard" ? "hazard" : kind === "theme" ? "theme" : kind === "principle" ? "principle"
+    : kind === "design" ? "design"
     : ELEVATION_BANDS.has(band) ? "" : "lens";
   const group = doc.getAttribute("data-kb-group");
   // The filesystem is part of the data model: a page's location must agree with the

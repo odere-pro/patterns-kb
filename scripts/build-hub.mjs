@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { BANDS, THEME_ORDER, ML_CASE_STUDIES, HAZARD_ORDER, PRINCIPLE_ORDER, esc } from "./lib/model.mjs";
+import { BANDS, THEME_ORDER, ML_CASE_STUDIES, DESIGN_ORDER, HAZARD_ORDER, PRINCIPLE_ORDER, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "site", "index.html");
@@ -90,6 +90,24 @@ function principleCard(id) {
 }
 const PRINCIPLES = PRINCIPLE_ORDER.filter((id) => N[id]);
 
+/* ---- design case studies ---- */
+/* Reuses the theme-card styling. Filtered to pages that exist so the hub still builds
+ * while the section is populated one page at a time; the section and its jumpnav link are
+ * omitted entirely until the first design lands. */
+const DESIGNS = DESIGN_ORDER.filter((id) => N[id]);
+const designCasesSection = DESIGNS.length ? `
+    <section class="themes design-cases" aria-labelledby="design-cases-h">
+      <div class="themes-head">
+        <h2 id="design-cases-h">System Design — Case Studies</h2>
+        <p>Worked end-to-end designs: each takes one classic problem from requirements to a diagram of the built system, argues the hard trade-offs, and links every pattern it puts to work. The low-level-design katas sit alongside the distributed ones.</p>
+      </div>
+      <div class="theme-grid">
+${DESIGNS.map(themeCard).join("\n")}
+      </div>
+    </section>
+` : "";
+const designJump = DESIGNS.length ? `\n      <a href="#design-cases-h">Case Studies</a>` : "";
+
 /* ---- hazards ---- */
 function hazardChip(id) {
   const h = N[id];
@@ -131,7 +149,7 @@ const html = `<!doctype html>
       <a href="#band-arch-h">III · Architecture</a>
       <a href="#band-dist-h">IV · Network</a>
       <a href="#themes-h">Themes</a>
-      <a href="#ml-cases-h">ML Case Studies</a>
+      <a href="#ml-cases-h">ML Case Studies</a>${designJump}
       <a href="#lens-ml-h">Machine Learning</a>
       <a href="#principles-h">Principles</a>
       <a href="#lens-msg-h">Messaging</a>
@@ -170,7 +188,7 @@ ${THEME_ORDER.map(themeCard).join("\n")}
 ${ML_CASE_STUDIES.map(themeCard).join("\n")}
       </div>
     </section>
-
+${designCasesSection}
     <section class="themes principles" aria-labelledby="principles-h">
       <div class="themes-head">
         <h2 id="principles-h">Principles — how to write it well</h2>

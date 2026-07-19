@@ -55,7 +55,7 @@ Each folder under `site/` has its own CLAUDE.md with local rules.
 ## Invariants `make check` enforces
 
 - Relations are **bidirectional** — every relationship is declared on both pages it joins.
-- The relation vocabulary (13 verbs) and the **tag vocabulary (60 tags)** are **closed**.
+- The relation vocabulary (15 verbs) and the **tag vocabulary** are **closed**.
   Adding a tag means adding it to `TAGS` in `scripts/lib/model.mjs` first, and only if it
   will honestly apply to 3+ pages.
 - A page's **path must match** its `data-kb-band` / `data-kb-group`.
@@ -66,6 +66,7 @@ Each folder under `site/` has its own CLAUDE.md with local rules.
 ```
 site/patterns/<band>/[<group>/]<id>.html   the source of truth
 site/hazards/<id>.html · site/themes/<id>.html · site/principles/<id>.html
+site/designs/<id>.html                     worked case studies (system-design & LLD katas)
 site/assets/graph.json · catalog.json      DERIVED
 site/index.html · vocab.html · map/graph.html   DERIVED
 scripts/kb.mjs        the reader/writer — your interface to all of it

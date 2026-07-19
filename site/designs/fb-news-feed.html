@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Facebook News Feed · Patterns</title>
+  <meta name="description" content="Design a social news feed at two-billion-user scale — the fan-out problem, solved by mixing write-time precomputation with read-time assembly.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#fb-news-feed",
+  "identifier": "fb-news-feed",
+  "name": "Facebook News Feed",
+  "description": "Assemble each user's reverse-chronological feed at two-billion-user scale by mixing fan-out-on-write with fan-out-on-read",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/messaging/fan-out.html#fan-out",
+      "name": "Fan-Out",
+      "kb:note": "precomputes each follower's feed at post time, the core write-time strategy the design turns on"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "the PrecomputedFeed table is a maintained, reverse-chronological view of each user's feed keyed by userId"
+    },
+    {
+      "@id": "../patterns/messaging/message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:note": "post creation enqueues {postId, creatorId} so fan-out happens off the critical path and the write returns in milliseconds"
+    },
+    {
+      "@id": "../patterns/messaging/competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:note": "a fleet of fan-out workers drains the queue in parallel, each writing a post into its followers' feeds"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "at-least-once delivery plus the idempotent PUT /follow mean redelivered fan-out writes must be safe no-ops"
+    },
+    {
+      "@id": "../patterns/caching/cache-aside.html#cache-aside",
+      "name": "Cache-Aside",
+      "kb:note": "a long-TTL Redis post cache keyed by postID fronts the store and is invalidated only on the rare edit"
+    },
+    {
+      "@id": "../patterns/distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "the Post and Feed services hold no per-request state, so they scale horizontally behind the gateway"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/replication.html#replication",
+      "name": "Replication",
+      "kb:note": "the post cache is replicated rather than sharded so any instance serves any postID, spreading a viral post's reads"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="fb-news-feed" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Assemble each user's reverse-chronological feed at two-billion-user scale by mixing fan-out-on-write with fan-out-on-read" data-kb-order="8" data-kb-aliases='["news feed","social feed","timeline"]' data-kb-tags='["system-design","scalability","read-optimization","asynchrony","caching"]' data-kb-solves='["my feed takes seconds to load because I recompute it from scratch on every request","assembling one feed means querying the hundreds of people someone follows and merge-sorting all their posts","when a user with millions of followers posts, I would have to write to millions of feeds at once","a single viral post gets hammered so hard that one database shard falls over while the rest sit idle","one account with a huge following brings my whole write path to its knees every time it posts"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Facebook News Feed</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Facebook News Feed</h1>
+      <p class="doc-essence">A social news feed shows a user the recent posts of everyone they follow, newest first, with infinite scroll. At two billion users the whole design turns on one word — <em>fan-out</em>: do you assemble each feed when a post is written, when it is read, or in a blend of the two?</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="fb-news-feed">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A news feed pulls the recent posts from a user's social graph into one reverse-chronological stream. The mechanics look trivial — get the people you follow, get their posts, sort by time — until the numbers arrive. One reader may follow thousands of accounts; one author may be followed by tens of millions. Either extreme turns a single request into an avalanche of downstream work, and that avalanche, called <em>fan-out</em>, is the only interesting problem on the page. To keep the graph simple we model relationships as uni-directional <strong>follows</strong> rather than mutual friendships, which changes nothing about the fan-out. This is a canonical read-heavy system, and it draws on the whole playbook of the <a href="../themes/scaling-reads.html">Scaling Reads</a> theme.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Create a post.</li>
+            <li>Follow another user — a uni-directional link (unfollow is out of scope).</li>
+            <li>View a feed of posts from followed users, newest first.</li>
+            <li>Page through that feed indefinitely (infinite scroll).</li>
+          </ol>
+          <p class="prose">Out of scope: likes, comments, and private or restricted-visibility posts. Users are assumed already authenticated, with a <code>userId</code> available in the session or JWT.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Availability over consistency</strong> — a stale feed is harmless; a feed that fails to load is not. The classic CAP lean.</li>
+            <li><strong>Bounded staleness</strong> — a new post may take up to ~1&nbsp;minute to surface in a follower's feed.</li>
+            <li><strong>Latency</strong> — both post creation and feed reads target under 500&nbsp;ms.</li>
+            <li><strong>Scale</strong> — 2B users, with no cap on follows per user or followers per account.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Reads dominate.</strong> With a large fraction of 2B users opening the feed several times a day, the read path faces on the order of hundreds of thousands of feed assemblies per second at peak. The saving grace is that almost everyone reads only the first handful of items before losing interest — so caching the top of each feed pays off enormously.</p>
+        <p><strong>Writes amplify.</strong> A post is one write until you ask who must see it. An author with <em>F</em> followers turns a single post into <em>F</em> feed updates. For an ordinary account that is a few hundred; for a mega-account with 90M+ followers it is 90M writes for one post — the number that breaks the naive design and forces everything downstream.</p>
+        <p><strong>Storage is the easy part.</strong> Precompute each user's feed as a list of ~200 post IDs at ~10&nbsp;bytes each ≈ 2&nbsp;KB/user; across 2B users that is roughly <strong>4&nbsp;TB</strong> — trivial for a modern fleet. At a fraction of a cent per user per month against something like ~$100/year of ad revenue per active user, the storage spend is a rounding error next to the latency it buys.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three domain entities, plus one derived structure the deep dives build toward:</p>
+        <ul>
+          <li><strong>User</strong> — an account in the system.</li>
+          <li><strong>Follow</strong> — a uni-directional edge from <code>userFollowing</code> to <code>userFollowed</code>. Many-to-many, but a purpose-built graph database would be overkill; a plain key-value table with the right indexes answers every query we need.</li>
+          <li><strong>Post</strong> — authored by a user, with a <code>creatorId</code>, a <code>createdAt</code>, and an intentionally generic <code>content</code> body so rich formats can be added later.</li>
+          <li><strong>PrecomputedFeed — derived.</strong> A per-user list of ~200 post IDs in reverse-chronological order, keyed only by <code>userId</code>. It is not a source of truth but a materialization of the two entities above; it earns its own section below.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>One endpoint per requirement. The auth token rides in the header and is not spelled out here.</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — post, follow, read</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /posts
+{ "content": { } }
+&rarr; 200 { "postId": "..." }
+
+PUT /users/{userId}/follow
+&rarr; 200 OK          // PUT, so a double-click is idempotent; unfollow would be DELETE
+
+GET /feed?pageSize={n}&amp;cursor={oldestSeenTimestamp}
+&rarr; 200 { "items": [ Post ], "nextCursor": "..." }</code></pre>
+      </details>
+      <div class="prose">
+        <p>The follow verb is a <strong>PUT</strong> on purpose: following someone twice must be the same as following them once. Pagination uses a <strong>cursor</strong> rather than a page number — because the feed is strictly chronological, the timestamp of the oldest post you have already seen is all the state a page needs, and each request returns the next <em>n</em> posts older than it.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Writes and reads have opposite shapes, so they get separate services behind a shared gateway. A horizontally scaled, <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> <strong>Post Service</strong> persists posts to a key-value store partitioned for even load; a secondary index on <code>(creatorId, createdAt)</code> lets anyone's posts be read back in time order. Rather than assemble feeds at read time, post creation drops a small message onto a <a href="../patterns/messaging/message-queue.html">queue</a> and returns immediately; a fleet of fan-out workers does the heavy lifting asynchronously, writing each new post into its followers' precomputed feeds. The <strong>Feed Service</strong> then reads a user's precomputed feed and hydrates the post bodies through a cache — so a feed request rarely touches the primary store at all.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client / app"]
+    Gateway["API gateway / load balancer"]
+    PostSvc["Post Service (stateless)"]
+    PostDB[("Post store + creatorId/createdAt index")]
+    Queue[["Fan-out queue"]]
+    Workers["Fan-out workers"]
+    FeedDB[("Precomputed feed store")]
+    FeedSvc["Feed Service"]
+    Cache[("Replicated post cache")]
+    Client --> Gateway
+    Gateway -->|"POST /posts"| PostSvc
+    Gateway -->|"GET /feed"| FeedSvc
+    PostSvc -->|"write post"| PostDB
+    PostSvc -->|"enqueue postId + creatorId"| Queue
+    Queue --> Workers
+    Workers -->|"prepend to each follower's feed"| FeedDB
+    FeedSvc -->|"read post IDs"| FeedDB
+    FeedSvc -->|"hydrate bodies + pull live celebrity posts"| Cache
+    Cache -->|"miss"| PostDB
+        </pre>
+        <figcaption>The write path returns as soon as the post is queued; workers fan it out off the critical path, and the read path is served almost entirely from precomputed feeds and the cache.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · A user who follows thousands of accounts</h3>
+        <p>Assembling a feed at read time <em>fans out on read</em>: one request explodes into a query per followed account, then a merge-sort of everything they posted. Tens to hundreds of downstream queries is tolerable; thousands is not, given a 500&nbsp;ms budget. Flip the work to write time instead. Maintain a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of each feed — the <strong>PrecomputedFeed</strong> table, keyed by <code>userId</code>, holding roughly the last 200 post IDs in reverse-chronological order. A read becomes a single point lookup plus a cache hydration, no matter how many accounts the user follows. Paging past the 200th post is deliberately unsupported and falls back to the slow naive query; real users almost never scroll that deep, the same bet a search engine makes by refusing to show you page 100 of results. The cost of this move is that all the work now lands on the write side — which is the next problem.</p>
+
+        <h3>2 · An author with millions of followers</h3>
+        <p>Precomputing feeds means a single post from a high-follower account must be written into millions of feed records, all inside the one-minute staleness window.</p>
+        <ul>
+          <li><strong>Bad — blast synchronously.</strong> Have the Post Service push all the fan-out writes itself at creation time. It collapses on connection limits and the latency budget, and load lands wildly unevenly — one host drowning in millions of writes while the rest idle — which is exactly what you cannot scale.</li>
+          <li><strong>Good — async workers.</strong> Enqueue <code>{ postId, creatorId }</code> and let a fleet of <a href="../patterns/messaging/competing-consumers.html">competing consumers</a> drain the <a href="../patterns/messaging/message-queue.html">queue</a>, each looking up the author's followers and prepending the post to their feeds. The queue smooths the burst so post creation never blocks. At-least-once delivery means a message can be redelivered, so the prepend must be <a href="../patterns/messaging/idempotency.html">idempotent</a> — applying the same post to a feed twice has to be a no-op. Worker load still varies enormously between a small account and a giant one, so very large fan-outs may be split into smaller tasks.</li>
+          <li><strong>Great — hybrid feeds.</strong> Stop precomputing for the extreme accounts. Flag specific follow edges as "not precomputed" (a Justin-Bieber-scale account with 90M+ followers), and the workers simply skip them. At read time the Feed Service merges the precomputed feed with the recent posts of those few celebrity accounts, fetched live. In other words, choose <a href="../patterns/messaging/fan-out.html">fan-out</a>-on-write for the many ordinary authors and fan-out-on-read for the handful of giants — the precomputation threshold is a tunable knob. The price is more work at read time and a more complex Feed Service.</li>
+        </ul>
+
+        <h3>3 · Uneven reads on the post store</h3>
+        <p>Whichever way feeds are built, the Feed Service eventually reads post bodies from the key-value store, and those reads are lopsided: most posts are read hard for a day or two then never again, while a viral post draws a spike of traffic in its first hours. A key-value store sustains throughput only when load is spread evenly across the keyspace; one post ID at 500&nbsp;req/s against its neighbours at 0 is a textbook <a href="../hazards/hot-key.html">hot key</a> that pins a single physical shard.</p>
+        <ul>
+          <li><strong>Good — a post cache.</strong> Put a <a href="../patterns/caching/cache-aside.html">cache-aside</a> layer (Redis, keyed by post ID) in front of the store, with a long TTL because posts are rarely edited, and invalidate an entry only on the occasional edit. It absorbs most reads — but the hot key just moves to whichever cache shard owns the viral post, which is as hard to scale as the store shard was.</li>
+          <li><strong>Great — replicate, don't shard, the cache.</strong> Keep the same long-TTL scheme but <a href="../patterns/distributed/coordination/replication.html">replicate</a> the cache so every instance can serve any post ID, with a load balancer spreading requests across all of them. A viral post's traffic now splits across all <em>N</em> replicas with zero coordination between them — <em>N×</em> the headroom for a hot key. The trade is a colder start (a newly viral post can miss on up to <em>N</em> instances, costing <em>N</em> store reads instead of 1) and fewer distinct posts cached overall; both are dwarfed by the millions of origin reads avoided.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Feed reads collapse to a single lookup plus cache hydration, holding under 500&nbsp;ms no matter how many accounts a user follows.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">The queue absorbs write bursts, so a post is created in milliseconds while fan-out happens off the critical path.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Hybrid fan-out means a celebrity post costs one write, not ninety million, and a replicated cache spreads viral reads without coordination.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Eventual consistency — a new post can take up to a minute to appear in a follower's feed.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Precomputed feeds are millions of derived copies that must be kept updated, paying real storage and write amplification for the read speed.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The read path is no longer simple: it merges precomputed feeds with live celebrity posts, and deep pagination past ~200 posts drops back to the slow naive query.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — clearly defined endpoints and data model, landing on a working high-level design that meets the functional requirements. May reach fan-out-on-write as the fix for expensive reads, but is not expected to work through every scaling edge case; mostly breadth, some depth.</li>
+          <li><strong>Senior</strong> — moves briskly through the high-level design to spend real time on two or more deep dives. Surfaces the fan-out and hot-key bottlenecks without being prompted, argues the write-time versus read-time trade-off, and justifies each choice on scalability and latency.</li>
+          <li><strong>Staff+</strong> — covers essentially all the deep dives, including ones not enumerated here (thundering herds on a newly viral post, where feed ranking would slot in), volunteers the hybrid fan-out and replicated-cache mitigations up front, and talks concretely about tuning the precomputation threshold and cache replication factor.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="fan-out"><a href="../patterns/messaging/fan-out.html">Fan-Out</a><span class="rel-note">precomputes each follower's feed at post time, the core write-time strategy the design turns on</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">the PrecomputedFeed table is a maintained, reverse-chronological view of each user's feed keyed by userId</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="message-queue"><a href="../patterns/messaging/message-queue.html">Message Queue</a><span class="rel-note">post creation enqueues {postId, creatorId} so fan-out happens off the critical path and the write returns in milliseconds</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="competing-consumers"><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a><span class="rel-note">a fleet of fan-out workers drains the queue in parallel, each writing a post into its followers' feeds</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">at-least-once delivery plus the idempotent PUT /follow mean redelivered fan-out writes must be safe no-ops</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cache-aside"><a href="../patterns/caching/cache-aside.html">Cache-Aside</a><span class="rel-note">a long-TTL Redis post cache keyed by postID fronts the store and is invalidated only on the rare edit</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">the Post and Feed services hold no per-request state, so they scale horizontally behind the gateway</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="replication"><a href="../patterns/distributed/coordination/replication.html">Replication</a><span class="rel-note">the post cache is replicated rather than sharded so any instance serves any postID, spreading a viral post's reads</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

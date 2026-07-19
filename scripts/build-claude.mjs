@@ -92,6 +92,27 @@ Read with \`node ../../scripts/kb.mjs get <id>\`. See the root CLAUDE.md for the
 `;
 }
 
+function forDesigns(list) {
+  return `# site/designs
+
+**Case studies** — ${list.length} worked designs (the \`design\` kind). Each breaks one real
+system down the way a strong interview answer would, and \`demonstrates\` the patterns it uses.
+
+Pages here: ${list.map((n) => n.id).sort().join(", ")}
+
+Blocks, in order: ${BLOCKS.design.map((b) => `\`${b}\``).join(" → ")}.
+Optional: \`estimation\`, \`interface\`, \`levels\` — a low-level-design kata may skip the first two.
+
+The \`architecture\` block carries the primary mermaid diagram (a \`flowchart\` for a distributed
+design, a \`classDiagram\` for a low-level one). A design links to the patterns it uses through the
+typed \`relationships\` block — \`node ../../scripts/kb.mjs link <id> demonstrates <pattern>\` writes
+both sides, giving each pattern a "Demonstrated by" backlink. Tag distributed katas
+\`system-design\` and OOP katas \`low-level-design\`; designs carry \`data-kb-solves\` like a pattern.
+
+Read with \`node ../../scripts/kb.mjs get <id>\`. See the root CLAUDE.md for the contract.
+`;
+}
+
 function forPrinciples(list) {
   return `# site/principles
 
@@ -119,6 +140,7 @@ for (const [dir, list] of Object.entries(byDir)) {
     dir === "hazards" ? forHazards(list)
     : dir === "themes" ? forThemes(list)
     : dir === "principles" ? forPrinciples(list)
+    : dir === "designs" ? forDesigns(list)
     : forPatternFolder(dir, list);
   const file = join(SITE, dir, "CLAUDE.md");
   const cur = existsSync(file) ? readFileSync(file, "utf8") : "";

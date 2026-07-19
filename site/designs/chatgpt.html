@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChatGPT · Patterns</title>
+  <meta name="description" content="Design a conversational LLM product — stream tokens to the browser in under 500 ms while scheduling a scarce pool of GPUs fairly across 200M users.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#chatgpt",
+  "identifier": "chatgpt",
+  "name": "ChatGPT",
+  "description": "Stream an LLM's answer token-by-token to 200M users while fairly scheduling a scarce pool of GPUs",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "a request queue sits between bursty prompts (~20k/s) and fixed-rate GPU workers, absorbing spikes as bounded wait instead of dropped requests"
+    },
+    {
+      "@id": "../patterns/messaging/competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:note": "a pool of GPU workers pulls generation jobs off one shared queue whenever a worker has free capacity"
+    },
+    {
+      "@id": "../patterns/concurrency/backpressure.html#backpressure",
+      "name": "Backpressure",
+      "kb:note": "the generation queue is bounded with an admission policy that sheds or defers once too deep, which also bounds an admitted request's wait time"
+    },
+    {
+      "@id": "../patterns/concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:note": "continuous batching advances dozens of sequences per GPU forward pass, the single biggest lever on utilization of memory-bandwidth-bound hardware"
+    },
+    {
+      "@id": "../patterns/messaging/pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "workers publish token deltas on a per-runId channel that whichever instance holds the client's SSE connection subscribes to and relays"
+    },
+    {
+      "@id": "../patterns/messaging/correlation-identifier.html#correlation-identifier",
+      "name": "Correlation Identifier",
+      "kb:note": "a runId minted at generation start lets a worker and the connection-holding instance rendezvous without direct knowledge, and lets a reconnecting client resume the right stream"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/rate-limiter.html#rate-limiter",
+      "name": "Rate Limiter",
+      "kb:note": "cost-aware per-user token budgets that refill over time, plus tier-weighted queueing, meter actual GPU scarcity instead of raw request counts"
+    },
+    {
+      "@id": "../patterns/distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "the Chat Service holds no per-request state, so any instance can serve, relay, or resume a stream and the tier redeploys and scales freely"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="chatgpt" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Stream an LLM's answer token-by-token to 200M users while fairly scheduling a scarce pool of GPUs" data-kb-order="24" data-kb-aliases='["LLM serving","conversational AI"]' data-kb-tags='["system-design","latency","throughput","backpressure","resource-management"]' data-kb-solves='["my users stare at a blank screen for thirty seconds while the backend computes the whole answer before sending anything","a burst of requests slams my expensive workers all at once and latency spirals instead of degrading gracefully","one heavy user drains my scarce pool of accelerators and everyone else&#39;s requests starve","replaying the entire conversation into the model on every turn keeps getting slower and more expensive","a routine deploy kills thousands of in-flight streaming responses mid-sentence"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">ChatGPT</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">ChatGPT</h1>
+      <p class="doc-essence">A conversational AI serves an LLM's answer to a user's prompt, streaming it token by token and saving each chat so it can be resumed later. The model itself is a black box; the engineering is in the serving layer — pushing tokens out fast, scheduling a scarce pool of GPUs, and keeping cost bounded as conversations grow.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="chatgpt">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A user types a natural-language prompt, and an answer streams back a few words at a time; conversations persist so an old chat can be reopened and continued. The large language model is treated as something we <em>call</em>, not something we train or run internally — prompt in, completion out. That framing pushes every hard question into the serving system: how to get the first word onto the screen fast, how to hand a thirty-second generation to a pool of extraordinarily expensive accelerators without wasting them, and how to stop the cost of a long conversation from climbing on every turn. Scope is deliberately narrow: text in, text out, no image or audio, no editing or branching of past messages. The two properties that decide the whole design are that <strong>GPUs are the scarce, costly resource</strong> and that <strong>latency to the first token</strong> matters more than total completion time — a blank screen after hitting enter feels broken.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Send a prompt in a chat and receive an AI-generated response.</li>
+            <li>View past chats and resume a conversation, with the prior turns carried into the new prompt as context.</li>
+          </ol>
+          <p class="prose">Out of scope: editing or branching existing messages; image, audio and video I/O; sharing and collaboration; custom GPTs, tool calling and web browsing; full-text search across history.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Time-to-first-token</strong> — under ~500&nbsp;ms, then smooth continuous streaming; the full answer may take up to ~30&nbsp;s.</li>
+            <li><strong>Availability over consistency</strong> — ~99.9%+, favouring a degraded or errored experience over blocking on perfectly synchronised chat state.</li>
+            <li><strong>Scale under GPU-constrained capacity</strong> — 200M daily actives, ~20k prompts/sec at peak, ~120k concurrent in-flight streams, with fair allocation across a tiered (free vs paid) user base.</li>
+            <li><strong>Durability scope</strong> — only the final assistant message is persisted, not every streamed token.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Concurrency.</strong> ~20k prompts/sec at peak, each generation running up to ~30&nbsp;s, lands the system at roughly <strong>120k concurrent in-flight streams</strong>. That concurrency number — not the request rate — is what the streaming and scheduling design has to hold up.</p>
+        <p><strong>GPUs.</strong> A frontier model's weights don't fit on one GPU, so they're split across a whole box of them; holding 120k streams live means standing up thousands of such boxes — <strong>tens of thousands of GPUs</strong> for a single model. As an order-of-magnitude anchor, OpenAI's reported inference compute ran around <strong>$1.8B in 2024</strong>. The exact figure isn't the point; the scale is what justifies every ounce of engineering spent squeezing utilization out of the fleet.</p>
+        <p><strong>Context cost.</strong> A 50-turn chat at ~500 tokens/turn ships roughly <strong>25k input tokens</strong> on the next prompt if you replay everything. Since input tokens are billed per call, the naïve "resend the whole history" approach makes each turn slower and more expensive than the last, and eventually blows past the model's context window entirely.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Four entities, the last of which only earns its place once streaming needs a handle:</p>
+        <ul>
+          <li><strong>User</strong> — an account carrying a <code>tier</code> (free vs paid), which later drives fairness and scheduling.</li>
+          <li><strong>Chat</strong> — one conversation thread belonging to a user; an ordered sequence of messages with a title and timestamps.</li>
+          <li><strong>Message</strong> — a single turn (user prompt or assistant response): <code>chatId</code>, <code>role</code>, <code>content</code>, and a token count.</li>
+          <li><strong>Generation</strong> — one inference attempt for a message: a <code>runId</code>, <code>chatId</code>, <code>messageId</code>, a <code>status</code> lifecycle (<code>queued → streaming → done / cancelled / failed</code>), the model that served it, and input/output token counts used for billing and quotas.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Plain REST for the CRUD surface; the one streamed endpoint is delivered over Server-Sent Events and hands back a <code>runId</code> so an in-flight response can be tracked, reconnected to, or cancelled:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — chats, streamed messages, history, cancel</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /chats
+&rarr; 200 { "chatId": "..." }
+
+POST /chats/{chatId}/messages          # streamed via SSE
+{ "content": "..." }
+&rarr; 200 Message (token deltas over SSE; response carries a runId)
+
+GET /chats?cursor={c}&amp;limit={n}        # sidebar, cursor-paginated
+&rarr; 200 Chat[]
+GET /chats/{chatId}/messages?cursor={c}&amp;limit={n}
+&rarr; 200 Message[]
+
+POST /chats/{chatId}/runs/{runId}/cancel   # plain HTTP side-channel
+&rarr; 202 Accepted</code></pre>
+      </details>
+      <div class="prose">
+        <p>Two decisions carry weight here. First, <code>userId</code> never appears in a path or body — it comes from the session token, and chat ownership is checked server-side on every request; trusting a client-supplied <code>userId</code> is a classic forgeable-input red flag. Second, because SSE is a one-directional server→client channel, anything the client needs to send mid-stream — notably "stop generating" — travels over a <em>separate</em> plain HTTP request rather than back up the stream.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The naïve version is fully synchronous: the <strong>Chat Service</strong> writes the user's message to Postgres, calls the <strong>Inference Service</strong> and blocks until the full completion returns, then writes the assistant message back. That satisfies the two functional requirements and nothing else — the client hangs for up to thirty seconds, and a GPU worker is called directly with no admission control. Two moves fix it, and both live in the deep dives. Streaming replaces the blocking call: a per-<code>runId</code> Redis Stream carries token deltas out of the worker, and any <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> Chat Service instance relays them to the browser over SSE. A <a href="../patterns/messaging/message-queue.html">queue</a> replaces the direct call: the Chat Service enqueues a generation and returns immediately, and GPU workers pull work when they have room. The one deliberate split — cheap, stateless Chat Service versus GPU-bound, expensive Inference Service — lets each scale on its own axis.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    Client["Web client"]
+    GW["API Gateway"]
+    Chat["Chat Service (stateless)"]
+    DB[("Postgres — chats &amp; messages")]
+    Q["Generation queue"]
+    Worker["GPU inference workers"]
+    Stream[("Redis Stream — runId tokens")]
+
+    Client -->|"POST /messages"| GW
+    GW -->|"auth · rate limit"| Chat
+    Chat -->|"persist message"| DB
+    Chat -->|"enqueue prompt + runId"| Q
+    Q -->|"workers pull when free"| Worker
+    Worker -->|"XADD token deltas"| Stream
+    Chat -->|"XREAD by runId"| Stream
+    Chat -->|"SSE stream to browser"| Client
+        </pre>
+        <figcaption>The write path persists to Postgres; the generation path decouples through a queue and a per-<code>runId</code> Redis Stream, so any Chat Service instance can relay tokens over SSE.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Streaming tokens out fast, and keeping the stream unbroken</h3>
+        <p>This is really two problems. Getting the <em>first</em> token onto the screen is pure latency; keeping the flow smooth thereafter — no gaps, correct order — is a reliability problem across a tier of instances that come and go. On transport, polling a status endpoint is rejected outright: a 300&nbsp;ms poll adds dead time and, at 120k concurrent streams, generates hundreds of thousands of mostly-empty requests per second. WebSockets work but overpay — a full-duplex, stateful connection for traffic that only ever flows one way. <strong>Server-Sent Events</strong> win: the browser opens an <code>EventSource</code> over ordinary HTTP, renders on the very first event, and auto-reconnects on drop, with no protocol upgrade for proxies to mishandle. Internally, the worker streams tokens to the Chat Service over gRPC server-streaming so it never has to buffer the whole completion.</p>
+        <p>Smoothness is the harder half. Pinning one client to the instance that started its generation would tie a client to a single box for thirty seconds — a routine deploy then either severs thousands of streams mid-sentence or blocks until they drain. Decoupling through Redis <a href="../patterns/messaging/pubsub.html">pub/sub</a> keyed on the <code>runId</code> removes the pin: the worker publishes each token delta to the <code>runId</code> channel and whichever instance holds the client's SSE connection subscribes and forwards. Publishing <em>deltas</em>, not the growing full text, is essential — republishing the whole answer-so-far would be quadratic. But pub/sub is fire-and-forget: in the gap between an old instance dropping and a new one subscribing, tokens vanish, leaving a hole. The fix is a Redis <strong>Stream</strong> — an append-only log on the same <code>runId</code> key. Workers <code>XADD</code> each delta; an instance does a blocking <code>XREAD</code> from the client's last-seen entry id and, on reconnect to a different instance, replays exactly the missed entries before resuming live. The stream is bounded with <code>MAXLEN</code> and a short TTL, so it stays short-lived working state, never a second copy of history — the durable copy is the final assistant message written to Postgres.</p>
+        <h3>2 · Scheduling generation across the GPU fleet</h3>
+        <p>GPUs are the bottleneck, so how work reaches them decides both cost and tail latency. Direct synchronous dispatch — the naïve design — has no admission control and no view into which worker has room, so a spike slams already-saturated hardware and one long prompt can hog a worker while short ones wait behind it. The first improvement is a <a href="../patterns/distributed/resilience/load-leveling.html">queue between the Chat Service and a pool of pull-based workers</a>: the front end enqueues <code>(prompt, runId)</code> and returns fast, and workers pull when they have capacity. That buys room between a spiky producer (bursts to 20k prompts/sec) and a fixed-rate consumer (steady GPU throughput) — the queue turns a surge into extra wait rather than dropped requests, and the pull model is textbook <a href="../patterns/messaging/competing-consumers.html">competing consumers</a> across a worker pool.</p>
+        <p>Two things are still missing. The queue is unbounded, so sustained overload lets the line — and the wait — grow without limit; and treating each generation as one isolated job leaves the GPUs' best trick on the table. Both are addressed together. <a href="../patterns/concurrency/batching.html">Continuous batching</a> advances many sequences by one token per forward pass, adding and dropping sequences on the fly so a finished generation is instantly replaced by a queued one — the single biggest lever on utilization, because a forward pass must stream the entire weight set out of high-bandwidth memory regardless of how many sequences ride along, so token generation is memory-bandwidth bound and batching amortizes that haul. (vLLM and TGI are the production serving layers built around this.) And <a href="../patterns/concurrency/backpressure.html">backpressure</a> bounds the queue: past a depth threshold, admission control sheds or defers rather than letting latency climb, which also bounds wait time — an admitted request is only ever a bounded distance from the front, so a caller is either served within that bound or gets a fast "at capacity, try again" instead of an endless spinner.</p>
+        <h3>3 · Fairness across users and priority across tiers</h3>
+        <p>One scarce GPU pool is shared by everyone, and per-user cost is wildly uneven — a single 30k-token prompt burns more compute than a hundred one-liners. A flat, global <a href="../patterns/distributed/resilience/rate-limiter.html">rate limit</a> (a <a href="../patterns/distributed/resilience/token-bucket.html">token bucket</a> or fixed-window counter in Redis) fails on two counts: it measures requests, not tokens, so a giant prompt sails under a request cap while burning the most compute; and it's tier-blind, hitting paid and free users with the identical wall. Keying the limiter per <code>userId</code> stops one user draining the pool but still counts the wrong thing. The real answer meters actual scarcity: estimate a generation's cost from prompt length plus requested output, and check it against a per-user token budget that refills over time. Two distinct mechanisms serve two distinct goals — per-user cost budgets give <em>fairness across users</em>, while a tier-weighted queue gives <em>priority across tiers</em>, pulling paid requests ahead of free ones only when workers are contended. When even admission control isn't enough, a graceful-degradation policy leans on free traffic first: throttle, defer, or route it to a smaller, cheaper model before any paid user feels it — tempered by reserving a capacity floor for free traffic so strict priority can't starve it indefinitely.</p>
+        <h3>4 · Controlling context cost without a forgetful assistant</h3>
+        <p>The naïve "replay everything each turn" grows cost and latency turn over turn and eventually exceeds the context window. Truncation — keep the newest N turns, drop the rest — bounds the prompt with a simple <code>ORDER BY createdAt DESC LIMIT N</code>, but makes the assistant visibly forgetful, a bad look for a product whose appeal is that it remembers. The better pairing keeps memory without paying full price. <strong>Prefix caching</strong> exploits that most of the prompt (system prompt plus everything already said) is identical turn to turn: the inference server caches the model's intermediate state — the KV cache — for a stable prefix and only processes the new tail, cutting both cost and the time-to-first-token, and it pairs naturally with routing a conversation's turns back to a worker that already has its prefix warm. A <strong>rolling summary</strong> handles the hard context-window ceiling that caching can't: older history is compressed into a running summary while recent turns stay verbatim, so the prompt shape becomes system prompt → summary of old turns → last few turns → new message. The two complement each other, but the summary must update on a slower cadence, because rewriting it every turn would invalidate the prefix cache it depends on.</p>
+        <p><strong>Cancellation, and why a dropped tab isn't one.</strong> When a user hits stop, the client calls the plain-HTTP <code>cancel</code> side-channel; the Chat Service flips the Generation to <code>cancelled</code> and publishes a signal on a control channel keyed by <code>runId</code>, and the worker — checking between token batches — drops the sequence and reclaims the GPU immediately rather than burning compute on an abandoned answer. Crucially, closing the tab is <em>not</em> a cancel: the Redis-Stream-plus-reconnect design exists precisely so a dropped connection isn't read as termination. Generation continues in the background, and the user can reconnect or refetch the finished message from Postgres. Cancellation must be an explicit signal, never inferred from a network drop.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">First token under ~500&nbsp;ms and smooth streaming, because SSE pushes each delta the instant a worker emits it.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">GPUs stay near-saturated under bursty load — a queue plus continuous batching turn spikes into bounded waits rather than dropped requests.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Fair sharing under contention — cost-aware budgets stop one heavy user starving the pool, and tier-weighted queueing protects paid users.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">In-flight streams survive deploys and reconnects — a per-<code>runId</code> Redis Stream replays exactly the tokens an instance missed.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Availability is favoured over consistency, and per-token durability is given up outright — only the final assistant message is persisted.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Cost budgets run on estimates — true output length is unknown until generation ends, so a user can overshoot a soft limit and reconcile afterward.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Strict tier priority can starve free users through sustained peaks unless a capacity floor is deliberately reserved for them.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Summarising old turns is lossy and adds an extra model call — recent context is protected, old history is not.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working synchronous end-to-end flow (send a prompt, view past chats with context carried across turns), the recognition that a thirty-second blank screen won't fly and calls for push-based streaming like SSE, and at least the instinct to put a queue in front of the GPU workers.</li>
+          <li><strong>Senior</strong> — speeds through the high-level design to go deep on two-plus of streaming fanout, GPU scheduling, and fairness; argues SSE over WebSocket from the one-way nature of token flow; explains the queue-plus-continuous-batching trade-off for utilization; and proposes summarization or truncation for context cost.</li>
+          <li><strong>Staff+</strong> — drives three-plus deep dives with real depth, brings GPU economics in unprompted (120k concurrent streams imply tens of thousands of GPUs and a seven-figure daily bill, which is what justifies batching and backpressure), reaches prefix caching unaided, and cleanly separates fairness-across-users (per-user cost budgets) from priority-across-tiers (tier-weighted queueing).</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="load-leveling"><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">a request queue sits between bursty prompts (~20k/s) and fixed-rate GPU workers, absorbing spikes as bounded wait instead of dropped requests</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="competing-consumers"><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a><span class="rel-note">a pool of GPU workers pulls generation jobs off one shared queue whenever a worker has free capacity</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="backpressure"><a href="../patterns/concurrency/backpressure.html">Backpressure</a><span class="rel-note">the generation queue is bounded with an admission policy that sheds or defers once too deep, which also bounds an admitted request's wait time</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="batching"><a href="../patterns/concurrency/batching.html">Batching</a><span class="rel-note">continuous batching advances dozens of sequences per GPU forward pass, the single biggest lever on utilization of memory-bandwidth-bound hardware</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pubsub"><a href="../patterns/messaging/pubsub.html">Publish-Subscribe</a><span class="rel-note">workers publish token deltas on a per-runId channel that whichever instance holds the client's SSE connection subscribes to and relays</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="correlation-identifier"><a href="../patterns/messaging/correlation-identifier.html">Correlation Identifier</a><span class="rel-note">a runId minted at generation start lets a worker and the connection-holding instance rendezvous without direct knowledge, and lets a reconnecting client resume the right stream</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="rate-limiter"><a href="../patterns/distributed/resilience/rate-limiter.html">Rate Limiter</a><span class="rel-note">cost-aware per-user token budgets that refill over time, plus tier-weighted queueing, meter actual GPU scarcity instead of raw request counts</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">the Chat Service holds no per-request state, so any instance can serve, relay, or resume a stream and the tier redeploys and scales freely</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

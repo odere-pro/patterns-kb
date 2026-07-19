@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inventory Management · Patterns</title>
+  <meta name="description" content="Low-level design of a multi-warehouse inventory system — atomic transfers, per-warehouse locking, and low-stock alerts that fire once on the way down.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#inventory-management",
+  "identifier": "inventory-management",
+  "name": "Inventory Management",
+  "description": "Track product stock across fixed warehouses, move it between them atomically, and fire an alert when it runs low — an OOP design about where mutation and locking belong",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/concurrency/monitor-object.html#monitor-object",
+      "name": "Monitor Object",
+      "kb:note": "each Warehouse guards its quantity map and alert configs behind its own reentrant lock, admitting one thread at a time"
+    },
+    {
+      "@id": "../patterns/gof/behavioral/observer.html#observer",
+      "name": "Observer",
+      "kb:note": "a warehouse notifies registered listeners only when a count crosses down through a threshold, decoupling 'stock is low' from 'what to do about it'"
+    },
+    {
+      "@id": "../principles/dependency-inversion.html#dependency-inversion",
+      "name": "Dependency Inversion Principle",
+      "kb:note": "Warehouse depends on the AlertListener interface, never on a concrete email or webhook client, so delivery is swappable without touching stock code"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/pessimistic-locking.html#pessimistic-locking",
+      "name": "Pessimistic Locking",
+      "kb:note": "transfer acquires both warehouse locks up front, in sorted id order, and holds them across the move to guarantee atomicity"
+    },
+    {
+      "@id": "../patterns/gof/structural/facade.html#facade",
+      "name": "Facade",
+      "kb:note": "InventoryManager is the single public surface that routes and coordinates over the hidden warehouse map"
+    },
+    {
+      "@id": "../patterns/ddd/value-object.html#value-object",
+      "name": "Value Object",
+      "kb:note": "AlertConfig is an immutable pairing of threshold and listener, with duplicate-suppression handled by the crossing check rather than any state on the config"
+    },
+    {
+      "@id": "../principles/separation-of-concerns.html#separation-of-concerns",
+      "name": "Separation of Concerns",
+      "kb:note": "cross-warehouse orchestration lives in the manager while per-location counts, locking, and alerts stay inside each warehouse"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="inventory-management" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Track product stock across fixed warehouses, move it between them atomically, and fire an alert when it runs low — an OOP design about where mutation and locking belong" data-kb-order="37" data-kb-aliases='["stock management","warehouse inventory"]' data-kb-tags='["low-level-design","concurrency","transactions","domain-modeling","decoupling"]' data-kb-solves='["two threads bump the same counter and one update silently overwrites the other","moving items between two locations sometimes shows them missing from both or counted twice","my low-stock notification fires over and over once the count sits below the limit","I want to change how alerts are delivered — email, webhook, a log line — without touching the code that tracks quantities","I hold a lock while a callback makes a network call and every other operation stalls behind it"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Inventory Management</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Inventory Management</h1>
+      <p class="doc-essence">A fixed set of warehouses each hold a per-product count. The system receives shipments, deducts on fulfilment, moves stock between locations, answers "who can ship this?", and alerts a manager when a product runs low. There is no distributed scale to reason about — it is one process — so the whole exercise is concurrency and placement: which object mutates state, where the lock sits, and how a slow notification stays off the critical path.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="inventory-management">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>The warehouses are configured once at startup — no lifecycle to manage, no add-or-remove-a-warehouse. Products live in an external catalogue, so a "product" is just a string key naming what is being counted, never a class with behaviour. What the system owns is the numbers: add stock when a shipment lands, remove it when an order is fulfilled, transfer it between two locations, and never let any of that push a count below zero. The two hard requirements hide in plain sight — every operation must be <strong>thread-safe</strong> (one warehouse can be receiving while another fulfils the same product), and a transfer must be <strong>atomic</strong> (stock is never observably absent from both ends). Orders, payments, and persistence are out of scope; the design is pure object modelling around those two constraints.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Track a per-product quantity across a fixed set of named warehouses set at initialization.</li>
+            <li>Add stock to a warehouse (receiving) and remove stock from one (fulfilling), rejecting any removal that would go negative.</li>
+            <li>Transfer stock between two warehouses as one atomic move.</li>
+            <li>Given a product and a quantity, return the warehouses that can currently fulfil it.</li>
+            <li>Register low-stock thresholds per product per warehouse that fire a pluggable callback when the count crosses down through the threshold.</li>
+          </ol>
+          <p class="prose">Out of scope: product-catalogue management, order/payment/serviceability, and persistence. Products exist externally; the system only counts them.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional (constraints)</h3>
+          <ul>
+            <li><strong>Thread safety</strong> — concurrent adds, removes, and transfers stay correct with no lost updates.</li>
+            <li><strong>No negative inventory</strong> — validate before mutating; an operation that can't succeed changes nothing.</li>
+            <li><strong>Atomic transfer</strong> — stock leaves the source and arrives at the destination as one indivisible step, with no phantom or double-counted state.</li>
+            <li><strong>Alert discipline</strong> — a threshold fires once on the way down, not on every operation while the count sits low.</li>
+            <li><strong>Pluggable delivery</strong> — email, webhook, or log is chosen by the caller and swapped without touching stock-tracking code.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Four types survive the "does it hold changing state or enforce a rule?" test — and one obvious noun does not:</p>
+        <ul>
+          <li><strong>InventoryManager</strong> — the orchestrator and the only public surface. Owns a <code>Map&lt;warehouseId, Warehouse&gt;</code>, routes single-warehouse calls straight through by id, and owns the genuinely cross-warehouse logic: the atomic transfer and the availability scan.</li>
+          <li><strong>Warehouse</strong> — one storage location. Holds a <code>Map&lt;productId, int&gt;</code> of quantities and, per product, a list of alert configs. It enforces "no negative stock," owns its own lock, and decides which alerts a change has tripped — but knows nothing about any other warehouse.</li>
+          <li><strong>AlertConfig</strong> — an immutable value object pairing a <code>threshold</code> with an <code>AlertListener</code>. Keeping the two together reads better than parallel maps and leaves no room for them to drift apart.</li>
+          <li><strong>AlertListener</strong> — the interface a notification implements: a single <code>onLowStock(warehouseId, productId, currentQuantity)</code>. It is what makes delivery pluggable; the warehouse never learns whether an email or a webhook is on the other side.</li>
+          <li><strong>Product — not a class.</strong> The catalogue is external, so a product collapses to a string key. Modelling it here would be state with no owner and no behaviour.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Everything external goes through <code>InventoryManager</code>. The return types encode a deliberate asymmetry: you can always receive more stock, so <code>addStock</code> returns nothing; removing and transferring can fail on insufficient stock, so they return a boolean rather than throw for an ordinary shortfall.</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — the public API</summary>
+<pre><code class="language-python" data-kb-lang="python">class InventoryManager:                                  # the only public surface
+    addStock(warehouseId, productId, qty)          -&gt; void      # receiving; always succeeds
+    removeStock(warehouseId, productId, qty)       -&gt; boolean   # fulfilling; false if short
+    transfer(productId, fromId, toId, qty)         -&gt; boolean   # atomic move; false if short/invalid
+    getWarehousesWithAvailability(productId, qty)  -&gt; List      # warehouse ids that can fulfil qty
+    setLowStockAlert(warehouseId, productId, threshold, listener) -&gt; void</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The manager is a thin router over the warehouse map. <code>addStock</code>, <code>removeStock</code>, and <code>setLowStockAlert</code> look up one warehouse by id and delegate; a missing id throws for the write path and fails cheaply for the query path. Only two operations are genuinely the manager's own work: <code>getWarehousesWithAvailability</code> iterates every warehouse and collects the ids that can fulfil the quantity, and <code>transfer</code> coordinates two warehouses at once. All the real state — the quantity map, the alert configs, and a reentrant lock — lives inside each <code>Warehouse</code>, which serialises its own mutations and, crucially, decides <em>which</em> alerts to fire while holding the lock but leaves the actual firing to its caller after the lock is released.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+classDiagram
+    class InventoryManager {
+        -Map~String,Warehouse~ warehouses
+        +addStock(warehouseId, productId, qty) void
+        +removeStock(warehouseId, productId, qty) boolean
+        +transfer(productId, fromId, toId, qty) boolean
+        +getWarehousesWithAvailability(productId, qty) List
+        +setLowStockAlert(warehouseId, productId, threshold, listener) void
+    }
+    class Warehouse {
+        -String id
+        -Map~String,int~ inventory
+        -Map~String,List~ alertConfigs
+        -ReentrantLock lock
+        +addStock(productId, qty) void
+        +removeStock(productId, qty) boolean
+        +checkAvailability(productId, qty) boolean
+        -getAlertsToFire(productId, prevQty, newQty) List
+    }
+    class AlertConfig {
+        -int threshold
+        -AlertListener listener
+    }
+    class AlertListener {
+        +onLowStock(warehouseId, productId, currentQty) void
+    }
+    class EmailAlertListener {
+        +onLowStock(warehouseId, productId, currentQty) void
+    }
+    InventoryManager "1" o-- "*" Warehouse : owns
+    Warehouse "1" o-- "*" AlertConfig : holds
+    AlertConfig ..> AlertListener : notifies
+    EmailAlertListener ..|> AlertListener : implements
+        </pre>
+        <figcaption>The manager routes and coordinates; each warehouse owns its counts, its alert configs, and its lock. Listeners plug in behind an interface the warehouse never has to know the shape of.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Making a transfer atomic</h3>
+        <p>A transfer is the one operation touching two warehouses, and it is where correctness is easiest to lose. Three versions, each fixing the last:</p>
+        <ul>
+          <li><strong>Check, then move.</strong> Ask the source <code>checkAvailability</code>, and if it passes, <code>removeStock</code> from source and <code>addStock</code> to destination. This is a textbook time-of-check-to-time-of-use <a href="../hazards/race-condition.html">race</a>: the source lock is released between the check and the removal, so another thread can drain the stock in that gap. Thread A confirms 50 units are available, Thread B removes them, and Thread A proceeds anyway — either the removal quietly fails and A adds phantom units to the destination, or the count goes negative. Never acceptable in production; it is a correctness bug, not a tuning knob.</li>
+          <li><strong>Trust the return value.</strong> Skip the separate check and let <code>removeStock</code> validate <em>while it holds the source lock</em>, moving on only if it returns true. That closes the check-then-act window. But a gap remains: between the successful removal and the destination's <code>addStock</code>, the units belong to neither warehouse, so any thread that sums total inventory in that instant is short — and if the add somehow fails, the stock is simply lost, with no rollback.</li>
+          <li><strong>Lock both, in order (chosen).</strong> Acquire the locks on both warehouses before touching anything, do the remove-and-add while holding both, then release. No other thread can observe the in-between state. Two details make it safe: the warehouse lock must be <em>reentrant</em>, because <code>transfer</code> calls the already-synchronised <code>removeStock</code>/<code>addStock</code> and the thread re-acquires locks it already holds; and the two locks must always be taken in a consistent order — sort by warehouse id — or a pair of opposite-direction transfers can each hold one lock and wait on the other, a classic <a href="../hazards/deadlock.html">deadlock</a>. This is <a href="../patterns/distributed/coordination/pessimistic-locking.html">pessimistic locking</a>: assume the conflict and take both locks up front.</li>
+        </ul>
+        <p>The cost is real — while both locks are held, no other thread can touch either warehouse even for an unrelated product — so a hot warehouse pair under heavy transfers will serialise. The alternative (the "trust the return value" version) is a legitimate choice when brief intermediate states are acceptable and you want the extra concurrency; it just is not truly atomic.</p>
+
+        <h3>2 · Firing an alert once, not on every dip</h3>
+        <p>The tempting rule — fire whenever the new count is below the threshold — floods the channel: with stock at 5 and a threshold of 10, every single removal re-fires, turning a warning into noise. The fix is to compare the two quantities and fire only on a <em>downward crossing</em>: <code>previousQty &gt;= threshold AND newQty &lt; threshold</code>. Stock 12→8 fires (crossed); 8→5 does not (already below); 5→15 does not (recovering, and rising anyway); 15→9 fires again. It is self-resetting — no <code>hasFired</code> flag to track and reset, because recovering above the threshold naturally re-arms the next drop. The same comparison has to run in <code>addStock</code> as well as <code>removeStock</code>, since a count can move either way, and the previous-versus-new test correctly stays silent when it crosses upward. The warehouse notifying an external observer only on this state change is the <a href="../patterns/gof/behavioral/observer.html">Observer</a> pattern, and the listener sits behind an abstraction the warehouse depends on rather than a concrete email or webhook client — <a href="../principles/dependency-inversion.html">dependency inversion</a> is what keeps delivery swappable.</p>
+
+        <h3>3 · Where the lock goes, and what runs outside it</h3>
+        <p>Without synchronisation, <code>addStock</code> is a read-modify-write race: two threads read 20, one writes 30, the other writes 25, and ten units vanish. The safe default is to make each <code>Warehouse</code> guard all of its state behind one lock and run every public method — writes <em>and</em> reads, since an unsynchronised read can see a torn value — under it. That is the <a href="../patterns/concurrency/monitor-object.html">Monitor Object</a> pattern: the object owns its mutex and admits one thread at a time. A per-product lock would let different products proceed in parallel, but it needs concurrent maps, grows an unbounded lock table, and reintroduces the same lock-ordering problem for transfers; it pays off only under genuinely high cross-product contention, so the coarse per-warehouse lock is the right default and the fine-grained version is a "if you asked about extreme throughput" note.</p>
+        <p>The subtlety is what the lock must <em>not</em> cover. A listener may send an email or POST a webhook — seconds of network I/O — and holding the warehouse lock across that blocks every other operation and can deadlock outright if the listener calls back into the warehouse. So the warehouse splits the work: it computes the list of alerts to fire while holding the lock, then releases and fires them. "Decide under the lock, dispatch outside it" is the shape.</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — capture under the lock, notify after it</summary>
+<pre><code class="language-python" data-kb-lang="python"># Warehouse — mutate under the lock, notify only after releasing it
+removeStock(productId, qty):
+    alerts = null
+    lock(this):                        # reentrant, so transfer() can nest add/remove
+        have = inventory[productId] or 0
+        if have &lt; qty: return false    # no negative inventory — reject before mutating
+        newQty = have - qty
+        inventory[productId] = newQty
+        alerts = getAlertsToFire(productId, have, newQty)   # decide while locked
+    for a in (alerts or []):           # fire outside the lock — callbacks may do I/O
+        a.listener.onLowStock(id, productId, newQty)
+    return true</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Locking both warehouses in id order makes a transfer truly atomic — stock is never observably missing from both or counted twice.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">One coarse lock per warehouse keeps correctness reasoning trivial, with microsecond hold times at ordinary throughput.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Crossing-based alerts self-reset with no extra state, and deciding under the lock while dispatching outside keeps slow callbacks off the critical section.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">The listener abstraction swaps email, webhook, or log without the warehouse changing at all.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The coarse lock serialises unrelated products in the same warehouse, so a hot warehouse pair bottlenecks under heavy transfer traffic.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">It assumes reentrant locks; without them the two-lock transfer deadlocks, and the alert helper must never be separately synchronised.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Transfer assumes stock teleports — in-transit inventory during a multi-day shipment isn't modelled until a first-class Transfer holder is added.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Deducting only on fulfilment invites overselling under a slow checkout; fairness needs a reservation layer on top.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Junior</strong> — a working system: an <code>InventoryManager</code> coordinating <code>Warehouse</code> objects, with <code>addStock</code>/<code>removeStock</code> updating counts correctly, rejecting anything that would go negative, and handling an unknown warehouse id. Concurrency need not be spotted unprompted; a hint about locks is fine.</li>
+          <li><strong>Mid-level</strong> — clean separation without prompting (the manager orchestrates, the warehouse owns its map and alerts), recognises that concurrent operations need synchronisation and adds basic locking, and uses the <code>AlertListener</code> interface to decouple delivery. May validate a transfer but miss the time-of-check race until nudged.</li>
+          <li><strong>Senior</strong> — handles concurrency correctly on their own, catches the TOCTOU bug in the naive transfer and explains why checking a return value alone still leaves a non-atomic gap, locks both warehouses in a consistent order for deadlock-free atomicity, and weighs coarse versus per-product locking. Reaches for the reservation and in-transit-Transfer extensions when there is time.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="monitor-object"><a href="../patterns/concurrency/monitor-object.html">Monitor Object</a><span class="rel-note">each Warehouse guards its quantity map and alert configs behind its own reentrant lock, admitting one thread at a time</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="observer"><a href="../patterns/gof/behavioral/observer.html">Observer</a><span class="rel-note">a warehouse notifies registered listeners only when a count crosses down through a threshold, decoupling 'stock is low' from 'what to do about it'</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="dependency-inversion"><a href="../principles/dependency-inversion.html">Dependency Inversion Principle</a><span class="rel-note">Warehouse depends on the AlertListener interface, never on a concrete email or webhook client, so delivery is swappable without touching stock code</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pessimistic-locking"><a href="../patterns/distributed/coordination/pessimistic-locking.html">Pessimistic Locking</a><span class="rel-note">transfer acquires both warehouse locks up front, in sorted id order, and holds them across the move to guarantee atomicity</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="facade"><a href="../patterns/gof/structural/facade.html">Facade</a><span class="rel-note">InventoryManager is the single public surface that routes and coordinates over the hidden warehouse map</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="value-object"><a href="../patterns/ddd/value-object.html">Value Object</a><span class="rel-note">AlertConfig is an immutable pairing of threshold and listener, with duplicate-suppression handled by the crossing check rather than any state on the config</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="separation-of-concerns"><a href="../principles/separation-of-concerns.html">Separation of Concerns</a><span class="rel-note">cross-warehouse orchestration lives in the manager while per-location counts, locking, and alerts stay inside each warehouse</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

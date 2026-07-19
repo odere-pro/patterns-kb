@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Instagram · Patterns</title>
+  <meta name="description" content="Design a photo/video sharing feed — precompute feeds on write, serve media from the edge, and merge celebrity posts in real time to hit a 500 ms feed at 500M DAU.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#instagram",
+  "identifier": "instagram",
+  "name": "Instagram",
+  "description": "Serve a 500M-user chronological feed in under 500 ms by precomputing feeds on write and pushing media to the edge",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/messaging/fan-out.html#fan-out",
+      "name": "Fan-Out",
+      "kb:note": "a new post is fanned out on write, prepending its id into every follower's precomputed feed"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "each user's Redis sorted-set feed is an incrementally maintained projection of what they should see, ready to slice in one call"
+    },
+    {
+      "@id": "../patterns/messaging/message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:note": "fan-out is a long-running job dropped on a queue so millions of follower writes stay off the post's critical path"
+    },
+    {
+      "@id": "../patterns/caching/cache-aside.html#cache-aside",
+      "name": "Cache-Aside",
+      "kb:note": "post metadata is served from a short-lived Redis hash, with only the misses batch-fetched from DynamoDB and backfilled"
+    },
+    {
+      "@id": "../patterns/distributed/routing/valet-key.html#valet-key",
+      "name": "Valet Key",
+      "kb:note": "POST /posts returns a scoped, time-boxed pre-signed URL so the client uploads media straight to S3"
+    },
+    {
+      "@id": "../patterns/distributed/routing/object-storage.html#object-storage",
+      "name": "Object Storage",
+      "kb:note": "media bytes live in S3 rather than the database, referenced from post metadata by object key"
+    },
+    {
+      "@id": "../patterns/distributed/routing/cdn.html#cdn",
+      "name": "CDN",
+      "kb:note": "media is fronted by edge caches so photos and videos are served from a location near each viewer"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "post metadata is partitioned by user id with a composite time-ordered sort key for chronological reads"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="instagram" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Serve a 500M-user chronological feed in under 500 ms by precomputing feeds on write and pushing media to the edge" data-kb-order="9" data-kb-aliases='["IG"]' data-kb-tags='["system-design","read-optimization","event-driven","scalability","caching"]' data-kb-solves='["my feed takes seconds to load because I recompute it from every account a user follows on each request","one popular account posts and it triggers millions of feed writes that grind my system to a halt","users far from my storage region wait several seconds for photos and videos to appear","uploading a multi-gigabyte video in a single request fails and hammers my application servers","every popular post gets re-queried independently by millions of separate feed requests"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Instagram</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Instagram</h1>
+      <p class="doc-essence">A photo and video sharing platform where people post media, follow each other, and scroll a chronological feed. Almost all the load is reading feeds and viewing media, so the design pushes work off the read path: feeds are assembled when someone posts, and media is served from the edge rather than the origin.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="instagram">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Instagram lets a user publish a photo or video with a caption, follow other people, and see a chronological feed of everything the accounts they follow have posted. The surface is small, but the load is not: half a billion people open it every day, each refreshing a feed several times, while posting only occasionally. That asymmetry — read-heavy by orders of magnitude, with heavy binary payloads on top — is what decides the architecture. The two hard problems are <strong>assembling a feed fast enough</strong> and <strong>delivering media fast enough</strong>, everywhere on earth. Everything else follows from getting those two right.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Create a post with a photo or video and a simple caption.</li>
+            <li>Follow another user — a one-directional relationship.</li>
+            <li>See a chronological feed of posts from the accounts you follow.</li>
+          </ol>
+          <p class="prose">Out of scope, named on purpose to keep the design narrow: likes and comments, search over users or hashtags, ephemeral stories, and live streaming.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Availability over consistency</strong> — a new post appearing in followers' feeds within ~2 minutes is fine; the system must not go dark.</li>
+            <li><strong>Feed latency</strong> — a feed request returns end-to-end in under 500&nbsp;ms.</li>
+            <li><strong>Media latency</strong> — photos and videos render effectively instantly, wherever the viewer is.</li>
+            <li><strong>Scale</strong> — 500M daily actives, ~100M posts/day.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Feed reads.</strong> 500M DAU × ~5 refreshes/day ≈ 2.5&nbsp;billion feed generations per day ≈ ~29k/s on average. Traffic is spiky and time-zone-clustered, so budget for a peak of <strong>150k+ feed requests/second</strong>. That number is the one the read path must survive.</p>
+        <p><strong>The cost of computing at read time.</strong> A user following 1,000 accounts, each posting ~10 times a day, has ~10,000 candidate posts behind a single refresh. Fetching those on demand means many database reads per refresh — and DynamoDB batch reads cap at 100 items, so even one refresh needs ≥10 parallel batch calls. Multiply by 150k/s and read-time assembly is hopeless. The computation has to move to write time.</p>
+        <p><strong>Writes.</strong> 100M posts/day ≈ <strong>~1,200 posts/second</strong> on average. Small next to reads — but each post can fan out to a poster's entire follower set, so the <em>write</em> path is where amplification hides.</p>
+        <p><strong>Storage.</strong> Media dominates: at ~2&nbsp;MB average, 100M posts/day ≈ <strong>200&nbsp;TB/day</strong> of bytes, roughly <strong>750&nbsp;PB over ten years</strong>. Metadata is a rounding error by comparison — ~1&nbsp;KB/post ≈ <strong>100&nbsp;GB/day</strong>. The media number forces object storage plus cold tiers; the metadata number fits any scalable key-value store.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Four entities, kept thin:</p>
+        <ul>
+          <li><strong>User</strong> — username and profile details.</li>
+          <li><strong>Post</strong> — a caption, a creator, a created-at timestamp, and a reference to its media. One Post type covers both photos and videos; the media kind is just a field.</li>
+          <li><strong>Media</strong> — the actual bytes, kept out of the database and in an object store.</li>
+          <li><strong>Follow</strong> — a one-directional edge from follower to followee. Following <code>@leomessi</code> puts his posts in your feed, not yours in his.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>A small REST surface — one verb per requirement. The create-post call returns metadata plus a place to upload the bytes; it never carries the file itself through the app tier.</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — post, follow, feed</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /posts
+{ "media": "&lt;photo or video&gt;", "caption": "My cool photo!" }
+&rarr; 201 { "post_id": "p_123", "upload_url": "https://s3...&lt;pre-signed, 1h&gt;" }
+
+POST /follows
+{ "followed_id": "u_456" }          // follower_id comes from the auth token, not the body
+&rarr; 201
+
+GET /feed?cursor={cursor}&amp;limit={page_size}
+&rarr; 200 { "posts": [ ... ], "next_cursor": "..." }</code></pre>
+      </details>
+      <div class="prose">
+        <p>The follower's identity is taken from the session or JWT rather than the request body — a small application of <a href="../patterns/security/least-privilege.html">least privilege</a> that stops a caller from writing follow edges on behalf of anyone else. The feed uses <strong>cursor</strong>-based pagination, not offsets, so a page stays stable while new posts arrive at the top.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Clients hit an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> that routes, authenticates, and rate-limits. Behind it, the write and read halves of the feed are deliberately separate. A <strong>Post Service</strong> stores metadata and hands out a pre-signed URL so the client uploads media <em>directly</em> to the <a href="../patterns/distributed/routing/object-storage.html">object store</a> (S3), keeping multi-gigabyte transfers off the app servers. A <strong>Follow Service</strong> owns the (much lower-frequency) follow graph. The pivotal piece is the <strong>Feed Fan-out worker</strong>: every new post is enqueued, and the worker pushes that post's id into the precomputed feed of each follower, held in Redis as a per-user sorted set. A <strong>Feed Service</strong> then serves a read by slicing the top of that sorted set and hydrating post ids into full posts. Media is fronted by a <a href="../patterns/distributed/routing/cdn.html">CDN</a> so bytes are served from an edge near the viewer.</p>
+        <p>Post metadata lives in a horizontally scalable store — DynamoDB here for its scale and tolerance of eventual consistency, though the real Instagram famously runs PostgreSQL at this scale, a reminder that "SQL doesn't scale" is folklore, not fact. Post and Follow services may even share a database: the domains are naturally coupled, and the textbook "database per service" rule is one large systems routinely break where the coupling is real.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client / app"]
+    Client -->|"POST /posts · GET /feed"| GW["API Gateway"]
+    GW -->|"create post"| Post["Post Service"]
+    GW -->|"read feed"| Feed["Feed Service"]
+    Post -->|"metadata"| DDB[("Posts DB")]
+    Post -->|"pre-signed upload"| S3[("Blob store (S3)")]
+    Post -->|"enqueue post_id"| Q[["Fan-out queue"]]
+    Q --> Fanout["Feed Fan-out worker"]
+    Fanout -->|"prepend to each follower"| Redis[("Redis feeds (ZSET)")]
+    Feed -->|"top N post_ids"| Redis
+    Feed -->|"hydrate misses"| DDB
+    S3 --> CDN["CDN edge"]
+    CDN -->|"media bytes"| Client
+        </pre>
+        <figcaption>The write path fans a new post out to followers' precomputed feeds asynchronously; the read path slices Redis and hydrates ids. Media flows client &rarr; S3 &rarr; edge, never through the app tier.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · A feed under 500&nbsp;ms</h3>
+        <p>The naïve design assembles the feed on read: look up who you follow, query each of their recent posts, merge, sort by time, return. It is correct and it does not scale. Three things go wrong at once — <strong>read amplification</strong> (one refresh spawns dozens of reads, times 150k/s), <strong>repeated work</strong> (a single popular post is independently re-fetched by millions of separate feeds), and <strong>unpredictable latency</strong> (your feed is only as fast as the busiest account you follow). Deferring the computation to read time is fighting the requirement head-on.</p>
+        <p>So flip it: compute the feed <strong>when someone posts</strong>, not when a follower reads — a <a href="../patterns/messaging/fan-out.html">fan-out</a> on write. On a new post, look up the poster's followers (via a secondary index keyed by <code>followed_id</code>) and prepend the new post id to each follower's feed. Because a post can have millions of followers, this is a long-running job that must be asynchronous: the post is durably stored, a job is dropped on a <a href="../patterns/messaging/message-queue.html">message queue</a>, and workers do the fan-out off the critical path. Each follower's feed is a Redis sorted set — <code>feed:{user_id}</code>, members are post ids, scores are timestamps — an incrementally maintained <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of "what this user should see," ready to slice in a single call.</p>
+        <p>Reads then hydrate ids into posts. Doing one lookup per id re-introduces an N+1 read; instead, keep a short-lived Redis hash of post metadata and treat it <a href="../patterns/caching/cache-aside.html">cache-aside</a> — read the hash, batch-fetch only the misses from DynamoDB with <code>BatchGetItem</code>, backfill the hash. A caption edit just invalidates that one entry.</p>
+        <details class="sketch">
+          <summary>Pseudocode — fan-out on write, then read</summary>
+<pre><code class="language-python" data-kb-lang="python"># on new post (async worker)
+followers = follows_gsi.query(followed_id=post.author)   # secondary index
+for f in followers:
+    redis.zadd(f"feed:{f}", {post.id: post.created_at})   # sorted set, score = time
+    redis.zremrangebyrank(f"feed:{f}", 0, -1001)          # keep newest ~1000
+
+# on read
+ids   = redis.zrevrange(f"feed:{user}", start, start + limit)   # top N by score
+metas = redis.hmget("post:meta", ids)                          # cache-aside
+miss  = [i for i, m in zip(ids, metas) if m is None]
+metas += dynamo.batch_get_item(miss)                          # only the misses</code></pre>
+        </details>
+        <p>One flaw remains, and it is the whole game: <strong>write amplification, the "celebrity problem."</strong> A user with 200M followers posts once and the fan-out is 200M Redis writes — a self-inflicted thundering herd that stalls the queue and slows every other poster. The fix is a <strong>hybrid</strong>: fan out on write for ordinary accounts, but for anyone over a threshold (say <strong>100k followers</strong>) skip the fan-out entirely and store the post only. At read time, the Feed Service serves the precomputed feed <em>and</em> merges in the recent posts of the handful of celebrities you follow, fetched live. Most accounts get instant precomputed feeds; the few enormous ones get a cheap real-time merge. The threshold needs tuning — too low and write amplification returns, too high and too many users pay the read-time merge cost.</p>
+        <p>Storing feeds in Redis invites the durability question. The honest answer is to run it as a real datastore: append-only-file persistence so a crash loses at most a second of writes, Sentinel for automatic failover, and Cluster to shard feeds across nodes. If a feed is lost, it can be rebuilt from the source of truth in the Posts DB — the sorted set is a cache of a derivation, not the derivation itself.</p>
+
+        <h3>2 · Rendering media instantly</h3>
+        <p>Two distinct problems: getting big files <em>in</em>, and getting them <em>out</em> fast everywhere.</p>
+        <p><strong>Upload.</strong> A single HTTP request tops out well below the 4&nbsp;GB a video can reach, and routing gigabytes through the app tier wastes bandwidth and app-server memory. So <code>POST /posts</code> returns a <strong>pre-signed URL</strong> — a scoped, time-boxed credential (a <a href="../patterns/distributed/routing/valet-key.html">valet key</a>) that lets the client upload straight to S3 using its multipart API, chunk by chunk, with retries per chunk. The post is created with status <code>pending</code>; when the upload finishes, an <strong>S3 event notification</strong> fires a background job that records the object key and flips status to <code>complete</code>. This server-driven completion is more work than trusting a client <code>PATCH</code>, but the backend stays the source of truth for whether media actually landed.</p>
+        <p><strong>Download.</strong> Serving raw S3 URLs means a viewer in Singapore waits on a bucket in <code>us-east-1</code> — multi-second stalls, every request hitting the origin, and the same full-resolution file shipped to a phone on 4G as to a desktop. A CDN fixes the distance: edge caches hold media near viewers, fetch from S3 only on a miss, and cache images for hours since they never change. The best version adds a media-processing step that generates variants per upload — multiple resolutions, WebP for browsers that take it, adaptive bitrate ladders for video — and the CDN serves the variant that fits the requesting device and network. More storage and a processing pipeline to run, but it is what every large media platform actually does.</p>
+
+        <h3>3 · Holding at 500M DAU</h3>
+        <p>Scale here is not one trick but the sum of the choices above. Precomputed hybrid feeds keep the read path a single Redis slice regardless of how many people a user follows. The CDN keeps media latency flat as the audience globalizes. Chunked, direct uploads keep large writes off the app tier. Metadata sits in a store <a href="../patterns/distributed/routing/sharding.html">sharded</a> by user id, with a composite <code>(created_at, post_id)</code> sort key so a user's posts come back already in chronological order. And cost is managed by <strong>tiering</strong>: warm bytes sit at the edge and in cache, cold media ages down to cheaper storage such as Glacier — walking the ladder from CDN → memory → SSD → HDD → tape as access frequency drops. Every service tier autoscales horizontally behind a load balancer on CPU and memory pressure.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Feeds return from a single Redis slice, comfortably under 500&nbsp;ms even for users following thousands of accounts.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Read-time cost is paid once, at write time, instead of re-computed on every one of 2.5B daily refreshes.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Media is served from an edge near the viewer, and multi-gigabyte uploads bypass the app tier entirely.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Every tier scales horizontally and independently, matched to a lopsided read/write load.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The celebrity split forces a hybrid with a follower threshold that must be tuned and re-tuned as the network grows.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Two feed paths (precomputed plus live celebrity merge) run in parallel — more storage, more moving parts, uneven latency for users who follow many celebrities.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Feeds are eventually consistent: a new post may take up to ~2 minutes to surface for every follower.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Keeping feeds in Redis demands real durability engineering, and per-upload media variants multiply storage cost.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end design covering upload, follows, and feed; a simple schema for storing and retrieving posts; may start with fan-out on read but, prompted, recognizes its limits and reaches fan-out on write; grasps S3 for media and why a CDN helps, even without the optimization details.</li>
+          <li><strong>Senior</strong> — nails the two deep dives; argues fan-out on read vs. write vs. hybrid and why the hybrid solves the celebrity problem; handles large-file upload properly; details an indexing strategy for a read-heavy workload and justifies each technology choice.</li>
+          <li><strong>Staff+</strong> — identifies feed generation and media delivery as the real bottlenecks within minutes and spends the time there; discusses how the design evolves from 1M to 500M users, favouring simpler solutions until scale genuinely forces complexity; shows operational instinct — failure modes, durability, and user experience above all.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="fan-out"><a href="../patterns/messaging/fan-out.html">Fan-Out</a><span class="rel-note">a new post is fanned out on write, prepending its id into every follower's precomputed feed</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">each user's Redis sorted-set feed is an incrementally maintained projection of what they should see, ready to slice in one call</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="message-queue"><a href="../patterns/messaging/message-queue.html">Message Queue</a><span class="rel-note">fan-out is a long-running job dropped on a queue so millions of follower writes stay off the post's critical path</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cache-aside"><a href="../patterns/caching/cache-aside.html">Cache-Aside</a><span class="rel-note">post metadata is served from a short-lived Redis hash, with only the misses batch-fetched from DynamoDB and backfilled</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="valet-key"><a href="../patterns/distributed/routing/valet-key.html">Valet Key</a><span class="rel-note">POST /posts returns a scoped, time-boxed pre-signed URL so the client uploads media straight to S3</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-storage"><a href="../patterns/distributed/routing/object-storage.html">Object Storage</a><span class="rel-note">media bytes live in S3 rather than the database, referenced from post metadata by object key</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cdn"><a href="../patterns/distributed/routing/cdn.html">CDN</a><span class="rel-note">media is fronted by edge caches so photos and videos are served from a location near each viewer</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">post metadata is partitioned by user id with a composite time-ordered sort key for chronological reads</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

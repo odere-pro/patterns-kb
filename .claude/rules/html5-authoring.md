@@ -89,10 +89,15 @@ Fixed vocabulary, fixed order, per kind — see `BLOCKS` in `scripts/lib/model.m
 |---|---|
 | pattern | `description` `structure` `variations` `tradeoffs` `usage` `sketch` `wild`* `production`* `relationships` `fluency`* |
 | hazard | `description` `causes` `cost` `mitigation` |
-| theme | `framing` `tradespace` `tour` `decide` `siblings` |
+| theme | `framing` `architecture`* `tradespace` `tour` `decide` `siblings` |
 | principle | `statement` `rationale` `applying` `overreach` `relationships` |
+| design | `problem` `requirements` `estimation`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
 
-`*` optional. Same question, same place, on every page — that is what makes block-level
+`*` optional. A **design** is a worked case study (a system-design or low-level-design kata):
+`problem` frames it, `requirements` states FR + NFR, `architecture` carries the primary mermaid
+diagram, `deepdives` argues the hard sub-problems, and the typed `relationships` block joins it to the
+patterns it uses via `demonstrates` (see Relationships). Designs carry `data-kb-solves` like a pattern,
+tag distributed katas `system-design` and OOP ones `low-level-design`, and live flat in `site/designs/`. Same question, same place, on every page — that is what makes block-level
 extraction possible.
 
 A **principle** is a design maxim (SOLID, DRY, KISS, YAGNI, …), not a mechanism: `statement`
@@ -127,9 +132,11 @@ may skip the block entirely; a forced block is how fabrication happens.
 ## Relationships
 
 Declared on **both** pages, each side with its own `data-kb-rel` / `data-kb-to`. `make check`
-fails on one-way, dangling or contradictory edges. The 13 verbs are closed and paired
-(`variant-of` ↔ `has-variant`, `prevents-hazard` ↔ `mitigated-by`); see
-[site/vocab.html](../../site/vocab.html).
+fails on one-way, dangling or contradictory edges. The 15 verbs are closed and paired
+(`variant-of` ↔ `has-variant`, `prevents-hazard` ↔ `mitigated-by`, `demonstrates` ↔
+`demonstrated-by`); see [site/vocab.html](../../site/vocab.html). `demonstrates` runs from a **design**
+page to a pattern or principle it puts to work — write it with `kb.mjs link <design> demonstrates
+<pattern>`, which adds the "Demonstrated by" backlink on the pattern.
 
 Each side may phrase its **note** its own way — "Screen at the gate, then hand out scoped
 keys" reads correctly from `gatekeeper`, while `valet-key` may say something else. Only the
