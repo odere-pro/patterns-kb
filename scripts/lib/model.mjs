@@ -138,12 +138,14 @@ export const BANDS = [
   { id: "functional",  kind: "lens", label: "Functional",           short: "Functional",  anchor: "lens-fp-h",    groups: [{ id: "functional",  label: null }] },
   { id: "testing",     kind: "lens", label: "Testing",              short: "Testing",     anchor: "lens-test-h",  groups: [{ id: "testing",     label: null }] },
   { id: "security",    kind: "lens", label: "Security",             short: "Security",    anchor: "lens-sec-h",   groups: [{ id: "security",    label: null }] },
+  { id: "frontend",    kind: "lens", label: "Frontend",             short: "Frontend",    anchor: "lens-fe-h",    groups: [{ id: "frontend",    label: null }] },
 ];
 
 export const THEME_ORDER = [
   "system-design-interview",
   "cap-theorem", "streaming", "realtime-updates", "spike-handling", "long-running-tasks",
   "multi-step-processes", "performance", "auth-and-access", "api-design",
+  "frontend-architecture",
   "scalability", "scaling-reads", "scaling-writes", "consistency-and-replication",
   "observability", "resilience", "genai-scale", "caching",
   "dealing-with-contention", "proximity-search",
