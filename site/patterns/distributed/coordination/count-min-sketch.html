@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Count-Min Sketch · Patterns</title>
+  <meta name="description" content="Count-Min Sketch — estimate how often each item appears in a huge stream with a fixed grid of hashed counters, trading a small over-count for memory that never grows with the number of distinct keys.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#count-min-sketch",
+  "identifier": "count-min-sketch",
+  "name": "Count-Min Sketch",
+  "description": "Estimate per-item frequency in sublinear memory with hashed counters",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:often-confused-with": [
+    {
+      "@id": "./bloom-filter.html#bloom-filter",
+      "name": "Bloom Filter",
+      "kb:note": "Both are hash-based sketches, but this counts frequency where a Bloom filter tests membership"
+    },
+    {
+      "@id": "./hyperloglog.html#hyperloglog",
+      "name": "HyperLogLog",
+      "kb:note": "Same sketch family, different question: per-item frequency here, distinct-count there"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="count-min-sketch" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Estimate per-item frequency in sublinear memory with hashed counters" data-kb-order="84" data-kb-aliases="[&quot;CMS&quot;,&quot;count-min sketch&quot;]" data-kb-tags="[&quot;scalability&quot;,&quot;performance&quot;,&quot;resource-management&quot;,&quot;read-optimization&quot;]" data-kb-solves="[&quot;I need the top-K heavy hitters over a huge stream but can't keep a counter per key&quot;,&quot;exact per-item counts for billions of keys won't fit in memory&quot;,&quot;which items are trending right now, approximately, without a full count&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Count-Min Sketch</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network</p>
+      <h1 class="doc-title">Count-Min Sketch</h1>
+      <p class="doc-essence">A compact grid of counters that answers "about how many times has this key appeared?" over a stream — using memory fixed in advance, independent of how many distinct keys flow through it, at the cost of a small over-estimate it can never turn into an undercount.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="count-min-sketch">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>Count-Min Sketch</strong> is a two-dimensional array of counters — <em>d</em> rows by <em>w</em> columns, all zero to start — with one independent hash function per row. To record an occurrence of a key, hash it once per row and increment the single counter it lands on in that row, so each occurrence bumps <em>d</em> counters. To estimate how often a key has been seen, hash it the same <em>d</em> ways, read those counters, and take the <strong>minimum</strong>. The minimum, because every counter is shared by all the keys that hash to it, so a collision can only push a count up, never down — the smallest of a key's cells is the one least polluted by other keys, and the number it holds is an upper bound, never an undercount.</p>
+        <p>The force it resolves is counting per-item frequency over a stream when the keys are far too many to hold an exact counter for each. An exact tally needs one counter per distinct key — trivial for thousands, hopeless for billions of URLs, IP addresses or search terms. The sketch fixes its size up front at <em>w</em>×<em>d</em> counters, a footprint that does not grow with the number of distinct keys no matter how many pour through it. It buys that fixed memory with a bounded over-estimate: width <em>w</em> governs how much error each estimate can pick up from collisions, and depth <em>d</em> governs the confidence that the true error stays within that bound.</p>
+        <p>Cormode and Muthukrishnan described the structure in 2005. Like a Bloom filter it stores no keys — only collided counts — so it can tell you roughly how often a key you name has appeared, but it can neither list the keys it has seen nor recover them. That is why it is almost always paired with something that already holds the candidate keys: a small heap of hot keys turns it into an approximate top-K, and a running set of heavy hitters turns it into a trending list. On its own it is a frequency oracle you have to know what to ask.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    K["Key"] --> H1["hash · row 1"]
+    K --> H2["hash · row 2"]
+    K --> H3["hash · row 3"]
+    H1 --> R1["row 1: counter ++"]
+    H2 --> R2["row 2: counter ++"]
+    H3 --> R3["row 3: counter ++"]
+    R1 --> M{"take the min"}
+    R2 --> M
+    R3 --> M
+    M --> E["Estimated count — an upper bound"]
+        </pre>
+        <figcaption>Each occurrence increments one counter per row, chosen by that row's hash. A query reads the same cells and returns their minimum — the cell least inflated by collisions, so the estimate can overcount but never undercount.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Conservative Update</dt>
+        <dd>On insert, raise only the counters that are currently at the key's minimum rather than all <em>d</em> of them. This shaves the over-estimate substantially on skewed streams, at the price of no longer supporting decrements or deletions.</dd>
+        <dt id="variations-item-2">Count-Mean-Min Sketch</dt>
+        <dd>Estimates the collision noise in each row from the total volume, subtracts it from each counter, and takes the median instead of the minimum. This corrects much of the upward bias — useful when the long tail matters, not only the heavy hitters.</dd>
+        <dt id="variations-item-3">Count Sketch</dt>
+        <dd>Adds a second ±1 hash per row and takes the median of the signed counters, giving an unbiased estimate that can err in either direction rather than a one-sided upper bound. Better when rare items and frequent ones both need estimating.</dd>
+        <dt id="variations-item-4">Decayed / sliding-window sketch</dt>
+        <dd>Periodically scales every counter down, or keeps per-window sketches and ages the oldest out, so recent occurrences outweigh old ones — keeping the estimate tuned to what is frequent now rather than all-time totals.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Fixed memory, independent of the number of distinct keys — w×d counters whether you track thousands of keys or billions.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Insert and query are O(d) — a handful of hashes and increments, constant no matter how long the stream or how many keys.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Never undercounts: the estimate is a guaranteed upper bound, so a key's true frequency is always at or below what the sketch reports.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Two sketches of the same dimensions add cell-by-cell — combine per-shard sketches into a global one, so counting parallelizes across a cluster.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Over-estimates by design, and the inflation grows with total volume and skew — heavy hitters spill onto everything that collides with them.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Cannot enumerate or recover keys — it stores counts against hashed cells, not the keys, so it needs a companion structure that already knows the candidates.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Accurate for the heavy hitters, noisy for the long tail — a rare key's small true count is easily swamped by a frequent key sharing one of its cells.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Width and depth are sized upfront for an assumed volume and error target; a stream far larger or more skewed than planned drifts past the bound.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You need approximate per-item frequencies — or the heavy hitters and top-K — over a stream with far too many distinct keys to keep an exact counter for each.</li>
+            <li id="usage-when-2" data-kb-polarity="when">A small over-count is acceptable and you care most about the frequent items: trending topics, hot keys, most-viewed content.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You want fixed, predictable memory and mergeable per-shard counters, so the counting can spread across a cluster.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">You need exact counts, or downstream logic breaks on an over-estimate — reach for exact counters or a database aggregate.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The number of distinct keys is small enough that a plain hash map of counters fits comfortably in memory.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The question is "how many distinct items" rather than "how often each one" — that is a cardinality estimator like HyperLogLog; "is this item present at all" is a Bloom filter.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal sketch</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">class CountMinSketch {
+  private readonly rows: Uint32Array[];
+
+  constructor(private readonly width = 1 &lt;&lt; 16, private readonly depth = 5) {
+    this.rows = Array.from({ length: depth }, () =&gt; new Uint32Array(width));
+  }
+
+  // one independent hash per row — seed each with the row index
+  private column(row: number, key: string): number {
+    return fnv1a(key + ":" + row) % this.width;
+  }
+
+  add(key: string, count = 1): void {
+    for (let r = 0; r &lt; this.depth; r++) this.rows[r][this.column(r, key)] += count;
+  }
+
+  estimate(key: string): number {
+    let min = Infinity;
+    for (let r = 0; r &lt; this.depth; r++) {
+      min = Math.min(min, this.rows[r][this.column(r, key)]);
+    }
+    return min; // an upper bound — collisions only inflate, never deflate
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="redis-stack"><strong>Redis Stack Count-Min Sketch</strong><span>A first-class sketch type: CMS.INITBYDIM or CMS.INITBYPROB to size it, CMS.INCRBY to count occurrences, CMS.QUERY to estimate, and CMS.MERGE to fold several sketches into one.</span></div>
+        <div class="wild-item" data-kb-example="apache-spark"><strong>Apache Spark</strong><span>DataFrame.stat.countMinSketch(col, eps, confidence, seed) builds a sketch over a column, giving approximate frequencies without a full group-by shuffle over the whole dataset.</span></div>
+        <div class="wild-item" data-kb-example="algebird"><strong>Twitter Algebird</strong><span>Provides Count-Min Sketch as a mergeable monoid for streaming aggregation; its top-N variant keeps the heaviest keys alongside the sketch — the classic sketch-plus-heap route to approximate top-K.</span></div>
+        <div class="wild-item" data-kb-example="caffeine"><strong>Caffeine</strong><span>Its Window-TinyLFU eviction keeps a count-min frequency sketch — 4-bit counters, periodically halved to age out old counts — to judge which keys are hot enough to admit, an LFU-style signal.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="bloom-filter"><a href="./bloom-filter.html">Bloom Filter</a><span class="rel-note">Both are hash-based sketches, but this counts frequency where a Bloom filter tests membership</span></div>
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="hyperloglog"><a href="./hyperloglog.html">HyperLogLog</a><span class="rel-note">Same sketch family, different question: per-item frequency here, distinct-count there</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LSM Tree · Patterns</title>
+  <meta name="description" content="LSM Tree — buffer writes in a sorted in-memory table logged for durability, flush to immutable sorted files, and compact them in the background for very high write throughput.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#lsm-tree",
+  "identifier": "lsm-tree",
+  "name": "LSM Tree",
+  "description": "Turn random writes into sequential ones via an in-memory table flushed to sorted files",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:combines-with": [
+    {
+      "@id": "./bloom-filter.html#bloom-filter",
+      "name": "Bloom Filter",
+      "kb:note": "A per-SSTable bloom filter skips files that can't hold the key, taming read amplification"
+    }
+  ],
+  "kb:composed-of": [
+    {
+      "@id": "./write-ahead-log.html#write-ahead-log",
+      "name": "Write-Ahead Log",
+      "kb:note": "Every write is appended to a WAL before the memtable, so a crash loses nothing"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/scaling-writes.html#scaling-writes",
+      "name": "Scaling Writes",
+      "kb:role": "Trade read cost for sequential write throughput"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="lsm-tree" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Turn random writes into sequential ones via an in-memory table flushed to sorted files" data-kb-order="81" data-kb-aliases="[&quot;LSM tree&quot;,&quot;log-structured merge-tree&quot;]" data-kb-tags="[&quot;throughput&quot;,&quot;persistence&quot;,&quot;performance&quot;,&quot;durability&quot;]" data-kb-solves="[&quot;my write throughput is capped by random-write disk seeks&quot;,&quot;I need to ingest tens of thousands of writes a second and can accept slightly slower reads&quot;,&quot;a B-tree index is too slow for my write-heavy workload&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">LSM Tree</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">LSM Tree</h1>
+      <p class="doc-essence">A write-optimized storage engine: buffer writes in a sorted in-memory table, log each one for durability, then flush the table to immutable sorted files that a background process merges — trading a little read work for very high write throughput.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="lsm-tree">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>log-structured merge-tree</strong> (LSM tree) is a write-optimized storage engine. Every write first appends to a <a href="./write-ahead-log.html">write-ahead log</a> for durability, then lands in an in-memory sorted structure called the <em>memtable</em> — a skip list or balanced tree — at RAM speed. When the memtable fills, it is flushed to disk in a single sequential pass as an immutable, already-sorted file called an <em>SSTable</em> (sorted string table), and a fresh memtable takes over. A delete is just another write: a <em>tombstone</em> marker that shadows the old value rather than erasing it in place.</p>
+        <p>The force it resolves is the cost of random writes. Updating a B-tree in place means seeking to scattered pages and rewriting them — expensive on any disk, and the dominant cost of a write-heavy workload. An LSM tree never updates in place; it only ever appends, turning thousands of small random writes into a handful of large sequential ones that a disk or SSD handles at close to its best-case rate.</p>
+        <p>The bill comes due on reads and in the background. A key can live in the memtable and in several SSTables at once, newest winning, so a lookup may have to check many files. Each SSTable carries a <a href="./bloom-filter.html">bloom filter</a> — a probabilistic membership check that answers "definitely not here" with no disk I/O — and a block index, so most files are ruled out without being read. Meanwhile a background <em>compaction</em> process merge-sorts SSTables into fewer, larger files, dropping overwritten values and expired tombstones. That reorganization is what keeps reads from degrading over time, paid for in write and space amplification.</p>
+        <p>It is the mirror image of a B-tree, which is read-optimized, updated in place, and reaches any key in one lookup — still the right default for balanced workloads. Reach for an LSM tree when writes vastly outnumber reads and slightly slower, more variable reads are an acceptable trade. It is the engine inside Cassandra, RocksDB and LevelDB, and the shape behind most write-heavy key-value and time-series stores.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    W["Write"] --> L["Append to write-ahead log"]
+    L --> M["Memtable — sorted, in memory"]
+    M -- "fills up" --> F["Flush (sequential)"]
+    F --> T1["SSTable — immutable, sorted"]
+    T1 --> K["Compaction: merge sorted files, drop overwritten keys and tombstones"]
+    T2["Older SSTables"] --> K
+    K --> T3["Fewer, larger SSTables"]
+    R["Read"] --> M
+    R --> B["Bloom filter + block index skip most SSTables"]
+    B --> T3
+        </pre>
+        <figcaption>Writes append to the log, fill the memtable, and flush to immutable SSTables; background compaction merges them, while a bloom filter and block index keep reads from scanning every file.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Size-tiered vs. leveled compaction</dt>
+        <dd>Size-tiered compaction merges SSTables of similar size into one larger table — cheap writes, but a key can sit in many overlapping tables, so reads and space suffer. Leveled compaction keeps non-overlapping tables within each level, so a key is in at most one table per level — steadier read latency and lower space amplification, at the cost of more write amplification. The right choice follows the read/write mix.</dd>
+        <dt id="variations-item-2">Bloom filter and sparse block index</dt>
+        <dd>Each SSTable carries a bloom filter over its keys and a sparse index of block offsets. A point read consults the filter first and skips any file that "definitely" lacks the key with zero disk I/O — turning a scan of every SSTable into a read of the one or two that might hold it.</dd>
+        <dt id="variations-item-3">Tombstones for deletes</dt>
+        <dd>A delete does not remove data; it writes a tombstone that shadows older values. The bytes are reclaimed only when compaction reconciles the tombstone with the values it covers, and the marker must survive long enough to reach every replica before it can be dropped — otherwise a deleted key can resurface.</dd>
+        <dt id="variations-item-4">Key/value separation</dt>
+        <dd>For large values, some engines store the value in a separate log and keep only a pointer in the LSM tree, so compaction rewrites small keys instead of big payloads — cutting write amplification at the cost of an extra lookup on read. RocksDB's BlobDB and the WiscKey design work this way.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Turns random writes into large sequential ones — sustained write throughput far above an in-place B-tree.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Writes never block on reads: they land in the memtable while compaction reorganizes older data in the background.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Immutable SSTables are simple to cache, replicate, and back up — there is no in-place mutation to coordinate.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Sorted, batched, write-once files compress well, so on-disk footprint per record is often smaller than a B-tree's.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Read amplification — a key may sit in the memtable and several SSTables, so a read can touch many files; bloom filters and indexes mitigate but do not eliminate it.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Write and space amplification — compaction rewrites the same data multiple times and needs free disk headroom to run.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Compaction is a background tax on I/O and CPU; if it falls behind, reads degrade and writes stall.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Tombstones and overwritten values linger until compaction reclaims them, temporarily inflating space and slowing reads.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Writes vastly outnumber reads — ingest-heavy workloads such as metrics, logs, events, or time series.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You need sustained high write throughput that an in-place B-tree cannot match.</li>
+            <li id="usage-when-3" data-kb-polarity="when">Reads are mostly point lookups or range scans over sorted keys, and slightly higher, more variable read latency is acceptable.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The workload is read-heavy or read-latency-critical, where a B-tree's single-lookup reads win.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Writes are modest and a B-tree already keeps up — the compaction machinery is then pure overhead.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">You cannot spare the disk headroom or background I/O and CPU that compaction demands.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — memtable, flush to an immutable SSTable, read newest-first</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// null value = tombstone: the key is deleted, but the marker lingers
+// until compaction reclaims it.
+type Table = Map&lt;string, string | null&gt;;
+
+class LsmTree {
+  private memtable: Table = new Map();
+  private sstables: Table[] = []; // immutable, newest first
+  private readonly flushAt = 1000;
+
+  set(key: string, value: string) { this.write(key, value); }
+  delete(key: string) { this.write(key, null); } // writes a tombstone
+
+  private write(key: string, value: string | null) {
+    // A real engine appends to a write-ahead log here first, for durability.
+    this.memtable.set(key, value);
+    if (this.memtable.size &gt;= this.flushAt) this.flush();
+  }
+
+  // Memtable full: freeze it as a sorted, immutable file and start fresh.
+  private flush() {
+    const sorted: Table = new Map(
+      [...this.memtable].sort(([a], [b]) =&gt; (a &lt; b ? -1 : 1)),
+    );
+    this.sstables.unshift(sorted); // never mutated again
+    this.memtable = new Map();
+  }
+
+  // Newest wins: memtable, then SSTables newest-to-oldest.
+  // A real read consults a per-SSTable bloom filter to skip most files.
+  get(key: string): string | null {
+    if (this.memtable.has(key)) return this.memtable.get(key)!;
+    for (const table of this.sstables) {
+      if (table.has(key)) return table.get(key)!; // may be a tombstone (null)
+    }
+    return null;
+  }
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="cassandra"><strong>Apache Cassandra</strong><span>Writes append to a commit log (its write-ahead log) and a sorted in-memory memtable; when the memtable fills it flushes to an immutable SSTable, and background compaction merges SSTables and purges tombstoned rows. Reads check the memtable, then use a per-SSTable bloom filter to narrow which files to scan. Compaction strategy is pluggable — SizeTieredCompactionStrategy or LeveledCompactionStrategy.</span></div>
+        <div class="wild-item" data-kb-example="rocksdb-leveldb"><strong>RocksDB / LevelDB</strong><span>Embedded key-value LSM engines — LevelDB from Google, RocksDB forked and extended from it at Facebook. Writes go to a WAL and a memtable, flush to sorted SST files, and compact in levels; RocksDB exposes leveled and universal (size-tiered) compaction and per-SSTable bloom filters, and serves as the storage engine underneath many other databases.</span></div>
+        <div class="wild-item" data-kb-example="hbase"><strong>Apache HBase</strong><span>Keeps recent writes in an in-memory MemStore backed by a write-ahead log, flushes them to immutable HFiles, and runs minor and major compactions to merge files and drop deleted cells — an LSM design layered on top of HDFS.</span></div>
+        <div class="wild-item" data-kb-example="dynamodb"><strong>Amazon DynamoDB</strong><span>Its storage internals are not fully documented, but DynamoDB is widely understood to use an LSM-style engine rather than a B-tree, which fits its high, predictable write throughput and sort-key range scans within a partition.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Memtable size / flush threshold</strong> — How large the memtable grows before it flushes to an SSTable. Bigger memtables mean fewer, larger sequential flushes and less write amplification, but more memory and more write-ahead log to replay after a crash.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Compaction strategy</strong> — Size-tiered vs. leveled (Cassandra), or leveled vs. universal (RocksDB). The lever that trades write amplification against read and space amplification — pick it for the workload's read/write mix.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Bloom filter bits per key</strong> — More bits per key lower the false-positive rate (around 10 bits/key gives roughly a 1% rate) and cut wasted SSTable reads, at the cost of memory held per table.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>SSTable data block size</strong> — The unit read from disk and covered by the sparse index. Larger blocks compress better and shrink the index, but read more bytes per point lookup.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Read amplification</strong> — SSTables consulted per read; a rising count means compaction is behind or bloom filters are undersized</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Compaction backlog</strong> — Pending compaction work — RocksDB pending-compaction bytes, Cassandra pending compactions; sustained growth precedes read degradation and write stalls</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Write stalls / throttling</strong> — Time writes are slowed or paused because flush or compaction cannot keep up</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Space amplification</strong> — On-disk bytes versus live data bytes; spikes during compaction and with tombstone or overwrite buildup</li>
+            <li id="production-signal-5" data-kb-polarity="signal"><strong>p99 read latency</strong> — Tail read latency, which climbs as SSTable count and compaction backlog grow</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Compaction cannot keep up</strong> — Write bursts outpace compaction, SSTable count climbs, reads touch more files, and the engine eventually throttles or stalls writes to let it catch up</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Space blowup during compaction</strong> — A large merge needs room for both input and output files at once; without free headroom it can fill the volume and halt writes</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Tombstone buildup</strong> — Many deletes or TTL expiries leave tombstones that reads must scan past until compaction reclaims them, and range scans over a tombstone-heavy region slow sharply</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Large un-flushed memtable</strong> — A big memtable means more write-ahead log to replay, lengthening crash recovery</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Choose the compaction strategy for the actual read/write mix — write-heavy favours size-tiered/universal, read-heavy favours leveled</li>
+            <li id="production-check-2" data-kb-polarity="check">Size bloom filters (bits per key) for the point-read rate you need</li>
+            <li id="production-check-3" data-kb-polarity="check">Monitor compaction backlog and write stalls, and alert before they saturate</li>
+            <li id="production-check-4" data-kb-polarity="check">Plan disk headroom for compaction — keep enough free space for the largest merge to write its output</li>
+            <li id="production-check-5" data-kb-polarity="check">Test crash recovery time given the memtable and write-ahead-log sizing</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="bloom-filter"><a href="./bloom-filter.html">Bloom Filter</a><span class="rel-note">A per-SSTable bloom filter skips files that can't hold the key, taming read amplification</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Composed of</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="composed-of" data-kb-to="write-ahead-log"><a href="./write-ahead-log.html">Write-Ahead Log</a><span class="rel-note">Every write is appended to a WAL before the memtable, so a crash loses nothing</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="scaling-writes"><a href="../../../themes/scaling-writes.html">Scaling Writes</a><span>Trade read cost for sequential write throughput</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

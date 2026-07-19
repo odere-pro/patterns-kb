@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workflow Orchestration · Patterns</title>
+  <meta name="description" content="Workflow Orchestration — run a long, multi-step process as durable code that survives a crash by replaying its recorded history, with the engine owning retries, timeouts, and state.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#workflow-orchestration",
+  "identifier": "workflow-orchestration",
+  "name": "Workflow Orchestration",
+  "description": "Run a long multi-step process as durable code that survives crashes by replaying its history",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:combines-with": [
+    {
+      "@id": "./saga.html#saga",
+      "name": "Saga",
+      "kb:note": "An orchestrator is the durable engine that runs a saga's steps and compensations"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/multi-step-processes.html#multi-step-processes",
+      "name": "Multi-Step Processes",
+      "kb:role": "Run the steps as durable, replayable code"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="workflow-orchestration" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Run a long multi-step process as durable code that survives crashes by replaying its history" data-kb-order="83" data-kb-aliases="[&quot;durable execution&quot;,&quot;process manager&quot;,&quot;orchestrator&quot;]" data-kb-tags="[&quot;coordination&quot;,&quot;resilience&quot;,&quot;state-management&quot;,&quot;error-handling&quot;]" data-kb-solves="[&quot;a multi-step process keeps half-completing when a server crashes partway through&quot;,&quot;I am hand-rolling retries, timeouts, and persisted state for a long-running workflow&quot;,&quot;coordinating a multi-service saga by hand is error-prone and hard to observe&quot;,&quot;my process needs to pause for days waiting on a human or a webhook and then continue&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Workflow Orchestration</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network</p>
+      <h1 class="doc-title">Workflow Orchestration</h1>
+      <p class="doc-essence">An engine runs a long-running, multi-step process as durable code, persisting the result of every step so that a crash resumes from where it left off — by replaying the recorded history rather than starting over. The engine owns state, retries, timeouts, and compensation; you write the happy path.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="workflow-orchestration">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>workflow orchestration</strong> engine runs a long-running, multi-step process as durable code — or as an explicit state machine — and persists the result of every step as it completes. If a worker crashes or is redeployed partway through, a fresh worker resumes from where it left off, reconstructing progress from the recorded history of what already ran rather than starting the process over. The engine owns the hard, cross-cutting parts — durable state, retries, timeouts, timers, and compensation — so the developer's code can read like the business process: charge the card, reserve the stock, ship it, email the customer.</p>
+        <p>The force it resolves is that one logical operation now spans many flaky services and can take seconds or months. Walk those steps naively in a single request handler and two things break the moment reliability matters. A crash between steps loses all memory of where it was — did the payment go through before the process died? And an async callback (a payment webhook, a warehouse confirmation) can land on a different server than the one that started the flow, with no context for the in-flight work. Patch around these by hand — persist state after each step, route callbacks through a broker, add a poller with locking so two servers don't claim the same stalled job, bolt on retries and compensation — and you end up interleaving system-level plumbing with business logic until the whole thing is brittle.</p>
+        <p>The engine sidesteps that by making <em>durable execution</em> its core primitive: each completed step's result is appended to a history store, and recovery re-executes the workflow from the top, where every already-completed step returns its recorded result instead of running again. Because the workflow code is deterministic and no finished step re-fires, replay is side-effect-free and lands exactly at the point of the crash. This is distinct from a <a href="./saga.html">saga</a>: a saga is the <em>compensation model</em> for a transaction that spans services — often choreographed through events — whereas an orchestrator is the <em>engine</em> that can drive a saga's steps and everything else, owning the retries, timers, and durable state a hand-rolled saga would have to build for itself.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+    WF["Workflow: ordered steps as code"] -->|"await next step"| ENG["Engine schedules the step"]
+    ENG --> ACT["Activity worker runs the side effect<br/>(charge card, call service)"]
+    ACT -->|"records result"| HIST[("Durable event history")]
+    HIST -->|"drives the next step"| WF
+    HIST -.->|"on crash / redeploy"| REPLAY["Replay workflow from the top:<br/>completed steps return cached results"]
+    REPLAY -.->|"resume at the crash point"| WF
+        </pre>
+        <figcaption>The engine records every step's result to a durable history and never runs your workflow code where the side effects happen — those live in activities. A crashed workflow resumes by replaying that history, so completed steps are returned from the record instead of re-executed.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Durable execution (code-first)</dt>
+        <dd>The workflow is authored as ordinary imperative code — awaits, loops, conditionals — and the engine rebuilds state by deterministically replaying that code against the recorded history. You get real language control flow for free; the price is that the workflow body must stay deterministic, with all wall-clock time, randomness, and I/O pushed into activities.</dd>
+        <dt id="variations-item-2">Declarative state machine (config-first)</dt>
+        <dd>The workflow is described as a state machine or DAG in JSON, YAML, or a DSL, and the engine tracks each execution's position server-side and continues from it. This buys a visualizable diagram and simpler operations, at the cost of expressiveness — logic sometimes has to be contorted to fit the state-machine model.</dd>
+        <dt id="variations-item-3">Signals and durable timers</dt>
+        <dd>A workflow can block on an external event — a human approval, a webhook callback — or on a wall-clock timer, and wait days or months holding only persisted state, with no live thread or worker memory consumed while it waits. The engine rehydrates the execution when the event or timer fires.</dd>
+        <dt id="variations-item-4">Continue-as-New</dt>
+        <dd>For workflows that loop indefinitely or accumulate a large history, the execution periodically snapshots its current state into a fresh run seeded with an empty history. This caps replay cost and keeps the persisted history from growing past the engine's size limit.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">You write the happy path; the engine owns retries, timeouts, persisted progress, and crash recovery, so system plumbing stops leaking into business logic.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">A crash resumes exactly where it left off — completed steps are returned from history, never re-run — so no step is silently lost or duplicated.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A workflow can wait days or months for an external event on persisted state alone, without holding a thread or burning resources while it waits.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">The recorded history is a full audit trail: you can see precisely which step a stuck process is blocked on, instead of reverse-engineering it from scattered logs.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">It is another distributed system to operate or pay for — the engine, its history store, and worker pools all have to be run and monitored.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Code-first engines demand deterministic workflow code; a stray timestamp, random number, or direct network call in the workflow body breaks replay on recovery.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The entire execution history is persisted for replay, so a long-running or looping workflow can hit history-size limits unless it snapshots with Continue-as-New.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">It is overkill for a single-step job — every step pays round-trips through the engine plus a history write, which does not pay off for high-frequency trivial work.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">A logical operation spans several flaky services and must complete fully or unwind — and a crash mid-flow must neither lose nor repeat a step.</li>
+            <li id="usage-when-2" data-kb-polarity="when">The process is long-running: it waits on a human, a webhook, or a timer for anything from minutes to months before it can continue.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You catch yourself hand-building durable progress, a poller with locking, retries, timeouts, and compensation around a multi-step flow.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The work is a single step — resize an image, send one email — where a plain message queue already gives you retries and durability.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The client waits synchronously for the result and latency is tight; the engine's scheduling and history writes add overhead a hot path can't spare.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The operations are high-frequency and low-value — per-step round-trips through the engine plus a history write don't pay off across millions of trivial calls.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a durable workflow that survives a crash by replaying its history</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// The workflow reads like the happy path. The engine records each
+// step's result to history, so a crash replays this function and the
+// completed steps return their recorded result instead of re-running.
+const { charge, reserve, ship, refund } = proxyActivities&lt;Activities&gt;({
+  startToCloseTimeout: "1 minute",
+  retry: { maximumAttempts: 3 }, // retries are the engine's job, not yours
+});
+
+export async function fulfillOrder(order: Order): Promise&lt;void&gt; {
+  const payment = await charge(order);   // step 1 — result recorded to history
+  try {
+    const hold = await reserve(order);   // step 2 — result recorded to history
+    await ship(order, hold);             // step 3 — result recorded to history
+  } catch (err) {
+    await refund(payment);               // compensate the steps already done
+    throw err;
+  }
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="temporal"><strong>Temporal</strong><span>A durable execution engine and a 2019 open-source fork of Uber's Cadence: you write the workflow as ordinary code, and it reconstructs state by deterministically replaying that code against a recorded event history, resuming at the last completed step. Per-activity timeouts and retry policies, Signals for external events, and Continue-as-New for long loops are built in.</span></div>
+        <div class="wild-item" data-kb-example="aws-step-functions"><strong>AWS Step Functions</strong><span>A managed, serverless orchestrator: the workflow is a JSON/ASL state machine of Task, Wait, Choice, and Catch states, and the service tracks each execution's position server-side. Standard workflows cap execution duration at one year and inter-state payloads at 256 KB.</span></div>
+        <div class="wild-item" data-kb-example="azure-durable-functions"><strong>Azure Durable Functions</strong><span>An extension to Azure Functions for durable orchestrations: an orchestrator function awaits activity functions, and the framework replays the orchestrator against its execution history to rebuild state after a restart — the code-first replay model on a serverless platform.</span></div>
+        <div class="wild-item" data-kb-example="netflix-conductor"><strong>Netflix Conductor</strong><span>An open-source orchestration engine originally built at Netflix that runs JSON-defined workflows of tasks against a pool of workers, tracking each execution's state so it can be resumed and inspected.</span></div>
+        <div class="wild-item" data-kb-example="apache-airflow"><strong>Apache Airflow</strong><span>Schedules DAG-style batch workflows authored as Python DAGs. Built for scheduled ETL pipelines rather than event-driven, long-running, user-facing processes — the canonical tool when the shape is a batch DAG rather than a per-request durable flow.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>activity timeout &amp; retry policy</strong> — the start-to-close timeout bounding how long one step may run, plus the retry policy (max attempts, backoff) before the step is treated as failed. Too generous and a hung step stalls the whole workflow; too tight and a slow-but-healthy step is retried needlessly</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>history / execution size limit</strong> — engines persist the full event history for replay and enforce a ceiling on its size (and often a maximum execution age). Long or looping workflows approach it and must snapshot via Continue-as-New before they hit the wall</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>worker concurrency per task queue</strong> — how many workflow and activity tasks a worker pool polls and runs at once. Too low and tasks queue behind busy workers; too high and the activities overrun the downstream services they call</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>activity heartbeat interval</strong> — for a long-running activity, how often it reports liveness so the engine can tell a slow step from a dead worker and reschedule promptly instead of waiting out the full timeout</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>workflow start-to-close latency</strong> — end-to-end time from an execution starting to completing. A lengthening tail means steps are stalling or retrying, not that throughput merely dropped</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>activity failure &amp; retry rate</strong> — failures and retries attributed to each activity type. A spike isolates the one flaky downstream dragging workflows into long retry loops</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>task-queue backlog / schedule-to-start latency</strong> — how long tasks wait before a worker picks them up. Sustained growth means the worker pool is undersized for the arrival rate</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>open workflow count and age</strong> — how many executions are in flight and how old the oldest is. A growing tail of long-lived, un-advancing workflows points at stuck steps or a signal that never arrived</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>non-deterministic code breaks replay</strong> — a timestamp, random value, or direct network call in the workflow body (rather than in an activity) makes replay diverge from recorded history, and the execution wedges or errors on recovery</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>poison activity retries forever</strong> — a step that deterministically fails is retried under its policy without end, pinning workers and never advancing; without a max-attempts cap or a compensation branch it silently stalls the workflow</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>history outgrows its limit</strong> — a long loop or a firehose of signals inflates the event history until it hits the engine's size ceiling and the execution can no longer progress. Continue-as-New is the release valve</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>worker starvation on a backed-up task queue</strong> — a burst of workflows or slow activities saturates the worker pool; new tasks pile up and schedule-to-start latency climbs while nothing is technically failing</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Workflow code is deterministic — all wall-clock time, randomness, and I/O live in activities, so replay reproduces the same decisions</li>
+            <li id="production-check-2" data-kb-polarity="check">Every activity has a start-to-close timeout and a bounded retry policy, so a hung or poison step cannot stall the workflow forever</li>
+            <li id="production-check-3" data-kb-polarity="check">Activities are idempotent and keyed, so a retry after an unacknowledged success does not double-charge or double-send</li>
+            <li id="production-check-4" data-kb-polarity="check">Changes to running workflows are versioned or patched, so a deploy does not break in-flight executions' replay</li>
+            <li id="production-check-5" data-kb-polarity="check">Unbounded or looping workflows use Continue-as-New to keep the persisted history bounded</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="saga"><a href="./saga.html">Saga</a><span class="rel-note">An orchestrator is the durable engine that runs a saga's steps and compensations</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="multi-step-processes"><a href="../../../themes/multi-step-processes.html">Multi-Step Processes</a><span>Run the steps as durable, replayable code</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>
