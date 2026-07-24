@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tinder · Patterns</title>
+  <meta name="description" content="Design a swipe-and-match dating feed — a low-latency geospatial recommendation stack plus a strongly consistent, atomic mutual-match check at billions of writes a day.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#tinder",
+  "identifier": "tinder",
+  "name": "Tinder",
+  "description": "Surface nearby profiles in under 300 ms and fire a match the moment two people both swipe right, across billions of swipes a day",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/routing/geohash.html#geohash",
+      "name": "Geohash",
+      "kb:note": "the candidate stack is a geospatial index query — profiles within N km of the user's current location"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "an active user's next stack is precomputed by a background job and served straight from cache on app open"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/change-data-capture.html#change-data-capture",
+      "name": "Change Data Capture",
+      "kb:note": "profile edits are streamed into the search index instead of dual-writing, keeping the geo index in sync"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/lsm-tree.html#lsm-tree",
+      "name": "LSM Tree",
+      "kb:note": "Cassandra's log-structured write path absorbs ~2B swipes/day that a B-tree store could not"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "the swipe partition key is the sorted user pair, forcing both directions of a pair into one partition for atomic checks"
+    },
+    {
+      "@id": "../patterns/distributed/routing/consistent-hashing.html#consistent-hashing",
+      "name": "Consistent Hashing",
+      "kb:note": "the Redis variant combines both ids into one key so a pair's swipes hash to the same shard for an atomic Lua check"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/bloom-filter.html#bloom-filter",
+      "name": "Bloom Filter",
+      "kb:note": "heavy swipers get a per-user Bloom filter of their swipe history to keep the already-seen check cheap"
+    },
+    {
+      "@id": "../patterns/caching/client-side-cache.html#client-side-cache",
+      "name": "Client-Side Cache",
+      "kb:note": "the last K swipes are cached on the single device and filtered from the next stack, closing the replication-lag window"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="tinder" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Surface nearby profiles in under 300 ms and fire a match the moment two people both swipe right, across billions of swipes a day" data-kb-order="15" data-kb-aliases='[]' data-kb-tags='["system-design","consistency","partitioning","latency","caching"]' data-kb-solves='["two users act on each other at almost the same moment and my check misses that they mutually matched","loading a stack of nearby candidates takes seconds because I scan and filter the whole users table on every request","people keep getting shown profiles they already dismissed and it looks like their actions were lost","I am writing billions of tiny records a day and a single database cannot absorb the volume","one person history of things they have already seen has grown so large that checking against it is slow"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Tinder</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Tinder</h1>
+      <p class="doc-essence">A swipe-and-match feed shows one nearby person at a time; swipe right to like, left to pass, and when two people like each other the app announces a match. Two demands pull against each other: the candidate stack must appear almost instantly, and the mutual match behind it must be detected exactly once, immediately, at enormous write volume.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="tinder">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>The product is deceptively small: a stack of nearby profiles, a right-or-left swipe on each, and a match when two people swipe right on each other. The difficulty is that the two hard requirements pull in opposite directions. Producing the stack means filtering millions of profiles by preference and physical distance, yet it has to land on screen in under 300&nbsp;ms. The match, meanwhile, has to be <em>strongly</em> consistent: the instant the second of two people swipes right, that person must be told — no missed match, no duplicate — and this holds across billions of swipes a day. Everything else — photos, chat, paid boosts — is deliberately set aside so the design can concentrate on the feed and the swipe, which are where the engineering actually lives.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Create a profile with match preferences — age range, interests, and a maximum distance.</li>
+            <li>Open a stack of candidate profiles that match those preferences and sit within the maximum distance of the user's current location.</li>
+            <li>Swipe right (yes) or left (no) on one profile at a time.</li>
+            <li>Receive a match notification the instant a right-swipe turns out to be mutual.</li>
+          </ol>
+          <p class="prose">Out of scope: photo uploads, post-match chat, and paid boosts or super-likes — named so the design stays on the recommendation-and-swipe core.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Consistency (matching)</strong> — a mutual right-swipe must always notify the person who swiped second; strong consistency here, not eventual reconciliation.</li>
+            <li><strong>Latency</strong> — the candidate stack loads in under 300&nbsp;ms.</li>
+            <li><strong>No repeats</strong> — never show a profile the user has already swiped on.</li>
+            <li><strong>Scale</strong> — 20M daily actives at ~100 swipes each per day, roughly 2B swipes/day.</li>
+          </ul>
+          <p class="prose">Out of scope: fake-profile detection and monitoring/alerting.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Swipe writes.</strong> 20M DAU × ~100 swipes/day ≈ <strong>2B swipes/day</strong> ≈ ~23k writes/sec on average, and considerably spikier at peak. At ~100 bytes per swipe that is ~<strong>200&nbsp;GB/day</strong> of new swipe data. This is the number that rules out a single B-tree store and forces a write-optimized, partitioned one.</p>
+        <p><strong>Feed reads.</strong> Every swipe is preceded by a profile view, so feed generation has to produce on the order of <strong>2B candidate cards/day</strong>, each stack delivered inside the 300&nbsp;ms budget. Serving those from a live geospatial query on every open is what the caching path exists to avoid.</p>
+        <p><strong>Matches.</strong> A tiny fraction of swipes ever become matches, but each one must be detected <em>exactly once</em> and surfaced immediately — so the cost is not volume, it is the atomicity of the check.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three entities, and the first is the one people forget:</p>
+        <ul>
+          <li><strong>User</strong> — both the person swiping and a profile shown to others. Carries the match preferences (age range, interests, <code>interested_in</code>) and a current location. Listed explicitly because users are the things being swiped on.</li>
+          <li><strong>Swipe</strong> — one yes/no decision, from a <code>swiping_user</code> onto a <code>target_user</code>.</li>
+          <li><strong>Match</strong> — the connection formed when two users have each swiped yes on the other.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>A small REST surface — one endpoint per requirement:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — profile, feed, swipe</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /profile          Authorization: Bearer &lt;jwt&gt;
+{ "age_min": 20, "age_max": 30, "distance_km": 10,
+  "interested_in": "female" | "male" | "both" }
+&rarr; 200
+
+GET /feed?lat={}&long={}&distance_km={}    Authorization: Bearer &lt;jwt&gt;
+&rarr; 200 [ User, User, ... ]   // no pagination — re-request when the stack runs low
+
+POST /swipe/{targetUserId}                 Authorization: Bearer &lt;jwt&gt;
+{ "decision": "yes" | "no" }
+&rarr; 200 { "match": true | false }</code></pre>
+      </details>
+      <div class="prose">
+        <p>Three deliberate choices are baked in here. Identity comes from the auth header on <em>every</em> call, never from the body — body fields are client-forgeable, so the acting user is taken from the session token or JWT. Location rides in as a query parameter rather than being stored server-side, because it changes constantly and only the current position matters. And the feed is <strong>not paginated</strong>: it is a recommendation stream, not a page-able list, so the client simply re-hits <code>/feed</code> for more once it nears the end of the current batch.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Three request types with completely different shapes share one API gateway and then diverge. Profile writes are rare, so a plain <strong>Profile Service</strong> over a relational store handles them. Feed reads are the latency-critical path and need geospatial filtering, so a <strong>Feed Service</strong> sits over a search index and a precomputed-feed cache. Swipes are the highest-volume, consistency-critical path — billions of small writes a day plus an atomic mutual-match check — so a <strong>Swipe Service</strong> gets its own write-optimized store, kept separate from profiles precisely because the two read/write profiles are nothing alike. A match is announced two ways: the second swiper is told synchronously in the swipe response, while the earlier swiper — who may have swiped weeks ago — gets an asynchronous push through APNS or FCM.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Mobile client"]
+    Gateway["API Gateway"]
+    Client -->|"/profile, /feed, /swipe"| Gateway
+    Gateway -->|"profile writes"| Profile["Profile Service"]
+    Gateway -->|"GET /feed"| Feed["Feed Service"]
+    Gateway -->|"POST /swipe"| Swipe["Swipe Service"]
+    Profile --> ProfileDB[("Profile store")]
+    Feed -->|"precomputed stack"| FeedCache[("Feed cache")]
+    Feed -->|"geo + filter on miss"| Search[("Geo search index")]
+    ProfileDB -.->|"CDC"| Search
+    Swipe -->|"atomic match check"| Redis[("Redis")]
+    Swipe -->|"durable append"| Cass[("Cassandra")]
+    Redis -.->|"async push on match"| Push["APNS / FCM"]
+        </pre>
+        <figcaption>Profile, feed, and swipe paths split behind the gateway, each onto a store matched to its workload; a match notifies the second swiper inline and the first swiper via push.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Detecting a mutual match without a race</h3>
+        <p>The dangerous case is two people swiping right on each other in the same instant. Each swipe independently checks for the other's swipe, both find nothing because neither write has landed yet, and both save — a textbook <a href="../hazards/race-condition.html">race condition</a> that leaves a genuine match undetected and both people un-notified. Polling the store on a schedule for reciprocal swipes is a non-starter: it violates the immediate-notification requirement outright and hammers the database. The fix is to make write-and-check a single atomic step.</p>
+        <p>The durable store is <a href="../patterns/distributed/coordination/lsm-tree.html">Cassandra</a> — its log-structured write path (commit log, memtables, SSTables) absorbs the ~2B swipes/day that a B-tree store could not. Cassandra offers lightweight transactions, but only within one partition, so the trick is to force both directions of a pair into the same partition. Derive the partition key from the two user ids sorted and joined — <code>smaller:larger</code> — and A→B and B→A land together, turning an insert-then-read into one single-partition, atomic operation. That is <a href="../patterns/distributed/routing/sharding.html">sharding</a> chosen for atomicity, not merely for spread.</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — co-locate a pair, then check atomically</summary>
+<pre><code class="language-python" data-kb-lang="python">def pair_key(a, b):
+    lo, hi = sorted([a, b])
+    return f"{lo}:{hi}"          # A→B and B→A resolve to the same key
+
+# one atomic Redis step: record my swipe, read theirs
+#   HSET  swipes:{pair_key}  {me}_swipe    {decision}
+#   HGET  swipes:{pair_key}  {them}_swipe
+# if both sides are "yes" → it's a match, notify immediately</code></pre>
+      </details>
+      <div class="prose">
+        <p>A faster variant keeps the same co-location trick but in Redis: combine the two ids into one key so <a href="../patterns/distributed/routing/consistent-hashing.html">consistent hashing</a> maps both swipes to the same shard, then run set-my-swipe-and-read-yours inside one Lua script, which Redis executes atomically and in memory. Cassandra stays the system of record; Redis holds only recent swipes and expires them aggressively, so losing a Redis node risks missing a <em>very</em> recent match — the user just swipes again — never durable data.</p>
+        <h3>2 · Loading the stack in under 300&nbsp;ms</h3>
+        <p>The naive feed query — <code>SELECT … WHERE age BETWEEN … AND lat BETWEEN … AND long BETWEEN …</code> — is a filtered scan that blows the budget even with ordinary indexes. Two moves fix it. First, hold the candidate corpus in a search-optimized store (Elasticsearch or OpenSearch) with a <a href="../patterns/distributed/routing/geohash.html">geospatial index</a>, so "profiles matching these preferences within N&nbsp;km" is a fast bounded lookup rather than a scan. That index has to track the profile store, which is a separate write path, so <a href="../patterns/distributed/coordination/change-data-capture.html">change data capture</a> streams profile edits into it instead of dual-writing — at the cost of a small sync lag. Second, don't compute the stack on the hot path for active users at all: a background job precomputes each active user's next stack and stores it as a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a>, served straight from cache on app open.</p>
+        <p>The two combine: instant from the precomputed stack, and when a user nears the end of it the Feed Service falls back to the live geo query and refreshes the stack in the background, so the feed feels endless. The risk is a <a href="../hazards/stale-cache.html">stale feed</a> — a candidate moves out of range or edits their filters and no longer qualifies. Bounding it is a set of tunable knobs: a short TTL (well under an hour), precompute only for genuinely active users rather than everyone, and trigger a refresh when the user changes filters or moves a meaningful distance.</p>
+        <h3>3 · Never re-showing a swiped profile</h3>
+        <p>Re-showing someone the user already dismissed reads as a bug, and worse, suggests their swipes weren't recorded. The obvious approach — query swipe history and filter the feed against it — has two problems: under an availability-leaning store a very recent swipe may not have replicated to the replica the feed reads from, and a heavy swiper's history grows into an ever more expensive contains-check. Both get solved on the way to the client. Because a user is on a single device, a <a href="../patterns/caching/client-side-cache.html">client-side cache</a> of the last K swipes filters anything just swiped out of the next stack, closing the replication-lag window with no server-side cache to maintain. For users whose history is genuinely enormous, keep a per-user <a href="../patterns/distributed/coordination/bloom-filter.html">Bloom filter</a> of everything they've swiped and test candidates against it: it never re-shows a swiped profile (no false negatives) and only, rarely, hides a fresh one (a false positive), with the error rate traded against memory. It is arguably over-engineered for the median user — which is the point: it earns its keep only in the long tail.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Mutual matches are detected atomically and announced immediately — even for near-simultaneous swipes — by co-locating a pair's swipes on one partition or shard.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">The candidate stack lands well under 300&nbsp;ms: precomputed for active users, backed by a geospatial index when it depletes.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Profile, feed, and swipe scale independently, each on a store suited to its own read/write shape.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The Redis match path and the CDC-fed search index are both internally eventually consistent: a lost Redis node can miss a very recent match, and index lag can briefly surface a stale profile.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Precomputed feeds go stale between refreshes; freshness leans on TTLs and change-triggered recomputes rather than always-live data.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The Bloom filter trades a small rate of never-shown profiles for cheap history checks, and its per-user cache is expensive to rebuild after a loss.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end design: profile, feed, and swipe services with their stores, a sound API and data model, geospatial as well as ordinary filters, and a scheme that avoids re-showing swiped profiles. Deep technology internals are not assumed.</li>
+          <li><strong>Senior</strong> — moves quickly past the high-level design to spend real time on scalable feed generation and reliable matching; argues index choices, names the feed-staleness problem, and reasons about caching and CDC trade-offs unprompted.</li>
+          <li><strong>Staff+</strong> — drives depth on the hard parts from experience: the single-partition-transaction trick and the Redis/Cassandra split for matching, the precompute-plus-index feed, and Bloom-filter history filtering — articulating each trade-off as a peer.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="geohash"><a href="../patterns/distributed/routing/geohash.html">Geohash</a><span class="rel-note">the candidate stack is a geospatial index query — profiles within N km of the user's current location</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">an active user's next stack is precomputed by a background job and served straight from cache on app open</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="change-data-capture"><a href="../patterns/distributed/coordination/change-data-capture.html">Change Data Capture</a><span class="rel-note">profile edits are streamed into the search index instead of dual-writing, keeping the geo index in sync</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="lsm-tree"><a href="../patterns/distributed/coordination/lsm-tree.html">LSM Tree</a><span class="rel-note">Cassandra's log-structured write path absorbs ~2B swipes/day that a B-tree store could not</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">the swipe partition key is the sorted user pair, forcing both directions of a pair into one partition for atomic checks</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="consistent-hashing"><a href="../patterns/distributed/routing/consistent-hashing.html">Consistent Hashing</a><span class="rel-note">the Redis variant combines both ids into one key so a pair's swipes hash to the same shard for an atomic Lua check</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="bloom-filter"><a href="../patterns/distributed/coordination/bloom-filter.html">Bloom Filter</a><span class="rel-note">heavy swipers get a per-user Bloom filter of their swipe history to keep the already-seen check cheap</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="client-side-cache"><a href="../patterns/caching/client-side-cache.html">Client-Side Cache</a><span class="rel-note">the last K swipes are cached on the single device and filtered from the next stack, closing the replication-lag window</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

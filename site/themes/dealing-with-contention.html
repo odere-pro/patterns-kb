@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dealing with Contention · Patterns</title>
+  <meta name="description" content="Keeping concurrent writers correct when they fight over the same data — an escalation ladder from an atomic conditional write up through locks to a cross-server lease.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#dealing-with-contention",
+  "identifier": "dealing-with-contention",
+  "name": "Dealing with Contention",
+  "description": "Keeping concurrent writers correct when they fight over the same data",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "theme",
+  "kb:band": "theme",
+  "kb:group": "theme",
+  "kb:tours": [
+    {
+      "@id": "../patterns/distributed/coordination/conditional-write.html#conditional-write",
+      "name": "Conditional Write",
+      "kb:role": "Fold the check into the write so the store guards it atomically"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/optimistic-concurrency-control.html#optimistic-concurrency-control",
+      "name": "Optimistic Concurrency Control",
+      "kb:role": "Bet no one else wrote, verify the bet at write time, retry the rare loser"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/pessimistic-locking.html#pessimistic-locking",
+      "name": "Pessimistic Locking",
+      "kb:role": "Lock the contended rows up front when collisions are frequent"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/distributed-lock.html#distributed-lock",
+      "name": "Distributed Lock",
+      "kb:role": "Hold exclusivity across servers and across time as a self-expiring lease"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:role": "Make the retry safe so a duplicate write is harmless"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc theme">
+  <main class="doc-wrap" data-kb-id="dealing-with-contention" data-kb-kind="theme" data-kb-band="theme" data-kb-group="theme" data-kb-essence="Keeping concurrent writers correct when they fight over the same data" data-kb-order="11" data-kb-aliases="[&quot;concurrency control&quot;,&quot;write contention&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;consistency&quot;,&quot;transactions&quot;,&quot;coordination&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#themes-h">Themes</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Dealing with Contention</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Theme</p>
+      <h1 class="doc-title">Dealing with Contention</h1>
+      <p class="doc-essence">Keeping concurrent writers correct when they contend for the same record — a ladder of coordination mechanisms you climb as collisions grow more frequent and reach further across servers and time.</p>
+      <div class="doc-metarow">
+        <span class="badge">Theme</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="dealing-with-contention">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="framing" aria-labelledby="h-framing" data-kb-block="framing">
+      <h2 class="doc-h" id="h-framing">The question</h2>
+      <div class="prose">
+        <p>Picture one row — a seat count, an account balance, a live scoreboard — and two requests arriving in the same millisecond, each wanting to change it. The obvious code reads the current value, decides what to do with it, and writes the result back. Run that under concurrency and it is quietly broken: both requests read the same starting value before either write lands, both compute from it, and one write silently erases the other. The seat sells twice, a deposit vanishes, the counter drifts low. Nothing throws; the numbers are just wrong.</p>
+        <p>That naive read-modify-write is a <a href="../hazards/race-condition.html">race condition</a>, and closing it is what this theme is about. The fixes are not one trick but a ladder. At the bottom sits a single statement the database makes atomic for you; a rung up is a version check that lets the rare loser retry; higher still is an explicit lock that makes writers queue; at the top is a lease that outlives an entire transaction. You climb only as far as the collision rate and the reach of the contention actually force you — the whole skill is not over-building.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradespace" aria-labelledby="h-tradespace" data-kb-block="tradespace">
+      <h2 class="doc-h" id="h-tradespace">The tradespace</h2>
+      <div class="prose">
+        <p>Two questions place you on the ladder. <strong>How often do writers actually collide?</strong> When collisions are rare — most retail checkout, admin edits, a review-count bump — bet on that and pay nothing for the common case: fold the whole safety rule into one conditional write the store executes atomically, or attach a version to the row and let the occasional loser retry. This is the <em>optimistic</em> stance: assume no interference, detect the exception, redo only the rare bit. When collisions are frequent — a hot auction, the one flash-sale row everyone wants — optimism turns into a retry storm that clears slower than it fills, and it is cheaper to be <em>pessimistic</em>: take an explicit lock up front so writers block in an orderly queue instead of thrashing.</p>
+        <p><strong>How far does the contention reach?</strong> While the decision fits inside one row and one transaction, the database itself is your coordinator — a <code>WHERE</code> clause or a <code>SELECT ... FOR UPDATE</code> is all the machinery you need. Once exclusivity must be seen by more than one server, or must outlive the transaction — hold a seat for ten minutes of checkout, keep two workers off the same job — a transaction-scoped lock can't stretch that far, and you need a lease any server can read and that expires on its own.</p>
+        <p>Cutting across both axes is one enabler: a retry, or a duplicate delivery, is only safe if applying a write twice equals applying it once. Make each operation <a href="../patterns/messaging/idempotency.html">idempotent</a> and every retry on the ladder becomes trustworthy. And there is a boundary: once an operation must stay correct across several independent stores at the same time, it has left contention behind and become a distributed-transaction problem.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+    S["Two writers contend for one record"] --> Q1{"Must exclusivity span servers or outlive the transaction?"}
+    Q1 -->|"Yes"| DL["Distributed lock: a lease with a TTL"]
+    Q1 -->|"No"| Q2{"Does the safety rule fit in the row's WHERE clause?"}
+    Q2 -->|"Yes"| CW["Conditional write: one atomic statement"]
+    Q2 -->|"No, needs app logic"| Q3{"Do writers collide often?"}
+    Q3 -->|"Rarely"| OCC["Optimistic control: version check, loser retries"]
+    Q3 -->|"Often"| PL["Pessimistic lock: acquire the rows up front"]
+        </pre>
+        <figcaption>Climb only as high as scope and collision rate force you: reach for a lease last, prefer a single atomic write first, and choose optimism or pessimism by how often writers actually meet.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="tour" aria-labelledby="h-tour" data-kb-block="tour">
+      <h2 class="doc-h" id="h-tour">The escalation ladder</h2>
+      <div class="tour">
+        <div class="tour-step" data-kb-member="conditional-write" data-kb-role="Fold the check into the write so the store guards it atomically">
+          <h3><a href="../patterns/distributed/coordination/conditional-write.html">Conditional Write</a></h3>
+          <p>The cheapest rung, and the one to try first. When the safety rule is a predicate on the row you're writing — <code>available_seats &gt; 0</code>, <code>status = 'available'</code> — you need no lock at all: fold the check into the write's <code>WHERE</code> clause and let the store serialize writes to that row for you. The loser's condition re-evaluates against the winner's result, matches zero rows, and does nothing. One atomic statement, no coordinator.</p>
+        </div>
+        <div class="tour-step" data-kb-member="optimistic-concurrency-control" data-kb-role="Bet no one else wrote, verify the bet at write time, retry the rare loser">
+          <h3><a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">Optimistic Concurrency Control</a></h3>
+          <p>When the decision needs a little application logic but collisions are rare, don't lock — assume no one else touched the row and check that assumption as you write. Attach a version that changes on every write and condition the update on the version you read still being current. If a concurrent writer moved it first, your update matches zero rows and you retry. You pay only when there is a real conflict, which makes it ideal for high read-to-write ratios.</p>
+        </div>
+        <div class="tour-step" data-kb-member="pessimistic-locking" data-kb-role="Lock the contended rows up front when collisions are frequent">
+          <h3><a href="../patterns/distributed/coordination/pessimistic-locking.html">Pessimistic Locking</a></h3>
+          <p>When collisions are frequent, optimism degrades into a retry storm. Lock the contended rows up front instead — <code>SELECT ... FOR UPDATE</code> — so a competing writer blocks until you commit rather than doing work it will have to discard. The price is that every writer pays lock overhead even when it would never have collided, and a lock held across slow I/O — a payment call, say — stalls everyone queued behind it.</p>
+        </div>
+        <div class="tour-step" data-kb-member="distributed-lock" data-kb-role="Hold exclusivity across servers and across time as a self-expiring lease">
+          <h3><a href="../patterns/distributed/coordination/distributed-lock.html">Distributed Lock</a></h3>
+          <p>When exclusivity must outlive a single transaction or be seen by more than one server — hold a seat through a ten-minute checkout, keep two workers off the same task — a row lock cannot reach that far. Represent the lock as a lease instead: a record of who holds it and when it expires, readable by any server and self-cleaning when its TTL lapses. The escalation of last resort — reach for it only when a single-transaction guard genuinely cannot do the job.</p>
+        </div>
+        <div class="tour-step" data-kb-member="idempotency" data-kb-role="Make the retry safe so a duplicate write is harmless">
+          <h3><a href="../patterns/messaging/idempotency.html">Idempotency</a></h3>
+          <p>Every rung above leans on retrying the loser, and a retry is only safe if doing the write twice equals doing it once. Give each operation a key the store remembers, so a replayed or duplicated request returns the first result instead of applying a second charge. It doesn't resolve contention on its own — it is what makes the whole ladder's retries trustworthy from client to store.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="decide" aria-labelledby="h-decide" data-kb-block="decide">
+      <h2 class="doc-h" id="h-decide">How to decide</h2>
+      <div class="table-scroll">
+        <table class="decision">
+          <thead>
+            <tr><th>If you need…</th><th>Lean</th><th>Reach for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>The safety rule to fit inside one row's <code>WHERE</code> clause (a counter, status, or claim)</td><td>Atomic write</td><td><a href="../patterns/distributed/coordination/conditional-write.html">Conditional Write</a></td></tr>
+            <tr><td>Read-decide-write correctness where collisions are rare and reads dominate</td><td>Optimistic</td><td><a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">Optimistic Concurrency Control</a></td></tr>
+            <tr><td>Correctness when many writers keep hitting the same hot row</td><td>Pessimistic</td><td><a href="../patterns/distributed/coordination/pessimistic-locking.html">Pessimistic Locking</a></td></tr>
+            <tr><td>Exclusivity that spans servers or an external wait such as checkout</td><td>A lease</td><td><a href="../patterns/distributed/coordination/distributed-lock.html">Distributed Lock</a></td></tr>
+            <tr><td>A retried or duplicated write to land exactly once</td><td>Safe replay</td><td><a href="../patterns/messaging/idempotency.html">Idempotency</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="doc-section" id="siblings" aria-labelledby="h-siblings" data-kb-block="siblings">
+      <h2 class="doc-h" id="h-siblings">Sibling themes</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="./consistency-and-replication.html">Consistency &amp; Replication</a><span>Contention is the single-node face of the question replication asks across many: whose write wins, and when does everyone agree on it.</span></div>
+        <div class="fluency-item"><a href="./cap-theorem.html">CAP Theorem</a><span>When contention spreads across a partitioned network, keeping writers correct turns into the consistency-versus-availability choice.</span></div>
+        <div class="fluency-item"><a href="./scalability.html">Scalability</a><span>A hot contended row is where horizontal scaling stops helping — sharding splits keys, but not the one key every writer wants at once.</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#themes-h">← Themes</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#themes-h">Themes →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

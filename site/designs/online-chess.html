@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Online Chess · Patterns</title>
+  <meta name="description" content="Design an online chess platform — skill-based matchmaking, half a million server-authoritative real-time games, and a live 10M-player leaderboard.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#online-chess",
+  "identifier": "online-chess",
+  "name": "Online Chess",
+  "description": "Match players by rating, run 500K real-time games where the server owns every board and clock, and rank 10M players live",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/concurrency/actor-model.html#actor-model",
+      "name": "Actor Model",
+      "kb:note": "each live game is owned by one server that holds its board and clocks in memory and processes its own moves serially"
+    },
+    {
+      "@id": "../patterns/distributed/routing/consistent-hashing.html#consistent-hashing",
+      "name": "Consistent Hashing",
+      "kb:note": "gameId is mapped to a game server through a hash ring plus a membership registry so both players land together and node changes remap only a slice"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/write-ahead-log.html#write-ahead-log",
+      "name": "Write-Ahead Log",
+      "kb:note": "every accepted move is appended to a durable log before it is broadcast, so a crash can never leave players ahead of the record"
+    },
+    {
+      "@id": "../patterns/architecture/event-sourcing.html#event-sourcing",
+      "name": "Event Sourcing",
+      "kb:note": "a replacement server rebuilds the board by replaying the move log, and a rating is a fold over finished games rather than a stored value"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/optimistic-concurrency-control.html#optimistic-concurrency-control",
+      "name": "Optimistic Concurrency Control",
+      "kb:note": "two matchers racing for the same waiting player are resolved by an atomic ZREM claim where exactly one wins and losers retry, no lock held"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/conditional-write.html#conditional-write",
+      "name": "Conditional Write",
+      "kb:note": "a generation counter on the game row guards every write with WHERE generation <= :gen, so a partitioned zombie server's stale updates are silently dropped"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "exact rank is served from a Redis sorted set derived from finished games, never the source of truth and always rebuildable by reconciliation"
+    },
+    {
+      "@id": "../patterns/messaging/pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "the worker that claims a player publishes matchFound on a channel keyed by requestId to whichever node holds that player's long-poll"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="online-chess" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Match players by rating, run 500K real-time games where the server owns every board and clock, and rank 10M players live" data-kb-order="20" data-kb-aliases='["Chess.com","Lichess","multiplayer chess"]' data-kb-tags='["system-design","state-management","concurrency","consistency","latency"]' data-kb-solves='["two workers both claim the same waiting player and double-book them into two matches","keeping live session state in a shared store makes every action pay a network round trip","a server that holds in-memory sessions crashes and takes every one of them down with it","a distant player keeps losing on the clock because their own network lag comes out of their own time","showing someone their exact rank means counting millions of rows above them on every request"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Online Chess</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Online Chess</h1>
+      <p class="doc-essence">An online chess platform is three systems wearing one coat: skill-based matchmaking that pairs strangers by rating, a real-time game in which the server is the sole authority on the board and both clocks, and a global leaderboard. The whole design turns on one rule — the server validates every move and owns the time — and on holding half a million live games in memory without losing one to a crash.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="online-chess">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Two players are paired by rating, sit down at a shared board with their own countdown clocks, trade moves in real time, and afterwards climb a rating ladder. The one decision that shapes everything is authority: the <strong>server</strong> validates each move and owns both clocks, so no client can play an illegal move, claim extra time, or drift into a different board position than its opponent. A move must land on the other side in under 200&nbsp;ms, and at peak there are hundreds of thousands of these games in flight at once. Build the single game first; the scale, the fairness of the clock, and the survival of the game-server fleet are where the real work is.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Find an opponent of similar skill through matchmaking and start a game.</li>
+            <li>Play the game in real time, with the server validating every move and running both clocks.</li>
+            <li>View a global leaderboard and one's own rank, both refreshed shortly after a game ends.</li>
+          </ol>
+          <p class="prose">Out of scope: spectating and broadcasts, chat and social, puzzles and post-game analysis, tournaments, and anti-cheat/engine-detection — named so the core stays narrow (several are revisited as deferred systems below the line).</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Latency</strong> — move propagation end to end under 200&nbsp;ms.</li>
+            <li><strong>Consistency over availability</strong> — if a game server is unreachable, <em>pause</em> the game rather than let two clients diverge. A paused game is recoverable; a corrupted one is not.</li>
+            <li><strong>Fair clock</strong> — a player's own network latency must not systematically eat their own time.</li>
+            <li><strong>Scale</strong> — 500K concurrent games at peak, which is 1M live connections plus 500K stateful game sessions.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Connections.</strong> 500K games × 2 players ≈ <strong>1M concurrent WebSocket connections</strong>, each also carrying live in-memory state (board, whose turn, two clocks). A box holds tens of thousands of idle sockets, but a game server also validates moves and runs clocks, so realistic per-node counts are lower — the fleet lands at dozens to low hundreds of servers.</p>
+        <p><strong>Matchmaking throughput.</strong> Blitz games last a couple of minutes and players immediately re-queue, so ~1M active players ÷ ~120&nbsp;s ≈ <strong>8k match requests/sec</strong> from re-queuing alone; fresh arrivals and evening peaks push it to <strong>tens of thousands/sec</strong>. Each request is a range search plus an atomic claim against one shared pool — the contention, not the compute, is the problem.</p>
+        <p><strong>Leaderboard.</strong> Around 10M rated players. The whole ranking structure is roughly a gigabyte, and games finish at ~4k/sec × 2 players ≈ <strong>8k rating updates/sec</strong> — comfortable for a single node. The hard part is not the write rate but answering <em>one player's exact rank</em> out of 10M on the most common personalized read on the site.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Four entities, with matchmaking kept separate from gameplay on purpose:</p>
+        <ul>
+          <li><strong>Player</strong> — identity plus a skill <code>rating</code> (ELO). The rating drives both matchmaking and leaderboard placement, and is always read from this record server-side, never trusted from a request body.</li>
+          <li><strong>Game</strong> — one game between two players: colour assignment, current board position, whose turn, both clock values, the pre-game ratings snapshotted for the ELO delta, a <code>generation</code> fence, and the result once over.</li>
+          <li><strong>Move</strong> — one move (<code>from</code>, <code>to</code>, <code>moveNumber</code>, <code>timestamp</code>). Moves form an append-only history — the durable record the whole design leans on for recovery.</li>
+          <li><strong>MatchRequest</strong> — a pending request to be paired, carrying rating and preferred time control (e.g. "3 minutes each, +2 s/move"). Kept apart from Game so matchmaking has its own record to churn against.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Matchmaking and the leaderboard are request/response REST; gameplay is a persistent WebSocket, because both sides continuously send and receive. The security line to hold: <code>playerId</code> and <code>rating</code> come from the auth token, never the request body — a client that could name its own rating would shop for an easier opponent.</p>
+      </div>
+      <details class="sketch">
+        <summary>Protocol — REST for setup, WebSocket for play</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /matchmaking            &rarr; MatchRequest    # async pairing, held open as a long-poll
+Body: { timeControl }        # e.g. "blitz-3-2" = 3 min each, +2 s/move
+# playerId + rating are read from the auth token, never the body
+
+WS /games/:gameId            # gameplay rides one persistent socket, not polling
+  client &rarr; server:  sendMove     { from, to, moveNumber }
+  server &rarr; client:  moveAck      { accepted, reason?, whiteTimeMs, blackTimeMs }
+                     opponentMove { from, to, whiteTimeMs, blackTimeMs }
+                     gameEnd      { result }
+
+GET /leaderboard?cursor=&amp;limit=   &rarr; Player[]           # top-N page, cursor-paginated
+GET /players/:id/rank             &rarr; { rank, rating }   # the expensive personalized read</code></pre>
+      </details>
+      <div class="prose">
+        <p>The matchmaking <code>POST</code> is a <strong>long-poll</strong>: it stays open until the player is paired or times out, so both the arriving player and the one already waiting get their answer on the same held request — no separate notification channel to the client is needed.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Three planes, loosely joined. The <strong>Matchmaking Service</strong> keeps a pending pool in Redis (one sorted set per time control) and, on a pairing, creates the Game and notifies both players over a Redis channel. A thin, stateless <strong>Session Router</strong> maps each <code>gameId</code> to a <strong>Game Server</strong> through a hash ring and a membership registry, so both players land on the same server; that server holds the board in memory, validates moves locally, and appends every move to a durable log <em>before</em> it broadcasts. When a game ends it computes new ratings and updates the <strong>Leaderboard</strong>, a Redis sorted set kept as a derived, rebuildable rank index over the durable Games record.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Player · browser"]
+    MM["Matchmaking Service"]
+    Redis[("Redis · sorted set + pub/sub")]
+    Router["Session Router · hash ring"]
+    Registry[("Membership Registry")]
+    Game["Game Server · board in memory"]
+    Log[("Move log + Games DB")]
+    Board[("Leaderboard · sorted set")]
+
+    Client -->|"POST /matchmaking (long-poll)"| MM
+    MM -->|"ZADD / ZRANGEBYSCORE / ZREM"| Redis
+    Redis -->|"matchFound"| MM
+    Client -->|"WS /games/:id"| Router
+    Router -->|"watch membership"| Registry
+    Router -->|"route both seats"| Game
+    Game -->|"append move, then broadcast"| Log
+    Game -->|"on game end: new ELO"| Board
+        </pre>
+        <figcaption>Setup is REST and Redis; play is a socket to one stateful server; every move is durable before it is seen; ratings flow into a rebuildable rank index.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Where does the live game live?</h3>
+        <p>The core decision is whether game state (board, turn, clocks) sits in a shared store or in a server's memory.</p>
+        <ul>
+          <li><strong>Stateless servers, state in a shared store.</strong> Any server can handle any move: load the game from Redis/DB, validate, write back, broadcast. There is no routing problem and a dying server loses nothing — but every move now pays a network round trip inside the 200&nbsp;ms budget, trading a microsecond in-memory check for a hop, and the store must be kept hot for every active game.</li>
+          <li><strong>Stateful servers, board in memory (chosen).</strong> Each game is owned by one server that holds its board and clocks in memory and validates moves with nothing to fetch — essentially an <a href="../patterns/concurrency/actor-model.html">actor</a> owning its own state and processing its own mailbox of moves serially. A chess game is a few hundred bytes and lasts minutes, so it is cheap to hold; in-memory validation stays comfortably inside the latency budget. The cost is that both players must land on the same server and a crash takes its in-flight games down.</li>
+        </ul>
+        <p>Durability is bought cheaply and separately. Every accepted move is appended to a durable log <strong>before</strong> the server broadcasts it — a <a href="../patterns/distributed/coordination/write-ahead-log.html">write-ahead log</a> ordering. If the server acked and pushed first and then crashed, recovery would produce a board missing a move both players already saw: the exact corrupted state the "pause, don't corrupt" rule forbids. The 200&nbsp;ms budget easily absorbs a few-millisecond synchronous write. And because the log <em>is</em> the truth, the in-memory board is just its fast projection — this is <a href="../patterns/architecture/event-sourcing.html">event sourcing</a>: a replacement server rebuilds the board by replaying a few hundred bytes of moves, so no snapshot or checkpoint machinery is ever needed.</p>
+
+        <h3>2 · Matching fairly at scale</h3>
+        <p>Tens of thousands of match requests per second hit one pending pool, and most players cluster around middle ratings where nearly everyone is a compatible opponent — so the same waiting players are candidates for huge numbers of simultaneous incoming requests. Two matchers reading the same waiting player and both pairing them is a <a href="../hazards/race-condition.html">race condition</a> that double-books someone into two games. The pool moves into a Redis <strong>sorted set</strong> per time control (member = requestId, score = rating): <code>ZRANGEBYSCORE</code> finds opponents in a rating window that widens with wait time, and the claim is a single <code>ZREM</code> — a return of 1 means this worker won the player, 0 means someone already took them. That atomic compare-and-claim is <a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">optimistic concurrency</a> doing its purpose-built job: no lock is held, exactly one worker wins the contested claim, and losers simply retry. The winning worker then publishes <code>matchFound</code> on a <a href="../patterns/messaging/pubsub.html">pub/sub</a> channel keyed by requestId; whichever node holds that player's long-poll is subscribed and completes the request with the gameId. Throughput checks out — the busiest single time control is well under a third of one Redis node's sorted-set capacity — so the pool is replicated with automatic failover rather than sharded; pending requests are cheap and ephemeral, so a failed-over pool just refills within seconds.</p>
+
+        <h3>3 · Surviving a game-server crash</h3>
+        <p>Routing and survival are one problem. The Session Router maps <code>gameId</code> to a server with <a href="../patterns/distributed/routing/consistent-hashing.html">consistent hashing</a> — each game server holds an ephemeral node in a membership registry (ZooKeeper, etcd, or Consul) that expires when it stops heartbeating, and the router rebuilds its ring on membership change so adding or losing a node remaps only a small slice of games. Recovery is pure replay: the successor loads the Game row for clocks and turn, replays the move log to rebuild the board, and takes over. The subtle failure is a <em>zombie</em> — a replaced-but-still-alive server on the far side of a partition that keeps writing to a game the ring has moved on from. The fix is a <code>generation</code> counter on the Game row, bumped each time the ring reassigns the game; every write runs as a <a href="../patterns/distributed/coordination/conditional-write.html">conditional write</a> guarded by <code>WHERE generation &lt;= :gen</code>, so the zombie's stale-generation updates silently fail their predicate and are dropped. (Player-initiated disconnects are handled differently: the clock keeps running, matching over-the-board rules, so nobody escapes a losing position by closing the tab.)</p>
+
+        <h3>4 · A fair clock across uneven latency</h3>
+        <p>The server can only start or stop a timer when the move physically arrives, so each player's own transit latency comes out of their own clock. A player 200&nbsp;ms from the server pays ~170&nbsp;ms extra per move over a 30&nbsp;ms opponent — roughly 7 seconds across a 40-move blitz game, enough to lose on time purely for being far away. The clock is exactly the value that must stay server-authoritative, so a client-managed timer is out. The chosen answer keeps the server authoritative but adds <strong>latency compensation</strong>: it measures round-trip time continuously with WebSocket ping/pong frames, keeps a rolling <em>median</em> RTT (to resist spikes), and on each move credits back an estimated one-way transit of <code>median_rtt / 2</code> before charging think time. It is best-effort by design — asymmetric paths make it fair only on average, and a client could stall its pong to claw back time, so the compensation any single move can reclaim is capped (~100&nbsp;ms). The goal is to erase the systematic geographic penalty, not to defeat a determined cheater at the margin.</p>
+
+        <h3>5 · Exact rank across 10M players</h3>
+        <p>The top-N page is easy: a btree on <code>rating</code> walks the first 50 entries even at 10M rows, behind a cache on a page that barely moves. The hard read is a single player's own rank — <code>COUNT(*) WHERE rating &gt; :myRating</code> — because a btree gives sorted order but not <em>position</em>, so it is O(rank), millions of entries for the mid-pack majority, on the most common personalized read on the site. If approximate is acceptable, a few hundred per-band counts give "about 4,200th" in constant time. For exact rank, keep a Redis sorted set of <code>(playerId, rating)</code>: <code>ZREVRANK</code> is O(log n) because the backing skip list is an order-statistics structure a plain btree is not. Crucially, that sorted set is a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a>, never the source of truth — a rating is fully derivable from a player's finished games (each stores its pre-game ratings), so the game-end write to the Game row is the single commit point, and the Players row and sorted set are both filled by an idempotent apply keyed on <code>gameId</code>. A drifted or lost set is simply rebuilt from completed games; there is no precious in-memory rating to protect.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">In-memory move validation stays microseconds, comfortably inside the 200&nbsp;ms move budget.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Crash recovery is pure replay of a few hundred bytes — no snapshots, no checkpoint scheme.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A lock-free atomic claim scales matchmaking to tens of thousands of requests/sec on a single Redis key.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Exact rank is O(log n) and the whole leaderboard is rebuildable from finished games.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Consistency over availability means a server failure pauses a game and forces a brief reconnect rather than tolerating divergence.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Latency compensation is fair only on average; the cap limits pong-stall abuse rather than detecting it.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Consistent-hashing placement is a pure function, so scaling the fleet up during a peak remaps a slice of healthy in-progress games.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Anti-cheat/engine-detection, spectator fan-out, and the permanent game archive are separate systems deliberately kept off the live path.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end design across all three requirements: matchmaking, a server-validated real-time game over WebSocket, and a leaderboard. The load-bearing insight is that the <em>server</em>, not the client, owns move validation and the clock; notices 500K games cannot live on one box, and reaches a "good" answer for one deep dive with some prompting.</li>
+          <li><strong>Senior</strong> — races through the high-level design to spend the time on deep dives, self-derives the scale numbers (1M connections, tens of thousands of match requests/sec) and uses them to kill naive options, argues the plain vs. latency-compensated clock trade-off, talks through consistent hashing with a membership registry, and states the consistency-over-availability call out loud.</li>
+          <li><strong>Staff+</strong> — sees that the durable move log <em>is</em> the recovery mechanism, so a replacement server just replays a few hundred bytes and failover needs only a generation fence; resists the over-engineering trap of a snapshot or checkpoint scheme a short game never needs; and goes deep on production realities — draining games on a deploy, what reconnection looks like to the client during failover, and tuning the matchmaking widening policy from real wait-time data.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="actor-model"><a href="../patterns/concurrency/actor-model.html">Actor Model</a><span class="rel-note">each live game is owned by one server that holds its board and clocks in memory and processes its own moves serially</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="consistent-hashing"><a href="../patterns/distributed/routing/consistent-hashing.html">Consistent Hashing</a><span class="rel-note">gameId is mapped to a game server through a hash ring plus a membership registry so both players land together and node changes remap only a slice</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="write-ahead-log"><a href="../patterns/distributed/coordination/write-ahead-log.html">Write-Ahead Log</a><span class="rel-note">every accepted move is appended to a durable log before it is broadcast, so a crash can never leave players ahead of the record</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="event-sourcing"><a href="../patterns/architecture/event-sourcing.html">Event Sourcing</a><span class="rel-note">a replacement server rebuilds the board by replaying the move log, and a rating is a fold over finished games rather than a stored value</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="optimistic-concurrency-control"><a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">Optimistic Concurrency Control</a><span class="rel-note">two matchers racing for the same waiting player are resolved by an atomic ZREM claim where exactly one wins and losers retry, no lock held</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="conditional-write"><a href="../patterns/distributed/coordination/conditional-write.html">Conditional Write</a><span class="rel-note">a generation counter on the game row guards every write with WHERE generation &lt;= :gen, so a partitioned zombie server's stale updates are silently dropped</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">exact rank is served from a Redis sorted set derived from finished games, never the source of truth and always rebuildable by reconciliation</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pubsub"><a href="../patterns/messaging/pubsub.html">Publish-Subscribe</a><span class="rel-note">the worker that claims a player publishes matchFound on a channel keyed by requestId to whichever node holds that player's long-poll</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

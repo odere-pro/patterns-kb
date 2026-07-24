@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Refresh-Ahead · Patterns</title>
+  <meta name="description" content="Refresh-Ahead — reloads a hot cache entry from the source before its TTL expires, so busy keys never actually miss.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#refresh-ahead",
+  "identifier": "refresh-ahead",
+  "name": "Refresh-Ahead",
+  "description": "Proactively refreshes hot entries before they expire",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "caching",
+  "kb:group": "caching",
+  "kb:combines-with": [
+    {
+      "@id": "./read-through.html#read-through",
+      "name": "Read-Through",
+      "kb:note": "Refresh hot keys before they expire"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/cache-stampede.html#cache-stampede",
+      "name": "Cache Stampede",
+      "kb:note": "Reload the hot key before its TTL expires, so it never goes cold under load"
+    },
+    {
+      "@id": "../../hazards/stale-cache.html#stale-cache",
+      "name": "Stale Cache",
+      "kb:note": "Background refresh keeps the entry close to the source, bounding the stale window"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../designs/top-k.html#top-k",
+      "name": "Top-K",
+      "kb:note": "the leaderboard stays permanently warm by proactively refreshing on a cadence ahead of TTL expiry, avoiding cold-miss stampedes"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/caching.html#caching",
+      "name": "Caching",
+      "kb:role": "Reload hot keys before they expire"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="refresh-ahead" data-kb-kind="pattern" data-kb-band="caching" data-kb-group="caching" data-kb-essence="Proactively refreshes hot entries before they expire" data-kb-order="104" data-kb-tags="[&quot;caching&quot;,&quot;latency&quot;,&quot;consistency&quot;,&quot;read-optimization&quot;]" data-kb-solves="[&quot;my latency graph has a sawtooth spike exactly on the expiry boundary every few minutes&quot;,&quot;one unlucky user every five minutes pays a two second query while everyone else gets an instant response&quot;,&quot;the moment the homepage entry expires, a thousand requests hit the database at the same instant&quot;,&quot;I would rather hand back a slightly old value than make anyone wait for the reload&quot;,&quot;the source is fine with a steady trickle of queries but falls over when they all arrive together&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-cache-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-cache-h">Caching</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Refresh-Ahead</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Caching</p>
+      <h1 class="doc-title">Refresh-Ahead</h1>
+      <p class="doc-essence">Before a hot key's TTL runs out, a background reload fetches its value from the source and swaps it in — so the entry never actually goes stale under load, and no reader ever pays for the refresh.</p>
+      <div class="doc-metarow">
+        <span class="badge">Caching</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="refresh-ahead">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>refresh-ahead</strong> cache watches the remaining time-to-live on an entry and, once it drops below a threshold, reloads the value from the source in the background — before the entry ever actually expires. The trigger can be a scheduled timer per key or a read that happens to land inside that threshold window; either way, the old value keeps serving requests until the fresh one comes back, then gets swapped in with a new TTL. No caller sees a miss for a key this is applied to.</p>
+        <p>The force it resolves is the <strong>cost concentrated at expiry</strong>. Under a plain TTL, the busiest keys expire at the worst possible moment — under load — and the very next reader pays a synchronous fetch from the source right as many other readers are arriving for that same now-expired key: a cache stampede, dozens or thousands of requests missing at once and hammering the backing store together. Refresh-ahead moves the reload earlier and off the request path entirely, so the hottest keys are the ones least likely to ever be seen expired.</p>
+        <p>That protection is deliberately narrow. Refreshing every key ahead of expiry regardless of traffic would waste load on entries nobody's asking for anymore, so refresh-ahead is usually gated by access frequency — only genuinely hot keys earn a proactive reload. It's less a standalone caching strategy than an enhancement bolted onto an existing read-through or cache-aside layer: the same load-and-populate path, just preempted by a background trigger instead of waiting for a miss.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant App
+    participant Cache
+    participant Source
+    App->>Cache: get(key)
+    Cache-->>App: value, still within TTL
+    Note over Cache: remaining TTL drops below threshold
+    Cache->>Source: reload(key), in the background
+    Source-->>Cache: fresh value, entry swapped
+        </pre>
+        <figcaption>A read on a hot key returns from cache untouched. Once its remaining TTL crosses a threshold, a background reload fetches a fresh value and swaps it in before anyone could ever see it expire.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Layered on <a href="./read-through.html">Read-Through</a></dt>
+        <dd>The common form: reuse a read-through cache's existing load path, but trigger it from a background check instead of waiting for a miss to happen.</dd>
+        <dt id="variations-item-2">Threshold-triggered refresh</dt>
+        <dd>A read that lands once remaining TTL falls below a percentage of the original — say 10-20% — kicks off an async reload; the read itself is never blocked by it.</dd>
+        <dt id="variations-item-3">Scheduled background refresh</dt>
+        <dd>A per-key or per-shard timer reloads on a fixed cadence independent of traffic, so a key never goes stale even if it briefly stops being read.</dd>
+        <dt id="variations-item-4">Hot-key gating</dt>
+        <dd>Refresh only keys whose access frequency crosses a threshold; refreshing every entry blanket-style wastes load on data nobody's reading anymore.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Busy keys effectively never expire under load — readers get a fresh value without ever paying for the reload.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Eliminates the cache stampede a hot key's expiry would otherwise cause at the worst possible moment.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Reload latency happens off the request path, so a slow source never shows up as user-facing latency.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Falls back to a plain TTL for free — a key that cools off just expires normally, no extra teardown needed.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Proactive reloads do real work, sometimes wasted — a key refreshed once then never read again cost a load for nothing.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Needs bookkeeping a plain cache doesn't have: which keys are hot, and how much TTL each has left.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">A reload that keeps failing can leave the cache serving old data that looks perfectly fresh, unless failures are surfaced.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Threshold and hotness cutoffs are tuning knobs, not defaults that suit every workload.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">A known set of keys is read constantly enough that an expiry-triggered miss would be visible latency or a stampede risk.</li>
+            <li id="usage-when-2" data-kb-polarity="when">The source absorbs a steady trickle of proactive reloads more easily than a burst of simultaneous misses at expiry.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You can identify "hot" cheaply enough to gate refreshes to the keys that are actually worth it.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Traffic per key is sparse or unpredictable — most proactive reloads would refresh data no one is about to read; plain <a href="./read-through.html">Read-Through</a> is enough.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Data changes rarely and the existing TTL is already generous relative to load on the source.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">A brief staleness window during the reload is unacceptable — the old value keeps serving until the new one lands.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal refresh-ahead cache</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface Entry&lt;V&gt; { value: V; ttlMs: number; expiresAt: number; }
+
+class RefreshAheadCache&lt;K, V&gt; {
+  private store = new Map&lt;K, Entry&lt;V&gt;&gt;();
+  private inFlight = new Set&lt;K&gt;();
+
+  constructor(
+    private readonly load: (key: K) =&gt; Promise&lt;V&gt;,
+    private readonly ttlMs = 60_000,
+    private readonly refreshBelow = 0.2, // reload once 20% of TTL remains
+  ) {}
+
+  async get(key: K): Promise&lt;V&gt; {
+    const entry = this.store.get(key);
+    if (!entry) return this.populate(key);        // cold miss, must block
+
+    if (entry.expiresAt - Date.now() &lt; entry.ttlMs * this.refreshBelow) {
+      this.refresh(key);                          // fire-and-forget
+    }
+    return entry.value;                           // always served from cache
+  }
+
+  private async populate(key: K): Promise&lt;V&gt; {
+    const value = await this.load(key);
+    this.store.set(key, { value, ttlMs: this.ttlMs, expiresAt: Date.now() + this.ttlMs });
+    return value;
+  }
+
+  private refresh(key: K): void {
+    if (this.inFlight.has(key)) return;            // single-flight, no dupes
+    this.inFlight.add(key);
+    this.populate(key).finally(() =&gt; this.inFlight.delete(key));
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="caffeine-refresh"><strong>Caffeine refreshAfterWrite</strong><span>Once an entry passes the configured refresh duration, the next access schedules an asynchronous reload while the previous value keeps serving; only that first requester triggers it, and a failed reload retains the old value.</span></div>
+        <div class="wild-item" data-kb-example="coherence-refresh-ahead"><strong>Oracle Coherence refresh-ahead</strong><span>A refresh-ahead-factor between 0 and 1 sets how far before expiry an accessed entry is asynchronously reloaded from the CacheStore — the configuration the pattern is named after.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Refresh threshold</strong> — The remaining-TTL fraction (or absolute lead time) at which an accessed entry triggers a background reload; Caffeine's refreshAfterWrite and Coherence's refresh-ahead-factor set this.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Base TTL / expiry</strong> — The full lifetime that refresh-ahead only preempts; a key that stops being read still expires normally once its TTL runs out.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Hot-key gate</strong> — The access-frequency cutoff that decides which keys earn a proactive reload; refreshing every key blanket-style wastes load on data nobody is reading.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Refresh single-flight</strong> — Whether a key already refreshing suppresses a second trigger, so one hot key can't launch several overlapping reloads.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Proactive refresh rate</strong> — Background reloads per second; if it dwarfs actual reads, the hot-key gate is too loose and load is being wasted.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Refresh failure rate</strong> — Background reloads that error; these are dangerous because a failed refresh can leave a stale value serving as if fresh.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Served-value age</strong> — How old the currently-served value is relative to its TTL; a rising age despite refreshes hints they are failing or lagging.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Residual miss rate on hot keys</strong> — Misses that still reach the blocking load path for keys meant to be hot; a nonzero rate means the threshold is too tight to preempt expiry.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Silent staleness on repeated refresh failure</strong> — A reload that keeps failing leaves the old value serving with the look of freshness; unless refresh errors are surfaced it goes unnoticed.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Wasted reloads on cooling keys</strong> — A key refreshed once then never read again cost a load for nothing; a loose hot-key gate multiplies this across the keyspace.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Refresh storm on the source</strong> — If many hot keys cross the threshold together — say all written at the same instant — their background reloads can burst the source, the very stampede refresh-ahead was meant to avoid.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Overlapping reloads for one key</strong> — Without single-flight, a hot key read repeatedly inside the threshold window can launch several concurrent reloads, multiplying source load.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Refreshes are gated to genuinely hot keys, not applied blanket across the keyspace</li>
+            <li id="production-check-2" data-kb-polarity="check">A refresh already in flight for a key suppresses duplicate reloads (single-flight)</li>
+            <li id="production-check-3" data-kb-polarity="check">Refresh failures are surfaced so a stale value can't serve indefinitely looking fresh</li>
+            <li id="production-check-4" data-kb-polarity="check">The base TTL still expires cooled-off keys so hot-key bookkeeping doesn't grow unbounded</li>
+            <li id="production-check-5" data-kb-polarity="check">Refresh triggers are jittered so many hot keys don't reload the source in the same instant</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="read-through"><a href="./read-through.html">Read-Through</a><span class="rel-note">Refresh hot keys before they expire</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="cache-stampede"><a href="../../hazards/cache-stampede.html">Cache Stampede</a><span class="rel-note">Reload the hot key before its TTL expires, so it never goes cold under load</span></div>
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="stale-cache"><a href="../../hazards/stale-cache.html">Stale Cache</a><span class="rel-note">Background refresh keeps the entry close to the source, bounding the stale window</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="top-k"><a href="../../designs/top-k.html">Top-K</a><span class="rel-note">the leaderboard stays permanently warm by proactively refreshing on a cadence ahead of TTL expiry, avoiding cold-miss stampedes</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    RA["Refresh-Ahead"]
+    RA --- RT["Read-Through"]
+    click RT "./read-through.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./write-behind.html">← Write-Behind</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="../../index.html">The Map →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yelp · Patterns</title>
+  <meta name="description" content="Design a local-business search and review platform — geospatial + text search under 500 ms, ratings kept fresh incrementally, and a one-review-per-user rule enforced at the store.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#yelp",
+  "identifier": "yelp",
+  "name": "Yelp",
+  "description": "Search ten million local businesses by name, geography, and category under 500 ms on a read-dominated workload",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/coordination/optimistic-concurrency-control.html#optimistic-concurrency-control",
+      "name": "Optimistic Concurrency Control",
+      "kb:note": "the incremental average-rating update reads num_reviews, writes conditioned on it being unchanged, and retries on a lost race"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/conditional-write.html#conditional-write",
+      "name": "Conditional Write",
+      "kb:note": "the one-review-per-user rule is a UNIQUE (user_id, business_id) constraint the engine enforces on insert"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/change-data-capture.html#change-data-capture",
+      "name": "Change Data Capture",
+      "kb:note": "a CDC stream keeps the search index current with the authoritative primary database"
+    },
+    {
+      "@id": "../patterns/distributed/routing/api-gateway.html#api-gateway",
+      "name": "API Gateway",
+      "kb:note": "a single gateway fronts every request and routes reads to the Business Service and writes to the Review Service"
+    },
+    {
+      "@id": "../patterns/distributed/routing/geohash.html#geohash",
+      "name": "Geohash",
+      "kb:note": "location search rides a spatial index (geohash/quadtree/R-tree) that a plain B-tree cannot provide"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "average_rating and precomputed location_names turn expensive aggregates and polygon geometry into single column reads"
+    },
+    {
+      "@id": "../principles/kiss.html#kiss",
+      "name": "Keep It Simple (KISS)",
+      "kb:note": "~1 write/sec rules out a message queue and ~1TB rules out sharding, and Postgres extensions avoid a second search system entirely"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="yelp" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Search ten million local businesses by name, geography, and category under 500 ms on a read-dominated workload" data-kb-order="12" data-kb-aliases='[]' data-kb-tags='["system-design","read-optimization","consistency","scalability","latency"]' data-kb-solves='["recomputing an average rating with a JOIN on every search result is melting my database","two people reviewing the same place at once keep clobbering each others rating update","the same person can spam one business with a dozen reviews and my app-level guard keeps losing the race","my search crawls the moment I filter by a location box and a name keyword at the same time","I want to search pizza in the Mission but a radius from a point cannot describe a lopsided neighborhood"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Yelp</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Yelp</h1>
+      <p class="doc-essence">A local-business platform lets people search for restaurants and services near them and read the reviews that decide where they go. Almost every request is a read — a search or a page view — while reviews trickle in slowly. The design turns on two things: making search understand geography, text, and category at once, and keeping each business's average rating cheap to serve without ever going stale.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="yelp">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Users look up local businesses by name, by where they are, and by category — "coffee near me", "The Mission pizza" — then open a business to read its reviews before deciding. They can also leave their own review: a mandatory one-to-five-star rating with optional text. The surface is small, but two properties shape everything downstream. First, the workload is overwhelmingly read: searches and page views run constantly while a given user reviews a place at most once, so the ratio of reads to writes is roughly a thousand to one. Second, the query itself is hard — it filters on a geographic box, a fuzzy name, and a category simultaneously, and a plain relational index handles none of those three well. Administration of the business catalogue, map rendering, and personalised recommendations are all out of scope; the goal is to keep search fast and ratings honest.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Search for businesses by name, location (latitude/longitude), and category.</li>
+            <li>View a business and its reviews.</li>
+            <li>Leave a review on a business — a required 1–5 star rating plus optional text.</li>
+          </ol>
+          <p class="prose">A constraint carried through the whole design: a user may leave <strong>only one review per business</strong>. Out of scope: adding or editing the business catalogue, map views, and recommendations.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Latency</strong> — search returns in under 500&nbsp;ms.</li>
+            <li><strong>Availability</strong> — highly available; eventual consistency is acceptable (a rating that lags a few seconds is fine).</li>
+            <li><strong>Scale</strong> — 100M daily users and 10M businesses, with reads dwarfing writes by roughly 1000:1.</li>
+          </ul>
+          <p class="prose">The interesting non-functionals here are latency and the query shape — every system claims to be fault-tolerant and scalable, so the design focuses on what is specifically hard about search.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Reads.</strong> 100M daily users issuing searches and page views dominate the load — this is the number the architecture has to survive, and it is why a purpose-built search index earns its place.</p>
+        <p><strong>Writes.</strong> Reviews are rare next to reads: at a ~1000:1 ratio, 100M users produce on the order of <strong>~100k reviews/day ≈ 1 write/sec</strong>. Even a large surge stays trivial for a single database. This one figure quietly rules out a message queue and a separate write pipeline later on.</p>
+        <p><strong>Storage.</strong> 10M businesses × ~1&nbsp;KB ≈ <strong>10&nbsp;GB</strong> of business data. Reviews are larger: 10M businesses × ~100 reviews × ~1&nbsp;KB ≈ <strong>1&nbsp;TB</strong> — still comfortably inside one modern instance. Nothing here forces sharding; the read <em>shape</em>, not the data volume, is the real problem to solve.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three entities carry the whole model:</p>
+        <ul>
+          <li><strong>Business</strong> — <code>name</code>, <code>location</code> (latitude/longitude), <code>category</code>, and a maintained <code>average_rating</code> plus <code>num_reviews</code>.</li>
+          <li><strong>User</strong> — the person who searches and reviews; present mainly to attribute reviews and enforce the one-per-business rule.</li>
+          <li><strong>Review</strong> — a <code>rating</code> (1–5) with optional <code>text</code>, joined to one user and one business.</li>
+        </ul>
+        <p>The <code>average_rating</code> and <code>num_reviews</code> columns on Business are the quiet centre of the design: search results must show a rating, so it has to be a stored value, not something recomputed per query.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>A small REST surface, paginated wherever a call can return many rows:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — search, view, review</summary>
+<pre><code class="language-http" data-kb-lang="http">GET /businesses?query&amp;location&amp;category&amp;page
+&rarr; 200 Business[]
+
+GET /businesses/{businessId}
+&rarr; 200 Business          # business details only
+
+GET /businesses/{businessId}/reviews?page
+&rarr; 200 Review[]          # reviews paginated independently
+
+POST /businesses/{businessId}/reviews
+{ "rating": 5, "text": "optional" }
+&rarr; 201 Created
+  (409 Conflict if this user already reviewed this business)</code></pre>
+      </details>
+      <div class="prose">
+        <p>Business details and reviews are split into two calls rather than one combined response. A popular business can have thousands of reviews; splitting them lets the review list paginate on its own without bloating every business fetch. The <strong>409</strong> on a duplicate review is the client-visible face of the store-level rule enforced in the second deep dive.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>An <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> fronts everything and routes each request to a service. Search and view are closely related and both read-heavy, so they share a single <strong>Business Service</strong>. Reviews behave completely differently — rare, write-side, and tied to the rating maths — so they get their own <strong>Review Service</strong>; splitting a service is justified when the halves scale differently, and this is exactly that case. Businesses and reviews live together in one primary database, because they are tightly coupled and, at 1&nbsp;TB, small enough that a shared store beats cross-service joins. A dedicated <strong>search index</strong> (Elasticsearch, or Postgres with geospatial and trigram extensions) answers the hard multi-filter queries, and a <a href="../patterns/distributed/coordination/change-data-capture.html">change-data-capture</a> stream keeps it current with the primary store.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client"]
+    Gateway["API gateway"]
+    Biz["Business Service"]
+    Rev["Review Service"]
+    DB[("Primary DB — businesses + reviews")]
+    Search[("Search index — geo, text, category")]
+    CDC["CDC pipeline"]
+    Client -->|"search / view"| Gateway
+    Client -->|"POST review"| Gateway
+    Gateway -->|"read"| Biz
+    Gateway -->|"write"| Rev
+    Biz -->|"multi-filter query"| Search
+    Biz -->|"business + reviews"| DB
+    Rev -->|"insert review, bump rating"| DB
+    DB -->|"change stream"| CDC
+    CDC -->|"index updates"| Search
+        </pre>
+        <figcaption>The read path (gateway → Business Service → search index) carries the load; writes go through the Review Service and propagate to the index via CDC.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Keeping the average rating fresh and cheap</h3>
+        <p>Search results show a rating, so serving it must be cheap. The naïve option — a <code>JOIN</code> and <code>AVG</code> over the reviews table on every query — gets more expensive as popular businesses accumulate reviews, recomputes work that has not changed, and competes with real reads. A periodic cron that writes an <code>average_rating</code> column fixes the cost but introduces staleness: a fresh five-star review on a struggling café would not show up for hours. The right move is to update the rating <em>synchronously</em> as each review is written, incrementally: keep <code>num_reviews</code> alongside the average and compute <code>new_avg = (old_avg × n + new_rating) / (n + 1)</code> — a few CPU cycles, cheap enough to do inline. This is a maintained <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of the reviews, one column that turns an aggregate query into a single column read.</p>
+        <p>The incremental update opens a race: two reviews for the same business read <code>n = 100, avg = 4.0</code> at once, each computes a new average from that stale pair, and the second write silently overwrites the first — one review vanishes from the maths. The fix is <a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">optimistic concurrency control</a>: read the current <code>num_reviews</code>, attempt the update conditioned on it being unchanged, and if the count moved, re-read and retry. Because writes run at about one per second, contention is essentially nil and a retry practically never fires — which is also why a message queue and a separate consumer, a defensible answer at high write volume, is unneeded complexity here.</p>
+
+        <h3>2 · One review per user, enforced where it can't be bypassed</h3>
+        <p>Checking in application code for an existing review before inserting looks fine and is quietly broken two ways. It is fragile — any other write path (a new service, a data backfill) that does not know the rule can violate it — and it races: two submissions from the same user can both pass the check before either insert lands, producing two reviews. Push the rule down to the store as a unique constraint on <code>(user_id, business_id)</code> and both problems dissolve. A duplicate insert now fails deterministically with a database error, surfaced to the client as the 409 from the interface. This is a <a href="../patterns/distributed/coordination/conditional-write.html">conditional write</a> — the engine, not the application, is the arbiter — and it reflects a general rule of thumb: enforce data constraints as close to persistence as possible so no code path can drift around them.</p>
+
+        <h3>3 · Search that understands geography, text, and category at once</h3>
+        <p>The query is the crux. A latitude/longitude bounding box combined with a wildcard name match is a full table scan without the right index, and a plain B-tree composite index on <code>(latitude, longitude)</code> does not help — B-trees model single-dimension ranges and are blind to two-dimensional spatial relationships. Each filter wants its own kind of index: location needs a spatial index built on a <a href="../patterns/distributed/routing/geohash.html">geohash</a>, quadtree, or R-tree; name needs a full-text inverted index; category needs a simple B-tree. A search engine like Elasticsearch supports all three natively and answers the combined query in one shot.</p>
+      </div>
+      <details class="sketch">
+        <summary>Search query — three filters, three index types</summary>
+<pre><code class="language-json" data-kb-lang="json">{
+  "query": {
+    "bool": {
+      "must": [
+        { "match":        { "name": "coffee" } },
+        { "geo_distance": { "distance": "10km",
+                            "location": { "lat": 40.7128, "lon": -74.0060 } } },
+        { "term":         { "category": "coffee shop" } }
+      ]
+    }
+  }
+}</code></pre>
+      </details>
+      <div class="prose">
+        <p>The engine must not be the system of record — it is not built for transactional integrity, and losing an index node should never lose data. So the primary database stays authoritative and CDC feeds changes into the index; the index is a read model, and consistency with the store is eventual. There is a simpler alternative worth naming: since the dataset is only ~10&nbsp;GB of businesses, Postgres with its PostGIS (geospatial) and <code>pg_trgm</code> (trigram full-text) extensions can serve all three filters from the primary store itself — no second system, no sync pipeline, no consistency gap. It trades some full-text performance at extreme scale for a much simpler operation, and at this data volume that is usually the better bet. When forced to reason about the geospatial index directly, a quadtree suits businesses well — they cluster densely in cities, and updates are infrequent — followed by a precise second pass with the Haversine great-circle distance, applying the most selective filter (distance) first to shrink the candidate set before the rest.</p>
+
+        <h3>4 · Searching by neighbourhood, not just a radius</h3>
+        <p>People search by place name — "pizza in NYC", "bars in The Mission" — and neighbourhoods are irregular shapes a radius-from-a-point cannot describe. Model each named place as a <strong>polygon</strong>. A <code>locations</code> table holds <code>name</code>, <code>type</code> (city, neighbourhood), and a <code>polygon</code> (GeoJSON, sourced from public datasets), indexed by name for a fast text lookup. Both PostGIS and Elasticsearch can test whether a point falls inside a polygon, but computing that membership on every request is wasteful. Instead, precompute it once: when a business is created, resolve which named areas contain it and store the list — <code>location_names: ["bay_area", "san_francisco", "mission_district"]</code> — as keyword terms on the record. A neighbourhood search then becomes an inverted-index lookup on <code>location_names</code>, the expensive geometry paid once at write time rather than on every query.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Multi-filter search — geography, text, and category — answered in one query under 500&nbsp;ms.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Ratings served as a single column read, updated incrementally and safely under concurrent writes.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The one-review rule cannot be bypassed by any write path, because the store enforces it.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Tiny write volume keeps the design simple — no queue, no sharding, no separate rating pipeline.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A separate search index adds a CDC pipeline and an eventual-consistency gap between store and index.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Choosing Postgres extensions instead keeps it simple but caps full-text performance at very large scale.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Precomputed <code>location_names</code> must be recomputed if a business moves or a neighbourhood boundary changes.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">The whole design leans on writes staying rare; a sudden review flood would reopen the queue-versus-inline question.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end design (search → view → review), a sensible answer on average ratings, and, when nudged, the instinct to move the one-review rule toward the store and to reach for the right category of index rather than a plain B-tree.</li>
+          <li><strong>Senior</strong> — nails most deep dives, weighs the index types and picks the right technology with reasons, and is watched for over-engineering: every added component needs a clear justification.</li>
+          <li><strong>Staff+</strong> — spots the simplifying insights and states the conditions under which the complex version would be warranted: Postgres extensions to dodge the search-engine consistency gap, ~1 write/sec meaning no message queue, and ~1&nbsp;TB meaning a read replica or cache instead of sharding.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="optimistic-concurrency-control"><a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">Optimistic Concurrency Control</a><span class="rel-note">the incremental average-rating update reads num_reviews, writes conditioned on it being unchanged, and retries on a lost race</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="conditional-write"><a href="../patterns/distributed/coordination/conditional-write.html">Conditional Write</a><span class="rel-note">the one-review-per-user rule is a UNIQUE (user_id, business_id) constraint the engine enforces on insert</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="change-data-capture"><a href="../patterns/distributed/coordination/change-data-capture.html">Change Data Capture</a><span class="rel-note">a CDC stream keeps the search index current with the authoritative primary database</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="api-gateway"><a href="../patterns/distributed/routing/api-gateway.html">API Gateway</a><span class="rel-note">a single gateway fronts every request and routes reads to the Business Service and writes to the Review Service</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="geohash"><a href="../patterns/distributed/routing/geohash.html">Geohash</a><span class="rel-note">location search rides a spatial index (geohash/quadtree/R-tree) that a plain B-tree cannot provide</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">average_rating and precomputed location_names turn expensive aggregates and polygon geometry into single column reads</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="kiss"><a href="../principles/kiss.html">Keep It Simple (KISS)</a><span class="rel-note">~1 write/sec rules out a message queue and ~1TB rules out sharding, and Postgres extensions avoid a second search system entirely</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

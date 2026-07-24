@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Online Auction · Patterns</title>
+  <meta name="description" content="Design an online auction — serialize simultaneous bids to one true high, ingest every bid durably under load, and broadcast the current high bid to all watchers in real time.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#online-auction",
+  "identifier": "online-auction",
+  "name": "Online Auction",
+  "description": "Hold one true highest bid under a storm of concurrent bids, lose none, and broadcast each new high in real time",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/coordination/optimistic-concurrency-control.html#optimistic-concurrency-control",
+      "name": "Optimistic Concurrency Control",
+      "kb:note": "the chosen bid path reads max_bid as a version and commits only if it is still unchanged, retrying on conflict"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/conditional-write.html#conditional-write",
+      "name": "Conditional Write",
+      "kb:note": "the winning update lands only WHERE max_bid still equals the value just read, closing the read-then-write race on the high bid"
+    },
+    {
+      "@id": "../patterns/messaging/message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:note": "every bid is appended to a partitioned Kafka topic and acknowledged before adjudication, so no bid is lost to a crash"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "the queue absorbs an auction's final-minute bid surge so the Bid Service consumes at a steady rate instead of being over-provisioned"
+    },
+    {
+      "@id": "../patterns/messaging/pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "an accepted high is published to a per-auction channel so every SSE server, not just the one that judged it, learns the new number"
+    },
+    {
+      "@id": "../patterns/messaging/fan-out.html#fan-out",
+      "name": "Fan-Out",
+      "kb:note": "each SSE server pushes the new high to all of its own connected watchers of that auction"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "the auction store is partitioned by auctionId so ~15k writes/sec spread across instances with no cross-shard reads"
+    },
+    {
+      "@id": "../patterns/distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "the Bid and Auction services hold no per-request state, so an autoscaler can add instances freely under bursty load"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="online-auction" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Hold one true highest bid under a storm of concurrent bids, lose none, and broadcast each new high in real time" data-kb-order="26" data-kb-aliases='["bidding system","auction house"]' data-kb-tags='["system-design","concurrency","consistency","messaging","scalability"]' data-kb-solves='["two people submit at the same instant and both get told they are winning because each read a stale current value","under a last-minute traffic spike my service either drops writes or falls over, and I cannot afford to lose a single one","my clients poll every few seconds for the latest number and still act on stale data while hammering the database","one user is on server A and another on server B watching the same item, and an update on A never reaches B live connections","I overwrite the current maximum on every update and now I have no history left to settle a dispute"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Online Auction</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Online Auction</h1>
+      <p class="doc-essence">Sellers list an item with a starting price and an end date; buyers place bids that only stick if they beat the current high; the last highest bidder wins. The surface is small, but three forces pull against each other underneath it: many bids race for the same item at once, no bid may ever be lost, and every watcher must see the true high the moment it moves.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="online-auction">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>An auction is a write-contention problem wearing a read-heavy costume. Listing an item is rare and boring — validate, store, done. What makes the design is the bid: a single scalar (the current high) that thousands of clients read continuously and that many of them try to overwrite in the same second, where the answer must be exactly right and the losing party must be told so, promptly. Three non-negotiables shape every decision downstream — the high bid is <em>strongly consistent</em> (no two people may both believe they lead), no bid is ever <em>dropped</em>, and the number on the screen is <em>live</em>. Everything below is the cost of honouring those three at once.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Post an item for auction with a starting price and an end date.</li>
+            <li>Place a bid on an item; it is accepted only if it beats the current highest bid.</li>
+            <li>View an auction, including the current highest bid.</li>
+          </ol>
+          <p class="prose">Out of scope, named up front to keep the design narrow: search, category filtering, sorting by price, and browsing an item's bid history.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Consistency</strong> — bids are strongly consistent; every user sees the same one true high bid.</li>
+            <li><strong>Durability</strong> — fault tolerant and lossless; a bid, once acknowledged, is never dropped even if a service crashes.</li>
+            <li><strong>Real-time</strong> — the current high bid is displayed to watchers within a beat of changing.</li>
+            <li><strong>Scale</strong> — 10M concurrent auctions live at once.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Bid throughput.</strong> Say each of 10M live auctions draws ~100 bids over a ~1-week life. That is 10M × 100 ÷ 7 days ≈ 140M bids/day ≈ <strong>~1,400 bids/sec</strong> on average. Bidding is bursty — auctions cluster their action into the final minutes and the evening — so design for a peak roughly 10× the mean, call it <strong>~15k bids/sec</strong>. That write rate, on a single hot scalar per auction, is the number the architecture has to survive.</p>
+        <p><strong>Storage.</strong> An auction row is ~1&nbsp;KB; a bid is ~500 bytes. At 10M × 52 weeks ≈ 520M auctions/year, storage is ≈ 520M × (1&nbsp;KB + 100 × 500&nbsp;B) ≈ <strong>~25&nbsp;TB/year</strong>. Real, but not the pressing constraint — modern SSDs swallow it and replication covers durability. Write throughput, not disk, is what forces the interesting choices.</p>
+        <p><strong>Fan-out.</strong> With up to 100M users each potentially watching an auction, live connections could total on the order of 100M. No single box holds that, so the real-time layer has to spread across many servers and still deliver one bid to every watcher of that item.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Four entities, with one deliberate normalization choice:</p>
+        <ul>
+          <li><strong>Auction</strong> — <code>starting_price</code>, <code>end_date</code>, a reference to the item, and — critically — a denormalized <code>max_bid</code> that we will treat as the single point of truth for the high.</li>
+          <li><strong>Item</strong> — <code>name</code>, <code>description</code>, image URL. Kept separate from Auction rather than embedded: an unsold item can be relisted, item details change independently of an auction, and item-level features (categories, search) get easier later.</li>
+          <li><strong>Bid</strong> — <code>amount</code>, the bidding user, the auction, a timestamp, and an accepted/rejected status. Every bid is written; none is overwritten.</li>
+          <li><strong>User</strong> — starts auctions or bids on them.</li>
+        </ul>
+        <p>The tempting shortcut — keep only a single <code>max_bid_price</code> field and skip a bids table — is a trap. Overwriting the max on each bid destroys the audit trail: no way to reconstruct the sequence, investigate a dispute, or disprove a bidder's claim that their bid vanished. Keep the full, append-only bid log <em>and</em> the denormalized max; they answer different questions.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Three endpoints, one per functional requirement:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — list, bid, view</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /auctions
+{ "item": { "name": "…", "description": "…" },
+  "startDate": "…", "endDate": "…", "startingPrice": 10 }
+&rarr; 201 { "auctionId": "…", "item": { … } }
+
+POST /auctions/{auctionId}/bids
+{ "amount": 100 }
+&rarr; 202 { "status": "received" }   // durable, not yet adjudicated
+
+GET /auctions/{auctionId}
+&rarr; 200 { "auction": { "maxBid": 100, … }, "item": { … } }
+
+GET /auctions/{auctionId}/bid-stream   // SSE: pushes each new maxBid</code></pre>
+      </details>
+      <div class="prose">
+        <p>The bid response is a <strong>202 Accepted</strong>, not a 200: the bid is safely captured, but whether it <em>wins</em> is decided a step later, and the outcome comes back over the live stream. That small honesty — acknowledging receipt separately from adjudication — is what lets the durability and consistency machinery sit behind the endpoint without making the caller wait on it.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Split listing from bidding into two services with opposite shapes. The <strong>Auction Service</strong> is read-tuned and thin — create and fetch listings. The <strong>Bid Service</strong> is write-tuned and does the hard part: it never touches the database on the request path. A bid is dropped into a durable log the instant it arrives, acknowledged, and adjudicated asynchronously by a consumer that owns the auction's true high. That same consumer, on accepting a new high, publishes it so every real-time connection watching the item — wherever it is hosted — learns the new number. The split matters because bidding traffic is ~100× listing traffic, and the two want to be tuned and scaled independently.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client / browser"]
+    GW["API Gateway — auth, rate limit, routing"]
+    Auction["Auction Service"]
+    Producer["Bid producer"]
+    Queue[("Kafka — partitioned by auctionId")]
+    Bid["Bid Service consumer"]
+    DB[("Auction store — sharded by auctionId")]
+    PS[("Pub/Sub channel")]
+    SSE["SSE broadcaster"]
+    Client -->|"POST /auctions, GET"| GW
+    Client -->|"POST /bids"| GW
+    GW -->|"create / read listing"| Auction
+    GW -->|"enqueue bid"| Producer
+    Auction --> DB
+    Producer -->|"append, ack"| Queue
+    Queue -->|"consume in order"| Bid
+    Bid -->|"conditional update max_bid"| DB
+    Bid -->|"publish new high"| PS
+    PS -->|"fan-out to peers"| SSE
+    SSE -.->|"live maxBid"| Client
+        </pre>
+        <figcaption>A bid is durable at the queue before it is judged; the consumer holds the true high in the auction row and broadcasts each new one through pub/sub so every SSE server sees it.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Strong consistency for bids</h3>
+        <p>This is the crux. Two bids arrive on an auction whose high is $10. User&nbsp;A reads $10 and writes $100 — accepted. User&nbsp;B, reading a stale $10 through replication lag, writes $20 — also accepted, because $20 beats the $10 <em>they</em> saw. Now two people believe they lead. That is a textbook <a href="../hazards/race-condition.html">race condition</a> on a contended value, and it must be closed.</p>
+        <p>The naïve fix — take a <a href="../patterns/distributed/coordination/pessimistic-locking.html">pessimistic lock</a> over the auction's bid rows with <code>SELECT … FOR UPDATE</code> — is worse than it looks. Locking existing rows does not stop a concurrent transaction from <em>inserting</em> a fresh bid, so the race survives; and the lock set grows with every bid on the item, turning a hot auction into a queue of stalled transactions. Lock as few rows as possible for as short a time as possible — and this does the opposite.</p>
+        <p>Caching the max in Redis and comparing there is faster but relocates the problem: now the cache and the database can disagree, and there is no clean cross-system transaction to keep them honest. The clean answer collapses the two systems into one: <strong>keep the high on the auction row itself</strong> and guard the update. Lock-free is the better version — <a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">optimistic concurrency control</a>, which fits because true collisions are rare. Read the row's <code>max_bid</code> as an implicit version, then issue a <a href="../patterns/distributed/coordination/conditional-write.html">conditional write</a> that only lands if the max is still what you read. If it changed underneath you, the update touches zero rows — retry from the read. One row, no held lock, and the occasional retry is the whole cost.</p>
+      </div>
+      <details class="sketch">
+        <summary>SQL — optimistic compare-and-set on the auction row</summary>
+<pre><code class="language-sql" data-kb-lang="sql">-- read the current high (this value is the "version")
+SELECT max_bid FROM auctions WHERE id = :auctionId;   -- e.g. 10
+
+-- accept only if it is still 10 AND the new bid beats it
+UPDATE auctions
+   SET max_bid = :amount
+ WHERE id = :auctionId
+   AND max_bid = :seen_max        -- 0 rows affected => someone raced us
+   AND :amount &gt; max_bid;
+
+-- 1 row affected: record the winning bid as 'accepted'
+-- 0 rows affected: re-read max_bid and retry, or reject if we no longer lead</code></pre>
+      </details>
+      <div class="prose">
+        <h3>2 · Durability — never drop a bid</h3>
+        <p>Adjudicating on the request path couples acceptance to the Bid Service being up and un-overloaded, and a popular auction's final minute can produce thousands of bids per second — more than the service can take head-on. Rather than drop bids, crash, or massively over-provision, get every bid into a durable <a href="../patterns/messaging/message-queue.html">message queue</a> the moment it arrives, acknowledge from there, and let the consumer judge at its own pace. This is <a href="../patterns/distributed/resilience/load-leveling.html">load leveling</a>: the queue absorbs the surge so the service sees a smooth rate. It is also a <a href="../patterns/concurrency/producer-consumer.html">producer-consumer</a> split — the API-side producer only appends; the Bid Service consumes. Kafka fits: high throughput, on-disk durability with replication, and — by partitioning the topic on <code>auctionId</code> — a total order of bids <em>within</em> an auction, which decides ties fairly, while different auctions process in parallel. The trade is a few milliseconds of queue latency for the guarantee that an acknowledged bid outlives any single crash; if the consumer dies mid-bid, the message is still there to reprocess.</p>
+        <h3>3 · Showing the high bid in real time</h3>
+        <p>Polling every few seconds is both too slow for a hot auction and wasteful — nearly every poll re-reads a number that has not moved, straight off the database. The fix is to push. Long polling works (hold the request open until the max changes) but ties up a connection per watcher and invites a thundering herd on reconnect. Cleaner is <strong>Server-Sent Events</strong>: one long-lived, unidirectional server-to-client stream opened when a user views the auction, over which the server pushes each accepted high. It is unidirectional traffic, so SSE is a lighter fit than full WebSockets. The catch is coordination across servers — if the watcher is on server B and the winning bid was consumed on server A, B's stream never hears about it on its own.</p>
+        <h3>4 · Scaling the fan-out and the writes</h3>
+        <p>That coordination gap is closed with <a href="../patterns/messaging/pubsub.html">pub/sub</a>. When the consumer accepts a new high it publishes it to a channel keyed by auction; every SSE server subscribes, and each <a href="../patterns/messaging/fan-out.html">fans the update out</a> to its own connected watchers of that item. Now a bid landing anywhere reaches everyone, across up to ~100M connections spread over many boxes. The compute tier is easy: the Bid and Auction services are <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>, so they scale horizontally under an autoscaler tracking CPU and memory. The database is the pinch — ~15k writes/sec exceeds one Postgres instance — so <a href="../patterns/distributed/routing/sharding.html">shard by <code>auctionId</code></a>. Because a bid touches only its own auction's row and log, every read and write for an item stays on one shard: no scatter-gather, and the optimistic single-row update from deep dive&nbsp;1 keeps working unchanged. Left to right, each tier scales on its own axis — queue on partitions, services on instances, storage on shards.</p>
+        <h3>5 · Ending the auction</h3>
+        <p>A fixed end date is trivial. "End an hour after the last bid" is not — it is a scheduling problem. The cheap version stores a running <code>end_time</code> on the auction row and lets a periodic sweep close whatever has expired. The precise version uses a delayed-task <a href="../patterns/concurrency/scheduling.html">scheduler</a> — a Redis sorted set keyed by fire time, or a durable job queue — that on each bid schedules a check for one hour later; when it fires, it closes the auction only if that bid is still the latest. Doing it well pulls in clock drift and concurrent termination attempts, which is exactly the kind of adjacent complexity a staff answer surfaces unprompted.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">One true high per auction, enforced by a single-row conditional update with no held locks.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">No bid is ever lost: it is durable in the queue before it is acknowledged or judged.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The surge in an auction's final minutes is absorbed by the queue, not by over-provisioned servers.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Sharding by auction and per-auction partition ordering scale writes and fairness together.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Asynchronous adjudication means a bidder learns win-or-lose a beat after submitting, not synchronously.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Queue and pub/sub add a few milliseconds of latency and real operational surface — partitions, consumer lag, replication.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Optimistic concurrency degrades on a genuinely white-hot single auction, where retries pile up under contention.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">The live layer coordinates through pub/sub, so a stream can briefly miss an update if a broadcaster drops a message.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end flow (list → bid → view), a bids table rather than an overwritten scalar, and, when prompted, a sensible stab at the consistency and scaling questions.</li>
+          <li><strong>Senior</strong> — recognizes bid consistency and live broadcast as the heart of the problem and drives toward them: names the race condition, lands on a single-row optimistic update, and explains how the client stays current.</li>
+          <li><strong>Staff+</strong> — demonstrates mastery of consistency and real-time, then volunteers the adjacent hard parts unprompted — durable ingestion under surge, cross-server fan-out via pub/sub, sharding by auction, and auction-ending as its own distributed-systems problem with clock drift and concurrent termination.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="optimistic-concurrency-control"><a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">Optimistic Concurrency Control</a><span class="rel-note">the chosen bid path reads max_bid as a version and commits only if it is still unchanged, retrying on conflict</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="conditional-write"><a href="../patterns/distributed/coordination/conditional-write.html">Conditional Write</a><span class="rel-note">the winning update lands only WHERE max_bid still equals the value just read, closing the read-then-write race on the high bid</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="message-queue"><a href="../patterns/messaging/message-queue.html">Message Queue</a><span class="rel-note">every bid is appended to a partitioned Kafka topic and acknowledged before adjudication, so no bid is lost to a crash</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="load-leveling"><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">the queue absorbs an auction's final-minute bid surge so the Bid Service consumes at a steady rate instead of being over-provisioned</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pubsub"><a href="../patterns/messaging/pubsub.html">Publish-Subscribe</a><span class="rel-note">an accepted high is published to a per-auction channel so every SSE server, not just the one that judged it, learns the new number</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="fan-out"><a href="../patterns/messaging/fan-out.html">Fan-Out</a><span class="rel-note">each SSE server pushes the new high to all of its own connected watchers of that auction</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">the auction store is partitioned by auctionId so ~15k writes/sec spread across instances with no cross-shard reads</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">the Bid and Auction services hold no per-request state, so an autoscaler can add instances freely under bursty load</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

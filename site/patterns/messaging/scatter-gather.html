@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scatter-Gather · Patterns</title>
+  <meta name="description" content="Scatter-Gather — broadcasts a request to multiple recipients, then waits for and merges their replies into one response.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#scatter-gather",
+  "identifier": "scatter-gather",
+  "name": "Scatter-Gather",
+  "description": "Broadcasts a request, then merges the responses",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "messaging",
+  "kb:group": "messaging",
+  "kb:combines-with": [
+    {
+      "@id": "./correlation-identifier.html#correlation-identifier",
+      "name": "Correlation Identifier",
+      "kb:note": "Correlate responses back to the request"
+    }
+  ],
+  "kb:composed-of": [
+    {
+      "@id": "./splitter.html#splitter",
+      "name": "Splitter",
+      "kb:note": "Scatter fans out, gather aggregates"
+    },
+    {
+      "@id": "./aggregator.html#aggregator",
+      "name": "Aggregator",
+      "kb:note": "The gather step is an aggregator"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "../distributed/coordination/mapreduce.html#mapreduce",
+      "name": "MapReduce",
+      "kb:note": "Scatter/gather fans a request to responders; map-reduce grinds a whole dataset"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../designs/top-k.html#top-k",
+      "name": "Top-K",
+      "kb:note": "an exact global ranking is assembled from independent per-shard results, since a global winner must be a winner on its own shard"
+    },
+    {
+      "@id": "../../designs/gopuff.html#gopuff",
+      "name": "Gopuff",
+      "kb:note": "the union-across-nearby-DCs read is a textbook scatter to many partitions gathered into a single response"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="scatter-gather" data-kb-kind="pattern" data-kb-band="messaging" data-kb-group="messaging" data-kb-essence="Broadcasts a request, then merges the responses" data-kb-order="96" data-kb-aliases="[&quot;fan-out/fan-in&quot;]" data-kb-tags="[&quot;messaging&quot;,&quot;concurrency&quot;,&quot;latency&quot;,&quot;integration&quot;]" data-kb-solves="[&quot;I call five providers one after another and the request takes ten seconds&quot;,&quot;every backend I add makes my endpoint another second slower&quot;,&quot;I want the cheapest quote but I have to ask everyone and I do not know who will bother to answer&quot;,&quot;one slow participant hangs the whole comparison and there is no way to move on without it&quot;,&quot;my caller should not have to know there are eight services behind this one call&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-msg-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-msg-h">Messaging</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Scatter-Gather</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Messaging</p>
+      <h1 class="doc-title">Scatter-Gather</h1>
+      <p class="doc-essence">Broadcasts one request to a set of recipients in parallel, then waits for their replies and merges whatever comes back into a single, unified response.</p>
+      <div class="doc-metarow">
+        <span class="badge">Messaging</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="scatter-gather">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Scatter-Gather</strong> splits into two halves joined by one correlated exchange. The <em>scatter</em> half broadcasts a request to a set of recipients — a fixed list, a topic with several subscribers, or a dynamically resolved set of providers. The <em>gather</em> half collects the individual replies as they trickle back and combines them into one aggregate message that goes to the original requestor, who never sees the fan-out at all.</p>
+        <p>It resolves a specific tension: the answer to a request may live in more than one place, but the caller wants a single call and a single reply. Querying five pricing providers, four inventory shards, or a dozen workers one at a time multiplies latency by the number of recipients. Scatter-Gather parallelizes the dispatch — every recipient is asked at once — and centralizes the merge, so the caller's contract stays "one request in, one response out" no matter how many parties actually answered it.</p>
+        <p>Two intents show up under the same shape. In the <em>auction</em> form, every recipient answers the identical question and gather keeps only the best reply — cheapest quote, fastest route — discarding the rest. In the <em>distribution</em> form, the request is partitioned so each recipient does distinct work, and gather reassembles the parts into a whole, closer to a fan-out/fan-in over a computation than a competition.</p>
+        <p>Because replies arrive independently and out of order, each one must carry a correlation token back to its originating request, and the gather step has to decide what to do about recipients that never answer.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    Req["Requestor"] --> Sc["Scatter"]
+    Sc --> A["Recipient A"]
+    Sc --> B["Recipient B"]
+    Sc --> C["Recipient C"]
+    A --> Ga["Gather"]
+    B --> Ga
+    C --> Ga
+    Ga --> Req
+        </pre>
+        <figcaption>One request fans out to every recipient at once. Gather collects their replies, keyed by a correlation id, and returns a single merged response.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Auction</dt>
+        <dd>Every recipient answers the same question — a price, a bid, a route — and gather keeps only the winning reply, discarding the rest.</dd>
+        <dt id="variations-item-2">Distribution</dt>
+        <dd>The request is partitioned so each recipient handles distinct work; gather reassembles the pieces into one complete result rather than picking a winner.</dd>
+        <dt id="variations-item-3">Static vs. dynamic recipient list</dt>
+        <dd>Recipients are a fixed, known set, or resolved at runtime from a directory or service registry — trading simplicity for the ability to add participants without redeploying.</dd>
+        <dt id="variations-item-4"><a href="./correlation-identifier.html">Correlation Identifier</a></dt>
+        <dd>Each reply carries the id of the request that produced it, so gather can match interleaved replies back to the right in-flight scatter.</dd>
+        <dt id="variations-item-5">Timeout / quorum gather</dt>
+        <dd>Rather than block for every reply, gather closes after a deadline or once a minimum count has arrived, treating stragglers as absent instead of stalling the whole exchange.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Parallelizes the fan-out, so overall latency isn't the sum of every recipient's response time.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Surfaces the best or most complete answer by consulting several sources instead of trusting one.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Keeps the caller's contract simple — one request, one merged reply — no matter how many recipients answered.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Tolerant of partial failure when gather doesn't require every recipient to respond.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Latency is still bounded by the slowest recipient, or by whatever timeout gather enforces.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Aggregation logic must handle partial, duplicate, or out-of-order replies correctly.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Every call multiplies load N-fold across recipients and network, even when only one reply is kept.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Needs correlation, timeout, and partial-failure handling — real machinery, not a plain request/reply.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Several sources could answer, and you want the best, fastest, or most complete reply.</li>
+            <li id="usage-when-2" data-kb-polarity="when">A large piece of work can be partitioned and processed by recipients in parallel, then recombined.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The caller must keep a simple one-request/one-response contract regardless of how many parties respond.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">One authoritative source already has the answer — querying several adds cost without benefit.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Recipients must respond in a strict order, or the merge needs transactional consistency across replies.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The volume or cost of broadcasting to every recipient outweighs whatever the best reply is worth.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — scatter to vendors, gather with a timeout</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface Quote { vendorId: string; price: number; }
+
+async function scatterGather(
+  vendors: Array&lt;(reqId: string) =&gt; Promise&lt;Quote&gt;&gt;,
+  timeoutMs = 2_000,
+): Promise&lt;Quote[]&gt; {
+  const reqId = crypto.randomUUID(); // correlates replies to this call
+
+  const withTimeout = (p: Promise&lt;Quote&gt;) =&gt;
+    Promise.race([
+      p,
+      new Promise&lt;null&gt;((resolve) =&gt; setTimeout(() =&gt; resolve(null), timeoutMs)),
+    ]);
+
+  // scatter: dispatch to every recipient at once
+  const scattered = vendors.map((call) =&gt; withTimeout(call(reqId)));
+
+  // gather: wait for all slots to settle (reply or timeout)
+  const replies = await Promise.all(scattered);
+
+  // drop stragglers, keep whoever actually answered
+  return replies.filter((r): r is Quote =&gt; r !== null);
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="elasticsearch"><strong>Elasticsearch</strong><span>A coordinating node scatters each search to every relevant shard in parallel, gathers the top hits from each, and merges them into one ranked result set; the two-phase query-then-fetch design is scatter-gather over shards.</span></div>
+        <div class="wild-item" data-kb-example="apollo-federation"><strong>Apollo Federation</strong><span>The gateway compiles one client query into a query plan of parallel fetches against the owning subgraphs, then stitches their partial responses into a single result by entity keys.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Gather timeout / deadline</strong> — How long to wait for replies before closing the aggregate and treating stragglers as absent.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Quorum / minimum reply count</strong> — Close the gather once a minimum number of replies has arrived, rather than waiting for every recipient.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Fan-out breadth (recipient count)</strong> — How many recipients each request is scattered to; sets the load-amplification factor per call.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Correlation state TTL</strong> — How long the gather keeps an in-flight aggregation before discarding it, bounding memory from requests that never complete.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Reply completeness</strong> — Replies received divided by recipients scattered to, before the deadline; a falling ratio means recipients are timing out.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>End-to-end gather latency (p99)</strong> — Bounded by the slowest reply or the timeout, whichever comes first.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Timeout / straggler rate</strong> — How often the gather closes on the deadline instead of on full completion.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>In-flight aggregation count</strong> — Open scatters awaiting replies; a climbing count signals orphaned or stuck aggregations.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Slowest recipient dominates</strong> — Tail latency of the whole exchange tracks the slowest responder up to the gather timeout.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Orphaned aggregations</strong> — Replies that never arrive leave gather state open, leaking memory unless a correlation TTL expires it.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Late reply after close</strong> — A straggler answers after the aggregate was already sent, arriving for a request that no longer exists.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Load amplification</strong> — Every call multiplies N-fold across recipients; a request burst multiplies broadcast load on all of them at once.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">The gather has a hard timeout and a defined behavior for missing replies — partial result or fail</li>
+            <li id="production-check-2" data-kb-polarity="check">Each reply carries a correlation id matched to its in-flight request</li>
+            <li id="production-check-3" data-kb-polarity="check">In-flight aggregation state is bounded and expires orphaned requests</li>
+            <li id="production-check-4" data-kb-polarity="check">Duplicate and late replies are handled — ignored or reconciled</li>
+            <li id="production-check-5" data-kb-polarity="check">Downstream capacity is sized for N-fold amplification per request</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="correlation-identifier"><a href="./correlation-identifier.html">Correlation Identifier</a><span class="rel-note">Correlate responses back to the request</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Composed of</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="composed-of" data-kb-to="splitter"><a href="./splitter.html">Splitter</a><span class="rel-note">Scatter fans out, gather aggregates</span></div>
+          <div class="rel-item" data-kb-rel="composed-of" data-kb-to="aggregator"><a href="./aggregator.html">Aggregator</a><span class="rel-note">The gather step is an aggregator</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="mapreduce"><a href="../distributed/coordination/mapreduce.html">MapReduce</a><span class="rel-note">Scatter/gather fans a request to responders; map-reduce grinds a whole dataset</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="top-k"><a href="../../designs/top-k.html">Top-K</a><span class="rel-note">an exact global ranking is assembled from independent per-shard results, since a global winner must be a winner on its own shard</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="gopuff"><a href="../../designs/gopuff.html">Gopuff</a><span class="rel-note">the union-across-nearby-DCs read is a textbook scatter to many partitions gathered into a single response</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    SG["Scatter-Gather"]
+    SG --- SP["Splitter"]
+    SG --- AG["Aggregator"]
+    SG --- CI["Correlation Identifier"]
+    click SP "./splitter.html"
+    click AG "./aggregator.html"
+    click CI "./correlation-identifier.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./correlation-identifier.html">← Correlation Identifier</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./wire-tap.html">Wire Tap →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

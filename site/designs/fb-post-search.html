@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Facebook Post Search · Patterns</title>
+  <meta name="description" content="Design keyword search over trillions of posts without a search engine — an in-memory inverted index, pre-sorted result lists, and a write-heavy firehose of posts and likes.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#fb-post-search",
+  "identifier": "fb-post-search",
+  "name": "Facebook Post Search",
+  "description": "Search trillions of posts by keyword in under 500 ms with in-memory inverted indexes, while absorbing a write-heavy firehose of posts and likes",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "the inverted index is a precomputed keyword-to-post-ID view the ingestion tokenizer maintains on every write, so a query is a lookup not a scan"
+    },
+    {
+      "@id": "../patterns/caching/cache-aside.html#cache-aside",
+      "name": "Cache-Aside",
+      "kb:note": "the search service checks a distributed cache first and populates it on a miss, with a sub-minute TTL matching the freshness SLA"
+    },
+    {
+      "@id": "../patterns/distributed/routing/cdn.html#cdn",
+      "name": "CDN",
+      "kb:note": "hot /search responses are pushed to the edge via cache-control headers, returning in tens of milliseconds"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "the inverted indexes are partitioned by keyword so appends spread across many Redis instances instead of hot-spotting one"
+    },
+    {
+      "@id": "../patterns/concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:note": "like events are aggregated over a short window so hundreds of likes collapse into a single increment"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "a Kafka log buffers write bursts so parallel ingestion workers drain them without dropping posts"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/count-min-sketch.html#count-min-sketch",
+      "name": "Count-Min Sketch",
+      "kb:note": "bigram search frequency is estimated with a count-min sketch so only pairs worth indexing get stored"
+    },
+    {
+      "@id": "../patterns/distributed/routing/object-storage.html#object-storage",
+      "name": "Object Storage",
+      "kb:note": "rarely-searched keyword entries are evicted from Redis into cheap blob storage and read back on a cache miss"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="fb-post-search" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Search trillions of posts by keyword in under 500 ms with in-memory inverted indexes, while absorbing a write-heavy firehose of posts and likes" data-kb-order="10" data-kb-aliases='["post search","keyword search"]' data-kb-tags='["system-design","read-optimization","caching","batching","partitioning"]' data-kb-solves='["searching billions of rows with LIKE %keyword% scans the whole table and takes seconds","the same popular searches run over and over and I keep recomputing identical results","I need results sorted by both recency and popularity but re-sorting millions of matches per query is too slow","a viral post takes thousands of like-writes a second and they all hit the same counter","my index has grown to petabytes but almost nobody ever searches most of the terms in it"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Facebook Post Search</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Facebook Post Search</h1>
+      <p class="doc-essence">A user types a keyword and gets matching posts back in under half a second, ranked by recency or by likes. The twist is that this search is write-heavy rather than read-heavy: posts and likes pour in far faster than searches, so the real problem is maintaining an in-memory inverted index cheaply as the firehose arrives — and doing it without a ready-made search engine.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="fb-post-search">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Posts are short pieces of text that people write, like, and share; the job here is only the search box over them. The interviewer adds a deliberate constraint: no Elasticsearch, no Postgres full-text index, nothing pre-built. That is not arbitrary — it moves the question off tool trivia and onto the fundamentals of how you lay data out so a keyword lookup is fast at a scale where the corpus is measured in trillions of posts and petabytes of bytes. What makes it unusual for a search system is the shape of the load: writes dwarf reads, so the interesting engineering is on the ingestion side, in keeping a queryable structure fresh while a torrent of posts and likes pours in.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Users can create posts and like posts.</li>
+            <li>Users can search posts by keyword.</li>
+            <li>Users can get results sorted either by recency or by like count.</li>
+          </ol>
+          <p class="prose">Out of scope: fuzzy or semantic matching, personalized ranking, privacy filtering, media, and a live-updating result page. Dropping personalization is the load-bearing simplification — with no per-user ranking, the same query returns the same results for everyone, which is what makes the whole thing cacheable.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Latency</strong> — median search under 500&nbsp;ms.</li>
+            <li><strong>Freshness</strong> — a new post is searchable within 1&nbsp;minute of creation.</li>
+            <li><strong>Completeness</strong> — every post is discoverable, including old and unpopular ones; more latency is tolerated for this cold tail than for hot, in-memory results.</li>
+            <li><strong>Availability</strong> — the search path stays up under load.</li>
+            <li><strong>Scale</strong> — write-heavy: roughly 10k posts/sec and 100k likes/sec against ~10k searches/sec that can burst 10× or more.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Writes.</strong> With 1B users and ~100k seconds in a day, an average of one post per user per day gives 1B ÷ 100k ≈ <strong>10k posts/sec</strong>. Likes run ~10× higher — about <strong>100k likes/sec</strong>. Likes, not posts, are the true firehose, and each one may touch many index entries.</p>
+        <p><strong>Reads.</strong> One search per user per day is another 1B ÷ 100k ≈ <strong>10k searches/sec</strong>, spiking 10× on a breaking news event. So reads and writes are the same order of magnitude and the like stream is larger than either — this is a <a href="../themes/scaling-writes.html">write-heavy</a> system that happens to be a search engine, the opposite of the usual read-heavy assumption.</p>
+        <p><strong>Storage.</strong> Assume ten years of history at ~1KB of metadata per post: 1B/day × 365 × 10 ≈ <strong>3.6 trillion posts</strong>, or roughly <strong>3.6&nbsp;PB</strong> raw. Nothing that size lives in memory, so the design has to decide what is hot enough to keep there and what can go cold.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three entities, plus the derived structure the whole design is built around:</p>
+        <ul>
+          <li><strong>Post</strong> — the searchable unit: <code>content</code>, an author (<strong>User</strong>), a <code>created_at</code> timestamp, and an implicit like count.</li>
+          <li><strong>User</strong> — creates posts and likes; present mainly as the author reference.</li>
+          <li><strong>Like</strong> — an event fired when a user likes a post. The system rarely cares about individual likes, only the running <em>count</em> per post.</li>
+          <li><strong>Inverted index — not an entity, the point of the exercise.</strong> A dictionary from keyword to the list of post IDs that contain it, maintained on every write. Everything downstream is about building, ranking, and affording this structure.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Two writes and one read. In a real deployment the writes would likely be events on a stream rather than direct calls, but exposing them as endpoints keeps the two paths legible:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — write and query paths</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /posts
+{ "content": "I saw Taylor Swift at the concert" }
+&rarr; 201 { "postId": "p_8f2c" }
+
+POST /posts/:postId/likes
+&rarr; 202 Accepted
+
+GET /search?keyword=taylor&amp;sortBy=likes   # sortBy = recency | likes
+&rarr; 200 { "postIds": ["p_8f2c", "p_5a11", ...] }</code></pre>
+      </details>
+      <div class="prose">
+        <p>Search returns post IDs; hydrating them into full posts is a separate lookup against the Post service, kept off the ranking path so the index only ever moves IDs around.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The two paths are wired independently because they scale differently. On the <strong>write path</strong>, posts and likes are published to a Kafka log; an <strong>Ingestion service</strong> consumes it, tokenizes each post into keywords, and appends the post ID into two Redis-backed inverted indexes — a <em>creation index</em> ordered by time and a <em>likes index</em> ordered by score. On the <strong>read path</strong>, requests hit an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> for auth and <a href="../patterns/distributed/resilience/rate-limiter.html">rate limiting</a>, fan out to a horizontally scaled, <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> Search service, and read the relevant index — fronted by a cache so identical queries never re-touch it. Splitting ingestion from queries, and creation writes from like writes, is what lets each side absorb its own very different volume.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client"]
+    Gateway["API gateway (auth, rate limit)"]
+    Search["Search service (stateless)"]
+    Cache[("Search cache / CDN edge")]
+    PostSvc["Post and Like service"]
+    Kafka[["Kafka ingestion log"]]
+    Ingest["Ingestion service (tokenizer)"]
+    Creation[("Creation index (Redis list)")]
+    Likes[("Likes index (Redis sorted set)")]
+    Cold[("Cold blob storage")]
+
+    Client -->|"GET /search"| Gateway
+    Gateway --> Search
+    Search -->|"hit"| Cache
+    Search -->|"miss"| Creation
+    Search -->|"miss"| Likes
+    Client -->|"POST /posts, /likes"| PostSvc
+    PostSvc --> Kafka
+    Kafka --> Ingest
+    Ingest -->|"append post id per keyword"| Creation
+    Ingest -->|"update score per keyword"| Likes
+    Creation -.->|"evict cold keywords"| Cold
+        </pre>
+        <figcaption>Reads flow gateway &rarr; search &rarr; cache &rarr; index; writes flow through Kafka into the ingestion tokenizer, which fans each post out across many keyword entries in both indexes.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Finding a keyword without a search engine</h3>
+        <p>The naïve answer is to keep posts in a relational table and run <code>SELECT * FROM posts WHERE content LIKE '%keyword%'</code>. That scans every row on every query; sharding across M nodes only divides the work by M, so at trillions of rows it is still hopeless — a dead end, not a starting point. The fix is to invert the layout: instead of storing posts and searching their text, precompute a dictionary from each keyword to the post IDs that contain it. This is a maintained <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> over the corpus — the ingestion tokenizer appends to it on every write, so a query is a single dictionary lookup instead of a scan. It lives in Redis, in memory, for speed; durability comes from a Redis-compatible durable store such as MemoryDB rather than plain Redis. The cost it introduces is on the write side: a single post can carry 10–1,000 keywords, so each creation triggers that many index appends.</p>
+        <h3>2 · Two sort orders without sorting at query time</h3>
+        <p>Sorting at request time is the trap. A keyword like "taylor" might match tens of millions of posts; fetching every ID, looking up its timestamp and like count, and sorting in the Search service means hundreds of megabytes on the wire and millions of lookups — nowhere near the 500&nbsp;ms budget. Instead, keep the results pre-ordered by storing two indexes per keyword. The <strong>creation index</strong> is a Redis list: writes append, and because posts arrive roughly in time order, the most recent results are simply the tail. The <strong>likes index</strong> is a Redis sorted set keyed on the like count, which keeps entries ordered as scores change with comparable insert and read cost. A search reads from whichever index matches <code>sortBy</code> and takes the top slice — no query-time sort at all. The price is doubled index storage and, because likes are so frequent, a steady stream of score updates into the sorted set.</p>
+        <h3>3 · Multi-word phrases</h3>
+        <p>A query like "Taylor Swift" is two keywords that must appear together. The straightforward approach is <em>intersect and filter</em>: pull the ID set for each word, intersect them, hydrate the survivors, and keep only those where the words are actually adjacent (ruling out "my friend Taylor made a swift exit"). It works but the per-word sets are enormous, so the intersection and the false-positive filtering are both expensive. The sharper move is to index <strong>bigrams</strong> (adjacent word pairs, borrowing Lucene's "shingles"): "I saw Taylor Swift" yields "i saw", "saw taylor", "taylor swift", so the phrase query hits a single entry directly with no intersection. Bigrams are far more numerous than single words, though — the key space can jump from ~10M to 100M+ — so you only index the pairs likely to be searched, estimating that frequency with a <a href="../patterns/distributed/coordination/count-min-sketch.html">count-min sketch</a> and falling back to intersect-and-filter when no bigram entry exists.</p>
+        <h3>4 · Absorbing the write firehose</h3>
+        <p>Two write sources stress the index for different reasons. <strong>Post creation</strong> is heavy because each post fans out into many keyword appends, and a burst can overwhelm a single ingester and drop events. Putting a Kafka log in front turns that burst into a buffer — <a href="../patterns/distributed/resilience/load-leveling.html">queue-based load levelling</a> — so many ingestion workers can consume in parallel, and <a href="../patterns/distributed/routing/sharding.html">sharding</a> the indexes by keyword spreads the appends across Redis instances instead of hot-spotting one. <strong>Likes</strong> are worse: far more frequent, and each one is a score update. Two tactics compound. First, <a href="../patterns/concurrency/batching.html">batch</a> likes over a short window — 500 likes on a viral post in 30 seconds collapse into one <code>+500</code> — though this does nothing for a post that gets one like a minute all day. Second, and more powerful, only write the count at <em>milestones</em>: persist at 1, 2, 4, 8, … (powers of two or ten) rather than on every increment, turning 1,000 writes into ten. The stored count is now deliberately approximate — labelled something like <code>approxLikes</code> so nobody mistakes it for exact — but ordering stays roughly right (10k likes still outranks 1). To return N precise results you over-fetch the top N×2 from the likes index, ask the Like service for each post's exact current count, and re-rank on the fresh numbers. Approximate storage, precise final answer — a common shape in information retrieval.</p>
+        <h3>5 · Serving reads and storing 3.6&nbsp;PB</h3>
+        <p>Two economies close the design. On <strong>reads</strong>, the no-personalization decision pays off: identical queries have identical answers, and a minute of staleness is allowed, so results are cacheable. A distributed cache in front of the Search service serves repeated queries with a TTL under one minute — checked first, populated on <a href="../patterns/caching/cache-aside.html">miss</a> — so guaranteed-fresh-enough results never re-touch the index. Layering a <a href="../patterns/distributed/routing/cdn.html">CDN</a> in front and setting <code>cache-control</code> on the <code>/search</code> response pushes hits to the edge, returning in tens of milliseconds versus the hundreds a full origin round trip costs; this is the standard <a href="../themes/scaling-reads.html">scaling-reads</a> playbook. On <strong>storage</strong>, most of the 3.6&nbsp;PB is dead weight — nobody searches most keywords, and no one scrolls millions of results deep. So cap each index entry at roughly 1k–10k IDs instead of storing every match, which cuts size by orders of magnitude, and run a periodic job over search analytics to evict rarely-searched keywords from Redis into cheap <a href="../patterns/distributed/routing/object-storage.html">object storage</a> such as S3 or R2. Queries hit Redis first and fall back to the cold tier with a latency penalty — exactly the hot/cold split the completeness requirement allows.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Sub-500&nbsp;ms keyword search over trillions of posts, served from in-memory inverted indexes and, for hot queries, the edge.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Ranking is free at query time — the creation list and likes sorted set are pre-ordered, so there is no request-time sort.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The write firehose is survivable: Kafka buffers bursts, keyword shards spread appends, and milestone counts cut like-writes exponentially.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Stored like counts are intentionally approximate; exact ordering needs a query-time re-rank against the Like service.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Everything hinges on the index staying in memory — durability leans on MemoryDB, and cold-tiered keywords pay a real latency penalty.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Bigrams and doubled indexes multiply storage, and capping entries silently drops the long tail of matches for very common keywords.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end design: clear API and data model, both the ingestion and query sides built, and a real inverted index rather than a table scan. Proposing a "bad" solution first is fine if it is discussed well; expect the interviewer to probe basics, like a cache's eviction policy.</li>
+          <li><strong>Senior</strong> — moves quickly through the high-level design to spend time on the critical paths. Recognizes the pressure points unprompted — write volume, storage size, and the high rate of duplicate queries — and lands an inverted index plus a caching strategy with the trade-offs argued out loud.</li>
+          <li><strong>Staff+</strong> — treats the system as write-heavy from the first minute and volunteers the hard parts: Kafka fan-out, milestone/approximate counts with a precise re-rank, bigram indexing, and cold tiering, at a config-level of familiarity. A good signal is the interviewer coming away having learned something.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">the inverted index is a precomputed keyword-to-post-ID view the ingestion tokenizer maintains on every write, so a query is a lookup not a scan</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cache-aside"><a href="../patterns/caching/cache-aside.html">Cache-Aside</a><span class="rel-note">the search service checks a distributed cache first and populates it on a miss, with a sub-minute TTL matching the freshness SLA</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cdn"><a href="../patterns/distributed/routing/cdn.html">CDN</a><span class="rel-note">hot /search responses are pushed to the edge via cache-control headers, returning in tens of milliseconds</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">the inverted indexes are partitioned by keyword so appends spread across many Redis instances instead of hot-spotting one</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="batching"><a href="../patterns/concurrency/batching.html">Batching</a><span class="rel-note">like events are aggregated over a short window so hundreds of likes collapse into a single increment</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="load-leveling"><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">a Kafka log buffers write bursts so parallel ingestion workers drain them without dropping posts</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="count-min-sketch"><a href="../patterns/distributed/coordination/count-min-sketch.html">Count-Min Sketch</a><span class="rel-note">bigram search frequency is estimated with a count-min sketch so only pairs worth indexing get stored</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-storage"><a href="../patterns/distributed/routing/object-storage.html">Object Storage</a><span class="rel-note">rarely-searched keyword entries are evicted from Redis into cheap blob storage and read back on a cache miss</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

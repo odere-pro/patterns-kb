@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WhatsApp · Patterns</title>
+  <meta name="description" content="Design a messaging service — real-time delivery to online users, durable delivery to offline ones, and per-user pub/sub routing across billions of persistent sockets.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#whatsapp",
+  "identifier": "whatsapp",
+  "name": "WhatsApp",
+  "description": "Deliver a message in under 500 ms to whoever is online, store it for whoever is not, across billions of persistent connections",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/messaging/pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "chat servers subscribe to per-user channels so a sender reaches a recipient without knowing which host holds their socket"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/inbox.html#inbox",
+      "name": "Inbox",
+      "kb:note": "every undelivered message is written to a per-client inbox before delivery, so an offline recipient still receives it on reconnect"
+    },
+    {
+      "@id": "../patterns/distributed/routing/load-balancer.html#load-balancer",
+      "name": "Load Balancer",
+      "kb:note": "an L4 load balancer spreads long-lived WebSocket connections across the chat-server fleet"
+    },
+    {
+      "@id": "../patterns/messaging/claim-check.html#claim-check",
+      "name": "Claim Check",
+      "kb:note": "a message carries only an attachmentId, keeping large media off the real-time delivery path"
+    },
+    {
+      "@id": "../patterns/distributed/routing/object-storage.html#object-storage",
+      "name": "Object Storage",
+      "kb:note": "media is uploaded to a dedicated attachment service backed by object storage rather than the message database"
+    },
+    {
+      "@id": "../patterns/messaging/fan-out.html#fan-out",
+      "name": "Fan-Out",
+      "kb:note": "one sent message is delivered to every chat participant and to each of their multiple devices"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "clients ack each push and the server resends until acked, tolerating duplicates so nothing is ever lost"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="whatsapp" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Deliver a message in under 500 ms to whoever is online, store it for whoever is not, across billions of persistent connections" data-kb-order="17" data-kb-aliases='[]' data-kb-tags='["system-design","messaging","routing","availability","scalability"]' data-kb-solves='["a message I send to someone who is offline just disappears instead of arriving when they finally reconnect","chat only works while both people are pinned to the same server, and breaks the moment I add a second machine","polling a REST endpoint for new messages wastes bandwidth and still feels laggy","a phone drops signal and the socket still looks open, so messages vanish with no error","the same conversation shows its messages in a different order on my laptop than on my phone"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">WhatsApp</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">WhatsApp</h1>
+      <p class="doc-essence">A messaging service carries a message from one phone to another — fast when the recipient is online, and eventually when they are not. The hard part is not the chat mechanics; it is doing both at the same time, for billions of devices that each hold one long-lived connection, without ever losing a message.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="whatsapp">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Two people (or up to a hundred, in a group) exchange text and media over their phones and computers. That surface hides two distinct problems that must be solved together: delivering a message <em>in real time</em> to whoever is currently online, and delivering it <em>durably</em> to whoever is not — the recipient whose phone is off, out of signal, or simply closed. The first problem wants speed; the second wants a place to hold the message and a guarantee it is never dropped.</p>
+        <p>A clean simplification carries the whole design: a 1:1 chat is just a group chat with two participants. Build for the general group case and the direct case falls out for free. The other framing that matters is scale — WhatsApp famously moved billions of messages a day on a small engineering team, leaning on Erlang's <a href="../patterns/concurrency/actor-model.html">actor model</a> to pack a million-plus live connections onto a single host. The design below is the same shape: start with the simplest system that satisfies the requirements, then let the deep dives make it survive real load.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Start a group chat with up to 100 participants (a 1:1 chat is the two-person case).</li>
+            <li>Send and receive messages within a chat.</li>
+            <li>Receive messages sent while offline, retained for up to 30 days.</li>
+            <li>Send and receive media — images, video, files — inside messages.</li>
+          </ol>
+          <p class="prose">Out of scope, named to keep the design narrow: voice and video calling, business accounts, and registration or profile management.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Latency</strong> — delivery under 500&nbsp;ms to online recipients.</li>
+            <li><strong>Deliverability</strong> — messages must <em>eventually</em> reach every recipient; none may be silently lost.</li>
+            <li><strong>Scale</strong> — billions of users at high throughput.</li>
+            <li><strong>Frugal storage</strong> — messages live on central servers no longer than necessary.</li>
+            <li><strong>Resilience</strong> — the system tolerates the failure of any single component.</li>
+          </ul>
+          <p class="prose">Out of scope: an exhaustive treatment of end-to-end encryption, and spam or scraping defence.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Writes.</strong> Assume ~20 messages per active user per day across 200M active users — roughly 4B messages/day, about <strong>40k messages/sec</strong>. Each message becomes one write to the <code>Message</code> table plus one <code>Inbox</code> write per recipient. Because 1:1 chats dominate, fan-out is small on average; even accounting for groups the total lands near <strong>100k writes/sec</strong>. Partitioned by <code>userId</code>, that is comfortably inside a managed key-value store like DynamoDB.</p>
+        <p><strong>Connections.</strong> Of ~1B users, budget for <strong>~200M connected at once</strong>. A single well-tuned socket host historically carried 1–2M live connections, so the fleet is <strong>hundreds of chat servers</strong> — not one. That number is the source of the central problem: sender and recipient will usually be on different hosts.</p>
+        <p><strong>Storage.</strong> Messages are small and short-lived (30-day retention), so the durable footprint is bounded by retention, not by history. Media is the heavy part, and it is deliberately pushed out of this budget onto object storage.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>A handful of records, most of them thin:</p>
+        <ul>
+          <li><strong>User</strong> — an account; the unit everything is addressed to.</li>
+          <li><strong>Client</strong> — a single device belonging to a user. One user may have several (phone, laptop, tablet), so delivery targets a client, not just a user.</li>
+          <li><strong>Chat</strong> — a conversation of 2–100 participants; primary key is the chat id.</li>
+          <li><strong>ChatParticipant</strong> — the membership join. Partition key <code>chatId</code>, sort key <code>participantId</code> lists a chat's members; a global secondary index keyed the other way lists a user's chats.</li>
+          <li><strong>Message</strong> — the payload plus a server-stamped receipt time and a chat sequence number.</li>
+          <li><strong>Inbox</strong> — a per-client holding queue of message ids not yet acknowledged by that device.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>REST is the wrong tool. Chat is high-frequency and bidirectional — the server must push to the client as often as the client pushes to the server — and a request/response protocol has no way to do that. Instead each client opens one persistent <strong>WebSocket over TLS</strong> and both sides send framed commands over it. The connection is the primitive; the request/response verbs below travel inside it.</p>
+      </div>
+      <details class="sketch">
+        <summary>Socket commands — client &harr; server</summary>
+<pre><code class="language-javascript" data-kb-lang="javascript">// client -&gt; server
+createChat            { participants:[], name }        -&gt; { chatId }
+sendMessage           { chatId, message, attachments } -&gt; { status, messageId }
+createAttachment      { body, hash }                   -&gt; { attachmentId }
+modifyChatParticipants{ chatId, userId, op }           -&gt; "SUCCESS" | "FAILURE"
+
+// server -&gt; client  (pushed)
+chatUpdate  { chatId, participants }              -&gt; "RECEIVED"
+newMessage  { chatId, userId, message, attachments } -&gt; "RECEIVED"</code></pre>
+      </details>
+      <div class="prose">
+        <p>The detail that makes durability work is the <code>ack</code>. Every server-to-client push demands a matching acknowledgement from the client. Until that ack arrives, the server assumes the message has not landed and keeps it. That single rule — deliver, wait for ack, only then forget — is what turns "we sent it" into "they got it."</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>An <a href="../patterns/distributed/routing/load-balancer.html">L4 load balancer</a> spreads incoming socket connections across a fleet of <strong>chat servers</strong> — layer 4 is enough because a WebSocket is one long-lived connection, not a stream of routable HTTP requests. Each chat server keeps an in-memory map of <code>clientId → socket</code> for the clients it holds. When a message arrives it does two things: it writes the message to the <code>Message</code> table and drops a row into each recipient's <a href="../patterns/distributed/coordination/inbox.html">Inbox</a> so the message is durable before anything else happens; then it delivers to whoever is online.</p>
+        <p>The catch is that the recipient's socket almost certainly lives on a <em>different</em> chat server. Rather than have every server track where every client is, each server subscribes on a <a href="../patterns/messaging/pubsub.html">pub/sub</a> channel keyed by the ids of its own connected users (Redis channels). To deliver, the sending server just publishes to the recipient's channel; whichever server holds that recipient is subscribed and pushes the <code>newMessage</code> down the socket. Media never travels this path — a client uploads attachments to a separate <strong>attachment service</strong> backed by <a href="../patterns/distributed/routing/object-storage.html">object storage</a> and the message carries only an <code>attachmentId</code>, keeping large binaries off the hot delivery path (a <a href="../patterns/messaging/claim-check.html">claim check</a>).</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    Sender["Sender client"]
+    LB["L4 load balancer"]
+    CS1["Chat server A"]
+    Store[("DynamoDB — Chat, Message, Inbox")]
+    PS(("Redis pub/sub — per-user channels"))
+    CS2["Chat server B"]
+    Recipient["Recipient client"]
+    Attach["Attachment service"]
+    Blob[("Object storage")]
+    Sender -->|"sendMessage over WebSocket"| LB
+    LB --> CS1
+    CS1 -->|"persist message and per-recipient inbox"| Store
+    CS1 -->|"publish to recipient's channel"| PS
+    PS -->|"recipient subscribed here"| CS2
+    CS2 -->|"newMessage push, awaits ack"| Recipient
+    Sender -.->|"upload media first"| Attach
+    Attach --> Blob
+        </pre>
+        <figcaption>Durability first (write to store), then real-time delivery via a per-user pub/sub channel that hides which server holds the recipient. Media detours through the attachment service.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Routing across hundreds of chat servers</h3>
+        <p>With ~200M live connections spread over hundreds of hosts, sender and recipient rarely share a server, so delivery becomes a routing problem. A per-user Kafka topic is a non-starter — brokers top out around 10–20k topics, not millions. <a href="../patterns/distributed/routing/consistent-hashing.html">Consistent hashing</a> can map each user deterministically to a server, but you then own the hard parts yourself: hot nodes, and redistributing connections every time a host is added or removed. Offloading to pub/sub sidesteps all of it — servers subscribe to their users' channels and the broker handles membership. The partitioning choice is by <strong>user</strong>, not by chat: because 1:1 chats dominate, per-chat channels would create a mountain of near-duplicate channels for little gain, and chats are capped at 100 members anyway. The one exception is the celebrity problem — a rare very-large chat. Above a size threshold (say 25 members) clients also subscribe to a per-chat channel and senders publish there instead, publishing to both briefly during the transition so no server misses the switch.</p>
+        <h3>2 · One user, many devices</h3>
+        <p>A user reads on a phone and a laptop, and both must stay in sync — so a single per-user inbox is not enough. A <code>Clients</code> table keyed by user id resolves each participant to its active devices; the <code>Inbox</code> becomes <em>per client</em>; and a message fans out to every one of a recipient's clients, each acking independently. The pub/sub layer is untouched — channels are still keyed by <code>userId</code>. To bound the storage and throughput this multiplies, the number of clients per account is capped (around 3).</p>
+        <h3>3 · Detecting a dead socket</h3>
+        <p>A WebSocket can look open while being functionally dead — a phone that walked into an elevator. TCP keepalives can take minutes to notice, far too slow for chat, and you would otherwise only discover the break when a send times out. The fix is <strong>application-level heartbeats</strong>: the client emits a small liveness ping on an interval, and a missed heartbeat marks the connection dead promptly, independent of the TCP layer.</p>
+        <h3>4 · When pub/sub drops a message</h3>
+        <p>Redis pub/sub is at-most-once — if no subscriber is listening at the instant of publish, the message is simply gone. Durability for offline recipients is already covered, because the message was written to the <code>Inbox</code> before it was ever published. The remaining gap is a <em>connected</em> client that missed a live push. Three mechanisms layer up: per-chat <strong>sequence numbers</strong> let a client notice a hole and request the missing range; those sequence numbers ride along on the heartbeat, so liveness and gap-detection share one signal; and periodic polling is the final backstop. Production systems run all three at once.</p>
+        <h3>5 · Ordering without a global clock</h3>
+        <p>Guaranteeing strict send-order delivery would mean buffering and reordering late arrivals — the kind of watermark machinery stream processors like Flink use, and far more complexity than users actually want. Instead, chat servers sync their clocks with NTP and stamp each message with its <em>server-receipt</em> time; every client sorts by that stamp. All devices then agree on an order, at the cost of the occasional message that "pops in" above one that was really sent later — a trade users happily accept for speed.</p>
+        <h3>6 · "Last seen" without hammering the database</h3>
+        <p>Writing to the database on every heartbeat would be a torrent of writes for a low-value signal. Presence is already knowable for free: a user is online exactly when they hold an active socket and channel subscription. Derive "last seen" from that connection state rather than persisting it, and the feature costs almost nothing.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Sub-500&nbsp;ms delivery to online users over persistent sockets, with pub/sub hiding which server holds the recipient.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">No message is ever lost: write-to-inbox-before-publish plus the deliver-then-ack loop guarantees eventual delivery across offline gaps.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Scales to billions by sharding connections across hundreds of hosts; adding servers only changes channel subscriptions, not application logic.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Media stays off the chat and database path, so large binaries never slow message delivery.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Ordering is approximate — server-receipt timestamps, not true send order, so a message can surface above a later one.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Correctness leans on layered detection (heartbeats, sequence gaps, polling) rather than one clean guarantee, because pub/sub is at-most-once.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Presence and liveness rest on connection state that is fuzzy on flaky networks; a dead socket looks alive until a heartbeat is missed.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Per-client inboxes multiply storage and throughput by device count, forcing a cap on clients per account.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a clear socket-based API and a working end-to-end design that meets the functional requirements, with the honest observation that a single chat server won't scale and some awareness of where a first scaling attempt is rough.</li>
+          <li><strong>Senior</strong> — moves briskly through the happy path to spend real time on scaling and robustness: argues consistent-hashing versus pub/sub, weighs partition-by-user against partition-by-chat, and can explain the mechanics of a long-lived socket.</li>
+          <li><strong>Staff+</strong> — goes two or three levels deep on failure modes — dead-socket detection, recovering from at-most-once pub/sub, multi-device sync, the celebrity chat — and volunteers regionalization and cell-based architecture as the operational realities behind billions of users.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pubsub"><a href="../patterns/messaging/pubsub.html">Publish-Subscribe</a><span class="rel-note">chat servers subscribe to per-user channels so a sender reaches a recipient without knowing which host holds their socket</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="inbox"><a href="../patterns/distributed/coordination/inbox.html">Inbox</a><span class="rel-note">every undelivered message is written to a per-client inbox before delivery, so an offline recipient still receives it on reconnect</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="load-balancer"><a href="../patterns/distributed/routing/load-balancer.html">Load Balancer</a><span class="rel-note">an L4 load balancer spreads long-lived WebSocket connections across the chat-server fleet</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="claim-check"><a href="../patterns/messaging/claim-check.html">Claim Check</a><span class="rel-note">a message carries only an attachmentId, keeping large media off the real-time delivery path</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-storage"><a href="../patterns/distributed/routing/object-storage.html">Object Storage</a><span class="rel-note">media is uploaded to a dedicated attachment service backed by object storage rather than the message database</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="fan-out"><a href="../patterns/messaging/fan-out.html">Fan-Out</a><span class="rel-note">one sent message is delivered to every chat participant and to each of their multiple devices</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">clients ack each push and the server resends until acked, tolerating duplicates so nothing is ever lost</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

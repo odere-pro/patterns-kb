@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BookMyShow · Patterns</title>
+  <meta name="description" content="Low-level design of a movie-ticket booking system — where seat state lives, why availability is derived, and how a per-showtime lock stops two shoppers claiming one seat.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#bookmyshow",
+  "identifier": "bookmyshow",
+  "name": "BookMyShow",
+  "description": "Book specific seats across many screenings, where a per-showtime lock is the only thing standing between two shoppers and the same seat",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/concurrency/monitor-object.html#monitor-object",
+      "name": "Monitor Object",
+      "kb:note": "each Showtime encapsulates its own lock so book, cancel, and isAvailable run mutually exclusive — only one booking touches a screening at a time"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/pessimistic-locking.html#pessimistic-locking",
+      "name": "Pessimistic Locking",
+      "kb:note": "it assumes a colliding booking and holds the lock across the whole check-and-store rather than gambling on optimistic retries"
+    },
+    {
+      "@id": "../principles/dry.html#dry",
+      "name": "Don't Repeat Yourself (DRY)",
+      "kb:note": "seat availability is derived from the reservations list, so there is no second booked-seats field that could drift out of sync"
+    },
+    {
+      "@id": "../principles/separation-of-concerns.html#separation-of-concerns",
+      "name": "Separation of Concerns",
+      "kb:note": "routing lives in BookingSystem, seat-state mutation inside each Showtime, and Movie/Theater/Reservation stay dumb data"
+    },
+    {
+      "@id": "../principles/yagni.html#yagni",
+      "name": "You Aren't Gonna Need It (YAGNI)",
+      "kb:note": "Seat and Screen stay plain strings until fine-grained locking genuinely requires promoting Seat to a class"
+    },
+    {
+      "@id": "../patterns/functional/immutability.html#immutability",
+      "name": "Immutability",
+      "kb:note": "Movie has no setters and Reservation defensively copies its seat list in and out, so shared references can't mutate a booking"
+    },
+    {
+      "@id": "../patterns/gof/behavioral/state.html#state",
+      "name": "State",
+      "kb:note": "the checkout extension turns seat status into a three-way free/held/booked state machine with guarded transitions"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="bookmyshow" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Book specific seats across many screenings, where a per-showtime lock is the only thing standing between two shoppers and the same seat" data-kb-order="39" data-kb-aliases='["movie ticket booking","seat reservation system"]' data-kb-tags='["low-level-design","concurrency","domain-modeling","separation-of-concerns","state-management"]' data-kb-solves='["two users both grab the last free seat at the same instant and I end up double-booking it","where should the seat-availability state live — on each seat, or on the thing that owns the whole screening","I keep a separate already-booked set alongside my reservations and the two keep drifting out of sync","I made a class for every noun in the spec and half of them are just an id string with no behaviour","cancelling one booking forces me to scan every venue and screening to find where it lives"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">BookMyShow</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">BookMyShow</h1>
+      <p class="doc-essence">A ticket-booking system lets a shopper search for a film, pick a screening at a theater, choose specific seats from the map, and reserve them. There is no distributed scale here — the whole exercise is object modelling under one hard constraint: when two people reach for the same seat at the same moment, exactly one may win.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="bookmyshow">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A shopper searches by film title, or browses what is playing at a given theater, lands on a specific screening, sees which seats are still free, and books one or more of them in a single transaction that hands back a confirmation code. Later they may cancel that code and release the seats. Search is a plain case-insensitive substring match — no ranking, no full-text engine. Seats are picked explicitly from a standard grid (rows A–Z, seats 0–20, so 546 per screen); there are no seat tiers, no pricing, and payment is assumed to always succeed. Everything interesting is object placement: which class owns seat state, how availability is stored, and — the one requirement that shapes the whole design — how to guarantee that concurrent bookings of the same seat resolve to a single winner.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Search for films by title, and browse the films playing at a given theater.</li>
+            <li>Theaters have several screens; every screen shares one fixed seat layout (rows A–Z, seats 0–20).</li>
+            <li>View the free seats for a screening and select specific ones; book several in one reservation, which returns a confirmation id.</li>
+            <li>When two bookings race for the same seat, exactly one succeeds; the other is rejected.</li>
+            <li>Cancel a reservation by confirmation id, releasing its seats back into the pool.</li>
+          </ol>
+          <p class="prose">Out of scope: payment, seat types and pricing, rescheduling (cancel and rebook instead), and any UI or seat-map rendering — the system only exposes availability.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional (constraints)</h3>
+          <ul>
+            <li><strong>Correctness</strong> — a seat is never sold to two reservations at once, even under concurrent load.</li>
+            <li><strong>Atomicity</strong> — a multi-seat booking is all-or-nothing; one taken seat fails the whole request with no partial state.</li>
+            <li><strong>Encapsulation</strong> — mutation of a screening's seat state happens in exactly one place, so it can be reasoned about under a lock.</li>
+            <li><strong>Evolvability</strong> — extra film fields, dynamic scheduling, and checkout holds should slot in without a rewrite.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Five classes, and two deliberate demotions. The rule of thumb: a candidate earns a class only if it connects other entities, is searched against, or carries its own behaviour.</p>
+        <ul>
+          <li><strong>BookingSystem</strong> — the orchestrator and top-level entry point. Owns the theaters and answers the cross-cutting queries no single entity can — global film search and booking-by-id — routing each booking or cancellation to the screening that owns the seats.</li>
+          <li><strong>Theater</strong> — a named venue with an <code>id</code> and a list of its screenings. No booking logic; users query it directly ("what's on at the Odeon tonight?").</li>
+          <li><strong>Showtime</strong> — one screening: a film, a datetime, and a screen label. It owns the seat state and is the <em>only</em> object that mutates it — booking and cancellation both run here under its own lock.</li>
+          <li><strong>Movie</strong> — a searchable record: an <code>id</code> and a <code>title</code>. The id exists because titles are not unique (remakes and re-releases collide), and it lets screenings across theaters point at one film.</li>
+          <li><strong>Reservation</strong> — the booking reference: a <code>confirmationId</code>, the list of seat ids, and a back-pointer to its <code>Showtime</code> so a cancellation can find its way home without scanning every venue.</li>
+          <li><strong>Seat and Screen — not classes.</strong> A seat is just a string like <code>"A5"</code>; a screen is a label like <code>"Screen 3"</code>. With one shared layout and no per-seat behaviour, string equality and hashing are all that is needed — a class would be state with no owner.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>The <code>BookingSystem</code> is the public surface; entities like <code>Showtime</code> expose their booking methods to it but not to callers. Four operations cover every requirement:</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — the orchestrator's public API</summary>
+<pre><code class="language-python" data-kb-lang="python">class BookingSystem:
+    searchMovies(title)               -&gt; List[Showtime]   # case-insensitive substring, future screenings only
+    getShowtimesAtTheater(theater)    -&gt; List[Showtime]   # one call, no per-showtime round trip
+    book(showtimeId, seatIds)         -&gt; Reservation      # mints a confirmation id; raises if any seat is taken
+    cancelReservation(confirmationId) -&gt; None             # follows the back-reference, frees the seats</code></pre>
+      </details>
+      <div class="prose">
+        <p><code>book</code> creates the <code>Reservation</code> up front — it is only a data object at that point — then hands it to the target <code>Showtime</code> for atomic validation and storage. If the screening rejects it, the reservation is never registered, so a failed booking leaves no trace anywhere.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Responsibility flows one way. <code>BookingSystem</code> holds the theaters and a set of lookup indexes — <code>showtimesById</code>, <code>reservationsById</code>, and a film-to-screenings map — built once at construction so search, booking, and cancellation are index lookups rather than nested scans over every theater. Each <code>Showtime</code> owns its own <code>reservations</code> list, which is the single source of truth for both what has been booked and which seats are free. <code>Theater</code> and <code>Movie</code> are thin data holders; <code>Reservation</code> is a data record that points back at the screening that owns it.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+classDiagram
+    class BookingSystem {
+        -List~Theater~ theaters
+        -Map~String,Showtime~ showtimesById
+        -Map~String,Reservation~ reservationsById
+        +searchMovies(title) List~Showtime~
+        +book(showtimeId, seatIds) Reservation
+        +cancelReservation(confirmationId) void
+    }
+    class Theater {
+        -String id
+        -String name
+        -List~Showtime~ showtimes
+        +getShowtimesForMovie(movie) List~Showtime~
+    }
+    class Showtime {
+        -String id
+        -String screenLabel
+        -DateTime datetime
+        -List~Reservation~ reservations
+        -Lock lock
+        +isAvailable(seatId) bool
+        +getAvailableSeats() List~String~
+        +book(reservation) void
+        +cancel(reservation) void
+    }
+    class Movie {
+        -String id
+        -String title
+        +getTitle() String
+    }
+    class Reservation {
+        -String confirmationId
+        -List~String~ seatIds
+        +getSeatIds() List~String~
+    }
+    BookingSystem "1" o-- "*" Theater : owns
+    Theater "1" o-- "*" Showtime : schedules
+    Showtime "1" o-- "*" Reservation : holds
+    Showtime ..> Movie : screens
+    Reservation ..> Showtime : back-ref for cancellation
+        </pre>
+        <figcaption>The orchestrator routes; each Showtime owns its seat state and its own lock. Availability is derived from the reservations list — there is no separate booked-seats field to keep in sync.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Where seat availability lives</h3>
+        <p>A <code>Reservation</code> already carries its own seat list, so the screening's <code>reservations</code> list alone tells you everything: booking is an append, cancellation is a remove, and a seat is free exactly when no reservation names it. <code>getAvailableSeats</code> generates the fixed grid (A–Z × 0–20, 546 seats) and subtracts the booked set. The tempting alternative is a persistent <code>bookedSeats</code> set for O(1) checks — but that is a second piece of mutable state that must be updated in lockstep with <code>reservations</code>, and the moment the two drift you get a phantom or a double-sold seat. Deriving one truth from the other keeps the invariant impossible to break; it is the <a href="../principles/dry.html">don't-repeat-yourself</a> choice, trading a linear scan for a state you can never desynchronise.</p>
+
+        <h3>2 · The booking race — exactly one winner</h3>
+        <p>The naïve <code>book</code> checks each seat, then appends the reservation. Between the check and the append sits a classic check-then-act window: two threads both read seat <code>A5</code> as free, both append, and the seat is sold twice. The requirement demands one winner, so the check and the store must happen as one indivisible step.</p>
+        <p>The default answer wraps the whole sequence in a lock the <code>Showtime</code> owns — validate the seat ids, confirm every requested seat is free, then append — all mutually exclusive. Because <code>book</code>, <code>cancel</code>, and <code>isAvailable</code> all run under the same per-screening lock, the object is a self-contained <a href="../patterns/concurrency/monitor-object.html">monitor</a>: only one booking touches a given screening at a time, while different screenings never contend. This is deliberate <a href="../patterns/distributed/coordination/pessimistic-locking.html">pessimistic</a> control — you assume a collision and hold the lock across the read-and-write rather than gambling on optimistic retries. The critical section is a short scan-and-append, so a coarse per-screening lock costs almost nothing.</p>
+        <p>The validation is all-or-nothing: every seat is checked before any state changes, so a request for <code>["A5","A6","A7"]</code> where A6 is taken throws immediately and A5 is never claimed. A finer design gives each seat its own lock so bookings for different seats of a packed opening night proceed in parallel — real throughput, but it promotes <code>Seat</code> from a string to a class with a lock and a <code>bookedBy</code> field, and demands sorted lock acquisition to avoid <a href="../hazards/deadlock.html">deadlock</a>. That is the answer to a measured hot-screening bottleneck, not the starting point.</p>
+        <details class="sketch">
+          <summary>Pseudocode — Showtime.book under the lock</summary>
+<pre><code class="language-python" data-kb-lang="python">def book(self, reservation):
+    with self._lock:                       # the screening owns its lock
+        seat_ids = reservation.get_seat_ids()
+        if not seat_ids:
+            raise ValueError("select at least one seat")
+        for s in seat_ids:                 # every seat well-formed…
+            if not self._is_valid_seat_id(s):
+                raise ValueError(f"invalid seat: {s}")
+        for s in seat_ids:                 # …and every seat free, before any change
+            if not self.is_available(s):
+                raise ValueError(f"seat {s} unavailable")
+        self._reservations.append(reservation)   # only now do we mutate</code></pre>
+        </details>
+
+        <h3>3 · Modelling only what earns a class</h3>
+        <p>Two decisions keep the object graph honest. First, <code>Seat</code> and <code>Screen</code> stay plain strings — with no per-seat behaviour and one shared layout, a class would add ceremony without state, so it is deferred until fine-grained locking actually needs it (<a href="../principles/yagni.html">you aren't gonna need it</a>). Second, <code>BookingSystem</code> stays a pure orchestrator: it never holds seat state, only routing and the indexes that make routing cheap. Layering the rules this way — orchestration on top, seat state inside each screening, dumb records below — is textbook <a href="../principles/separation-of-concerns.html">separation of concerns</a>, and it is why cancellation lives on <code>Showtime</code> (which owns the list it must modify) rather than on <code>Reservation</code>, keeping every mutation of a screening in one lockable place. The indexes are denormalised state — faster reads at the cost of more careful writes — but they turn what would be an O(theaters × screenings) scan on every search or cancellation into a hash lookup, and sidestep the N+1 trap of resolving screenings one id at a time.</p>
+
+        <h3>4 · Extending toward a real checkout</h3>
+        <p>Today's <code>book</code> is instantaneous — succeed or fail on the spot. A real flow needs to hold seats while the shopper pays. That turns seat status from a binary into a three-way <a href="../patterns/gof/behavioral/state.html">state</a> — free, held, or booked — with a <code>holds</code> map alongside <code>reservations</code>: <code>isAvailable</code> now rejects a seat claimed by either a reservation or a non-expired hold, <code>holdSeats</code> and <code>confirmHold</code> run under the same per-screening lock (no new lock type), and an expiry sweep returns abandoned holds to the pool. The hold timeout is a business dial — too short cancels people mid-payment, too long freezes seats other buyers want — the kind of policy a strategy would eventually own. Immutability guards the records underneath all of this: <code>Movie</code> has no setters, and <code>Reservation</code> defensively copies its seat list on the way in and the way out, so shared references can never mutate a booking from the outside (<a href="../patterns/functional/immutability.html">immutability</a>).</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">One source of truth for seats: availability is derived from reservations, so there is no second field to fall out of sync.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">A per-screening lock makes booking atomic and correct under concurrency, while different screenings never contend.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A pure orchestrator plus lookup indexes turns search, booking, and cancellation into O(1) routing rather than nested scans.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A coarse per-screening lock serialises a packed opening night; per-seat locking recovers the throughput but adds a Seat class and deadlock-avoiding lock order.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Deriving availability means an O(booked-seats) scan per check instead of an O(1) set lookup.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The denormalised indexes are fast to read but must be updated on every structural change, and past screenings accumulate in memory with no cleanup in this in-memory build.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Junior</strong> — a working flow: BookingSystem orchestrates, Showtime tracks seats, Reservation records the booking; <code>book</code> checks availability and stores, <code>cancel</code> removes and frees, with basic rejection of bad seat ids. May need a hint to spot the concurrency issue.</li>
+          <li><strong>Mid-level</strong> — clean split between orchestrator and screening, recognises the reservations list as the single source of truth, implements synchronized booking, handles all-or-nothing multi-seat requests, and uses lookup indexes instead of scanning every theater.</li>
+          <li><strong>Senior</strong> — nails the check-then-act race unprompted and explains why the check and store must be atomic, weighs per-screening against per-seat locking (and the deadlock-avoiding sort), lets the Reservation→Showtime back-reference fall out naturally, and walks the seat-hold extension without changing the locking model.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="monitor-object"><a href="../patterns/concurrency/monitor-object.html">Monitor Object</a><span class="rel-note">each Showtime encapsulates its own lock so book, cancel, and isAvailable run mutually exclusive — only one booking touches a screening at a time</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pessimistic-locking"><a href="../patterns/distributed/coordination/pessimistic-locking.html">Pessimistic Locking</a><span class="rel-note">it assumes a colliding booking and holds the lock across the whole check-and-store rather than gambling on optimistic retries</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="dry"><a href="../principles/dry.html">Don't Repeat Yourself (DRY)</a><span class="rel-note">seat availability is derived from the reservations list, so there is no second booked-seats field that could drift out of sync</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="separation-of-concerns"><a href="../principles/separation-of-concerns.html">Separation of Concerns</a><span class="rel-note">routing lives in BookingSystem, seat-state mutation inside each Showtime, and Movie/Theater/Reservation stay dumb data</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="yagni"><a href="../principles/yagni.html">You Aren't Gonna Need It (YAGNI)</a><span class="rel-note">Seat and Screen stay plain strings until fine-grained locking genuinely requires promoting Seat to a class</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="immutability"><a href="../patterns/functional/immutability.html">Immutability</a><span class="rel-note">Movie has no setters and Reservation defensively copies its seat list in and out, so shared references can't mutate a booking</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="state"><a href="../patterns/gof/behavioral/state.html">State</a><span class="rel-note">the checkout extension turns seat status into a three-way free/held/booked state machine with guarded transitions</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

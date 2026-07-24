@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Distributed Rate Limiter · Patterns</title>
+  <meta name="description" content="Design a distributed rate limiter — cap each client to N requests per window across a fleet of gateways, enforced from shared token-bucket state in under 10 ms.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#distributed-rate-limiter",
+  "identifier": "distributed-rate-limiter",
+  "name": "Distributed Rate Limiter",
+  "description": "Enforce per-client request quotas across a fleet of gateways from shared token-bucket state, in under 10 ms",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/resilience/token-bucket.html#token-bucket",
+      "name": "Token Bucket",
+      "kb:note": "the chosen counting algorithm — a per-client bucket that refills at a steady rate and admits a burst up to its depth"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/rate-limiter.html#rate-limiter",
+      "name": "Rate Limiter",
+      "kb:note": "the design is a distributed instantiation of the rate-limiter pattern — quota, window, 429, fail-fast"
+    },
+    {
+      "@id": "../patterns/distributed/routing/api-gateway.html#api-gateway",
+      "name": "API Gateway",
+      "kb:note": "the limiter is enforced at the gateway that already terminates every request, adding no extra hop"
+    },
+    {
+      "@id": "../patterns/caching/distributed-cache.html#distributed-cache",
+      "name": "Distributed Cache",
+      "kb:note": "Redis holds the shared bucket state so every gateway sees one global count"
+    },
+    {
+      "@id": "../patterns/distributed/routing/consistent-hashing.html#consistent-hashing",
+      "name": "Consistent Hashing",
+      "kb:note": "hashes each client id to a fixed shard so its state never splits across nodes"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "splits ~2M bucket ops/second across roughly ten Redis nodes to clear the single-instance ceiling"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/replication.html#replication",
+      "name": "Replication",
+      "kb:note": "each shard runs a master with syncing replicas that auto-promote on failure rather than uncovering its clients"
+    },
+    {
+      "@id": "../patterns/gof/extra/object-pool.html#object-pool",
+      "name": "Object Pool",
+      "kb:note": "connection pooling reuses warm TCP connections to Redis so no check pays the 20-50 ms handshake"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="distributed-rate-limiter" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Enforce per-client request quotas across a fleet of gateways from shared token-bucket state, in under 10 ms" data-kb-order="3" data-kb-aliases='["throttling","API throttle"]' data-kb-tags='["system-design","resilience","coordination","scalability","latency"]' data-kb-solves='["one abusive client keeps hammering my API and the backend falls over for everyone else","I want to cap each user to 100 requests a minute, but my gateways each count separately so the global limit leaks","two requests from the same user race on the same counter and both get allowed when only one slot was left","when a viral post throws thousands of requests a second at one key, that one shard tips over","I need to reject excess traffic in under 10 ms without a database round trip on every request"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Distributed Rate Limiter</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Distributed Rate Limiter</h1>
+      <p class="doc-essence">A rate limiter is the traffic controller in front of an API: it counts how many requests each client has made in a window and rejects the rest with a 429. The whole problem is doing that count correctly and cheaply when the counting is spread across dozens of gateways serving a million requests a second.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="distributed-rate-limiter">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Take a social platform's public API — post, fetch a timeline, upload a photo. Left unmetered, a single buggy client or a botnet can drown the backend, and one heavy user can starve everyone else. The fix is a request-level rate limiter that admits, say, 100 requests per minute per user and answers the overflow with <code>HTTP 429 Too Many Requests</code>. It has to be enforced <em>server-side</em>: a client SDK can be asked to behave, but it cannot be trusted to, so client-side throttling is at best a courtesy layer, never the real defence. The interesting engineering is not the counting rule itself but keeping one honest count when the machines doing the counting are many and the traffic is enormous.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Identify the client behind each request — by user ID, IP address, or API key — so the right limits apply.</li>
+            <li>Allow or deny each request against configurable rules (for example, 100 requests/minute/user), enforcing the most restrictive rule when several apply.</li>
+            <li>On rejection, return HTTP 429 with helpful headers: the ceiling, the count remaining, and when the window resets.</li>
+          </ol>
+          <p class="prose">Out of scope: analytics or ad-hoc querying over rate-limit data, and long-term persistence of that data — it is disposable, per-window state.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Latency</strong> — the check adds under 10&nbsp;ms to a request; it sits in the hot path of every call.</li>
+            <li><strong>Availability</strong> — high; eventual consistency is acceptable, so a small cross-node drift in the count is fine.</li>
+            <li><strong>Scale</strong> — 1M requests/second across 100M daily actives.</li>
+            <li><strong>Correctness under contention</strong> — concurrent requests for the same client must not both slip through one remaining slot.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Throughput.</strong> Every request is one check, so the limiter carries the full <strong>1M req/s</strong>. Done naïvely each check is two store operations — read the bucket, write it back — so budget <strong>~2M store ops/second</strong>. That single number drives the whole scaling story.</p>
+        <p><strong>Store capacity.</strong> A Redis instance handles roughly 100k–200k ops/second on simple operations, which lands each instance at <strong>~50k–100k checks/second</strong> once you count both ops. To absorb 1M checks/second you therefore need on the order of <strong>10 shards</strong> — the reason this design is distributed rather than a single box.</p>
+        <p><strong>Memory.</strong> Each client's state is tiny: a token count and a last-refill timestamp, call it ~100 bytes with key overhead. Even 100M live clients is only <strong>~10&nbsp;GB</strong>, ~1&nbsp;GB per shard, and idle keys expire themselves. State is cheap; the ops rate is the constraint.</p>
+        <p><strong>Latency.</strong> A Redis op is sub-millisecond, but a fresh TCP handshake is 20–50&nbsp;ms and a cross-region round trip is tens of ms — so most of the 10&nbsp;ms budget is spent on the network, not the store, which tells you where to optimise.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three entities, and a single flow through them:</p>
+        <ul>
+          <li><strong>Rule</strong> — a policy: how many requests per window, which clients it covers, which endpoints. Example: "authenticated users get 1000 requests/hour"; "the search endpoint allows 10/minute per IP."</li>
+          <li><strong>Client</strong> — the thing being limited: a user ID, an IP, an API key, or a combination. Each carries the rate-limiting state that tracks its usage against the rules.</li>
+          <li><strong>Request</strong> — an incoming call carrying the client's identity, the endpoint hit, and a timestamp; it is what gets evaluated.</li>
+        </ul>
+        <p>The flow is always the same: a request arrives, the client is identified, the applicable rules are looked up, usage is checked, and the request is allowed or denied.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>The core is one predicate, plus the shape of the rejection it produces. The call takes a client identifier and a rule identifier and returns the verdict together with the numbers the caller needs to build response headers:</p>
+      </div>
+      <details class="sketch">
+        <summary>The check, and the 429 it produces</summary>
+<pre><code class="language-http" data-kb-lang="http">isRequestAllowed(clientId, ruleId)
+  &rarr; { passes: boolean, remaining: number, resetTime: timestamp }
+
+# on a deny, the gateway returns:
+HTTP/1.1 429 Too Many Requests
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1640995200
+Retry-After: 60
+Content-Type: application/json
+
+{ "error": "Rate limit exceeded",
+  "message": "Limit of 100 requests/minute reached. Try again in 60s." }</code></pre>
+      </details>
+      <div class="prose">
+        <p>The <code>X-RateLimit-*</code> headers turn a blunt rejection into a contract: a well-behaved client reads <code>Retry-After</code> and backs off instead of hammering the door. The design chooses to <em>fail fast</em> rather than queue overflow — queuing an interactive request burns memory, makes latency unpredictable, and invites users to retry a call they think stalled, piling on more load. Queuing only earns its place in batch systems that can tolerate the wait.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The limiter lives at the <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a>, not embedded in each service and not in a separate hop of its own. The gateway already terminates every request, so it can enforce limits with no extra network call, and it can see everything it needs to identify a caller inside the HTTP request itself — the <code>Authorization</code> JWT for a user ID, <code>X-Forwarded-For</code> for an IP, <code>X-API-Key</code> for a developer key — without a database lookup that would blow the latency budget. Each gateway extracts the identifier, hashes it to pick a Redis shard, and runs a <a href="../patterns/distributed/resilience/token-bucket.html">token-bucket</a> check against the shared state there. Redis is what makes the count global: keeping bucket state in a gateway's own memory would let Alice's 50 requests to gateway A and 50 to gateway B each look like 50, and the limit would quietly leak.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client request"] --> GW["API Gateway"]
+    GW --> ID["Identify client: user ID / IP / API key"]
+    ID --> Hash{"Consistent hash on client id"}
+    Hash --> S1[("Redis shard 1 · token bucket + Lua")]
+    Hash --> S2[("Redis shard N · token bucket + Lua")]
+    S1 --> Decide{"Token available?"}
+    S2 --> Decide
+    Decide -->|"yes — consume 1"| Backend["Backend service"]
+    Decide -->|"no"| Reject["429 + X-RateLimit headers"]
+    S1 -.->|"master to replica"| Rep[("Replica · auto-failover")]
+        </pre>
+        <figcaption>Every request is identified, routed to exactly one shard by a hash of the client id, and allowed or denied by an atomic token-bucket check on that shard.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Choosing the counting algorithm</h3>
+        <p>Four algorithms trade accuracy against memory. A <strong>fixed-window counter</strong> — one bucket per minute — is trivial but has an ugly boundary: 100 requests at 12:00:59 plus 100 at 12:01:00 is 200 in two seconds, double the intended rate. A <strong>sliding-window log</strong> stores every request's timestamp and is exact, but a 1000/min user needs 1000 stored timestamps, which does not survive millions of users. A <strong>sliding-window counter</strong> keeps just the current and previous window's counts and weights them by how far into the window you are — cheap and much smoother, at the cost of assuming traffic is evenly spread. The chosen one is the <strong>token bucket</strong>: each client holds a bucket of up to N tokens that refills at a steady rate; a request spends one token, an empty bucket is a reject. It captures both dimensions of real traffic — the refill rate caps the sustained load, the bucket depth allows a burst — while storing only two numbers per client. Stripe uses this shape for its API. Its state is exactly <code>(tokens, last_refill)</code>, and tokens are computed lazily from elapsed time rather than ticked by a timer.</p>
+
+        <h3>2 · One honest count without a race</h3>
+        <p>Sharing bucket state in Redis is the easy half. The trap is the read-modify-write. If a gateway does <code>HMGET</code> to read the count, computes the refill in application code, then writes it back, two simultaneous requests for the same client can both read the same starting count, both decide a token is free, and both write — over-admitting when only one slot existed. Wrapping the writes in <code>MULTI/EXEC</code> does not save you, because the <em>read</em> that the decision hinges on happened outside the transaction. This is a textbook <a href="../hazards/race-condition.html">race condition</a> on a distributed counter, and the fix is to widen the atomic boundary to cover the whole sequence: push read, refill-calculation, and write into a single Redis <strong>Lua script</strong> that runs atomically on the shard. Redis's <a href="../patterns/caching/distributed-cache.html">shared, in-memory store</a> is a good fit here precisely because its single-threaded execution makes such a script indivisible, its ops are sub-millisecond, and an <code>EXPIRE</code> on each key reclaims idle buckets for free.</p>
+      </div>
+      <details class="sketch">
+        <summary>The atomic token-bucket check, as one Lua script</summary>
+<pre><code class="language-lua" data-kb-lang="lua">-- KEYS[1] = "alice:bucket"; ARGV = now, refill_rate, capacity, cost, ttl
+local s      = redis.call('HMGET', KEYS[1], 'tokens', 'last_refill')
+local tokens = tonumber(s[1]) or capacity          -- cold start: full bucket
+local last   = tonumber(s[2]) or now
+tokens = math.min(capacity, tokens + (now - last) * refill_rate)
+if tokens &lt; cost then
+  return {0, tokens}                                -- deny, state untouched
+end
+tokens = tokens - cost
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'last_refill', now)
+redis.call('EXPIRE', KEYS[1], ttl)
+return {1, tokens}                                  -- allow, tokens remaining</code></pre>
+      </details>
+      <div class="prose">
+        <h3>3 · Scaling writes to a million a second</h3>
+        <p>One Redis instance tops out near 50k–100k checks/second, an order of magnitude short of the target, so the store has to be sharded. The one non-negotiable is that a given client always lands on the same shard — split a client's state across two shards and neither shard's count means anything. <a href="../patterns/distributed/routing/consistent-hashing.html">Consistent hashing</a> on the identifier (user ID, IP, or API key) gives exactly that: each client maps to one shard, load spreads evenly, and adding a shard only remaps a slice of keys. In production this is usually <a href="../patterns/distributed/routing/sharding.html">Redis Cluster</a>, which hashes keys across 16,384 slots and places <code>alice:bucket</code> on the right node automatically, so the gateways stay dumb routers rather than owning the hash ring. Ten shards at ~100k checks each covers the 1M/s target, and the token-bucket logic itself does not change — only where its state lives.</p>
+
+        <h3>4 · Surviving a shard failure</h3>
+        <p>Sharding turns every shard into a single point of failure for the clients it holds: lose one and those clients go uncovered, and if they retry hard, an unprotected backend can cascade. Two honest answers exist for a check that cannot reach its shard. <strong>Fail-open</strong> admits the request — good when availability of the API matters more than the limit. <strong>Fail-closed</strong> rejects it — chosen here, because a rate-limiter outage tends to coincide with a traffic spike, which is exactly when protection matters most; better to shed some load briefly than to let a viral surge flatten the databases. Prevention beats both: run each shard as a master with <a href="../patterns/distributed/coordination/replication.html">replicas</a> that sync continuously, and let Redis Cluster auto-promote a replica on failure — typically a 1–2 second gap, not the worst-case tens of seconds. The cost is extra infrastructure and a little replication lag, which eventual consistency here happily tolerates.</p>
+
+        <h3>5 · Shaving the network cost</h3>
+        <p>Every check is a round trip, and the round trip — not the Redis op — is where the milliseconds go. Two optimisations do most of the work. <strong>Connection pooling</strong> keeps a warm set of TCP connections from each gateway to Redis so no request pays the 20–50&nbsp;ms handshake; it is a classic <a href="../patterns/gof/extra/object-pool.html">object pool</a>, and most Redis clients do it for you once tuned to the request volume. <strong>Geographic distribution</strong> is the bigger win: put gateways and their Redis clusters in the same region as the users, so a Tokyo request does not cross an ocean to a Virginia shard. Cross-region consistency gets fuzzier, but eventual consistency is acceptable for rate limiting, and the latency saved is large. Local caching of counts, pipelining, and request batching exist too, but they are rarely worth their staleness risk once pooling and locality are in place.</p>
+
+        <h3>6 · Hot keys, viral content, and abuse</h3>
+        <p>A single client throwing tens of thousands of requests a second at one shard is a <a href="../hazards/hot-key.html">hot key</a> — sometimes a legitimate analytics pipeline or an over-eager mobile refresh loop, often a bot or a DDoS. Legitimate high-volume clients are handled by encouraging client-side throttling that respects the response headers, letting them batch operations into fewer calls, and offering premium tiers with higher limits on dedicated capacity. Abusive traffic gets a blunter tool: a client that trips its limit repeatedly (say ten times in a minute) is dropped onto a blocklist — cheap to store on a shard and checked only on a cache miss — and outright floods are best absorbed upstream by a DDoS layer such as Cloudflare or AWS Shield before they ever reach the limiter. Legitimate IP sharing (corporate NATs, public WiFi) should be planned for up front with generous IP limits that lean on authenticated user limits, rather than patched after a false positive. Finally, limits should be reconfigurable without a redeploy — a launch may need a temporary bump — and a push-based config channel beats polling because a change takes effect in seconds instead of a poll interval later.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">An allow/deny verdict in under 10&nbsp;ms with no per-request database call, at 1M req/s across ~10 sharded Redis instances.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">The token bucket absorbs legitimate bursts while capping the sustained rate, matching how real API traffic actually arrives.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The atomic Lua check keeps the global count correct no matter which gateway serves the request, so the limit never leaks under concurrency.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Fail-closed drops legitimate requests during a shard-and-replica outage rather than risk flooding the backend — availability of the limiter is chosen over availability of the API.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Eventual consistency across regions lets a client briefly exceed its limit at the edges; strict global counting is deliberately not attempted.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Every check is a network round trip to shared state, so Redis is both the throughput ceiling and a standing operational burden to shard, replicate, and monitor.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — explains one algorithm clearly (token bucket is enough), places the limiter sensibly at the API gateway, names Redis as the shared-state store, and recognises that scaling means sharding Redis, with a rough sense of how.</li>
+          <li><strong>Senior</strong> — argues the algorithm trade-offs and justifies the choice, knows the store ops must be atomic and reaches for a Lua script over plain <code>MULTI/EXEC</code>, brings up consistent hashing, Redis Cluster, and connection pooling unprompted, and weighs fail-open against fail-closed while flagging hot keys and latency.</li>
+          <li><strong>Staff+</strong> — moves through the algorithm quickly to spend time on production reality: multi-region deployment and cross-geo consistency, observability on the limiter's own success rate and latency, canary and gradual rollout of rule changes, and the failure modes that only show up at scale.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="token-bucket"><a href="../patterns/distributed/resilience/token-bucket.html">Token Bucket</a><span class="rel-note">the chosen counting algorithm — a per-client bucket that refills at a steady rate and admits a burst up to its depth</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="rate-limiter"><a href="../patterns/distributed/resilience/rate-limiter.html">Rate Limiter</a><span class="rel-note">the design is a distributed instantiation of the rate-limiter pattern — quota, window, 429, fail-fast</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="api-gateway"><a href="../patterns/distributed/routing/api-gateway.html">API Gateway</a><span class="rel-note">the limiter is enforced at the gateway that already terminates every request, adding no extra hop</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="distributed-cache"><a href="../patterns/caching/distributed-cache.html">Distributed Cache</a><span class="rel-note">Redis holds the shared bucket state so every gateway sees one global count</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="consistent-hashing"><a href="../patterns/distributed/routing/consistent-hashing.html">Consistent Hashing</a><span class="rel-note">hashes each client id to a fixed shard so its state never splits across nodes</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">splits ~2M bucket ops/second across roughly ten Redis nodes to clear the single-instance ceiling</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="replication"><a href="../patterns/distributed/coordination/replication.html">Replication</a><span class="rel-note">each shard runs a master with syncing replicas that auto-promote on failure rather than uncovering its clients</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-pool"><a href="../patterns/gof/extra/object-pool.html">Object Pool</a><span class="rel-note">connection pooling reuses warm TCP connections to Redis so no check pays the 20-50 ms handshake</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

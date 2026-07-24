@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Health Endpoint Monitoring · Patterns</title>
+  <meta name="description" content="Health Endpoint Monitoring — expose a route that reports whether a service is healthy, so load balancers and orchestrators can route around instances that aren't.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#health-endpoint",
+  "identifier": "health-endpoint",
+  "name": "Health Endpoint Monitoring",
+  "description": "Exposes a route that reports whether a service is healthy",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-resilience",
+  "kb:combines-with": [
+    {
+      "@id": "./circuit-breaker.html#circuit-breaker",
+      "name": "Circuit Breaker",
+      "kb:note": "Health signals inform breaker state"
+    },
+    {
+      "@id": "../routing/autoscaling.html#autoscaling",
+      "name": "Autoscaling",
+      "kb:note": "Scale on health and load signals"
+    }
+  ],
+  "kb:enables": [
+    {
+      "@id": "../routing/load-balancer.html#load-balancer",
+      "name": "Load Balancer",
+      "kb:note": "Load balancers route only to healthy instances"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/observability.html#observability",
+      "name": "Observability",
+      "kb:role": "Report liveness and readiness"
+    },
+    {
+      "@id": "../../../themes/resilience.html#resilience",
+      "name": "Resilience",
+      "kb:role": "Route around unhealthy instances"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="health-endpoint" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-resilience" data-kb-essence="Exposes a route that reports whether a service is healthy" data-kb-order="49" data-kb-aliases="[&quot;health check&quot;,&quot;healthcheck&quot;,&quot;health check api&quot;]" data-kb-tags="[&quot;observability&quot;,&quot;coordination&quot;,&quot;load-balancing&quot;,&quot;resilience&quot;]" data-kb-solves="[&quot;the load balancer keeps sending traffic to an instance that cannot serve it&quot;,&quot;the process is up and listening but every request it takes fails&quot;,&quot;my pod gets restarted while it is still warming up its cache&quot;,&quot;we only find out a node is broken when customers start complaining&quot;,&quot;a deploy rolled traffic onto instances that were not ready yet and dropped requests&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Resilience</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Health Endpoint Monitoring</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Resilience</p>
+      <h1 class="doc-title">Health Endpoint Monitoring</h1>
+      <p class="doc-essence">Exposes a lightweight route — <code>/health</code> or <code>/ready</code> — that a service answers honestly about its own state, so load balancers, orchestrators, and on-call engineers can tell a live, working instance from one that's merely still listening.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Resilience</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="health-endpoint">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>health endpoint</strong> is a route a service exposes purely so machines can ask it a question: are you working? It answers cheaply and fast — a bare 200 for the simplest cut, or a small JSON body breaking down the state of the caches, queues, and downstream connections the service actually depends on. Nothing about the response is meant for a human eyeball first; it's built to be polled every few seconds by something that will act on the answer immediately.</p>
+        <p>The force it resolves is that an orchestrator or load balancer sitting outside a process has no way to see inside it. A socket accepting a TCP connection tells you the port is open, not that a request behind it will succeed — a process can keep listening long after its database pool is exhausted, its disk is full, or a background worker has wedged. Without an honest signal from the service itself, the infrastructure around it is left inferring health from proxies — uptime, CPU, whether the last deploy finished — none of which correlate reliably with whether a request sent right now will actually complete.</p>
+        <p>The pattern usually splits into two questions asked for different reasons. <em>Liveness</em> asks whether the process itself is still functioning, and a failure there means restart it. <em>Readiness</em> asks whether it should currently receive traffic, and a failure there means route around it without touching the process at all — an instance warming a cache or briefly starved of a downstream connection is very much alive, just not ready. Conflating the two turns a transient dependency hiccup into an unnecessary restart storm.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant LB as Orchestrator
+    participant S as Service Instance
+    participant Dep as Dependency
+    LB->>S: GET /healthz
+    S->>Dep: check connectivity
+    Dep-->>S: reachable or timeout
+    S-->>LB: 200 healthy or 503 unhealthy
+    LB->>LB: update routing table
+        </pre>
+        <figcaption>A poller queries the endpoint on an interval. The service checks its own dependencies and answers with a status the poller acts on directly — no polling of internals required.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Liveness vs. readiness probes</dt>
+        <dd>Two separate routes with different consequences — a failed liveness check restarts the process, a failed readiness check just pulls it out of rotation.</dd>
+        <dt id="variations-item-2">Shallow vs. deep checks</dt>
+        <dd>A shallow check confirms the process can respond at all; a deep check also pings its own dependencies. Deep checks catch more, but can themselves cascade if every instance hammers the same downstream at once.</dd>
+        <dt id="variations-item-3">Startup probe / grace period</dt>
+        <dd>A separate, more lenient check during boot so a slow-starting instance isn't killed by liveness before it has finished warming up.</dd>
+        <dt id="variations-item-4">Aggregated dependency health</dt>
+        <dd>The response body lists each dependency's status individually, so on-call engineers get a diagnosis, not just a single pass/fail bit.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Gives orchestrators and load balancers a real signal instead of guessing from an open socket.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Cheap and fast enough to poll every few seconds without meaningful load.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Separating liveness from readiness lets each control loop react the right way — restart vs. reroute.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Doubles as an operational tool — curl it during an incident and see what the orchestrator sees.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A deep check that pings every dependency can itself become a cascading failure under load.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">False positives: the process responds fine while a critical path it doesn't check is silently broken.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">False negatives: one blip on a nonessential dependency trips readiness and yanks a healthy instance out.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Another endpoint to secure — unauthenticated deep checks can leak internal topology to anyone who asks.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Something external — a load balancer, orchestrator, or deploy pipeline — needs to know if an instance can take traffic.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You run behind a container platform that expects liveness and readiness probes to manage restarts and rollout.</li>
+            <li id="usage-when-3" data-kb-polarity="when">On-call engineers need one fast, standard place to check an instance's status during an incident.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">There's no independent lifecycle to probe — a short-lived batch job has nothing to route around.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The check itself calls flaky dependencies with no timeout — that turns the health check into another failure point, and it needs a <a href="./circuit-breaker.html">Circuit Breaker</a> or timeout of its own.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Only one instance exists behind nothing — there's no load balancer or orchestrator to act on the signal yet.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — separate liveness and readiness routes</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">let ready = false;
+export function markReady() { ready = true; } // called once boot finishes
+
+// Liveness: is the process itself still functioning?
+app.get("/healthz", (_req, res) =&gt; {
+  res.status(200).json({ status: "ok" });
+});
+
+// Readiness: should it currently receive traffic?
+app.get("/readyz", async (_req, res) =&gt; {
+  if (!ready) {
+    return res.status(503).json({ status: "starting" });
+  }
+  try {
+    await withTimeout(db.ping(), 500); // bounded — never hang the check
+    res.status(200).json({ status: "ok", db: "up" });
+  } catch {
+    res.status(503).json({ status: "degraded", db: "down" });
+  }
+});</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="kubernetes"><strong>Kubernetes</strong><span>Liveness, readiness, and startup probes (httpGet, tcpSocket, exec, or grpc) drive different actions — a failed liveness restarts the container, a failed readiness pulls it from the Service endpoints — each tuned by periodSeconds, timeoutSeconds, and failure/success thresholds.</span></div>
+        <div class="wild-item" data-kb-example="spring-boot-actuator"><strong>Spring Boot Actuator</strong><span>Exposes /actuator/health, aggregating per-dependency HealthIndicator beans into one status, with separate liveness and readiness groups that map onto Kubernetes probes and a show-details toggle for the breakdown.</span></div>
+        <div class="wild-item" data-kb-example="aws-elb"><strong>AWS Elastic Load Balancing</strong><span>Target groups poll a configured health-check path on an interval and, after a set number of consecutive failures, mark the target unhealthy and stop routing to it — restoring it once it passes the healthy threshold again.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Probe period</strong> — How often the endpoint is polled (periodSeconds) — frequent enough to react, sparse enough not to load the service.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Failure and success thresholds</strong> — Consecutive failures before an instance is acted on and successes before it is restored (failureThreshold, successThreshold) — the anti-flap dials.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Probe timeout</strong> — A hard bound on the check itself (timeoutSeconds) so a slow dependency can never make the health check hang.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Startup grace</strong> — An initial delay or dedicated startup probe (initialDelaySeconds, startupProbe) so a slow-booting instance is not killed before it has warmed up.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Check depth</strong> — Shallow (the process can respond at all) versus deep (it also pings its own dependencies) — depth catches more but risks cascading.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Probe failure rate</strong> — Fraction of health checks failing per instance — the raw signal the orchestrator and load balancer act on.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Health check latency</strong> — How long the endpoint takes to answer; a deep check that is slowing is a leading indicator of dependency trouble.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Restart / eviction churn</strong> — Restarts driven by liveness failures and instances pulled from rotation by readiness — spikes reveal misconfigured thresholds.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Deep-check cascade</strong> — A check that pings a shared downstream, run by every instance at once, amplifies load and can fail the whole fleet together.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Liveness restart storm</strong> — Liveness set to fail on a transient dependency blip restarts healthy processes instead of just rerouting — the job readiness should have done.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Unbounded check hangs</strong> — A dependency call in the endpoint with no timeout makes the probe itself hang, turning the health check into another failure point.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Correlated readiness flip</strong> — Readiness tied to a non-critical shared dependency flips the entire fleet out of rotation on one blip, removing all capacity at once.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Separate liveness from readiness so a dependency hiccup reroutes rather than restarts.</li>
+            <li id="production-check-2" data-kb-polarity="check">Bound every dependency call inside the endpoint with its own timeout.</li>
+            <li id="production-check-3" data-kb-polarity="check">Set thresholds and period so a single blip does not yank an instance out.</li>
+            <li id="production-check-4" data-kb-polarity="check">Give slow-starting instances a startup probe or initial delay.</li>
+            <li id="production-check-5" data-kb-polarity="check">Keep readiness off non-critical dependencies that could evict the whole fleet at once.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="circuit-breaker"><a href="./circuit-breaker.html">Circuit Breaker</a><span class="rel-note">Health signals inform breaker state</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="autoscaling"><a href="../routing/autoscaling.html">Autoscaling</a><span class="rel-note">Scale on health and load signals</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="enables" data-kb-to="load-balancer"><a href="../routing/load-balancer.html">Load Balancer</a><span class="rel-note">Load balancers route only to healthy instances</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    HE["Health Endpoint"]
+    HE --- CB["Circuit Breaker"]
+    HE --- LB["Load Balancer"]
+    HE --- AS["Autoscaling"]
+    click CB "./circuit-breaker.html"
+    click LB "../routing/load-balancer.html"
+    click AS "../routing/autoscaling.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="observability"><a href="../../../themes/observability.html">Observability</a><span>Report liveness and readiness</span></div>
+        <div class="fluency-item" data-kb-theme="resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Route around unhealthy instances</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./bulkhead.html">← Bulkhead</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./compensating-transaction.html">Compensating Transaction →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

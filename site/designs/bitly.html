@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bitly · Patterns</title>
+  <meta name="description" content="Design a URL shortener — a read-dominated system built on unique code generation, aggressive caching, and a read/write split.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#bitly",
+  "identifier": "bitly",
+  "name": "Bitly",
+  "description": "Shorten a billion URLs and redirect each in under 100 ms, with reads outnumbering writes 1000:1",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/caching/cache-aside.html#cache-aside",
+      "name": "Cache-Aside",
+      "kb:note": "Redis in front of the store serves the hot working set; misses fall through to the database"
+    },
+    {
+      "@id": "../patterns/distributed/routing/cdn.html#cdn",
+      "name": "CDN",
+      "kb:note": "Popular codes and their redirects are pushed to the edge so they never reach the origin"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/replication.html#replication",
+      "name": "Replication",
+      "kb:note": "A read replica gives the single URL store failover without sharding"
+    },
+    {
+      "@id": "../patterns/distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "Write and read services scale horizontally because instances hold no per-request state"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/conditional-write.html#conditional-write",
+      "name": "Conditional Write",
+      "kb:note": "A UNIQUE constraint on short_code is the final backstop against a duplicate code"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="bitly" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Shorten a billion URLs and redirect each in under 100 ms, with reads outnumbering writes 1000:1" data-kb-order="1" data-kb-aliases='["URL shortener","TinyURL","short links"]' data-kb-tags='["system-design","caching","read-optimization","scalability","latency"]' data-kb-solves='["I need to turn long links into short ones and redirect them in milliseconds","my reads outnumber writes a thousand to one and one database cannot keep up","how do I generate short unique ids without two requests colliding on the same code","predictable sequential ids let anyone enumerate every record in my system"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Bitly</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Bitly</h1>
+      <p class="doc-essence">A URL shortener turns a long link into a short code and redirects visitors back to the original. Almost all the load is redirects, so the design is read-first: generate unique codes cheaply, then serve them from memory and the edge.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="bitly">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A URL shortener accepts a long URL and returns a short one — <code>short.ly/abc123</code> — that redirects to the original. It is a small surface with one dominant property that decides everything downstream: the read-to-write ratio is enormous. A link is created once and then clicked thousands of times, so the interesting engineering is not in creating codes but in redirecting fast, cheaply, and at scale. This is the entry point for the read-heavy playbook covered in depth by the <a href="../themes/scaling-reads.html">Scaling Reads</a> theme.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Submit a long URL and receive a short URL in return.</li>
+            <li>Optionally choose a custom alias, and optionally set an expiration date.</li>
+            <li>Visit a short URL and be redirected to the original.</li>
+          </ol>
+          <p class="prose">Out of scope: accounts and click analytics — named explicitly so the design stays narrow.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Uniqueness</strong> — every short code maps to exactly one long URL.</li>
+            <li><strong>Latency</strong> — redirects under 100&nbsp;ms.</li>
+            <li><strong>Availability</strong> — 99.99%, favoured over strict consistency (a stale mapping is harmless; a dropped redirect is not).</li>
+            <li><strong>Scale</strong> — 1B stored URLs, 100M daily actives, with reads dwarfing writes by roughly 1000:1.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Reads.</strong> 100M DAU × ~5 redirects/day ≈ 500M redirects/day ≈ 5,800 reads/sec on average. Traffic is spiky, so budget for a peak roughly 100× the mean — call it <strong>~600k reads/sec</strong>. That number, not the write path, is what the architecture has to survive.</p>
+        <p><strong>Writes.</strong> New links arrive far more slowly — on the order of ~100k/day, about <strong>1 write/sec</strong>. Writes are a rounding error next to reads.</p>
+        <p><strong>Storage.</strong> A row is a short code, the long URL, timestamps and an optional alias — round to ~500 bytes. 1B rows × 500 bytes ≈ <strong>500&nbsp;GB</strong>, which fits comfortably on one modern SSD-backed instance. The dataset does not force sharding; the read rate forces caching.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three entities, kept deliberately thin:</p>
+        <ul>
+          <li><strong>ShortLink</strong> — the mapping itself: <code>short_code</code> (primary key), <code>long_url</code>, <code>created_at</code>, optional <code>expires_at</code>, optional <code>custom_alias</code>.</li>
+          <li><strong>Long URL</strong> — the destination the user wants to shorten.</li>
+          <li><strong>User</strong> — the creator, present only so custom aliases and expiry can be attributed; out of scope here beyond that.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>A small REST surface — one verb per requirement:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — create and redirect</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /urls
+{ "long_url": "https://example.com/some/very/long/path",
+  "custom_alias": "optional",
+  "expiration_date": "optional" }
+&rarr; 200 { "short_url": "https://short.ly/abc123" }
+
+GET /{short_code}
+&rarr; 302 Found
+  Location: https://example.com/some/very/long/path
+  (410 Gone if the link has expired)</code></pre>
+      </details>
+      <div class="prose">
+        <p>The redirect is a <strong>302</strong>, not a 301: a 301 is cached by the browser and never returns to the server, which would forfeit expiry and any future analytics. 302 keeps every click flowing through the service.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Because reads and writes have wildly different shapes, split the server in two and scale them independently. The <strong>Write Service</strong> mints a code and stores the mapping; the <strong>Read Service</strong> does nothing but resolve codes to URLs, fronted by a cache and, for the hottest links, the edge. The store is a single relational instance with a read replica for failover — the 500&nbsp;GB dataset does not need sharding.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client / browser"]
+    Client -->|"POST /urls"| Write["Write Service"]
+    Client -->|"GET /{code}"| Read["Read Service"]
+    Write -->|"INCR batch of 1000"| Counter[("Redis counter")]
+    Write -->|"insert mapping"| DB[("URL store")]
+    Read -->|"lookup"| Cache[("Cache")]
+    Cache -->|"miss"| DB
+    Read -.->|"hot codes served near the user"| Edge["CDN / edge"]
+    DB -->|"replicate"| Replica[("Read replica")]
+        </pre>
+        <figcaption>The write path (mint code &rarr; store) is tiny; the read path (cache &rarr; edge &rarr; replica) carries ~600k req/s.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Generating short codes that never collide</h3>
+        <p>Codes must be unique, short, and cheap to make.</p>
+        <ul>
+          <li><strong>Naïve — prefix of the URL.</strong> Take the first few characters of the long URL. It collides instantly: two <code>linkedin.com/in/…</code> links share a prefix and become indistinguishable on redirect. Rejected.</li>
+          <li><strong>Hashing.</strong> Hash the canonicalized URL (SHA-256), base62-encode it, keep the first 8 characters — 62⁸ ≈ 218 trillion codes. Base62 (a–z, A–Z, 0–9) avoids <code>+</code> and <code>/</code>, which mean other things in URLs. Deterministic hashing gives free deduplication but is guessable without an HMAC salt, and collisions still need a UNIQUE constraint plus bounded retries.</li>
+          <li><strong>Counter + base62 (chosen).</strong> Keep a global counter, base62-encode its value. Redis's single-threaded atomic <code>INCR</code> hands every caller a distinct number, so there is <em>no</em> collision to check for — cheaper and simpler than hashing. 1B in base62 is only 6 characters. The catch is that sequential codes are enumerable; mitigate with a reversible XOR-with-secret before encoding, or accept it since short links are meant to be shared.</li>
+        </ul>
+        <h3>2 · Making redirects fast</h3>
+        <p>An un-indexed lookup is a table scan — fatal at a billion rows. A B-tree primary-key index on <code>short_code</code> gives O(log n) lookups, but a disk-backed instance tops out near ~100k IOPS while we need ~600k reads/sec. So put the working set in memory: a <a href="../patterns/caching/cache-aside.html">cache-aside</a> layer (Redis) in front of the store serves hits in ~100&nbsp;ns — roughly 1000× faster than SSD — and only misses touch the database. For globally popular codes, push the mapping to a <a href="../patterns/distributed/routing/cdn.html">CDN</a> and run the redirect at the edge, so those requests never reach the origin at all. The cache TTL is set at or below the link's expiry so stale entries evict themselves.</p>
+        <h3>3 · Scaling to 1B URLs and 100M DAU</h3>
+        <p>Storage is the easy part (500&nbsp;GB on one instance, with <a href="../patterns/distributed/coordination/replication.html">replication</a> for availability). The real coordination problem is the counter: many <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> Write Service instances must agree on one sequence. A single Redis counter with atomic <code>INCR</code> solves it, and <strong>batching</strong> makes it nearly free — each instance claims 1000 values at once and hands them out locally, cutting Redis traffic by 1000×. Across regions, hand each region a disjoint counter range (region A: 0–1B, region B: 1B–2B) so writes never coordinate across the WAN. If Redis loses a few unreplicated values on failover, that is fine — we need uniqueness, not an unbroken sequence, and the database's UNIQUE constraint via a <a href="../patterns/distributed/coordination/conditional-write.html">conditional write</a> is the final backstop.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Redirects served from memory and the edge, comfortably under 100&nbsp;ms at ~600k req/s.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Collision-free codes with no read-time checks, thanks to the atomic counter.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Read and write paths scale independently, matched to a 1000:1 load asymmetry.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Counter-based codes are enumerable unless obfuscated — a real concern if links are meant to be private.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Availability is favoured over consistency: a just-created link may be briefly missing from a replica or edge.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Cache and CDN invalidation add moving parts; expiry relies on TTLs lining up rather than instant deletes.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end flow (submit → generate → store → redirect), one sound uniqueness scheme, why 302 over 301, and the insight that caching helps a read-heavy load.</li>
+          <li><strong>Senior</strong> — drives the read-first framing, argues hashing vs. counter trade-offs unprompted, details a caching and invalidation strategy, and separates read/write services under asymmetric load.</li>
+          <li><strong>Staff+</strong> — structures the whole design read-heavy from the first minute, and volunteers multi-region counter ranges, Redis failover behaviour, enumeration risk, and expiry/cleanup as operational realities.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cache-aside"><a href="../patterns/caching/cache-aside.html">Cache-Aside</a><span class="rel-note">Redis in front of the store serves the hot working set; misses fall through to the database</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cdn"><a href="../patterns/distributed/routing/cdn.html">CDN</a><span class="rel-note">Popular codes and their redirects are pushed to the edge so they never reach the origin</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="replication"><a href="../patterns/distributed/coordination/replication.html">Replication</a><span class="rel-note">A read replica gives the single URL store failover without sharding</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">Write and read services scale horizontally because instances hold no per-request state</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="conditional-write"><a href="../patterns/distributed/coordination/conditional-write.html">Conditional Write</a><span class="rel-note">A UNIQUE constraint on short_code is the final backstop against a duplicate code</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

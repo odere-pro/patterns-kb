@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thread Pool · Patterns</title>
+  <meta name="description" content="Thread Pool — reuse a fixed set of worker threads to run a stream of tasks without paying the cost of creating a thread per task.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#thread-pool",
+  "identifier": "thread-pool",
+  "name": "Thread Pool",
+  "description": "Reuses a fixed set of worker threads",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "concurrency",
+  "kb:group": "concurrency",
+  "kb:combines-with": [
+    {
+      "@id": "../distributed/resilience/bulkhead.html#bulkhead",
+      "name": "Bulkhead",
+      "kb:note": "Separate pools are a common bulkhead"
+    },
+    {
+      "@id": "./producer-consumer.html#producer-consumer",
+      "name": "Producer-Consumer",
+      "kb:note": "A pool of consumers drains the queue"
+    },
+    {
+      "@id": "./future-promise.html#future-promise",
+      "name": "Future / Promise",
+      "kb:note": "Submitting work returns a future"
+    },
+    {
+      "@id": "./semaphore.html#semaphore",
+      "name": "Semaphore",
+      "kb:note": "The pool's size limit is a counting semaphore over its workers"
+    }
+  ],
+  "kb:variant-of": [
+    {
+      "@id": "../gof/extra/object-pool.html#object-pool",
+      "name": "Object Pool",
+      "kb:note": "A thread pool is an object pool of workers"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/resource-leak.html#resource-leak",
+      "name": "Resource Leak",
+      "kb:note": "Bounded, reused workers with lifecycle management instead of leak-prone ad-hoc threads"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="thread-pool" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="Reuses a fixed set of worker threads" data-kb-order="78" data-kb-aliases="[&quot;worker pool&quot;,&quot;executor&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;resource-management&quot;,&quot;throughput&quot;]" data-kb-solves="[&quot;spawning a thread per request works fine until traffic doubles and the box falls over&quot;,&quot;my process has thousands of threads and spends more time switching than working&quot;,&quot;memory blows up under load because every in-flight request carries its own stack&quot;,&quot;I need a hard ceiling on how much work runs at once instead of one per arrival&quot;,&quot;creating and tearing down a thread costs more than the tiny job I run on it&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Thread Pool</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Thread Pool</h1>
+      <p class="doc-essence">Reuses a fixed set of worker threads to run a stream of tasks, so the cost of spinning up and tearing down a thread is paid once instead of on every request — and the number of threads running at once stays bounded no matter how much work arrives.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="thread-pool">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>thread pool</strong> keeps a fixed (or bounded) collection of worker threads alive and a queue of pending tasks in front of them. When work arrives it's placed on the queue; whenever a worker is idle it pulls the next task off, runs it to completion, and loops back for another — it never exits between tasks. Callers get a handle back (often a <a href="./future-promise.html">future or promise</a>) and move on without waiting for the thread to be created.</p>
+        <p>The force it resolves is the <strong>cost and risk of thread creation</strong>. Spinning up an OS thread means allocating a stack, registering it with the scheduler, and paying a real, measurable cost — repeating that for every incoming request ties your concurrency directly to arrival rate, not to what the hardware can actually run in parallel. Under load that means unbounded thread counts, memory pressure from thousands of stacks, and context-switch thrashing that makes everything slower, not faster.</p>
+        <p>The pool decouples <em>submission</em> from <em>execution</em>. Pool size becomes the one dial that governs real parallelism, and the queue absorbs bursts by making callers wait their turn instead of translating every burst directly into more live threads.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    C["Caller"] -->|submit task| Q["Task Queue, bounded"]
+    Q --> T1["Worker 1"]
+    Q --> T2["Worker 2"]
+    Q --> T3["Worker N"]
+    T1 -.->|idle, pulls next| Q
+    T2 -.->|idle, pulls next| Q
+    T3 -.->|idle, pulls next| Q
+        </pre>
+        <figcaption>Callers submit and move on. A fixed set of workers pull tasks from the shared queue, run them, and loop back for the next one when idle.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Fixed-size pool</dt>
+        <dd>N threads created up front and reused for the life of the process — the simplest and most predictable default, and the one most runtimes ship as their standard executor.</dd>
+        <dt id="variations-item-2">Cached / elastic pool</dt>
+        <dd>Grows toward a cap as demand rises and retires idle threads after a timeout, trading a hard resource ceiling for lower latency under bursty, uneven load.</dd>
+        <dt id="variations-item-3">Work-stealing pool</dt>
+        <dd>Each worker owns its own task deque and steals from a busy neighbor's when its own is empty, instead of every thread contending on one shared queue — how <code>ForkJoinPool</code>-style runtimes scale many small, unevenly sized tasks.</dd>
+        <dt id="variations-item-4"><a href="../distributed/resilience/bulkhead.html">Bulkhead</a> pools</dt>
+        <dd>One dedicated pool per tenant, endpoint, or workload type instead of a single shared pool, so a caller that saturates its own pool can't starve every other caller's threads too.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Amortizes thread creation cost — threads are built once and reused across many tasks.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Bounds live concurrency to a known number, protecting memory and the scheduler.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The queue absorbs bursts instead of turning every spike into more live threads.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">One number — pool size — is a single, tunable knob for real parallelism.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Sizing is genuinely hard: too few threads underuses the hardware, too many causes context-switch thrashing.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">One long-running or blocking task can occupy a worker indefinitely and starve every other queued task.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">An unbounded queue hides backpressure — tasks pile up in memory instead of the caller ever seeing "busy."</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Tasks share threads, so leftover thread-local state or an uncaught exception in one task can bleed into the next.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You have a stream of many short, similar units of work — requests, jobs, callbacks — to run concurrently.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Creating a thread per task would be measurably expensive relative to the task itself.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You need a hard, known ceiling on how many threads can be running at once.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Tasks block indefinitely or run for a very long time — they'll occupy a worker and starve the rest of the queue.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The runtime already gives you a cheaper concurrency unit — an event loop, a coroutine, or a lightweight actor — where dedicating an OS thread per unit of work is overkill.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The workload is purely CPU-bound and what you actually want is one thread per core, not a generically sized pool.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal fixed-size pool</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type Task&lt;T&gt; = () =&gt; Promise&lt;T&gt;;
+
+class ThreadPool {
+  private queue: Array&lt;() =&gt; void&gt; = [];
+  private idle: number;
+
+  constructor(private readonly size = 4) {
+    this.idle = size; // all workers start idle
+  }
+
+  submit&lt;T&gt;(task: Task&lt;T&gt;): Promise&lt;T&gt; {
+    return new Promise((resolve, reject) =&gt; {
+      this.queue.push(() =&gt; {
+        this.idle--;
+        task()
+          .then(resolve, reject)
+          .finally(() =&gt; { this.idle++; this.drain(); });
+      });
+      this.drain();
+    });
+  }
+
+  private drain() {
+    while (this.idle &gt; 0 &amp;&amp; this.queue.length &gt; 0) {
+      this.queue.shift()!(); // hand the next task to an idle worker
+    }
+  }
+}
+
+const pool = new ThreadPool(4);
+const results = await Promise.all(items.map((i) =&gt; pool.submit(() =&gt; process(i))));</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="java-executorservice"><strong>java.util.concurrent.ExecutorService</strong><span>ThreadPoolExecutor and the Executors factory methods are the canonical fixed, cached, and work-stealing pools on the JVM. ThreadPoolExecutor exposes every knob directly — corePoolSize, maximumPoolSize, keepAliveTime, the BlockingQueue you hand it, and a pluggable RejectedExecutionHandler — which is why careful teams construct it explicitly rather than use Executors.newFixedThreadPool, whose convenience hides an unbounded queue.</span></div>
+        <div class="wild-item" data-kb-example="dotnet-threadpool"><strong>.NET ThreadPool</strong><span>The runtime keeps a managed, self-tuning pool of workers that backs Task.Run and async continuations, so user code rarely creates threads directly. It adjusts worker count with a hill-climbing heuristic and injects threads beyond the minimum only at a deliberately slow rate — so ThreadPool.SetMinThreads is the standard operational fix when bursts of blocking work make requests stall waiting for thread injection.</span></div>
+        <div class="wild-item" data-kb-example="libuv"><strong>libuv</strong><span>Node.js offloads filesystem, DNS lookups, and CPU-heavy crypto such as pbkdf2 to libuv's fixed-size worker pool so blocking calls never stall the event loop. The pool defaults to just 4 threads, sized once at startup via the UV_THREADPOOL_SIZE environment variable — the classic symptom of leaving it alone is fs and dns latency spiking together the moment a fifth blocking call queues.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>pool size</strong> — the real parallelism dial (corePoolSize/maximumPoolSize in JVM terms): near core count for CPU-bound work, larger for IO-bound — derived from the measured wait-to-compute ratio, not guessed</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>queue bound</strong> — an unbounded queue converts overload into silent memory growth and latency; a bounded one converts it into visible backpressure the caller must handle</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>rejection policy</strong> — what happens when the queue is full — throw, block the submitter, run on the caller's thread, or drop; each pushes the pain to a different place, and the default was chosen for you</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>idle keep-alive</strong> — how long an elastic pool retains an idle worker before retiring it; too short and every burst re-pays thread creation, too long and the pool never shrinks</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>queue depth</strong> — a burst that drains is fine; sustained growth means arrival rate exceeds service rate and latency is compounding</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>time-in-queue</strong> — the wait a task suffers before it even starts — under saturation it dwarfs execution time, and callers feel the sum</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>active workers vs. pool size</strong> — pinned at max for minutes is saturation; near zero with a deep queue means workers are blocked, not busy</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>rejection count</strong> — every rejection is load the pool refused; a count that is always zero may just mean the queue is unbounded</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>pool-induced deadlock</strong> — a task submits sub-tasks to the same pool and blocks waiting for them; once every worker is waiting, nothing can ever run</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>blocked-worker starvation</strong> — a few tasks stuck on slow I/O occupy all workers — throughput collapses to zero while the CPU sits idle</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>unbounded-queue creep</strong> — the pool looks healthy while the queue grows for hours; the symptom finally surfaces as memory exhaustion or timeouts far downstream</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>cross-task contamination</strong> — leftover thread-local state or an uncaught exception from one task poisons the worker the next task inherits</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">bound the queue and pick the rejection policy deliberately — the default is a decision either way</li>
+            <li id="production-check-2" data-kb-polarity="check">never block inside a task on work submitted to the same pool; give nested work its own pool or a work-stealing design</li>
+            <li id="production-check-3" data-kb-polarity="check">name every pool so it is identifiable in thread dumps and metrics</li>
+            <li id="production-check-4" data-kb-polarity="check">wrap tasks with a catch-all handler so one failure cannot silently kill or poison a worker</li>
+            <li id="production-check-5" data-kb-polarity="check">reset or avoid thread-local state between tasks — workers are shared, their memory is not private</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="bulkhead"><a href="../distributed/resilience/bulkhead.html">Bulkhead</a><span class="rel-note">Separate pools are a common bulkhead</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="producer-consumer"><a href="./producer-consumer.html">Producer-Consumer</a><span class="rel-note">A pool of consumers drains the queue</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="future-promise"><a href="./future-promise.html">Future / Promise</a><span class="rel-note">Submitting work returns a future</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="semaphore"><a href="./semaphore.html">Semaphore</a><span class="rel-note">The pool's size limit is a counting semaphore over its workers</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Variant of</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="variant-of" data-kb-to="object-pool"><a href="../gof/extra/object-pool.html">Object Pool</a><span class="rel-note">A thread pool is an object pool of workers</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="resource-leak"><a href="../../hazards/resource-leak.html">Resource Leak</a><span class="rel-note">Bounded, reused workers with lifecycle management instead of leak-prone ad-hoc threads</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    TP["Thread Pool"]
+    TP --- OP["Object Pool"]
+    TP --- BH["Bulkhead"]
+    TP --- PC["Producer-Consumer"]
+    TP --- FP["Future / Promise"]
+    click OP "../gof/extra/object-pool.html"
+    click BH "../distributed/resilience/bulkhead.html"
+    click PC "./producer-consumer.html"
+    click FP "./future-promise.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./producer-consumer.html">← Producer-Consumer</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./future-promise.html">Future / Promise →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Producer-Consumer · Patterns</title>
+  <meta name="description" content="Producer-Consumer — decouples generating work from processing it, so producers and consumers run at their own pace across a shared buffer.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#producer-consumer",
+  "identifier": "producer-consumer",
+  "name": "Producer-Consumer",
+  "description": "Decouples generating work from processing it",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "concurrency",
+  "kb:group": "concurrency",
+  "kb:combines-with": [
+    {
+      "@id": "../architecture/pipe-filter.html#pipe-filter",
+      "name": "Pipe-and-Filter",
+      "kb:note": "Stages are producers and consumers in series"
+    },
+    {
+      "@id": "../messaging/message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:note": "The queue is the buffer between them"
+    },
+    {
+      "@id": "./thread-pool.html#thread-pool",
+      "name": "Thread Pool",
+      "kb:note": "A pool of consumers drains the queue"
+    },
+    {
+      "@id": "./backpressure.html#backpressure",
+      "name": "Backpressure",
+      "kb:note": "A full buffer must slow the producer"
+    },
+    {
+      "@id": "./scheduling.html#scheduling",
+      "name": "Scheduling",
+      "kb:note": "A scheduler feeds timed work into the queue the consumers pull from"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "../messaging/pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "One-to-one hand-off vs. broadcast"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/unbounded-queue.html#unbounded-queue",
+      "name": "Unbounded Queue",
+      "kb:note": "A bounded blocking queue makes a fast producer wait instead of growing without limit"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../designs/elevator.html#elevator",
+      "name": "Elevator",
+      "kb:note": "a queue decouples the many request producers from the single consumer that advances the cars, removing shared-set contention"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/streaming.html#streaming",
+      "name": "Streaming",
+      "kb:role": "The basic shape of a stream stage"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="producer-consumer" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="Decouples generating work from processing it" data-kb-order="77" data-kb-aliases="[&quot;bounded buffer&quot;,&quot;producer/consumer&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;decoupling&quot;,&quot;buffering&quot;,&quot;backpressure&quot;]" data-kb-solves="[&quot;a burst of uploads floods my database and writes start timing out&quot;,&quot;my list of pending work keeps growing until the process runs out of memory&quot;,&quot;the fast part of my code spends all its time waiting on the slow part&quot;,&quot;I want to keep accepting work while the slow processing catches up&quot;,&quot;two threads writing to the same list keep corrupting it or losing items&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Producer-Consumer</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Producer-Consumer</h1>
+      <p class="doc-essence">Decouples generating work from processing it — producers append items to a shared, bounded buffer and consumers drain it independently, so each side runs at its own pace without ever calling the other directly.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="producer-consumer">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>In the <strong>producer-consumer</strong> shape, one or more <em>producers</em> generate items and place them on a shared buffer; one or more <em>consumers</em> take items off that same buffer and process them. Neither side calls the other directly — the buffer is the entire interface between them, and it's usually bounded, so it can hold only so many items before a producer must wait.</p>
+        <p>The force it resolves is a <strong>rate mismatch</strong>. Producers and consumers rarely run at the same speed: a producer might burst (a batch upload, a flood of sensor readings), while a consumer does something slower per item (a database write, a network call). Without a buffer between them, you're left with two bad options — couple them synchronously so the producer blocks on every single item, or let unconsumed work pile up somewhere uncontrolled. The buffer absorbs the mismatch, and its fullness becomes the signal that tells a producer to slow down and a consumer that there's nothing left to do.</p>
+        <p>Correctly coordinating access to that shared buffer is the whole exercise: producers must block (or be told to wait) when it's full, consumers must block when it's empty, and both need mutual exclusion around the buffer itself so two writers or a writer and a reader don't corrupt it. Get that wrong and you get lost updates, busy-waiting that pegs a CPU, or a deadlock where everyone is asleep.</p>
+        <p>It's tagged a <em>lens</em> here because it isn't one library or one API — it's the basic shape underneath a thread pool's work queue, an actor's mailbox, an OS pipe, and a streaming pipeline's internal channel. Once you see it, you recognize it inside far more specific-looking patterns.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    P1["Producer A"] -->|enqueue| Q[("Bounded buffer")]
+    P2["Producer B"] -->|enqueue| Q
+    Q -->|dequeue| C1["Consumer A"]
+    Q -->|dequeue| C2["Consumer B"]
+        </pre>
+        <figcaption>Producers enqueue onto a shared bounded buffer, consumers dequeue independently. The buffer decouples their rates and blocks whichever side hits its limit — full for producers, empty for consumers.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Bounded vs. unbounded buffer</dt>
+        <dd>A bounded buffer caps memory use and forces a policy for what happens when it fills; an unbounded one defers that decision until the process runs out of memory.</dd>
+        <dt id="variations-item-2">Multiple producers, multiple consumers</dt>
+        <dd>Any number of producers and consumers can share one buffer as long as access is synchronized — the classic bounded-buffer problem scales cleanly in both directions.</dd>
+        <dt id="variations-item-3"><a href="./backpressure.html">Backpressure</a></dt>
+        <dd>When the buffer is full, block the producer, drop the newest or oldest item, or reject outright — the full-policy is the pattern's central design decision.</dd>
+        <dt id="variations-item-4"><a href="../messaging/message-queue.html">Message Queue</a></dt>
+        <dd>Swap the in-process buffer for a durable, out-of-process queue and the same shape survives a crash and spans separate services.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Decouples producer and consumer rates — each runs at its own pace.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Smooths bursts, absorbing spikes instead of dropping or blocking work immediately.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Scales each side independently: add consumers to drain faster, add producers without touching consumers.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">The buffer's fullness is a built-in backpressure signal, not something bolted on afterward.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The buffer is shared mutable state — wrong synchronization causes races, lost wakeups, or deadlock.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">A bounded buffer forces a full-policy decision (block, drop, reject) that's easy to get wrong or skip entirely.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">An unbounded one hides unchecked memory growth until the process falls over.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Adds a moving part — buffer size, wakeups, queue depth — that must be sized and monitored.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Producers and consumers naturally run at different, variable rates.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Work should keep being generated even while processing catches up, or vice versa.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You need to smooth bursty input before it overwhelms downstream processing.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Work is a one-off, synchronous call — invoking the consumer directly is simpler and clearer.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Strict per-item ordering across producers is required and the buffer can't preserve it.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Producer and consumer speeds are already matched, so a buffer only adds cost.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — an async bounded queue</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">class BoundedQueue&lt;T&gt; {
+  private buffer: T[] = [];
+  private consumers: Array&lt;(item: T) =&gt; void&gt; = [];
+  private producers: Array&lt;() =&gt; void&gt; = [];
+
+  constructor(private readonly capacity: number) {}
+
+  async put(item: T): Promise&lt;void&gt; {
+    while (this.buffer.length &gt;= this.capacity) {
+      await new Promise&lt;void&gt;((resolve) =&gt; this.producers.push(resolve));
+    }
+    const waiting = this.consumers.shift();
+    if (waiting) waiting(item);          // hand off directly
+    else this.buffer.push(item);
+  }
+
+  async take(): Promise&lt;T&gt; {
+    if (this.buffer.length &gt; 0) {
+      const item = this.buffer.shift()!;
+      this.producers.shift()?.();         // wake one blocked producer
+      return item;
+    }
+    return new Promise&lt;T&gt;((resolve) =&gt; this.consumers.push(resolve));
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="go-channels"><strong>Go channels</strong><span>A buffered channel make(chan T, n) is a bounded queue: sends block when full, receives block when empty, close signals no more values, and range drains until closed. The classic bounded-buffer hand-off built into the language.</span></div>
+        <div class="wild-item" data-kb-example="java-blockingqueue"><strong>java.util.concurrent.BlockingQueue</strong><span>ArrayBlockingQueue is bounded and array-backed with a single lock; LinkedBlockingQueue uses separate put and take locks for higher throughput and is unbounded unless a capacity is given. put/take block, offer/poll take timeouts.</span></div>
+        <div class="wild-item" data-kb-example="unix-pipes"><strong>Unix pipes</strong><span>A shell pipeline gives each stage a fixed-size kernel buffer (64 KB on Linux by default, resizable via fcntl F_SETPIPE_SZ) that stalls the writer when full and the reader when empty; writes up to PIPE_BUF (4096 bytes) are atomic.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Queue capacity</strong> — The bound on the shared buffer. It sets how far producers may run ahead before they block and caps the memory the backlog can consume.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Consumer pool size</strong> — Number of consumer threads or workers draining the queue. Too few and the queue backs up; too many and they contend or sit idle for work.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Full-queue policy</strong> — What an insert does when the buffer is full: block (ArrayBlockingQueue.put), time out (offer with a timeout), or reject the item.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Batch / prefetch size</strong> — How many items a consumer takes per wakeup. Batching amortizes lock and wakeup cost against added latency.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Queue depth</strong> — Sustained near-full means consumers are the bottleneck; sustained near-empty means producers are.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Producer block time</strong> — Time producers spend blocked on a full queue.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Throughput vs consumer idle time</strong> — Items processed per second against the time consumers wait on an empty queue.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Unbounded queue to OOM</strong> — An unbounded buffer, such as a LinkedBlockingQueue with no capacity, lets a fast producer grow it until the process runs out of memory.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Deadlock on shutdown</strong> — Consumers blocked on take() never learn that producers are done unless a shutdown or poison-pill protocol wakes them.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Consumer starvation</strong> — If every consumer blocks on a downstream dependency while producers keep filling the queue, the whole pipeline stalls.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Bound the queue; an unbounded buffer only defers the failure to an OOM.</li>
+            <li id="production-check-2" data-kb-polarity="check">Size the consumer pool to the consumer service rate, not the producer rate.</li>
+            <li id="production-check-3" data-kb-polarity="check">Define an explicit shutdown or drain protocol (poison pills or channel close) so blocked consumers exit.</li>
+            <li id="production-check-4" data-kb-polarity="check">Instrument queue depth to see which side is the bottleneck.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="pipe-filter"><a href="../architecture/pipe-filter.html">Pipe-and-Filter</a><span class="rel-note">Stages are producers and consumers in series</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="message-queue"><a href="../messaging/message-queue.html">Message Queue</a><span class="rel-note">The queue is the buffer between them</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="thread-pool"><a href="./thread-pool.html">Thread Pool</a><span class="rel-note">A pool of consumers drains the queue</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="backpressure"><a href="./backpressure.html">Backpressure</a><span class="rel-note">A full buffer must slow the producer</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="scheduling"><a href="./scheduling.html">Scheduling</a><span class="rel-note">A scheduler feeds timed work into the queue the consumers pull from</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="pubsub"><a href="../messaging/pubsub.html">Publish-Subscribe</a><span class="rel-note">One-to-one hand-off vs. broadcast</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="unbounded-queue"><a href="../../hazards/unbounded-queue.html">Unbounded Queue</a><span class="rel-note">A bounded blocking queue makes a fast producer wait instead of growing without limit</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="elevator"><a href="../../designs/elevator.html">Elevator</a><span class="rel-note">a queue decouples the many request producers from the single consumer that advances the cars, removing shared-set contention</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    PC["Producer-Consumer"]
+    PC --- PF["Pipe-and-Filter"]
+    PC --- MQ["Message Queue"]
+    PC --- TP["Thread Pool"]
+    PC --- BP["Backpressure"]
+    PC --- PS["Publish-Subscribe"]
+    click PF "../architecture/pipe-filter.html"
+    click MQ "../messaging/message-queue.html"
+    click TP "./thread-pool.html"
+    click BP "./backpressure.html"
+    click PS "../messaging/pubsub.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="streaming"><a href="../../themes/streaming.html">Streaming</a><span>The basic shape of a stream stage</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#lens-conc-h">← Concurrency</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./thread-pool.html">Thread Pool →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

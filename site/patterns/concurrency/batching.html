@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Batching · Patterns</title>
+  <meta name="description" content="Batching collects items and processes them as a group so the fixed cost of an operation is paid once for many items instead of once each.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#batching",
+  "identifier": "batching",
+  "name": "Batching",
+  "description": "Accumulate many items and process them together to amortize fixed per-item cost",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "concurrency",
+  "kb:group": "concurrency",
+  "kb:combines-with": [
+    {
+      "@id": "../distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "Level the arrival rate with a queue, then drain it in amortized groups"
+    },
+    {
+      "@id": "./backpressure.html#backpressure",
+      "name": "Backpressure",
+      "kb:note": "An unbounded batch buffer needs backpressure so producers can't overrun it"
+    },
+    {
+      "@id": "../caching/write-behind.html#write-behind",
+      "name": "Write-Behind",
+      "kb:note": "Write-behind coalesces deferred store writes into one flush"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/n-plus-1-query.html#n-plus-1-query",
+      "name": "N+1 Query",
+      "kb:note": "Coalesce the per-item fetches into one batched, keyed query (the DataLoader move)"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../designs/design-distributed-cache.html#design-distributed-cache",
+      "name": "Distributed Cache",
+      "kb:note": "demonstrates batching cutting both write pressure on a hot shard and per-request network chatter"
+    },
+    {
+      "@id": "../../designs/top-k.html#top-k",
+      "name": "Top-K",
+      "kb:note": "coalescing skewed hot-key writes collapses a 700k/sec firehose 2-100x into large periodic writes a database handles efficiently"
+    },
+    {
+      "@id": "../../designs/metrics-monitoring.html#metrics-monitoring",
+      "name": "Metrics & Monitoring",
+      "kb:note": "amortising per-point overhead at the edge is what makes 5M points/second affordable to accept"
+    },
+    {
+      "@id": "../../designs/fb-post-search.html#fb-post-search",
+      "name": "Facebook Post Search",
+      "kb:note": "batching is the first line of defence against the 100k-likes/sec write firehose"
+    },
+    {
+      "@id": "../../designs/uber.html#uber",
+      "name": "Uber",
+      "kb:note": "collapsing many small writes into one is how high-volume ingestion stays affordable and avoids lock contention"
+    },
+    {
+      "@id": "../../designs/strava.html#strava",
+      "name": "Strava",
+      "kb:note": "coalescing hundreds of per-point writes into a single bulk sync is batching cutting backend request volume ~100x"
+    },
+    {
+      "@id": "../../designs/chatgpt.html#chatgpt",
+      "name": "ChatGPT",
+      "kb:note": "amortizing a fixed per-pass cost — streaming the whole weight set out of HBM — across many sequences is the payoff batching exists to capture"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/genai-scale.html#genai-scale",
+      "name": "Gen AI at Scale",
+      "kb:role": "Keep the GPU busy"
+    },
+    {
+      "@id": "../../themes/scaling-writes.html#scaling-writes",
+      "name": "Scaling Writes",
+      "kb:role": "Coalesce many small writes into fewer larger ones"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc lens">
+  <main class="doc-wrap" data-kb-id="batching" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="Accumulate many items and process them together to amortize fixed per-item cost" data-kb-order="101" data-kb-aliases="[&quot;batch processing&quot;]" data-kb-tags="[&quot;batching&quot;,&quot;throughput&quot;,&quot;latency&quot;,&quot;performance&quot;]" data-kb-solves="[&quot;every insert opens its own round-trip to the database and the writes crawl&quot;,&quot;we call the same API a thousand times in a loop and keep getting rate-limited&quot;,&quot;the GPU sits idle between single requests and inference throughput is terrible&quot;,&quot;per-message overhead dominates and the system cannot keep up with the incoming rate&quot;,&quot;committing each record one at a time is hammering the disk with fsyncs&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Batching</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Batching</h1>
+      <p class="doc-essence">Instead of handling each item the moment it arrives, batching collects items and processes them as a group — so the fixed cost of an operation (a network round-trip, a disk sync, a GPU kernel launch) is paid once for many items instead of once each.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="batching">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>Batching collects items as they arrive and processes them together as a single group, rather than handling each one the instant it shows up. A buffer accumulates work until a trigger — enough items, or enough time — fires a flush, and the whole group is then handed to one downstream operation.</p>
+        <p>The force it resolves is fixed per-operation overhead. Many operations cost roughly the same whether they carry one item or a hundred: a network round-trip, a disk fsync, a GPU kernel launch, an API call against a rate limit. Handle items one at a time and you pay that fixed cost once per item, and it comes to dominate — the system spends its time on overhead instead of work.</p>
+        <p>The core trade is a little latency for a lot of throughput. An item waits in the buffer for its group to form, so each individual item finishes slightly later; but the fixed cost is amortized across the whole group, so the system as a whole does far more work per second.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    I["Items arrive<br/>one at a time"] --> B["Accumulator / buffer"]
+    B -->|"size trigger: N items"| F["Flush"]
+    B -->|"time trigger: max wait"| F
+    F --> P["Process one group<br/>downstream"]
+        </pre>
+        <figcaption>Items accumulate in a buffer that flushes on whichever trigger fires first — a size threshold or a time limit — handing the whole group to one downstream operation.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Size-triggered vs. time-triggered (linger)</dt>
+        <dd>Flush when the buffer reaches N items, or after a maximum wait has elapsed — usually whichever comes first. Size alone stalls forever when items trickle in; a linger timer bounds how long any item can wait.</dd>
+        <dt id="variations-item-2">Micro-batching</dt>
+        <dd>Form very small groups on a tight timer so latency stays bounded while the fixed cost is still amortized across a handful of items. It is the middle ground between one-at-a-time and large batches, common in stream processing.</dd>
+        <dt id="variations-item-3">Client-side vs. server-side</dt>
+        <dd>The caller groups its own requests and sends them to a bulk endpoint, or the server coalesces incoming requests from many callers before doing the work. Client-side needs no server change; server-side batches across independent clients that cannot cooperate.</dd>
+        <dt id="variations-item-4">Dynamic / adaptive batching</dt>
+        <dd>Grow the batch size as load rises and shrink it when the system is idle, so you amortize hard under pressure but do not add latency when there is nothing to amortize.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Higher throughput — the fixed per-operation cost is amortized across the whole group.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Fewer round-trips, syscalls, and commits for the same amount of work.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Uses bulk-efficient resources well — DB bulk inserts, GPU kernels, vectorized paths.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Smooths bursty load: spikes fill larger groups instead of overwhelming the downstream.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Added latency — items wait for the group to fill before anything happens.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Bigger blast radius — a single failed group can affect many items at once.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Costs memory to hold in-flight items until the flush.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Partial-failure handling is harder — which items in the group succeeded, and which must be retried?</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">The per-item fixed cost dominates — most of the work is overhead, not payload.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Throughput matters more than the latency of any single item.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The downstream is far more efficient in bulk (bulk insert, GPU, vectorized ops).</li>
+            <li id="usage-when-4" data-kb-polarity="when">You are rate-limited by request count and want fewer, larger requests.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Each item needs an immediate response on an interactive path.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Items are large or memory-bound and buffering them is costly.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Strict per-item ordering or isolation is required.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid">Volume is low — you add latency for a saving that never materializes.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — buffer calls, flush on size or a linger timeout</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">class Batcher&lt;In, Out&gt; {
+  private buffer: { item: In; resolve: (o: Out) =&gt; void }[] = [];
+  private timer: ReturnType&lt;typeof setTimeout&gt; | null = null;
+
+  constructor(
+    private readonly run: (items: In[]) =&gt; Promise&lt;Out[]&gt;,
+    private readonly maxSize = 100,
+    private readonly lingerMs = 10,
+  ) {}
+
+  submit(item: In): Promise&lt;Out&gt; {
+    return new Promise&lt;Out&gt;((resolve) =&gt; {
+      this.buffer.push({ item, resolve });
+      if (this.buffer.length &gt;= this.maxSize) this.flush();      // size trigger
+      else this.timer ??= setTimeout(() =&gt; this.flush(), this.lingerMs); // time trigger
+    });
+  }
+
+  private async flush() {
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    const group = this.buffer;
+    this.buffer = [];
+    if (group.length === 0) return;
+    const results = await this.run(group.map((g) =&gt; g.item));
+    group.forEach((g, i) =&gt; g.resolve(results[i]));  // hand each caller its result
+  }
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="jdbc-batch"><strong>JDBC addBatch/executeBatch</strong><span>Groups many SQL statements into one round-trip to the database; some drivers add rewriteBatchedStatements to collapse repeated inserts into one statement.</span></div>
+        <div class="wild-item" data-kb-example="kafka-producer"><strong>Apache Kafka producer</strong><span>Accumulates records per partition and sends them together; batch.size caps bytes per batch and linger.ms adds a small wait so more records join each send.</span></div>
+        <div class="wild-item" data-kb-example="nagle"><strong>TCP Nagle's algorithm</strong><span>Coalesces small outgoing TCP segments until an ack returns or enough data accumulates, trading latency for fewer packets; TCP_NODELAY turns it off.</span></div>
+        <div class="wild-item" data-kb-example="openai-batch"><strong>OpenAI Batch API</strong><span>Submit a file of requests to run asynchronously (within 24h) at lower cost than synchronous calls — trading latency for throughput and price.</span></div>
+        <div class="wild-item" data-kb-example="anthropic-batches"><strong>Anthropic Message Batches API</strong><span>Send many Messages requests as one asynchronously-processed batch (within 24h) at reduced cost per request.</span></div>
+        <div class="wild-item" data-kb-example="vllm"><strong>vLLM continuous batching</strong><span>An LLM serving engine that adds and evicts requests from the running GPU batch at each decoding step, keeping the batch full instead of waiting for the slowest request to finish.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>max batch size</strong> — the item or byte ceiling that forces a flush</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>linger / flush interval</strong> — the maximum time an item waits before the group ships, even under-filled</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>buffer bound</strong> — cap on in-flight items or bytes held in memory</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>batch fill ratio</strong> — average items per flush — low means linger is dominating and you are paying latency for little gain</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>items waiting / queue depth</strong> — how much work is buffered ahead of the next flush</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>added p99 latency</strong> — the tail latency the wait introduces</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>under-fill at low load</strong> — batches ship half-empty on the linger timer, so you pay latency without the throughput win</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>memory pressure under bursts</strong> — an unbounded buffer grows without limit when producers outrun the flush</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>poison item</strong> — one bad record can fail the whole group unless failures are isolated</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">bound the buffer by size or memory, never unbounded</li>
+            <li id="production-check-2" data-kb-polarity="check">set linger to a latency budget you can defend</li>
+            <li id="production-check-3" data-kb-polarity="check">handle partial failure: retry survivors, isolate the bad item</li>
+            <li id="production-check-4" data-kb-polarity="check">load-test at both low and high arrival rates</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="load-leveling"><a href="../distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">Level the arrival rate with a queue, then drain it in amortized groups</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="backpressure"><a href="./backpressure.html">Backpressure</a><span class="rel-note">An unbounded batch buffer needs backpressure so producers can't overrun it</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="write-behind"><a href="../caching/write-behind.html">Write-Behind</a><span class="rel-note">Write-behind coalesces deferred store writes into one flush</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="n-plus-1-query"><a href="../../hazards/n-plus-1-query.html">N+1 Query</a><span class="rel-note">Coalesce the per-item fetches into one batched, keyed query (the DataLoader move)</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="design-distributed-cache"><a href="../../designs/design-distributed-cache.html">Distributed Cache</a><span class="rel-note">demonstrates batching cutting both write pressure on a hot shard and per-request network chatter</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="top-k"><a href="../../designs/top-k.html">Top-K</a><span class="rel-note">coalescing skewed hot-key writes collapses a 700k/sec firehose 2-100x into large periodic writes a database handles efficiently</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="metrics-monitoring"><a href="../../designs/metrics-monitoring.html">Metrics &amp; Monitoring</a><span class="rel-note">amortising per-point overhead at the edge is what makes 5M points/second affordable to accept</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="fb-post-search"><a href="../../designs/fb-post-search.html">Facebook Post Search</a><span class="rel-note">batching is the first line of defence against the 100k-likes/sec write firehose</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="uber"><a href="../../designs/uber.html">Uber</a><span class="rel-note">collapsing many small writes into one is how high-volume ingestion stays affordable and avoids lock contention</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="strava"><a href="../../designs/strava.html">Strava</a><span class="rel-note">coalescing hundreds of per-point writes into a single bulk sync is batching cutting backend request volume ~100x</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="chatgpt"><a href="../../designs/chatgpt.html">ChatGPT</a><span class="rel-note">amortizing a fixed per-pass cost — streaming the whole weight set out of HBM — across many sequences is the payoff batching exists to capture</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="scaling-writes"><a href="../../themes/scaling-writes.html">Scaling Writes</a><span>Coalesce many small writes into fewer larger ones</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#lens-conc-h">← Concurrency</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="../../index.html#lens-conc-h">Concurrency →</a>
+    </nav>
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube · Patterns</title>
+  <meta name="description" content="Design a video platform — take a 10-GB upload straight to blob storage, transcode it into segments, and stream it worldwide with adaptive bitrate.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#youtube",
+  "identifier": "youtube",
+  "name": "YouTube",
+  "description": "Take a 10-GB upload straight to blob storage, transcode it into segments, and stream it worldwide with adaptive bitrate",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/routing/valet-key.html#valet-key",
+      "name": "Valet Key",
+      "kb:note": "the Video Service hands the client a presigned URL so multi-gigabyte bytes upload straight to the blob store, never through the app tier"
+    },
+    {
+      "@id": "../patterns/distributed/routing/object-storage.html#object-storage",
+      "name": "Object Storage",
+      "kb:note": "segments, renditions, and manifests all live in an S3-style blob store — the only tier that scales to a petabyte of new video a day"
+    },
+    {
+      "@id": "../patterns/architecture/pipe-filter.html#pipe-filter",
+      "name": "Pipe-and-Filter",
+      "kb:note": "post-processing is a pipeline of split then transcode then manifest-generation, each a discrete transform over the previous stage's output"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/workflow-orchestration.html#workflow-orchestration",
+      "name": "Workflow Orchestration",
+      "kb:note": "a Temporal-style orchestrator builds the processing DAG and schedules worker nodes at the right time"
+    },
+    {
+      "@id": "../patterns/messaging/competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:note": "independent segments are transcoded in parallel by a fleet of interchangeable workers pulling from a queue"
+    },
+    {
+      "@id": "../patterns/caching/cache-aside.html#cache-aside",
+      "name": "Cache-Aside",
+      "kb:note": "a distributed cache keyed by videoId absorbs reads for popular videos so they never reach Cassandra"
+    },
+    {
+      "@id": "../patterns/distributed/routing/cdn.html#cdn",
+      "name": "CDN",
+      "kb:note": "segments and manifests are pushed to edge servers so streaming never travels back to the origin region"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/replication.html#replication",
+      "name": "Replication",
+      "kb:note": "hot video metadata is replicated onto extra Cassandra nodes so several can share a viral clip's read load"
+    },
+    {
+      "@id": "../patterns/distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "the Video Service keeps no per-request state, so it scales out horizontally behind the load balancer"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="youtube" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Take a 10-GB upload straight to blob storage, transcode it into segments, and stream it worldwide with adaptive bitrate" data-kb-order="23" data-kb-aliases='["video streaming platform","video sharing service"]' data-kb-tags='["system-design","scalability","availability","throughput","latency"]' data-kb-solves='["users upload multi-gigabyte files and my app servers fall over trying to proxy every byte","a viewer on a spotty connection keeps buffering because I only stored one giant video file","when an upload drops at 90% the user has to start the whole thing over from scratch","one clip goes viral and the single database node holding its record melts under the read load","transcoding a long video into every device format takes forever on a single machine"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">YouTube</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">YouTube</h1>
+      <p class="doc-essence">A video platform lets anyone upload a file and lets everyone else watch it. Only two verbs, but the file is tens of gigabytes, the viewer is on an unreliable connection, and one popular clip is read millions of times for every single write. The whole design lives in that gap between a trivial surface and a punishing load.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="youtube">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Strip the platform down and there are exactly two interactions: a user uploads a video, and a user watches one. That tiny functional surface is deceptive — almost all the engineering pressure comes from the shape of the load around those two verbs. Uploads are single files in the tens of gigabytes. Playback has to stay smooth for a viewer whose bandwidth drops mid-stream. And a single video is written once but read on a scale that ranges from a handful to hundreds of millions. So the requirements to pin down first are not <em>what</em> the system does but <em>how much</em> and <em>how reliably</em>. The upload half overlaps heavily with the large-file mechanics of a Dropbox-style design; the watch half is a streaming problem in its own right.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>A user can upload a video.</li>
+            <li>A user can watch (stream) a video.</li>
+          </ol>
+          <p class="prose">Out of scope: view counts, search, comments, recommendations, and channel/subscription management — named explicitly so the design stays on the upload-and-playback core.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Availability</strong> — favoured over consistency; a stale or briefly-missing video is tolerable, an outage is not.</li>
+            <li><strong>Large files</strong> — uploads and playback for videos in the tens of gigabytes.</li>
+            <li><strong>Low-latency streaming</strong> — playback starts quickly and stays smooth, even on low-bandwidth connections.</li>
+            <li><strong>Scale</strong> — roughly 1M videos uploaded and 100M videos watched per day.</li>
+            <li><strong>Resumable uploads</strong> — an interrupted upload resumes where it stopped rather than restarting.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Writes (uploads).</strong> 1M uploads/day is only ~12 uploads/sec on average — trivial as a request rate. What matters is not the count but the payload: each is a multi-gigabyte transfer, so the write path is bandwidth-bound, not QPS-bound.</p>
+        <p><strong>Reads (watches).</strong> 100M watches/day ≈ ~1,200 watches/sec on average, spiky well above that at peak. But a "watch" is not one request — the player pulls a manifest and then a steady stream of short segment files for the whole runtime, so the edge sees <em>orders of magnitude</em> more requests than the raw watch count. The read-to-write ratio is the defining asymmetry: a viral clip is uploaded once and watched millions of times.</p>
+        <p><strong>Storage.</strong> Two very different piles. Metadata is tiny — ~365M new rows/year at roughly a kilobyte each is a few hundred GB/year, comfortable for a partitioned store. Video bytes are enormous — even a conservative ~1&nbsp;GB of stored renditions per upload puts new blob data near a <strong>petabyte a day</strong>. That gap is the load-bearing fact: bytes go to a blob store, metadata goes to a database, and the two are designed independently.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>A short list is enough to anchor the design:</p>
+        <ul>
+          <li><strong>User</strong> — either an uploader or a viewer.</li>
+          <li><strong>Video</strong> — the media itself: the original source plus the derived <em>segments</em>, each a few-seconds playable unit stored in several formats (a codec + container combination).</li>
+          <li><strong>VideoMetadata</strong> — the queryable record: <code>videoId</code>, <code>uploaderId</code>, name, description, the blob-store URLs, a pointer to the manifest, and a <code>chunks</code> list that tracks upload progress.</li>
+          <li><strong>Manifest</strong> — the streaming index: a primary manifest listing every available format, and per-format media manifests listing the segment URLs the player fetches in order.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>The naïve first cut — <code>POST /upload</code> carrying <code>{ Video, VideoMetadata }</code> — routes multi-gigabyte payloads through the application tier. It doesn't survive contact with the requirements, so the upload endpoint evolves into a request for an upload <em>slot</em> rather than a byte sink:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — upload, track progress, watch</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /presigned_url
+{ "name": "...", "description": "...", "chunks": [{ "fingerprint": "...", "status": "NotUploaded" }] }
+&rarr; 200 { "videoId": "...", "urls": ["https://blob.example/upload/part/1?sig=...", ...] }
+     (client then uploads bytes DIRECTLY to the blob store, one part at a time)
+
+PATCH /videos/{videoId}/chunks
+{ "partNumber": 3, "eTag": "..." }        // relay each S3 part ack so the server marks it Uploaded
+&rarr; 200 { "status": "Uploaded" }
+
+GET /videos/{videoId}
+&rarr; 200 VideoMetadata                     // carries the manifest URL the player needs to stream</code></pre>
+      </details>
+      <div class="prose">
+        <p>Note what left the request body: the video bytes. The server hands back a signed URL and the client streams the file straight to storage. <code>GET /videos/{videoId}</code> returns only metadata — the content lives in the blob store and the manifest inside that metadata tells the player how to reach it.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Every request enters through an API gateway and load balancer that handle routing, authentication, and rate limiting, then reach a stateless <strong>Video Service</strong>. On upload, the Video Service does not touch the bytes: it writes the metadata row and issues a <a href="../patterns/distributed/routing/valet-key.html">presigned URL</a> so the client uploads each part <em>directly</em> to the blob store, keeping the application tier thin. That blob store is an <a href="../patterns/distributed/routing/object-storage.html">object store</a> — the only thing that scales to petabytes of video a day. When an upload completes, the store emits an event that fires the processing pipeline. On watch, the Video Service returns metadata — served through a <a href="../patterns/caching/cache-aside.html">cache</a> so hot videos never hit the database — and the player then pulls the manifest and segments from a <a href="../patterns/distributed/routing/cdn.html">CDN</a> at the edge, so the origin is out of the streaming loop entirely.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client / player"]
+    Gateway["API Gateway + Load Balancer"]
+    Video["Video Service (stateless)"]
+    Cache[("Metadata cache")]
+    Meta[("Metadata DB — Cassandra")]
+    Blob[("Blob store — S3")]
+    Orch["Pipeline Orchestrator"]
+    Workers["Transcode Workers"]
+    CDN["CDN / edge"]
+
+    Client -->|"POST /presigned_url, GET /videos"| Gateway
+    Gateway --> Video
+    Video -->|"read/write metadata"| Cache
+    Cache -->|"miss"| Meta
+    Video -->|"presigned URL"| Blob
+    Client -->|"direct chunked upload"| Blob
+    Blob -->|"ObjectCreated event"| Orch
+    Orch -->|"schedule DAG"| Workers
+    Workers -->|"segments + manifests"| Blob
+    Blob -->|"segments + manifests"| CDN
+    CDN -->|"adaptive segments"| Client
+        </pre>
+        <figcaption>Bytes bypass the app tier on the way in (presigned direct upload) and on the way out (CDN edge); the Video Service only ever moves metadata.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Processing a video for adaptive bitrate streaming</h3>
+        <p>Storing the raw file is a non-starter: different devices need different formats, and a single giant file can't be streamed a few seconds at a time. So the upload is post-processed into small <strong>segments</strong>, each transcoded into several codec + container formats, plus manifest files that index them. That work is a <a href="../patterns/architecture/pipe-filter.html">pipeline</a>: split the source with a tool like <code>ffmpeg</code>, transcode each segment (and process audio and transcripts), generate the primary and media manifests, then mark the upload complete. Crucially the segments have no cross-dependencies, so the pipeline is really a <strong>DAG</strong> whose transcode stage — the expensive, CPU-bound step — fans out across a fleet of <a href="../patterns/messaging/competing-consumers.html">worker nodes</a> pulling independent segments in parallel. A <a href="../patterns/distributed/coordination/workflow-orchestration.html">workflow orchestrator</a> such as Temporal builds the graph and schedules the workers; intermediate artifacts live in the blob store and workers pass URLs, not bytes, to keep the coordination cheap. The payoff at watch time is <strong>adaptive bitrate streaming</strong>: the player reads the manifest, picks a rendition for current conditions, and — if bandwidth drops mid-clip — quietly switches to more-compressed, lower-resolution segments instead of stalling.</p>
+        <h3>2 · Resumable uploads</h3>
+        <p>An upload of tens of gigabytes will be interrupted; restarting from zero is unacceptable. So the client splits the file into ~5–10&nbsp;MB chunks, each with a fingerprint hash, and registers that chunk list in <code>VideoMetadata</code> with every entry marked <code>NotUploaded</code>. It then uploads each part directly to the blob store via multipart upload; the store acknowledges each part with a part number and an <strong>ETag</strong>, which the client relays back (<code>PATCH /videos/{id}/chunks</code>) so the server verifies it and flips that chunk to <code>Uploaded</code>. Resuming is then trivial: fetch the metadata, see which chunks already landed, and skip them. When the client finally calls <code>CompleteMultipartUpload</code>, the store emits exactly one object-level event that kicks off processing — an <strong>idempotent</strong> trigger, so retries and duplicate notifications never launch the pipeline twice.</p>
+        <h3>3 · Scaling reads, hot videos, and streaming distance</h3>
+        <p>The Video Service is a <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> tier of presigned-URL and point-lookup handlers, so it scales out behind the load balancer without ceremony. Metadata sits in Cassandra, partitioned by <code>videoId</code> — the design only needs point look-ups, never bulk scans, so a horizontally-partitioned leaderless store is a clean fit. The classic failure mode is the <strong>hot key</strong>: a viral video pins its partition to one node that then buckles under the read load. Two fixes stack — <a href="../patterns/distributed/coordination/replication.html">replicate</a> popular metadata onto a few extra nodes so several can share the queries, and put a distributed cache keyed by <code>videoId</code> in front so the hottest records are served from memory and never reach the database at all. The video bytes have their own hot-spot problem: a bucket lives in one region, so a viewer far away sees slow starts and buffering. The answer is the <a href="../patterns/distributed/routing/cdn.html">CDN</a> — push segments and manifests to edge servers near the viewer, and once everything a player needs is at the edge, streaming never touches the origin. Upload bursts, meanwhile, are absorbed by a queue in front of the pipeline whose depth drives elastic worker scaling.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Multi-gigabyte uploads never pass through an app server — presigned direct-to-blob keeps the tier thin and cheap to scale.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Adaptive bitrate keeps playback smooth as bandwidth swings — the player downgrades resolution rather than stalling.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Read scale is handled at the edge and in cache — hot videos are insulated from both the database and the origin bucket.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Transcoding, the one expensive job, is embarrassingly parallel across an elastic worker fleet.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The client becomes a heavy participant — chunking, ETag bookkeeping, manifest parsing, and bitrate selection all live on it.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Availability over consistency — a just-uploaded video isn't watchable until the pipeline finishes and the caches and CDN warm up.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The processing pipeline is operationally heavy — an orchestrator, a worker fleet, and piles of intermediate blobs to garbage-collect.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Storing every segment in every format multiplies storage several-fold over the original source file.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end flow for upload and playback, clear API endpoints and data model, and the two key convergences: hand bytes straight to a blob store, and stream in segments rather than downloading the whole file.</li>
+          <li><strong>Senior</strong> — moves quickly through the high-level design to spend real time on the hard parts, explaining how multipart upload enables resumable uploads and how a video is post-processed into parallel-transcoded, multi-format segments for adaptive streaming, with the trade-offs argued unprompted.</li>
+          <li><strong>Staff+</strong> — reasons from practice, naming concrete technologies (Cassandra, S3, Temporal, ffmpeg) and why they fit; anticipates the hot-key and streaming-distance bottlenecks and pre-empts them with caching, replication, and a CDN; and steers the conversation as a peer rather than being steered.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="valet-key"><a href="../patterns/distributed/routing/valet-key.html">Valet Key</a><span class="rel-note">the Video Service hands the client a presigned URL so multi-gigabyte bytes upload straight to the blob store, never through the app tier</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-storage"><a href="../patterns/distributed/routing/object-storage.html">Object Storage</a><span class="rel-note">segments, renditions, and manifests all live in an S3-style blob store — the only tier that scales to a petabyte of new video a day</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pipe-filter"><a href="../patterns/architecture/pipe-filter.html">Pipe-and-Filter</a><span class="rel-note">post-processing is a pipeline of split then transcode then manifest-generation, each a discrete transform over the previous stage's output</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="workflow-orchestration"><a href="../patterns/distributed/coordination/workflow-orchestration.html">Workflow Orchestration</a><span class="rel-note">a Temporal-style orchestrator builds the processing DAG and schedules worker nodes at the right time</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="competing-consumers"><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a><span class="rel-note">independent segments are transcoded in parallel by a fleet of interchangeable workers pulling from a queue</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cache-aside"><a href="../patterns/caching/cache-aside.html">Cache-Aside</a><span class="rel-note">a distributed cache keyed by videoId absorbs reads for popular videos so they never reach Cassandra</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cdn"><a href="../patterns/distributed/routing/cdn.html">CDN</a><span class="rel-note">segments and manifests are pushed to edge servers so streaming never travels back to the origin region</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="replication"><a href="../patterns/distributed/coordination/replication.html">Replication</a><span class="rel-note">hot video metadata is replicated onto extra Cassandra nodes so several can share a viral clip's read load</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">the Video Service keeps no per-request state, so it scales out horizontally behind the load balancer</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Amazon Locker · Patterns</title>
+  <meta name="description" content="Low-level design of a package pickup locker — where occupancy lives, what a temporary access code really is, and which facts to store versus derive.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#amazon-locker",
+  "identifier": "amazon-locker",
+  "name": "Amazon Locker",
+  "description": "Match a package to a compartment, hand back a one-time code that expires in a week, and open on pickup — an OOP design about where occupancy and access control live",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:often-confused-with": [
+    {
+      "@id": "./parking-lot.html#parking-lot",
+      "name": "Parking Lot",
+      "kb:note": "Amazon Locker puts occupancy on the compartment itself, where Parking Lot derives it in the orchestrator"
+    }
+  ],
+  "kb:demonstrates": [
+    {
+      "@id": "../principles/single-responsibility.html#single-responsibility",
+      "name": "Single Responsibility Principle",
+      "kb:note": "each class changes for one reason — Locker allocates, AccessToken owns expiry, Compartment owns physical state"
+    },
+    {
+      "@id": "../principles/separation-of-concerns.html#separation-of-concerns",
+      "name": "Separation of Concerns",
+      "kb:note": "the intrinsic physical fact (occupied) lives on the Compartment while the managed relationship (code opens door) lives in the orchestrator"
+    },
+    {
+      "@id": "../patterns/distributed/routing/valet-key.html#valet-key",
+      "name": "Valet Key",
+      "kb:note": "the access code is a scoped bearer credential that opens exactly one compartment and nothing else"
+    },
+    {
+      "@id": "../patterns/security/least-privilege.html#least-privilege",
+      "name": "Least Privilege",
+      "kb:note": "the token grants the minimum authority that still works — one door, for one week"
+    },
+    {
+      "@id": "../patterns/ddd/value-object.html#value-object",
+      "name": "Value Object",
+      "kb:note": "the AccessToken is built once at deposit and never mutated; code, expiry and target door are read-only"
+    },
+    {
+      "@id": "../principles/yagni.html#yagni",
+      "name": "You Aren't Gonna Need It (YAGNI)",
+      "kb:note": "the O(1) size index, a used-token set, lockout, and two-phase deposit are all deferred until scale actually demands them"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="amazon-locker" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Match a package to a compartment, hand back a one-time code that expires in a week, and open on pickup — an OOP design about where occupancy and access control live" data-kb-order="34" data-kb-aliases='["parcel locker","package locker"]' data-kb-tags='["low-level-design","domain-modeling","access-control","lifecycle","state-management"]' data-kb-solves='["a courier drops off a parcel and the recipient picks it up later with a one-time code, and I cannot decide which class should own which part of that","I hand out a short-lived access code that must stop working after a set number of days, and an expired one should fail differently from a plain wrong one","should the is-it-taken flag live on the physical slot itself or on the manager that assigns the slots","an outside object contributes only one attribute to my operation, so should I model it as a full class or just pass it as a parameter","a code that was already redeemed and one that was never valid should both be rejected without me keeping a separate used-codes list"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Amazon Locker</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Amazon Locker</h1>
+      <p class="doc-essence">Amazon Locker lets a delivery driver drop a package into an exact-size compartment and hands back a code the customer later types to open the door; the code lapses after a week. As a low-level design it is almost entirely about ownership: which object holds occupancy, what a temporary access code really is, and which facts you can safely derive rather than store.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="amazon-locker">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A pickup locker is a self-service handoff between two people who never meet. A driver deposits a package into a free compartment sized to fit it; the system opens that door and mints an access code; later the customer types the code, the right door pops open, and they take their parcel. There is no scale story here — one station, a few dozen doors — so the whole exercise is object modelling. The scope is narrow on purpose: everything from the driver arriving to the customer collecting, and nothing about how the parcel reached the station or how the code was texted to the customer. That leaves the interesting questions all about <em>where a fact belongs</em>: on the physical thing, on the code, or on the orchestrator that ties them together.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>A driver deposits a package by size (small, medium, large); the system assigns a free compartment of that <em>exact</em> size, opens it, and returns one access code — or errors if none is free.</li>
+            <li>A customer retrieves a package by entering the code; the system validates it and opens the door, or throws a specific error for a code that is invalid or expired.</li>
+            <li>Codes expire after seven days; an expired code is rejected on pickup and the package stays put until staff remove it.</li>
+            <li>Staff can trigger every compartment whose code has expired to open, so stuck packages can be pulled and returned to sender.</li>
+          </ol>
+          <p class="prose">Out of scope, and named out loud rather than ignored: delivery logistics, getting the code to the customer, a lockout after repeated wrong codes, the UI, multiple stations, and payment.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional (constraints)</h3>
+          <ul>
+            <li><strong>Correctness</strong> — one compartment holds one package, and only the right code opens it.</li>
+            <li><strong>Exact fit</strong> — a size is matched exactly; the base design never upgrades a medium into a free large door.</li>
+            <li><strong>Actionable errors</strong> — an expired code fails differently from a plain invalid one, because the customer can act on it.</li>
+            <li><strong>Simplicity</strong> — no queueing for a full station, no lockout, no proactive cleanup; a full door or a bad code just errors.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three classes, one enum, and one deliberate refusal:</p>
+        <ul>
+          <li><strong>Locker</strong> — the orchestrator and the only public surface. Owns the compartments and a map from code to token, and runs both workflows: deposit, pickup, and the staff sweep.</li>
+          <li><strong>AccessToken</strong> — a bearer credential, not just a string on something else. It holds its <code>code</code>, an <code>expiration</code> timestamp, and a reference to the one <code>compartment</code> it unlocks, and it answers <code>isExpired()</code> itself. It is built once at deposit and never mutated afterwards, which makes it read as an immutable <a href="../patterns/ddd/value-object.html">value object</a>. Read as an access grant, it is a <a href="../patterns/distributed/routing/valet-key.html">valet key</a> and a study in <a href="../patterns/security/least-privilege.html">least privilege</a>: it opens exactly one door, for exactly one week, and confers nothing else.</li>
+          <li><strong>Compartment</strong> — a physical slot with a <code>size</code>, an <code>id</code>, and an <code>occupied</code> flag. It knows how to open its own door and track whether a package is inside; it knows nothing about codes or expiry.</li>
+          <li><strong>Package — not a class.</strong> The parcel is owned and tracked by Amazon's fulfilment system, which already holds its id, shipping details, and recipient. This system needs only its <em>size</em>, so size collapses to a <code>Size</code> enum passed into <code>depositPackage</code>. Modelling Package as a class here would be state with no owner and no behaviour.</li>
+        </ul>
+        <p>Splitting the work this way is the GRASP <em>Information Expert</em> heuristic in the small: the Locker owns allocation and the code lookup because it can see every compartment, the AccessToken owns expiry because it holds the timestamp, and the Compartment owns its physical condition because that is literally its own state.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>The Locker exposes three operations and nothing else — no <code>getFreeCompartments()</code> or <code>getStatus()</code>, which would leak internals the workflow never needs. Deposit returns only the code (the door already popped open, so the driver sees which one); a valid pickup returns nothing, because the opening door <em>is</em> the feedback; bad codes throw instead.</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — the public API</summary>
+<pre><code class="language-python" data-kb-lang="python">class Locker:
+    depositPackage(size)          -&gt; code   # matches a free door of exactly this size, opens it, returns a one-time code; raises if none free
+    pickup(code)                  -&gt; void   # validates the code and opens the door; raises "invalid" or "expired"
+    openExpiredCompartments()     -&gt; void   # staff sweep: opens every door whose code has expired, so packages can be pulled</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The Locker holds its list of compartments and a <code>tokens</code> map keyed by code. <code>depositPackage</code> scans for a free compartment of the requested size, opens it, marks it occupied, mints a token, files the token under its code, and returns the code. <code>pickup</code> looks the code up, checks expiry, and on success opens the door and clears both the occupancy flag and the map entry. The AccessToken carries expiry and its target door; the Compartment carries its own physical state; the rules live in the Locker.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+classDiagram
+    class Locker {
+        -List~Compartment~ compartments
+        -Map~String,AccessToken~ tokens
+        +depositPackage(size) String
+        +pickup(code) void
+        +openExpiredCompartments() void
+        -findFree(size) Compartment
+    }
+    class AccessToken {
+        -String code
+        -long expiration
+        -Compartment compartment
+        +isExpired() boolean
+        +getCompartment() Compartment
+        +getCode() String
+    }
+    class Compartment {
+        -String id
+        -Size size
+        -boolean occupied
+        +open() void
+        +markOccupied() void
+        +markFree() void
+        +isOccupied() boolean
+    }
+    class Size {
+        &lt;&lt;enumeration&gt;&gt;
+        SMALL
+        MEDIUM
+        LARGE
+    }
+    Locker "1" o-- "*" Compartment : owns
+    Locker "1" ..&gt; "*" AccessToken : issues
+    AccessToken --&gt; Compartment : unlocks
+    Compartment --&gt; Size : sized
+        </pre>
+        <figcaption>The Locker orchestrates; the token is an expiring credential that names one door; the compartment owns its own occupancy. Package is absent by design.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Where does occupancy live?</h3>
+        <p>Occupancy is the design's fault line. The tell is whether a fact is an <em>intrinsic physical condition</em> or a <em>relationship the system manages</em>.</p>
+        <ul>
+          <li><strong>Derive it from the tokens.</strong> A door is occupied iff some live token points at it — no stored flag at all, which sounds like the cleanest possible answer. It quietly breaks, because physical occupancy and code validity are different facts that drift apart. An expired token cannot be deleted at the seven-day mark (pickup must still be able to answer "expired"), and the package is physically still inside, so the scan happens to report the door occupied. The moment you "fix" the scan to count only non-expired tokens, it falsely frees a door that still holds a parcel. You cannot derive a physical fact from an access-control fact.</li>
+          <li><strong>Index the free doors by size.</strong> Keep a <code>Map&lt;Size, Queue&lt;Compartment&gt;&gt;</code> of what is available: deposit dequeues, pickup re-enqueues, and allocation is O(1) with a FIFO queue spreading wear evenly across doors. But now truth lives in two places — the compartment list and the queues — and they must move in lockstep; forget to enqueue on pickup and a perfectly good door looks full forever. It earns its keep only at hundreds or thousands of doors with constant traffic. For a station of twenty to fifty, O(1) versus O(50) is noise, so paying that synchronisation tax up front is <a href="../principles/yagni.html">a cost you are not going to need</a>.</li>
+          <li><strong>A boolean on the Compartment (chosen).</strong> Put <code>occupied</code> on the entity and scan linearly to allocate. Physical state lives where the physics is, there is a single source of truth, and the code is boring in the good way. This is <a href="../principles/separation-of-concerns.html">separation of concerns</a>: a physical condition (occupied, and later broken or out of service) belongs on the thing, while a managed relationship (this code opens that door) belongs in the orchestrator. It is not a universal rule — the Parking Lot design makes the opposite call and treats occupancy as a relationship in a central set — but here occupancy really is physical, so the flag goes on the door.</li>
+        </ul>
+        <h3>2 · One error for invalid, a distinct one for expired</h3>
+        <p>Pickup has three failure shapes but only two messages, and the collapse is deliberate.</p>
+        <ul>
+          <li><strong>Never issued and already used both return "invalid".</strong> A successful pickup removes the token from the map, so a reused code is indistinguishable from a code that was never valid — both simply miss the map. Telling them apart would mean keeping a <code>usedTokens</code> set or an <code>isUsed</code> flag alive forever, extra state for a marginal message. Not worth it, so both throw the same generic error. Each class here changes for exactly one reason — a nod to the <a href="../principles/single-responsibility.html">single-responsibility principle</a> — and adding a used-code ledger would hand the Locker a second job.</li>
+          <li><strong>Expired gets its own message.</strong> "Access token has expired" is distinct because it is <em>actionable</em>: it tells the customer the parcel is still sitting in the door and to contact support, rather than implying the code was garbage. The token stays mapped and the door stays occupied precisely so this answer is possible.</li>
+        </ul>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — deposit and pickup</summary>
+<pre><code class="language-python" data-kb-lang="python">depositPackage(size):
+    c = firstFreeCompartmentOfExactly(size)     # linear scan; null if none
+    if c is null: raise "No compartment of size " + size
+    c.open(); c.markOccupied()
+    token = AccessToken(randomCode(), now + 7d, c)
+    tokens[token.code] = token
+    return token.code
+
+pickup(code):
+    token = tokens[code]
+    if token is null:      raise "Invalid access token code"   # never issued OR already redeemed
+    if token.isExpired():  raise "Access token has expired"    # actionable: parcel still inside
+    token.compartment.open()
+    token.compartment.markFree(); tokens.remove(code)          # clear the deposit</code></pre>
+      </details>
+      <div class="prose">
+        <h3>3 · Lazy expiry, and the deposit you have to trust</h3>
+        <p>Expiry is lazy on purpose. Nothing sweeps the map at the seven-day mark; a token lingers so a late pickup gets "expired" instead of "invalid", and because the package is still physically present. The staff tool <code>openExpiredCompartments()</code> opens every expired door but pointedly does <em>not</em> free the compartment or drop the token — the real cleanup waits until a human has physically pulled the parcel and run a separate, out-of-scope step. Deposit has a matching act of faith: it opens the door, marks it occupied, and mints the code all on the assumption the driver actually put the package in. A driver who opens the door and walks away leaves a valid code for an empty compartment. In production that becomes a two-phase commit — <code>reserve</code> the door and return a reservation id, then <code>confirmDeposit</code> only once a sensor or a manual tap registers the parcel, with a short reservation timeout to reclaim an abandoned door. That buys a <code>RESERVED</code> state and a second map, correctly deferred here because the single-phase flow is cleaner and good enough for the interview scope.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Occupancy on the Compartment is a single source of truth — no index to keep in sync, and a linear scan over a few dozen doors is effectively free.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">The code is a self-contained expiring credential: it names its own door and enforces its own seven-day life, so the Locker just looks it up and trusts it.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A distinct, actionable "expired" error separates a still-present parcel from a plain bad code, without any extra bookkeeping.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Exact-size-only allocation rejects a medium deposit while large doors sit empty, until a size-fallback scan is added.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">"Never issued" and "already redeemed" collapse into one generic error; splitting them needs a used-token set kept alive indefinitely.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Expiry is lazy: expired tokens linger and their doors stay occupied until staff physically clear them; nothing reclaims space on its own.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Single-phase deposit trusts the driver actually deposited; an open-and-walk-away leaves a valid code for an empty door until two-phase confirmation is added.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Junior</strong> — a sensible class breakdown and a working happy path: name the three entities, wire deposit and pickup end to end, and show awareness that edge cases exist. Working through the entity design with a few hints is fine.</li>
+          <li><strong>Mid-level</strong> — reaches the three-entity model by reasoning and rejects Package as a class; keeps the concerns clean (Locker orchestrates, AccessToken owns access and expiry, Compartment owns physical state); handles invalid, expired, and full-station cases; and justifies where occupancy lives rather than just placing it.</li>
+          <li><strong>Senior</strong> — drives the conversation, rejects Package fast with a clear reason, and names the Information Expert framing. Volunteers the trade-offs unprompted: where occupancy belongs, why lazy cleanup is acceptable, and when a Package entity finally becomes necessary (multiple parcels per compartment). Anticipates the follow-ups — size fallback, out-of-service doors, two-phase deposit — before being asked.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+            <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="parking-lot"><a href="./parking-lot.html">Parking Lot</a><span class="rel-note">Amazon Locker puts occupancy on the compartment itself, where Parking Lot derives it in the orchestrator</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="single-responsibility"><a href="../principles/single-responsibility.html">Single Responsibility Principle</a><span class="rel-note">each class changes for one reason — Locker allocates, AccessToken owns expiry, Compartment owns physical state</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="separation-of-concerns"><a href="../principles/separation-of-concerns.html">Separation of Concerns</a><span class="rel-note">the intrinsic physical fact (occupied) lives on the Compartment while the managed relationship (code opens door) lives in the orchestrator</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="valet-key"><a href="../patterns/distributed/routing/valet-key.html">Valet Key</a><span class="rel-note">the access code is a scoped bearer credential that opens exactly one compartment and nothing else</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="least-privilege"><a href="../patterns/security/least-privilege.html">Least Privilege</a><span class="rel-note">the token grants the minimum authority that still works — one door, for one week</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="value-object"><a href="../patterns/ddd/value-object.html">Value Object</a><span class="rel-note">the AccessToken is built once at deposit and never mutated; code, expiry and target door are read-only</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="yagni"><a href="../principles/yagni.html">You Aren't Gonna Need It (YAGNI)</a><span class="rel-note">the O(1) size index, a used-token set, lockout, and two-phase deposit are all deferred until scale actually demands them</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

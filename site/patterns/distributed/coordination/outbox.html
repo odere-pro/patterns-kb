@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Outbox · Patterns</title>
+  <meta name="description" content="Outbox — write the state change and the event that announces it in one local transaction, then publish reliably.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#outbox",
+  "identifier": "outbox",
+  "name": "Outbox",
+  "description": "Writes the event and the state change in one local transaction",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:combines-with": [
+    {
+      "@id": "../../architecture/event-sourcing.html#event-sourcing",
+      "name": "Event Sourcing",
+      "kb:note": "Append the event, publish reliably"
+    },
+    {
+      "@id": "./saga.html#saga",
+      "name": "Saga",
+      "kb:note": "Publish each saga step reliably via the outbox"
+    },
+    {
+      "@id": "../../messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "Consumers dedupe replayed outbox messages"
+    },
+    {
+      "@id": "../../messaging/message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:note": "A relay drains the outbox to the broker"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "./change-data-capture.html#change-data-capture",
+      "name": "Change Data Capture",
+      "kb:note": "Write events transactionally to a table instead of tailing the database log"
+    }
+  ],
+  "kb:enables": [
+    {
+      "@id": "../../messaging/pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "The outbox makes publishing atomic with the write"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "./inbox.html#inbox",
+      "name": "Inbox",
+      "kb:note": "Opposite direction: outbox publishes reliably, inbox receives reliably"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/persona-identification.html#persona-identification",
+      "name": "Persona Identification & Sanction Check",
+      "kb:note": "atomically updating flow status and publishing the client webhook event on a persona-verification saga's join"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/consistency-and-replication.html#consistency-and-replication",
+      "name": "Consistency & Replication",
+      "kb:role": "Make the event and the write atomic"
+    },
+    {
+      "@id": "../../../themes/multi-step-processes.html#multi-step-processes",
+      "name": "Multi-Step Processes",
+      "kb:role": "Emit step events atomically with the state change"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="outbox" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Writes the event and the state change in one local transaction" data-kb-order="67" data-kb-favourite="true" data-kb-aliases="[&quot;transactional outbox&quot;]" data-kb-tags="[&quot;messaging&quot;,&quot;consistency&quot;,&quot;resilience&quot;,&quot;decoupling&quot;]" data-kb-solves="[&quot;my database commit succeeded but the event never reached the broker&quot;,&quot;the broker was down for a second and we silently lost the notification&quot;,&quot;I published a message and then the transaction rolled back, so downstream believes something that never happened&quot;,&quot;other services are missing updates and I cannot tell which ones got dropped&quot;,&quot;I need the write and the message to happen together but they are two different systems&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Outbox</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Outbox</h1>
+      <p class="doc-essence">Commits the state change and the event that announces it in a single local transaction, then hands the event to a relay that publishes it at least once — so the write and its notification can never drift apart, even if the broker is unreachable at the moment of commit.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="outbox">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>The <strong>outbox</strong> pattern adds a table to a service's own database that holds messages waiting to be published. When the service changes state, it writes both the business row and an outbox row — the event describing that change — inside the same local ACID transaction. A separate process then reads the outbox and delivers each message to a broker, marking it published once it's safely on its way.</p>
+        <p>It resolves the <strong>dual-write problem</strong>. A service's database and its message broker are two different systems with no shared transaction between them. Publish before committing and a rolled-back write leaves the world believing something happened that never did. Commit and then publish, and a crash or a broker outage between the two silently drops the event, with the database looking perfectly consistent and no error anywhere. There's no way to make "write to the database" and "send to the broker" atomic across two resource managers without something like distributed two-phase commit, which most message brokers don't support and most teams don't want to run.</p>
+        <p>Outbox sidesteps the problem instead of solving it head-on: it turns the publish into a second local write, which the database transaction already makes atomic with the first. The genuinely hard part — getting the message across the network exactly when it should go — is pushed onto a relay that can retry indefinitely against a table, rather than a request handler that gets one shot before the client hangs up.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant Svc as Service
+    participant DB as Local database
+    participant Rel as Relay
+    participant MQ as Broker
+    Svc-&gt;&gt;DB: insert order row and outbox row, one transaction
+    DB--&gt;&gt;Svc: commit
+    Rel-&gt;&gt;DB: poll unpublished outbox rows
+    Rel-&gt;&gt;MQ: publish message
+    Rel-&gt;&gt;DB: mark row published
+        </pre>
+        <figcaption>The service's write and its event commit together, in the same local transaction. A relay, running independently, drains the outbox to the broker and only then marks each row done.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Polling relay</dt>
+        <dd>A process periodically queries the outbox for unpublished rows and publishes them. Simple to build and reason about, at the cost of polling latency and steady read load on the table.</dd>
+        <dt id="variations-item-2">Transaction log tailing (CDC)</dt>
+        <dd>A connector like Debezium tails the database's write-ahead log or binlog directly and turns each outbox insert into a broker message with no polling and near-zero added latency.</dd>
+        <dt id="variations-item-3"><a href="../../architecture/event-sourcing.html">Event Sourcing</a></dt>
+        <dd>When every write is already an appended event, the event store doubles as the outbox — there's no separate table, because the write <em>is</em> the thing to publish.</dd>
+        <dt id="variations-item-4">Shared vs. per-aggregate outbox table</dt>
+        <dd>One outbox table serves the whole service, or each aggregate gets its own — the latter isolates hot tables and lets ordering guarantees stay scoped to one aggregate's stream.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Solves the dual-write problem with a single local ACID transaction — no distributed transaction coordinator needed.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Guarantees at-least-once delivery: an event is never lost because the broker happened to be down at commit time.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Recovery is just retrying unpublished rows — no special failure-handling logic in the request path.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Works with any relational database and any broker; it's a pattern, not a product.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Adds a table, a relay process, and one more moving part to deploy and monitor.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Delivers at-least-once, not exactly-once — consumers must dedupe or tolerate replays.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Polling relays add publish latency and load; log-tailing needs CDC infrastructure to run.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">The outbox table grows unbounded without its own archiving or cleanup job.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">A service must update its own data and reliably announce that change to other services or a broker.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You need at-least-once delivery that survives a crash or a broker outage right after commit.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The database and the message broker are separate systems with no shared transaction between them.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Nothing outside the service's own transaction needs to know about the change.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">An occasional missed notification is acceptable and the extra table and relay aren't worth running.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Delivery volume and stakes are low enough that a direct, synchronous call is simpler and fast enough.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a write, an outbox row, and a relay</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// Same local transaction: state change + outbox row
+async function placeOrder(tx: Transaction, order: Order) {
+  await tx.query(
+    "insert into orders (id, status) values ($1, $2)",
+    [order.id, "placed"],
+  );
+  await tx.query(
+    `insert into outbox (id, topic, payload, published)
+     values ($1, $2, $3, false)`,
+    [randomUUID(), "order.placed", JSON.stringify(order)],
+  );
+  // Both rows commit together, or neither does.
+}
+
+// Relay: runs independently, drains unpublished rows
+async function relayOnce(db: Db, broker: Broker) {
+  const rows = await db.query(
+    "select * from outbox where published = false order by id limit 100",
+  );
+  for (const row of rows) {
+    await broker.publish(row.topic, row.payload);
+    await db.query(
+      "update outbox set published = true where id = $1",
+      [row.id],
+    );
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="debezium"><strong>Debezium</strong><span>Its Outbox Event Router SMT (io.debezium.transforms.outbox.EventRouter) tails the database WAL/binlog and expands each outbox insert into a broker message, routing on the aggregatetype column and using aggregateid as the Kafka key so per-aggregate ordering is preserved — no polling, near-zero added latency.</span></div>
+        <div class="wild-item" data-kb-example="masstransit"><strong>MassTransit</strong><span>The .NET messaging library ships a transactional outbox: AddEntityFrameworkOutbox persists messages in an OutboxMessage table inside the same EF Core SaveChanges as the business write, and a delivery service sweeps and publishes them, with duplicate-detection to guard replays.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Relay poll interval</strong> — For a polling relay, how often it scans for unpublished rows. Shorter cuts publish latency but raises steady read load on the outbox table; log-tailing (CDC) sidesteps the tradeoff entirely.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Fetch batch size</strong> — Rows drained per relay iteration (the LIMIT in the poll query). Larger batches amortize round-trips but hold locks longer and enlarge the replay window on a mid-batch crash.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Cleanup / retention cadence</strong> — How aggressively a job deletes or archives already-published rows. Without it the table grows unbounded and the poll query slows as it scans dead rows.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Delivery retry / backoff</strong> — How the relay retries a row the broker rejected before moving on, and how long it backs off, so a broker blip does not spin the relay hot.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Outbox backlog depth</strong> — Count of rows with published = false. Steady growth means the relay is not keeping up with write volume.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Publish lag</strong> — Time between a row insert and its mark-published. The end-to-end latency other services see; dominated by poll interval for a polling relay.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Outbox table size / dead-row count</strong> — Total rows and un-vacuumed published rows. Rising size signals the cleanup job is behind and poll scans are getting more expensive.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Broker delivery error rate</strong> — Failed publishes per interval. A sustained rise is what precedes an exploding backlog.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Relay falls behind</strong> — Write bursts outrun the relay and backlog grows without bound; downstream services see ever-later events. Scale the relay or shard the outbox by aggregate.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Duplicate delivery</strong> — The relay crashes after publishing but before marking the row published; on restart it republishes. At-least-once is inherent — consumers must dedupe.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Table bloat stalls polling</strong> — Cleanup lags and the poll query scans millions of published rows, driving its own latency up and worsening the backlog it was meant to drain.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Concurrent relays double-publish</strong> — Two relay instances select the same unpublished rows. Use SELECT ... FOR UPDATE SKIP LOCKED or a single-owner lease so a row is claimed by exactly one relay.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">A partial index on published = false keeps the poll query fast as the table grows</li>
+            <li id="production-check-2" data-kb-polarity="check">A cleanup or archiving job removes published rows on a schedule</li>
+            <li id="production-check-3" data-kb-polarity="check">Consumers dedupe on message id — the pattern is at-least-once, never exactly-once</li>
+            <li id="production-check-4" data-kb-polarity="check">Only one relay can claim a given row (SKIP LOCKED, lease, or single instance)</li>
+            <li id="production-check-5" data-kb-polarity="check">Backlog depth and publish lag are monitored with an alert on sustained growth</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="event-sourcing"><a href="../../architecture/event-sourcing.html">Event Sourcing</a><span class="rel-note">Append the event, publish reliably</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="saga"><a href="./saga.html">Saga</a><span class="rel-note">Publish each saga step reliably via the outbox</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="idempotency"><a href="../../messaging/idempotency.html">Idempotency</a><span class="rel-note">Consumers dedupe replayed outbox messages</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="message-queue"><a href="../../messaging/message-queue.html">Message Queue</a><span class="rel-note">A relay drains the outbox to the broker</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="change-data-capture"><a href="./change-data-capture.html">Change Data Capture</a><span class="rel-note">Write events transactionally to a table instead of tailing the database log</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="enables" data-kb-to="pubsub"><a href="../../messaging/pubsub.html">Publish-Subscribe</a><span class="rel-note">The outbox makes publishing atomic with the write</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="inbox"><a href="./inbox.html">Inbox</a><span class="rel-note">Opposite direction: outbox publishes reliably, inbox receives reliably</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="persona-identification"><a href="../../../designs/persona-identification.html">Persona Identification &amp; Sanction Check</a><span class="rel-note">atomically updating flow status and publishing the client webhook event on a persona-verification saga's join</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    OB["Outbox"]
+    OB --- ES["Event Sourcing"]
+    OB --- SG["Saga"]
+    OB --- PS["Publish-Subscribe"]
+    OB --- ID["Idempotency"]
+    OB --- MQ["Message Queue"]
+    click ES "../../architecture/event-sourcing.html"
+    click SG "./saga.html"
+    click PS "../../messaging/pubsub.html"
+    click ID "../../messaging/idempotency.html"
+    click MQ "../../messaging/message-queue.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="consistency-and-replication"><a href="../../../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Make the event and the write atomic</span></div>
+        <div class="fluency-item" data-kb-theme="multi-step-processes"><a href="../../../themes/multi-step-processes.html">Multi-Step Processes</a><span>Emit step events atomically with the state change</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./strangler-fig.html">&larr; Strangler Fig</a>
+      <a class="up" href="../../../index.html">&uarr; The Map</a>
+      <a class="next" href="./inbox.html">Inbox &rarr;</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

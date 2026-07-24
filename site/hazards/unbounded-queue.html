@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unbounded Queue · Patterns</title>
+  <meta name="description" content="An in-memory queue or per-key state map with no capacity cap grows without bound under load until the process runs out of memory and the whole service crashes.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#unbounded-queue",
+  "identifier": "unbounded-queue",
+  "name": "Unbounded Queue",
+  "description": "A queue with no capacity cap grows until the process runs out of memory",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "hazard",
+  "kb:band": "hazard",
+  "kb:group": "hazard",
+  "kb:mitigated-by": [
+    {
+      "@id": "../patterns/concurrency/backpressure.html#backpressure",
+      "name": "Backpressure",
+      "kb:note": "Signal the producer to slow down before the buffer can overflow"
+    },
+    {
+      "@id": "../patterns/concurrency/producer-consumer.html#producer-consumer",
+      "name": "Producer-Consumer",
+      "kb:note": "A bounded blocking queue makes a fast producer wait instead of growing without limit"
+    },
+    {
+      "@id": "../patterns/concurrency/semaphore.html#semaphore",
+      "name": "Semaphore",
+      "kb:note": "Fixed permits cap in-flight work when there's no queue object to bound"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/token-bucket.html#token-bucket",
+      "name": "Token Bucket",
+      "kb:note": "Rate-limit intake so the backlog can't outrun the consumer indefinitely"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc hazard">
+  <main class="doc-wrap" data-kb-id="unbounded-queue" data-kb-kind="hazard" data-kb-band="hazard" data-kb-group="hazard" data-kb-essence="A queue with no capacity cap grows until the process runs out of memory" data-kb-order="11" data-kb-aliases="[&quot;unbounded buffer&quot;,&quot;memory blowup&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;resource-management&quot;,&quot;backpressure&quot;,&quot;throughput&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#hazards-h">Hazards</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Unbounded Queue</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Hazard</p>
+      <h1 class="doc-title">Unbounded Queue</h1>
+      <p class="doc-essence">An in-memory buffer or per-key state map with no capacity limit keeps accepting work faster than it drains, and because every queued item is a live heap object it grows without bound — until the process runs out of memory and takes the entire service down with it.</p>
+      <div class="doc-metarow">
+        <span class="badge">Hazard</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="unbounded-queue">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>An <strong>unbounded queue</strong> is an in-memory buffer created with no ceiling on how many items it will hold. Think of a task scheduler that pushes work off the request path — welcome emails, thumbnail resizing, monthly reports — onto a queue that a pool of worker threads drains. As long as workers keep pace, the queue stays shallow and nothing is wrong. But the moment producers outrun consumers, depth climbs, and with no capacity limit there is nothing to stop it: every queued item is a live object on the heap, so the queue grows in lockstep with memory until there is none left.</p>
+        <p>It wears two faces. The obvious one is a producer–consumer buffer that fills faster than it empties — a burst of traffic enqueues thousands of tasks that a fixed worker pool needs minutes to clear. The quieter one is a <em>per-key state map</em> that only ever grows: rate-limiter buckets keyed by client id, a session cache, a dedup set — one entry added the first time each key is seen and never removed. That second shape is a slow, hidden memory leak that can run for days before it tips over. Both end the same way: the heap fills, and the process dies.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="causes" aria-labelledby="h-causes" data-kb-block="causes">
+      <h2 class="doc-h" id="h-causes">How it happens</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>A queue created with no capacity argument.</strong> The default constructor of many blocking queues — a <code>LinkedBlockingQueue</code> with no size, a plain in-memory list — imposes no upper limit at all. The code looks correct and works fine at low load; the missing ceiling only matters once the queue starts to back up.</li>
+          <li><strong>Producers outpacing consumers.</strong> A spike — a marketing blast, a viral event, a retry storm — enqueues work far faster than a fixed pool of workers can drain it. Depth climbs from thousands to millions in the width of the burst, and each item sits in memory until a worker finally reaches it.</li>
+          <li><strong>A per-key state map that is never evicted.</strong> One entry per unique client, session, or key — added on first sight, never removed. Because the map grows with the <em>cardinality</em> of the keyspace rather than with instantaneous load, it leaks slowly and invisibly for as long as new keys keep arriving.</li>
+          <li><strong>No backpressure in the accept path.</strong> Work is taken in unconditionally, with no signal back to the producer to slow down when the buffer is already deep. Nothing couples the rate of arrival to the rate of drain, so the buffer is free to absorb an unlimited backlog.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="cost" aria-labelledby="h-cost" data-kb-block="cost">
+      <h2 class="doc-h" id="h-cost">What it costs</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>The whole process dies, not just the pipeline.</strong> An <code>OutOfMemoryError</code> is not scoped to the background queue that caused it — it takes down everything sharing that heap. The API handlers, the request threads, the health endpoint all die together, so a runaway <em>background</em> buffer produces a total, foreground outage.</li>
+          <li><strong>The failure is gradual and easy to miss.</strong> Memory creeps up over hours or days while every dashboard looks healthy; there is no error, no slow query, just a line trending upward that nobody is watching. The system gives almost no warning until the heap is exhausted and it crashes all at once.</li>
+          <li><strong>Latency and GC pressure degrade well before the crash.</strong> As depth grows, queued work waits minutes instead of milliseconds, and the garbage collector burns more and more CPU trying to manage a heap that keeps filling — so the service is already limping before it finally falls over.</li>
+          <li><strong>Recovery can loop.</strong> The crash loses everything buffered in memory, and if the load that caused it hasn't subsided, the restarted process refills the same unbounded buffer and crashes again — a crash loop that only ends when the upstream pressure relents.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
+      <h2 class="doc-h" id="h-mitigation">Getting out</h2>
+      <div class="prose">
+        <p>The root fix is to <strong>give the queue a bounded capacity</strong> and decide explicitly what happens when it is full — an overflow policy. There are three honest choices, matched to the workload: <em>block the producer</em> until space frees up, which slows a fast producer down and is right for internal pipelines that can afford to wait; <em>reject the item</em> with an immediate "system busy" response (a 503), which is right for request paths that must answer fast rather than stall; or <em>drop</em> the oldest or newest item and log it, which is right for lossy streams like analytics where shedding load under pressure is acceptable. The one policy that is never acceptable is "accept forever."</p>
+        <p>A bounded queue also gives you <strong>backpressure</strong> for free: when the buffer is full a blocking put slows the producer before memory can overflow, coupling the rate of arrival to the rate of drain. Where there is no queue object to bound — a burst of concurrent operations rather than a stream of tasks — cap the in-flight work with a fixed number of <strong>permits</strong> so only so much can be outstanding at once. And for the per-key state map, the equivalent of a capacity limit is an <strong>eviction policy</strong>: a TTL, an LRU cap, or idle-eviction, so entries expire instead of accumulating for the lifetime of the process. In every case the move is the same — put a ceiling on the structure, then choose deliberately what happens when it is reached.</p>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Mitigated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="backpressure"><a href="../patterns/concurrency/backpressure.html">Backpressure</a><span class="rel-note">Signal the producer to slow down before the buffer can overflow</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="producer-consumer"><a href="../patterns/concurrency/producer-consumer.html">Producer-Consumer</a><span class="rel-note">A bounded blocking queue makes a fast producer wait instead of growing without limit</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="semaphore"><a href="../patterns/concurrency/semaphore.html">Semaphore</a><span class="rel-note">Fixed permits cap in-flight work when there's no queue object to bound</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="token-bucket"><a href="../patterns/distributed/resilience/token-bucket.html">Token Bucket</a><span class="rel-note">Rate-limit intake so the backlog can't outrun the consumer indefinitely</span></div>
+        </div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#hazards-h">← Hazards</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#hazards-h">Hazards →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

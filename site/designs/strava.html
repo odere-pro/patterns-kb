@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Strava · Patterns</title>
+  <meta name="description" content="Design a fitness tracker — an offline-first system where the phone records the whole activity and the backend only ever sees one batched sync.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#strava",
+  "identifier": "strava",
+  "name": "Strava",
+  "description": "Record a run entirely on the phone, offline, then sync it in one batched upload — the client absorbs the write load so the backend barely sees it",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/caching/write-behind.html#write-behind",
+      "name": "Write-Behind",
+      "kb:note": "the phone accepts each GPS write locally and flushes to the system of record only when the activity ends"
+    },
+    {
+      "@id": "../patterns/concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:note": "a whole activity's ~600-point trace uploads in one request on completion instead of a point every few seconds"
+    },
+    {
+      "@id": "../patterns/caching/client-side-cache.html#client-side-cache",
+      "name": "Client-Side Cache",
+      "kb:note": "the activity lives in an on-device buffer persisted to local storage, so tracking and live stats never need the network"
+    },
+    {
+      "@id": "../patterns/architecture/event-sourcing.html#event-sourcing",
+      "name": "Event Sourcing",
+      "kb:note": "active time is derived by summing a STARTED/PAUSED/RESUMED status log rather than mutating an elapsed counter"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "the activity store is partitioned by completion time so recent-activity queries hit only a few shards"
+    },
+    {
+      "@id": "../patterns/distributed/routing/object-storage.html#object-storage",
+      "name": "Object Storage",
+      "kb:note": "traces older than a year are tiered off to cheap object storage like S3"
+    },
+    {
+      "@id": "../patterns/distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "the single Activity Service holds no per-request state and scales horizontally under load"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "the leaderboard is a precomputed ranking refreshed on a schedule rather than sorted per request"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="strava" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Record a run entirely on the phone, offline, then sync it in one batched upload — the client absorbs the write load so the backend barely sees it" data-kb-order="16" data-kb-aliases='["fitness tracker","activity tracker","run tracking app"]' data-kb-tags='["system-design","availability","scalability","asynchrony","partitioning"]' data-kb-solves='["my app has to keep tracking a workout even when the phone has no signal for miles","I ping the server with a GPS point every few seconds and it is melting my backend and the battery","my elapsed-time counter keeps running through pauses so the total time comes out wrong","a year of GPS traces is hundreds of terabytes and one database cannot hold it hot","friends want to watch a workout live but standing up a websocket push tier feels like overkill"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Strava</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Strava</h1>
+      <p class="doc-essence">A fitness tracker records a run or a ride — GPS route, distance, elapsed time — shows those numbers updating live during the workout, and shares the finished activity with the athlete's friends. Two requirements pull the design away from the usual server-centric instinct: it must work with no signal at all, and it must show exact live stats every second. Both point the same way — do the work on the phone.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="strava">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Scoped to running and cycling, the app has to start a workout, track its route and stats while it runs, save it, and let friends see the result. What makes it interesting is where the requirements point. Athletes run through canyons, tunnels and dead zones, so tracking cannot depend on the network; and the numbers on their wrist have to be exactly right, updating every second, not a few seconds behind a round trip. Both constraints resolve to a single decision — treat the client as a first-class participant that records the whole activity itself. Modern phones have the sensors, storage and compute to do it, and once they do, the backend has almost nothing left to do but accept a finished file. That inversion is the spine of the design.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Start, pause, resume, stop, and save a run or a ride.</li>
+            <li>During an activity, show the live route, distance, and elapsed time.</li>
+            <li>Browse the details of one's own completed activities and of friends' activities.</li>
+          </ol>
+          <p class="prose">Out of scope: managing the friend graph, authentication, and likes or comments — named explicitly so the design stays narrow.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Availability</strong> — heavily favoured over consistency: a few seconds of staleness is fine, a dropped recording is not.</li>
+            <li><strong>Offline</strong> — tracking must work end-to-end with zero connectivity.</li>
+            <li><strong>Live accuracy</strong> — the athlete's own stats update every second, exactly, during the workout.</li>
+            <li><strong>Scale</strong> — 10&nbsp;million activities in progress at once.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Write path.</strong> The naïve version pings the server with a GPS point every few seconds — for a 30-minute run at a point every ~3&nbsp;seconds that is ~600 tiny writes per activity. Recording locally and syncing once at the end collapses those 600 into <strong>one</strong> request, cutting backend write volume by roughly <strong>100×</strong> before any scaling work begins.</p>
+        <p><strong>Storage.</strong> Assume ~100M daily actives, one activity each, so ~100M new activities/day ≈ <strong>36.5&nbsp;billion/year</strong>. Metadata (type, user, timestamps, status) is ~100&nbsp;bytes — a rounding error. The route dominates: ~600 points, each a lat + lon + timestamp ≈ 24&nbsp;bytes, so ~<strong>15&nbsp;KB/activity</strong>. 15&nbsp;KB × 36.5B ≈ <strong>~550&nbsp;TB/year</strong>. That number, not the request rate, drives the storage design.</p>
+        <p><strong>Concurrency.</strong> Ten million "concurrent" activities sounds terrifying but costs the server almost nothing: while each one is being tracked it lives on a phone, and the only write lands when it finishes. Concurrency is a client-side number here, not a backend one.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Four entities, one of them only a scoping edge:</p>
+        <ul>
+          <li><strong>User</strong> — the athlete: profile and settings.</li>
+          <li><strong>Activity</strong> — one run or ride: <code>type</code> (RUN&nbsp;|&nbsp;RIDE), start and end time, a <code>status</code> log, <code>distance</code>, <code>duration</code>, and its route.</li>
+          <li><strong>Route</strong> — the ordered list of GPS points (<code>lat</code>, <code>lon</code>, <code>ts</code>) recorded during the activity. Modelled as its own rows because it <em>is</em> the bulk of the data.</li>
+          <li><strong>Friend</strong> — a connection between two users. The friend graph itself is out of scope, but the edge is needed to scope the "friends' activities" query. It is stored bidirectionally — each friendship is two rows with a composite key on <code>(userId, friendId)</code> — so a lookup by <code>userId</code> finds it whichever direction it was created.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>A small REST surface. Lifecycle changes are a <code>PATCH</code> rather than a <code>PUT</code> because only a subset of fields moves; saving and sharing are the same <code>COMPLETE</code> transition — there is no separate "share" call, completing an activity publishes it to friends.</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — activity lifecycle and reads</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /activities                       &rarr; Activity
+{ "type": "RUN" | "RIDE" }
+
+PATCH /activities/:id                   &rarr; Activity     # lifecycle transition
+{ "state": "STARTED" | "PAUSED" | "COMPLETE" }
+
+POST /activities/:id/routes             &rarr; Activity     # append a GPS point
+{ "location": { "lat": 40.7, "lon": -74.0, "ts": "..." } }
+
+GET /activities?mode=USER|FRIENDS&page=&pageSize=  &rarr; Partial&lt;Activity&gt;[]
+GET /activities/:id                     &rarr; Activity     # full detail, for the map</code></pre>
+      </details>
+      <div class="prose">
+        <p>The list endpoint returns a thin projection — distance, duration, date per row — so a feed page stays small; the full coordinate array loads only when a single activity is opened for its map. In the offline-first design that follows, the per-point <code>POST&nbsp;/routes</code> mostly disappears into a single batched sync.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The backend is deliberately plain: one stateless <strong>Activity Service</strong> in front of a relational store. No microservice fan-out — offloading the write path to the phone leaves too little server work to justify it, and there is no read/write skew across paths worth splitting. During a workout the <strong>phone runs the show</strong>. On-device location services (Core Location on iOS, the fused location provider on Android) sample GPS on a fixed cadence — about every 2&nbsp;seconds cycling, every 5&nbsp;running — append each point to an in-memory buffer, and update distance incrementally with the Haversine formula between consecutive points. Nothing leaves the device until the activity is done; when it completes and the phone has a connection, the buffer flushes to the service in one batched upload, which appends the route and metadata to the store. Reads — your own feed and a friend's — are ordinary paginated queries filtered to <code>state = COMPLETE</code>; opening one hands its coordinate array to a map-tiles API to draw the line.</p>
+        <p>Elapsed time hides a subtlety. Subtracting start-from-now keeps counting through pauses, so instead the activity carries a <strong>status log</strong> — <code>STARTED</code>, <code>PAUSED</code>, <code>RESUMED</code>, <code>STOPPED</code> with timestamps — and active time is the sum of the running intervals. Storing the events and deriving the number, rather than mutating a running counter, is <a href="../patterns/architecture/event-sourcing.html">event-sourcing</a> in miniature: it makes "moving time vs. total time" fall out for free and leaves an audit trail of the workout.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    App["Athlete's phone — on-device GPS, local buffer, live stats"]
+    Svc["Activity Service — stateless, scaled horizontally"]
+    DB[("Activity + Route store — sharded by completion time")]
+    Cold[("Object storage / S3 — cold archive tier")]
+    Friend["Friend's phone — live viewer"]
+    Maps["Map tiles API"]
+    App -->|"batched sync on completion or reconnect"| Svc
+    App -->|"GET recent + friends' activities"| Svc
+    Svc -->|"append / query activities"| DB
+    DB -->|"age out traces older than a year"| Cold
+    Friend -->|"poll live position every 2-5s"| Svc
+    App -->|"draw route polyline"| Maps
+        </pre>
+        <figcaption>The phone records the whole activity locally; the server sees one batched write on completion, plus light paginated reads. Live-viewer polling is the only path that touches the server mid-activity.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Tracking through a dead zone</h3>
+        <p>The unlock is that, as long as nobody is watching live, an activity is a purely local recording that needs the network exactly once — at the end. That removes the network from the critical path entirely and lets live stats come straight off local state, instantly and exactly.</p>
+        <ul>
+          <li><strong>Survive a dead battery.</strong> The buffer lives in memory, but a phone can die mid-run, so it is persisted to on-device storage every ~10&nbsp;seconds (Core&nbsp;Data or Room for the structured trace, a SQLite file once it grows; UserDefaults / SharedPreferences only for tiny key-values). The worst case is losing ~10&nbsp;seconds of points on a crash — a deliberate trade against the battery cost of persisting more often. On reopen or resume, the saved buffer is loaded back before recording continues.</li>
+          <li><strong>Sync once, retriably.</strong> On completion with a connection, everything ships at once; very long rides are chunked so a single request stays manageable. An optional background sync opportunistically uploads whenever connectivity appears mid-activity, buying durability without giving up the offline guarantee. Once the server acks, the local copy is dropped. Because any of those uploads can be retried — a dropped ack, a resumed chunk, a background attempt — the append must be <a href="../patterns/messaging/idempotency.html">idempotent</a>: the server dedupes by activity and point so a re-send never double-counts the route.</li>
+          <li><strong>It is write-behind, on the client.</strong> Accept the write locally, acknowledge it to the athlete immediately from on-device state, and reconcile with the system of record later — that is <a href="../patterns/caching/write-behind.html">write-behind</a> moved onto the phone. The device is a <a href="../patterns/caching/client-side-cache.html">client-side cache</a> that happens to be the source of truth until sync, and the flush is one <a href="../patterns/concurrency/batching.html">batched</a> upload instead of 600 pings.</li>
+        </ul>
+        <h3>2 · Storing 550&nbsp;TB of GPS a year</h3>
+        <p>Route rows dominate; metadata is negligible. Hundreds of terabytes a year is too much to keep uniformly hot, but the access pattern is forgiving — almost every query is for <em>recent</em> activities.</p>
+        <ul>
+          <li><strong>Shard by completion time.</strong> Partitioning the store on completion date keeps this-week's runs — yours and your friends' — on a handful of <a href="../patterns/distributed/routing/sharding.html">shards</a>, so the working set stays small even as the archive grows without bound.</li>
+          <li><strong>Tier by age.</strong> Hot recent data on fast storage; warm (a few months to a year) on cheaper disk; cold (older than a year) pushed to <a href="../patterns/distributed/routing/object-storage.html">object storage</a> like S3, where a rarely-opened trace costs pennies to keep and is fetched on the rare occasion someone scrolls that far back.</li>
+          <li><strong>Don't cache speculatively.</strong> Read throughput is genuinely low — people open a handful of activities, not thousands a second — so a cache earns its keep only if load times degrade. It is deferred, not designed in.</li>
+          <li><strong>Keep the service <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>.</strong> With no hot path and no per-request state, the Activity Service just scales horizontally on CPU, memory and network; there is no reason to carve it into independently-scaling pieces.</li>
+        </ul>
+        <h3>3 · Letting friends watch live</h3>
+        <p>The extension is that friends follow an activity as it happens, not just its summary. That reintroduces the very pings the offline design removed: location goes up every 2–5&nbsp;seconds so the server can persist it and fan it out to watchers, while the athlete's own screen still runs off local state.</p>
+        <ul>
+          <li><strong>Push is over-engineering here.</strong> The tempting answer is a real-time tier — WebSockets or SSE plus a pub/sub broadcast — but two facts make plain polling the better tool. Updates are <em>predictable</em>: the next one is known to land within 2–5&nbsp;seconds, unlike chat where a message can arrive at any instant. And precision doesn't matter: a few seconds of lag is fine for a spectator. So the watcher's phone simply polls the same endpoint on the same cadence, offset a couple of seconds for latency.</li>
+          <li><strong>Smart buffering.</strong> Deliberately display the position one or two intervals behind (5–10&nbsp;seconds) and interpolate between points, turning a jerky sequence of jumps into smooth continuous motion — trading a little real-time accuracy for a live-stream feel and absorbing network jitter for free.</li>
+        </ul>
+        <h3>4 · A leaderboard of top athletes</h3>
+        <p>Ranking athletes by distance for an activity type, filterable by country, region or city.</p>
+        <ul>
+          <li><strong>Naïve.</strong> Sort the activities table on every request — fine at toy scale, a full table scan at real scale. Rejected.</li>
+          <li><strong>Periodic aggregation.</strong> Precompute the rankings on a schedule into a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> the reads hit directly. A leaderboard that is a few minutes stale is perfectly acceptable, and the read becomes a single indexed lookup.</li>
+          <li><strong>Real-time with Redis.</strong> A sorted set keyed by segment and region, updated as activities complete, gives O(log&nbsp;n) rank updates and instant top-N reads — the answer when the board must be genuinely live.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Tracking lives entirely on the phone: no network dependency during a workout, exact live stats for free, and roughly 100× less backend traffic.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">One batched sync per activity, not a point every few seconds, so 10M concurrent activities barely touch the server.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Time-sharding plus cold tiering keeps hundreds of TB/year affordable while the hot working set stays small.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Durability is bounded by the persistence interval — an unexpected shutdown can lose the last ~10 seconds of a route.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Nothing a friend sees is live until the athlete finishes, unless live-sharing is switched on — which re-adds the very pings the design worked to remove.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Polling wastes requests when nothing has changed, and smart buffering means "live" is really a few seconds behind.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">The client is now complex — buffering, local persistence, resume, chunked retriable upload — moving hard bugs onto the least controllable part of the stack, across many device and OS versions.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end flow: create, pause and complete an activity, append GPS points, store a route, then list and open completed activities — plus the realization that the client can record locally rather than streaming every point.</li>
+          <li><strong>Senior</strong> — drives the offline-first framing unprompted, reaches for a status log instead of naïve elapsed time, sizes the ~550&nbsp;TB/year storage and picks time-sharding plus age tiering, and argues polling over WebSockets for live sharing with concrete reasons.</li>
+          <li><strong>Staff+</strong> — treats the client as the primary compute from the first minute, works the durability-vs-battery trade in the buffer, specifies idempotent chunked retriable sync, and volunteers the Redis leaderboard and smart-buffering as operational polish.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="write-behind"><a href="../patterns/caching/write-behind.html">Write-Behind</a><span class="rel-note">the phone accepts each GPS write locally and flushes to the system of record only when the activity ends</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="batching"><a href="../patterns/concurrency/batching.html">Batching</a><span class="rel-note">a whole activity's ~600-point trace uploads in one request on completion instead of a point every few seconds</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="client-side-cache"><a href="../patterns/caching/client-side-cache.html">Client-Side Cache</a><span class="rel-note">the activity lives in an on-device buffer persisted to local storage, so tracking and live stats never need the network</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="event-sourcing"><a href="../patterns/architecture/event-sourcing.html">Event Sourcing</a><span class="rel-note">active time is derived by summing a STARTED/PAUSED/RESUMED status log rather than mutating an elapsed counter</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">the activity store is partitioned by completion time so recent-activity queries hit only a few shards</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-storage"><a href="../patterns/distributed/routing/object-storage.html">Object Storage</a><span class="rel-note">traces older than a year are tiered off to cheap object storage like S3</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">the single Activity Service holds no per-request state and scales horizontally under load</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">the leaderboard is a precomputed ranking refreshed on a schedule rather than sorted per request</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scaling Writes · Themes</title>
+  <meta name="description" content="Scaling Writes — the write-path scaling ladder, from write-optimized storage and sharding to burst-absorbing queues, load shedding, batching, and hierarchical aggregation.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#scaling-writes",
+  "identifier": "scaling-writes",
+  "name": "Scaling Writes",
+  "description": "Escalating write capacity past a single primary with partitioning, queues, and batching",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "theme",
+  "kb:band": "theme",
+  "kb:group": "theme",
+  "kb:tours": [
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:role": "Partition writes across nodes by key"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/lsm-tree.html#lsm-tree",
+      "name": "LSM Tree",
+      "kb:role": "Trade read cost for sequential write throughput"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:role": "Buffer write bursts in a queue to smooth load"
+    },
+    {
+      "@id": "../patterns/concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:role": "Coalesce many small writes into fewer larger ones"
+    },
+    {
+      "@id": "../patterns/architecture/cqrs.html#cqrs",
+      "name": "CQRS",
+      "kb:role": "Give writes their own model and store"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc theme">
+  <main class="doc-wrap" data-kb-id="scaling-writes" data-kb-kind="theme" data-kb-band="theme" data-kb-group="theme" data-kb-essence="Escalating write capacity past a single primary with partitioning, queues, and batching" data-kb-order="16" data-kb-aliases="[&quot;write scaling&quot;]" data-kb-tags="[&quot;scalability&quot;,&quot;throughput&quot;,&quot;partitioning&quot;,&quot;persistence&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#themes-h">Themes</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Scaling Writes</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Theme · Building fluency</p>
+      <h1 class="doc-title">Scaling Writes</h1>
+      <p class="doc-essence">The write-path scaling ladder — climb from a single primary through a write-optimized engine and sharded partitions, then burst-absorbing queues and load shedding, up to batching and hierarchical aggregation. Every rung spreads, smooths, or coalesces the write stream so no single component has to sustain the whole of it.</p>
+      <div class="doc-metarow">
+        <span class="badge">Theme</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="scaling-writes">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="framing" aria-labelledby="h-framing" data-kb-block="framing">
+      <h2 class="doc-h" id="h-framing">The question</h2>
+      <div class="prose">
+        <p>Scaling writes is the harder half of scaling. Reads have well-worn tools — replicas, caches, the edge — that all lean on the same trick of serving many copies of data that rarely changes. Writes have no such shortcut: every write must land somewhere durable and ordered, often under contention, and you cannot make a write faster by copying it more. When an interviewer escalates "and how does it scale?", the write path is usually where the design strains first, because bursty, high-throughput, high-contention writes resist the copy-it strategy that saves the read path.</p>
+        <p>So the ladder is about reducing the throughput any single component must sustain. First make one server go further — confirm with quick back-of-envelope math that you are actually against a physical wall (modern hardware handles more than most guesses), and pick a store whose engine matches the write pattern before adding nodes. Then partition the writes across shards so no one node owns the whole stream, splitting by column where access patterns differ. Then absorb bursts with a queue and shed the writes that don't matter. Finally, batch many small writes into fewer large ones, and aggregate hierarchically when only the totals matter. This theme is that ladder specifically for writes; its read-path twin, <a href="./scaling-reads.html">Scaling Reads</a>, climbs a different one.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradespace" aria-labelledby="h-tradespace" data-kb-block="tradespace">
+      <h2 class="doc-h" id="h-tradespace">The tradespace</h2>
+      <div class="prose">
+        <p>The first trade is where the write is durable against how fast it is acknowledged. A write-optimized engine (log-structured, time-series, column store) buys throughput by appending sequentially and pays it back in read amplification; a queue buys burst tolerance by acknowledging <em>acceptance</em> rather than durability, and pays it back in eventual consistency and the risk of an unbounded backlog if inflow outpaces drain. Neither is free — both move the cost somewhere the requirements had better tolerate. And the discipline underneath all of it: validate with quick math that a real wall exists before reaching for any of this. Manufacturing a scaling problem where none existed is the worst outcome.</p>
+        <p>Partitioning's central trade is the key. A good partition key minimizes per-shard variance by hashing a primary identifier such as a user or post id; a bad one — raw country, say — concentrates load on one shard while another idles, or forces every read to fan out across all of them. And partitions are not static: going from eight shards to sixteen without downtime is its own problem, solved in production by <strong>dual-write migration</strong> — write to both old and new locations during the move, prefer the new shard on reads, and cut over once caught up, trading a window of double writes for continuous availability.</p>
+        <p>Even perfect key distribution breaks on a <strong>hot key</strong> — a viral post taking 100,000 likes/sec that no single shard can hold. The fixes only work for aggregable metrics (likes, views, counts): split the counter across <em>k</em> sub-keys and sum on read, either statically for every key or dynamically once a key is detected hot. The catch is reader–writer agreement — if writers split but readers don't check every sub-key, the count is wrong; most systems keep it simple by having readers always sum all sub-keys, accepting read amplification in exchange for correctness. Data that must stay atomic, like a profile, can't be split this way — but such data rarely sees this kind of write pressure.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+    Q{"Writes outgrowing one primary"}
+    Q --> A["One server further: bigger box + write-optimized engine"]
+    A --> B{"Still saturated"}
+    B --> C["Shard writes by key; split columns by access pattern"]
+    C --> D["Absorb bursts in a queue; shed low-value writes"]
+    D --> E["Batch small writes; aggregate hierarchically"]
+        </pre>
+        <figcaption>The write-path ladder: exhaust single-server options first, partition the write stream next, then smooth bursts and coalesce — each rung lowering the throughput any one component must sustain.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="tour" aria-labelledby="h-tour" data-kb-block="tour">
+      <h2 class="doc-h" id="h-tour">The tour</h2>
+      <div class="tour">
+        <div class="tour-step" data-kb-member="sharding" data-kb-role="Partition writes across nodes by key">
+          <h3><a href="../patterns/distributed/routing/sharding.html">Sharding</a></h3>
+          <p>The default move when writes outgrow a single primary. Sharding partitions the data across nodes by key, so if one server sustains 1,000 writes/sec, ten shards approach 10,000 — the multi-node fleet hidden behind one logical database. Everything rides on the partition key: hash a primary identifier and load spreads evenly; pick something skewed like raw country and one shard melts while another idles. Weigh reads too — the write path is cheap to shard, but if reads must fan out across every shard the per-request overhead can eat the win.</p>
+        </div>
+        <div class="tour-step" data-kb-member="lsm-tree" data-kb-role="Trade read cost for sequential write throughput">
+          <h3><a href="../patterns/distributed/coordination/lsm-tree.html">LSM-Tree</a></h3>
+          <p>Before adding nodes, consider a storage engine built for writes. An LSM-tree turns random in-place updates into sequential appends to an in-memory table that is flushed and later compacted, so a disk that struggles with scattered B-tree updates streams writes fast — the reason a log-structured store can sustain an order of magnitude more writes than a comparable relational one on the same hardware. The trade is on the read side: a lookup may have to check and merge several on-disk files, so you spend read latency to buy write throughput — worth it exactly when the workload is write-dominated.</p>
+        </div>
+        <div class="tour-step" data-kb-member="load-leveling" data-kb-role="Buffer write bursts in a queue to smooth load">
+          <h3><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a></h3>
+          <p>Real write traffic is bursty — a holiday order spike, a flood of drivers on New Year's — and provisioning for the peak wastes capacity the rest of the year. Load leveling puts a queue between accepting a write and applying it, so the database drains at its steady rate while the queue absorbs the burst. The cost is that the client learns only that the write was accepted, not durably stored, so it often needs a callback or poll to confirm; and a queue is for short bursts, not a database that simply can't keep up — feed it faster than it drains and the backlog grows without bound. Its sibling is load shedding: when even the queue can't cope, deliberately drop the least valuable writes — one of many location pings — to keep the important ones flowing.</p>
+        </div>
+        <div class="tour-step" data-kb-member="batching" data-kb-role="Coalesce many small writes into fewer larger ones">
+          <h3><a href="../patterns/concurrency/batching.html">Batching</a></h3>
+          <p>Every individual write carries fixed overhead — a round trip, transaction setup, index maintenance — and most stores handle one large write far more efficiently than many small ones. Batching coalesces them: an application or an intermediate processor tallies a stream — a minute of like events on a post becomes one increment instead of a hundred — and writes the aggregate. It only pays when the window matches the traffic (a one-minute batch on a post that gets a like an hour buys nothing), and buffering before the durable write opens a data-loss window if the batcher crashes, unless it can replay its source.</p>
+        </div>
+        <div class="tour-step" data-kb-member="cqrs" data-kb-role="Give writes their own model and store">
+          <h3><a href="../patterns/architecture/cqrs.html">CQRS</a></h3>
+          <p>When the write path and the read path pull in genuinely different directions, give them separate models. CQRS splits the command side from the query side, so writes land in a store and schema tuned for ingest — normalized, write-optimized, lightly indexed — while a separate read model is projected for queries, each scaled on its own. It is the heavier option, buying independent write scaling at the price of two models to keep in sync and the eventual consistency between them, so it earns its place when the load shapes are truly divergent rather than merely large.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="decide" aria-labelledby="h-decide" data-kb-block="decide">
+      <h2 class="doc-h" id="h-decide">How to decide</h2>
+      <div class="table-scroll">
+        <table class="decision">
+          <thead>
+            <tr><th>If you need…</th><th>Lean</th><th>Reach for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Writes outgrowing a single primary</td><td>Partition by key</td><td><a href="../patterns/distributed/routing/sharding.html">Sharding</a></td></tr>
+            <tr><td>A write-dominated workload fighting a B-tree store</td><td>Switch the engine</td><td><a href="../patterns/distributed/coordination/lsm-tree.html">LSM-Tree</a></td></tr>
+            <tr><td>Bursty spikes far above steady-state load</td><td>Buffer, and shed if needed</td><td><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a></td></tr>
+            <tr><td>Many tiny writes with fixed per-write overhead</td><td>Coalesce them</td><td><a href="../patterns/concurrency/batching.html">Batching</a></td></tr>
+            <tr><td>Write and read load shapes genuinely diverging</td><td>Split the models</td><td><a href="../patterns/architecture/cqrs.html">CQRS</a></td></tr>
+            <tr><td>A single key too hot for even its own shard</td><td>Split the counter (aggregable metrics only)</td><td>Sub-key splitting atop <a href="../patterns/distributed/routing/sharding.html">Sharding</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="doc-section" id="siblings" aria-labelledby="h-siblings" data-kb-block="siblings">
+      <h2 class="doc-h" id="h-siblings">Sibling themes</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="./scalability.html">Scalability</a><span>The general capacity theme; these write-path patterns overlap with it, but here they are ordered as a single ladder specifically for reducing per-component write throughput.</span></div>
+        <div class="fluency-item"><a href="./spike-handling.html">Handling Spikes</a><span>The queues and load shedding on this ladder are the write-path answer to the traffic bursts that theme treats head-on.</span></div>
+        <div class="fluency-item"><a href="./consistency-and-replication.html">Consistency &amp; Replication</a><span>Queues, batching, and sharded writes all relax consistency to gain throughput; this is where that cost is reasoned about.</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#themes-h">← Themes</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#themes-h">Themes →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

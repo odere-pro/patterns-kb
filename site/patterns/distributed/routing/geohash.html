@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Geohash · Patterns</title>
+  <meta name="description" content="Geohash flattens a latitude/longitude point into a short, prefix-sortable key so an ordinary B-tree or sorted set can answer 'what is nearby' as a cheap range scan.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#geohash",
+  "identifier": "geohash",
+  "name": "Geohash",
+  "description": "Encode a lat/long point into a short prefix-sortable key for range-scan nearest-neighbour",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-routing",
+  "kb:combines-with": [
+    {
+      "@id": "./sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "Shard geo data by geohash prefix so nearby points land on the same partition"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/yelp.html#yelp",
+      "name": "Yelp",
+      "kb:note": "two-dimensional lat/long proximity needs a geospatial encoding, not a single-dimension range index"
+    },
+    {
+      "@id": "../../../designs/uber.html#uber",
+      "name": "Uber",
+      "kb:note": "proximity search over a stream of live coordinates is exactly what a geohash index makes fast"
+    },
+    {
+      "@id": "../../../designs/tinder.html#tinder",
+      "name": "Tinder",
+      "kb:note": "the feed's 'nearby people' retrieval is exactly the bounded spatial lookup a geohash index makes fast"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/proximity-search.html#proximity-search",
+      "name": "Proximity Search",
+      "kb:role": "Encode space into a sortable key so a plain index answers nearby"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="geohash" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-routing" data-kb-essence="Encode a lat/long point into a short prefix-sortable key for range-scan nearest-neighbour" data-kb-order="66" data-kb-aliases="[&quot;geo hash&quot;,&quot;geohashing&quot;]" data-kb-tags="[&quot;read-optimization&quot;,&quot;data-modeling&quot;,&quot;latency&quot;,&quot;partitioning&quot;]" data-kb-solves="[&quot;I need to find all points near a location fast using an ordinary index&quot;,&quot;a 2-D nearest-neighbour query is slow without a special spatial index&quot;,&quot;how do I store locations so 'find things nearby' becomes a cheap range scan&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Geohash</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network</p>
+      <h1 class="doc-title">Geohash</h1>
+      <p class="doc-essence">A scheme that folds a two-dimensional point into one short, prefix-sortable string so nearest-neighbour and within-radius queries run as a plain range scan on an index the database already has — paid for by scanning a ring of neighbouring cells to catch matches that fall just across a cell boundary.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="geohash">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A geohash encodes a point on Earth — a latitude and longitude — as a single short string. Recursively bisect the globe: the first character selects one of 32 top-level cells, each further character subdivides the chosen cell into 32 smaller ones. More characters means a smaller cell, so a five-character hash pins you to roughly a five-kilometre box and a nine-character hash to a few metres. The crucial property is <strong>prefix locality</strong>: two points that share a longer prefix are guaranteed to sit in the same cell at that depth, so a shared prefix means physical nearness.</p>
+        <p>The force it resolves is that ordinary indexes cannot answer "what is near here". A range query on one sorted column — ages 20 to 25 — is cheap on a B-tree because the keys are physically ordered and packed onto adjacent pages: one seek, a short sequential read. But distance depends on latitude and longitude jointly. Index latitude alone and you get a horizontal band of the planet; a composite <code>(lat, lon)</code> index still sorts primarily by the first column and only tie-breaks on the second, so it is effectively a one-dimensional sort that returns a huge band of unranked rows and forces a brute-force distance check on every one. A one-dimensional sort order simply cannot preserve two-dimensional adjacency.</p>
+        <p>Geohash sidesteps the problem instead of building a dedicated spatial index. Because the encoded key is just a string (or the same bits read as an integer), "find things nearby" becomes an ordinary prefix or range scan on the B-tree or sorted set the database already ships — no spatial extension required, and a moving point's update is a single small key write.</p>
+        <p>The catch is the cell boundary. Two points a few metres apart can straddle a cell edge and receive different prefixes, so scanning a single cell can miss a very close neighbour. The standard correction is the <strong>3×3 ring</strong>: compute the query point's own cell plus its eight neighbours, scan all nine, then post-filter by exact distance to discard the far corners that only matched the window. The index never gives the final answer on its own — it narrows "scan everything" down to a small candidate set, and exact distance math finishes the job.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+    P["Query point (lat, lon)"] --> E["Encode to a geohash: 'dr5ru'"]
+    E --> R["Expand to the 3×3 ring:<br/>this cell + its 8 neighbours"]
+    R --> S["Prefix / range scan the index<br/>for all 9 cell prefixes"]
+    S --> C["Candidate set:<br/>every point in those cells"]
+    C --> F["Post-filter by exact distance"]
+    F --> A["Answer: points within the radius"]
+        </pre>
+        <figcaption>The index shrinks "scan the whole planet" to nine small cells; exact distance math on that candidate set produces the real answer. The neighbour ring is what makes points near a cell edge findable.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">String vs. integer encoding</dt>
+        <dd>Each base-32 character is five bits, so the same value is either text (a <code>LIKE 'dr5ru%'</code> prefix scan on a B-tree) or an interleaved integer (a numeric range scan). They index identically; Redis keeps it as a 52-bit integer on a sorted-set score, Postgres can keep it as text.</dd>
+        <dt id="variations-item-2">Precision by prefix length</dt>
+        <dd>Cell size shrinks with each added character — roughly 5 km at five characters, a few metres at nine. Choose a length that matches your search radius so the neighbour ring stays small and the candidate set stays cheap to post-filter.</dd>
+        <dt id="variations-item-3">S2 (Google) — spherical cells on a Hilbert curve</dt>
+        <dd>Geohash treats latitude and longitude as a flat rectangle, so its cells distort by latitude (wide near the equator, narrow near the poles). S2 projects the sphere onto the six faces of a cube and threads a Hilbert space-filling curve through them, giving cells of roughly uniform area anywhere on Earth and 64-bit hierarchical ids that truncate to a parent cell. It also models the sphere, so it handles shapes that cross the antimeridian.</dd>
+        <dt id="variations-item-4">H3 (Uber) — a hexagonal grid</dt>
+        <dd>Uses hexagonal cells instead of squares: a hexagon has six neighbours all at roughly equal distance, which is cleaner for "N rings out" queries and heatmap analytics than a square's mix of edge and corner neighbours. Its 64-bit ids are <em>not</em> laid out along a space-filling curve, so instead of a range scan you call grid-math functions to compute the ring of neighbour cell ids and look them up explicitly with an <code>IN</code> list.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Reuses the B-tree or sorted-set index every database already ships — no dedicated spatial extension to install and operate.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">A location update is a single short key write, so it absorbs very high update rates from constantly moving points.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A shared prefix guarantees spatial nearness, so "nearby" is a cheap prefix or range scan rather than a full-table distance computation.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Prefix length tunes precision on the fly — coarser or finer cells without rebuilding any structure.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Cell boundaries break naive queries: two close points can differ in prefix, so a correct search must scan the cell plus its eight neighbours and post-filter by exact distance.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">It encodes points only — it cannot represent a line or a polygon, so containment and intersection questions need a real spatial tree instead.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The flat latitude/longitude grid distorts cell area toward the poles, which is why uniform-area systems like S2 and H3 exist.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">A fixed grid ignores density — a cell in a dense city holds far more candidates than a rural one, so you post-filter more where data is thickest.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Your data is mostly moving points — drivers, live users, devices — updated constantly, and you want each update to be a cheap key write.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You want proximity search on a plain key-value store or relational index without adopting a spatial extension.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The question is point-and-radius ("what is within N km of here"), not polygon containment.</li>
+            <li id="usage-when-4" data-kb-polarity="when">You want to shard or colocate nearby points, using the prefix as a locality-preserving partition key.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">You need true geometry — polygon containment, line intersection, "is this address inside this delivery zone" — where an R-tree (PostGIS) is the right tool.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Uniform cell area across latitudes matters, for example spatial analytics that compares counts per cell — prefer S2 or H3.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The data is static geometry managed inside the database — a BKD or R-tree index built for shapes fits better than an encoded key.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — encode a point, then scan the neighbour ring</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// Geohash's base-32 alphabet (no a, i, l, o — easy to misread).
+const BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz";
+
+// Interleave lon/lat bits by bisecting each range in turn.
+function geohash(lat: number, lon: number, precision = 9): string {
+  let latLo = -90, latHi = 90, lonLo = -180, lonHi = 180;
+  let hash = "", bits = 0, ch = 0, even = true; // longitude first
+
+  while (hash.length &lt; precision) {
+    if (even) {
+      const mid = (lonLo + lonHi) / 2;
+      if (lon &gt;= mid) { ch = (ch &lt;&lt; 1) | 1; lonLo = mid; }
+      else            { ch = ch &lt;&lt; 1;        lonHi = mid; }
+    } else {
+      const mid = (latLo + latHi) / 2;
+      if (lat &gt;= mid) { ch = (ch &lt;&lt; 1) | 1; latLo = mid; }
+      else            { ch = ch &lt;&lt; 1;        latHi = mid; }
+    }
+    even = !even;
+    if (++bits === 5) { hash += BASE32[ch]; bits = 0; ch = 0; }
+  }
+  return hash;
+}
+
+// A "nearby" query is a prefix scan you widen to the 3×3 ring, then
+// post-filter — the index gives candidates, exact distance gives answers.
+//
+//   const cells = neighbours(geohash(lat, lon, 6)); // this cell + 8 around it
+//   SELECT id, lat, lon FROM places
+//   WHERE substr(geohash, 1, 6) IN (:cells)         -- prefix / range scan
+//   -- then drop rows whose real haversine distance exceeds the radius
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="redis-geo"><strong>Redis geospatial</strong><span>GEOADD encodes a longitude/latitude pair into a 52-bit geohash integer and stores it as the score of a sorted set; GEOSEARCH (and the older GEORADIUS) then returns members within a radius or box — a range scan over those scores.</span></div>
+        <div class="wild-item" data-kb-example="elasticsearch-geohash-grid"><strong>Elasticsearch geohash_grid</strong><span>The geohash_grid aggregation buckets documents by geohash cell at a chosen precision, and geo_point fields answer geo_distance and geo_bounding_box queries — the same encode-then-scan idea over its index.</span></div>
+        <div class="wild-item" data-kb-example="google-s2"><strong>Google S2</strong><span>The s2geometry library models Earth as cells on a Hilbert space-filling curve over the six faces of a cube, giving roughly uniform-area cells and 64-bit hierarchical ids; it is the cell system underneath MongoDB's 2dsphere index.</span></div>
+        <div class="wild-item" data-kb-example="uber-h3"><strong>Uber H3</strong><span>An open-source hexagonal hierarchical geospatial index: each cell is a 64-bit id with grid-traversal functions to walk the ring of neighbours. Uber uses it operationally for dispatch and surge pricing.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="sharding"><a href="./sharding.html">Sharding</a><span class="rel-note">Shard geo data by geohash prefix so nearby points land on the same partition</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="yelp"><a href="../../../designs/yelp.html">Yelp</a><span class="rel-note">two-dimensional lat/long proximity needs a geospatial encoding, not a single-dimension range index</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="uber"><a href="../../../designs/uber.html">Uber</a><span class="rel-note">proximity search over a stream of live coordinates is exactly what a geohash index makes fast</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="tinder"><a href="../../../designs/tinder.html">Tinder</a><span class="rel-note">the feed's 'nearby people' retrieval is exactly the bounded spatial lookup a geohash index makes fast</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="proximity-search"><a href="../../../themes/proximity-search.html">Proximity Search</a><span>Encode space into a sortable key so a plain index answers nearby</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

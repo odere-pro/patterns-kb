@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Semaphore · Patterns</title>
+  <meta name="description" content="Semaphore — cap how many threads may hold a resource at once with N permits: acquire takes one and blocks at zero, release returns one and wakes a waiter.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#semaphore",
+  "identifier": "semaphore",
+  "name": "Semaphore",
+  "description": "Cap how many threads may hold a resource at once with N permits",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "concurrency",
+  "kb:group": "concurrency",
+  "kb:combines-with": [
+    {
+      "@id": "./thread-pool.html#thread-pool",
+      "name": "Thread Pool",
+      "kb:note": "A pool bounds concurrency; a counting semaphore is the primitive that does the bounding"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "./monitor-object.html#monitor-object",
+      "name": "Monitor Object",
+      "kb:note": "A binary semaphore (one permit) is a lock — but a counting semaphore admits N, not one"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/unbounded-queue.html#unbounded-queue",
+      "name": "Unbounded Queue",
+      "kb:note": "Permits are a fixed budget — work blocks at the cap instead of piling into memory"
+    },
+    {
+      "@id": "../../hazards/resource-leak.html#resource-leak",
+      "name": "Resource Leak",
+      "kb:note": "Acquire-with-timeout and guaranteed release keep permits from draining away"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc lens">
+  <main class="doc-wrap" data-kb-id="semaphore" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="Cap how many threads may hold a resource at once with N permits" data-kb-order="85" data-kb-aliases="[&quot;counting semaphore&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;resource-management&quot;,&quot;throughput&quot;,&quot;backpressure&quot;]" data-kb-solves="[&quot;I need to let only N callers into this section at once, not just one&quot;,&quot;too many threads pile onto the database or API connection pool at the same time&quot;,&quot;I want to bound in-flight work to a fixed resource or memory budget&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Semaphore</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Semaphore</h1>
+      <p class="doc-essence">A counter of N permits that bounds concurrent access to a resource: every acquire takes a permit and blocks when none are left, every release returns one and wakes a waiting thread.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="semaphore">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A semaphore is a counter with two operations and one rule. It is created holding N permits. <code>acquire()</code> takes a permit before a thread proceeds; if the count is already zero it blocks the caller and parks it until a permit appears. <code>release()</code> returns a permit and wakes one waiting thread. Everything else about the pattern follows from those two moves.</p>
+        <p>The force it resolves is scarcity, not correctness: there simply is not enough of some resource for everyone who wants it at the same instant. A downstream API tolerates ten concurrent callers before it sheds load; a box has 500&nbsp;MB of buffer memory to share across worker threads; a pool holds ten database connections against a thousand requests a second. In each case the danger is overrun rather than a data race — issue more than the resource can absorb and it degrades or fails for everyone. The semaphore makes that ceiling explicit and enforces the wait: at the limit, the next caller blocks instead of piling on.</p>
+        <p>Two shapes recur. In the first, one permit is one slot — N permits cap how many callers may be inside a section at once, whatever the total thread count. In the second, a permit is a unit of a divisible budget — a caller acquires as many permits as it will consume, one per megabyte say, so the sum of all outstanding work can never exceed the total. A semaphore with a single permit degenerates into a plain lock, which is why the two ideas are so often conflated; but where a mutex only asks "is anyone inside?", a semaphore counts "how many, and is there room for one more?" That counting is the whole point. Because a blocked acquire is undone only by a matching release, that release belongs in a <code>finally</code> block or a <code>with</code>/<code>using</code> scope — miss it on an exception and the permit is gone for good, so the ceiling ratchets down until the semaphore is dead at zero.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    A["acquire()"] --> C{"any permits left?"}
+    C -->|yes| E["take one permit,<br/>enter the section"]
+    C -->|no| P["park in the wait queue"]
+    E --> W["hold the resource"]
+    W --> R["release()"]
+    R --> I["return one permit"]
+    I -->|wake one waiter| P
+    P -.->|resumes| C
+        </pre>
+        <figcaption>acquire takes a permit or blocks at zero; release returns one and wakes a parked waiter, which re-checks and proceeds.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Counting semaphore</dt>
+        <dd>The general form: N permits let up to N threads hold a resource at once. This is the default you reach for when the cap is greater than one — throttling concurrent operations without dedicating a worker per slot.</dd>
+
+        <dt id="variations-item-2">Binary semaphore (N = 1)</dt>
+        <dd>A single permit makes it behave like a lock. The difference from a mutex is ownership: a semaphore records no holder, so any thread may release it — useful for signalling between threads (one waits, another posts), but wrong as a mutual-exclusion lock, where you want the acquirer to be the only releaser.</dd>
+
+        <dt id="variations-item-3">Permits as a budget</dt>
+        <dd>Instead of one-permit-per-caller, one permit represents one unit of a divisible resource — a megabyte, a byte of bandwidth, a token. A caller acquires as many permits as it will use and releases exactly that many, so aggregate consumption is bounded even though each operation's size varies.</dd>
+
+        <dt id="variations-item-4">Timed / try-acquire</dt>
+        <dd>Rather than block forever, acquire with a timeout (or a non-blocking attempt) and fail when no permit arrives in time. Essential on request paths: it converts an indefinite hang into a fast, visible rejection the caller can turn into a 503 or a retry.</dd>
+
+        <dt id="variations-item-5">Fair vs. barging</dt>
+        <dd>When a permit frees, does the longest-waiting thread get it (FIFO fairness) or may a newly arriving thread barge in ahead of the queue? Barging gives higher throughput; strict fairness prevents a waiter from being starved indefinitely under heavy contention, at some cost in throughput.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">One explicit number caps concurrency or consumption — a single dial for how much of a scarce resource is in use at once.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Bounds in-flight work independent of thread count — any thread may hold a permit, so you throttle load without dedicating a worker per unit.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Blocking is OS-efficient — a waiter parks and is woken on release, with no spin-polling or sleep-and-retry.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Permits-as-a-budget generalizes past counts — the same primitive throttles megabytes of memory or bandwidth, not just how many operations run.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A leaked permit never comes back — miss the release on an exception and the ceiling ratchets down until the semaphore deadlocks at zero.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">A bare acquire blocks forever — on a request path a starved caller waits indefinitely, so users see timeouts while monitoring shows no errors; a timed acquire is needed to fail fast.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">It grants permission, not objects — a semaphore says "there is room" but hands out no connection or buffer; when callers need the actual resource you still need a pool behind it.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">No ownership or reentrancy — unlike a mutex, any thread can release a permit it never took, so a double-release or a wrong initial count silently lifts the real ceiling above the intended one.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con">Counting is manual for variable-size budgets — the caller must acquire and release exactly the right number of permits, and an off-by-one in that arithmetic is a slow resource leak.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You need to let at most N callers into a section at once — more than one, but still bounded — such as capping concurrent calls to a downstream that sheds load past a threshold.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You're bounding total consumption of a divisible resource — megabytes of buffer, in-flight bytes, disk I/O — where each operation uses a variable amount.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You want to throttle in-flight work without a fixed worker pool — any thread can hold a permit, so the cap rides on top of whatever concurrency you already have.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The limit is one and you want plain mutual exclusion — a lock or monitor states that intent more clearly and gives you ownership and reentrancy.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Callers need the actual resource object, not just permission — a connection, a GPU handle — where a blocking-queue resource pool that dispenses the objects fits better.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">You need to wait until a specific state holds, not merely for a free slot — that is condition-variable territory, handled by a monitor object.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a counting semaphore gating outbound calls</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">class Semaphore {
+  private permits: number;
+  private readonly waiters: Array&lt;() =&gt; void&gt; = [];
+
+  constructor(permits: number) {
+    this.permits = permits; // N slots free up front
+  }
+
+  async acquire(): Promise&lt;void&gt; {
+    if (this.permits &gt; 0) {
+      this.permits--;               // a slot was free — take it
+      return;
+    }
+    await new Promise&lt;void&gt;((resolve) =&gt; this.waiters.push(resolve)); // park
+  }
+
+  release(): void {
+    const next = this.waiters.shift();
+    if (next) next();               // hand the permit straight to a waiter
+    else this.permits++;            // no one waiting — return it to the pool
+  }
+}
+
+// Cap outbound calls to a fragile service at 5 concurrent.
+const gate = new Semaphore(5);
+
+async function callDownstream(req: Request): Promise&lt;Response&gt; {
+  await gate.acquire();
+  try {
+    return await fetch(req);
+  } finally {
+    gate.release();                 // always release, even on throw
+  }
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="java-semaphore"><strong>Java java.util.concurrent.Semaphore</strong><span>The canonical counting semaphore on the JVM: constructed with a permit count, acquire()/release() move the counter, tryAcquire(timeout, unit) fails instead of blocking forever, and a boolean fairness argument switches wake order from barging to FIFO. acquire(n)/release(n) take several permits at once for the budget idiom, and any thread may release.</span></div>
+        <div class="wild-item" data-kb-example="python-semaphore"><strong>Python threading.Semaphore / asyncio.Semaphore</strong><span>Bound concurrent work in either threaded or async code; both act as context managers (with / async with) so the permit is released even on exception. BoundedSemaphore raises if released more times than acquired, catching the double-release miscount that silently raises the ceiling.</span></div>
+        <div class="wild-item" data-kb-example="go-chan-semaphore"><strong>Go buffered channel as a counting semaphore</strong><span>A buffered channel of capacity N is the idiomatic counting semaphore — send an empty struct to take a slot, receive to release; a full channel blocks the sender until a slot frees. The golang.org/x/sync/semaphore package adds a weighted variant whose Acquire(ctx, n) requests several units at once for the budget idiom.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="thread-pool"><a href="./thread-pool.html">Thread Pool</a><span class="rel-note">A pool bounds concurrency; a counting semaphore is the primitive that does the bounding</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="monitor-object"><a href="./monitor-object.html">Monitor Object</a><span class="rel-note">A binary semaphore (one permit) is a lock — but a counting semaphore admits N, not one</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="unbounded-queue"><a href="../../hazards/unbounded-queue.html">Unbounded Queue</a><span class="rel-note">Permits are a fixed budget — work blocks at the cap instead of piling into memory</span></div>
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="resource-leak"><a href="../../hazards/resource-leak.html">Resource Leak</a><span class="rel-note">Acquire-with-timeout and guaranteed release keep permits from draining away</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#lens-conc-h">← Concurrency</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="../../index.html#lens-conc-h">Concurrency →</a>
+    </nav>
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

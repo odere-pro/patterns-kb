@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job Scheduler · Patterns</title>
+  <meta name="description" content="Design a distributed job scheduler — fire 10k jobs a second within two seconds of their scheduled time, at least once, on a two-phase poll-then-delay-queue architecture.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#job-scheduler",
+  "identifier": "job-scheduler",
+  "name": "Job Scheduler",
+  "description": "Fire 10k jobs a second within two seconds of their scheduled time, at least once, even when workers crash mid-run",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/messaging/message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:note": "a delay queue makes each job visible only at its exact run time, decoupling the durable database poll from precise execution"
+    },
+    {
+      "@id": "../patterns/messaging/competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:note": "a fleet of interchangeable workers drains the shared queue, each job handled by exactly one of them"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "at-least-once delivery forces task code to be safe to run more than once via idempotency keys and conditional writes"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/retry-backoff.html#retry-backoff",
+      "name": "Retry with Backoff",
+      "kb:note": "failed executions are re-enqueued with growing DelaySeconds (5s, 25s, 125s) before being given up on"
+    },
+    {
+      "@id": "../patterns/messaging/dead-letter-channel.html#dead-letter-channel",
+      "name": "Dead Letter Channel",
+      "kb:note": "jobs that exhaust their retry budget move to a dead-letter queue instead of looping forever"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "write-sharding the hot hourly execution partition fans a whole hour of writes across many partitions"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/distributed-lock.html#distributed-lock",
+      "name": "Distributed Lock",
+      "kb:note": "each in-flight job is leased via SQS visibility timeout plus a heartbeat, so a crashed worker's job auto-releases"
+    },
+    {
+      "@id": "../patterns/distributed/routing/autoscaling.html#autoscaling",
+      "name": "Autoscaling",
+      "kb:note": "the worker pool scales on queue depth, with a pre-warmed baseline and spot instances for spikes"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="job-scheduler" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-order="30" data-kb-essence="Fire 10k jobs a second within two seconds of their scheduled time, at least once, even when workers crash mid-run" data-kb-aliases='["task scheduler","cron service","distributed scheduler"]' data-kb-tags='["system-design","scalability","resilience","asynchrony","messaging"]' data-kb-solves='["I need to run thousands of tasks at exact future times and they keep firing a minute or two late","my recurring reminders work but finding which ones are due right now means scanning every row","when a worker crashes mid-task nobody retries the work and it silently never runs","a flaky task got retried and the same email went out to the customer three times","all of this hour&apos;s writes pile onto one database partition and it falls over under load"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Job Scheduler</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Job Scheduler</h1>
+      <p class="doc-essence">A job scheduler stores what to run and when, then makes sure each job fires close to its scheduled time — under heavy load and through worker failure. A <em>task</em> is the reusable unit of work ("send an email"); a <em>job</em> is one scheduled instance of it. The whole design turns on two separations: keeping durable job definitions apart from their execution instances, and keeping the durable database poll apart from precise, queue-driven execution.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="job-scheduler">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A job scheduler takes a set of jobs and runs each one at its appointed time — once, at a future date, or on a repeating cadence like "every day at 10:00". It is the plumbing behind reminders, nightly batch jobs, and maintenance sweeps. The surface is small, but two properties dominate everything downstream: jobs must <strong>execute close to their scheduled time</strong> even at high volume, and each must run <strong>at least once</strong> even when the machine running it dies mid-job. A naïve "poll the database on a timer" design satisfies neither at scale, so the interesting work is in getting precision and durability without paying for them on every request.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Schedule a job to run immediately, at a future date, or on a recurring schedule (a CRON expression such as <code>0 10 * * *</code>).</li>
+            <li>Monitor the status of one's own jobs — which have run, which are pending, which failed.</li>
+          </ol>
+          <p class="prose">Out of scope: cancelling and rescheduling jobs, security-policy enforcement, and CI/CD-style pipelines — named explicitly so the core stays narrow.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Precision</strong> — a job fires within 2&nbsp;seconds of its scheduled time.</li>
+            <li><strong>Durability</strong> — <strong>at-least-once</strong> execution; a job is never silently dropped, even if a worker crashes.</li>
+            <li><strong>Availability</strong> — favoured over strict consistency; a briefly stale status view is fine, a missed run is not.</li>
+            <li><strong>Scale</strong> — up to <strong>10k jobs/sec</strong> at execution time.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Throughput.</strong> The target is 10k executions/sec at peak. Creates run lower — a recurring job is written once but fires many times — so the execution path, not the create path, sets the budget.</p>
+        <p><strong>Queue depth.</strong> If the scheduler looks 5&nbsp;minutes ahead, a full window holds 10k/sec × 300&nbsp;s ≈ <strong>3&nbsp;million</strong> in-flight jobs. Each queued message is just an id, an execution time and a little metadata — a couple hundred bytes — so the window is on the order of <strong>~600&nbsp;MB</strong>, well under a managed queue's per-message size cap and comfortably within its throughput.</p>
+        <p><strong>Write budget.</strong> 10k execution rows a second, plus status updates on each. A single database partition sustains only so many writes per second (on DynamoDB, ~1,000 write units), so an hour of executions cannot land on one partition — the spread across partitions is a design constraint, not an afterthought.</p>
+        <p><strong>Retention.</strong> Executions accumulate forever if untouched; age rows past ~a year into cheap object storage so the hot tables stay small.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Four conceptual entities, with a fifth that the storage model forces into the open:</p>
+        <ul>
+          <li><strong>Task</strong> — the reusable definition of work ("send an email"), parameterised and carrying no schedule of its own.</li>
+          <li><strong>Job</strong> — one task bound to a schedule and a set of parameters; the thing a user actually creates ("send email to john@example.com every Friday at 10:00").</li>
+          <li><strong>Schedule</strong> — either a one-shot <code>DATE</code> or a recurring <code>CRON</code> expression; it decides when a job's next run is due.</li>
+          <li><strong>Execution</strong> — a single due run of a job at one instant, with its own <code>status</code> and <code>attempt</code> count. It is what workers actually process, and separating it from the job definition is the pivotal modelling call (see below).</li>
+          <li><strong>User</strong> — owns jobs and queries their status.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Two operations cover both functional requirements — one to schedule, one to observe:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — schedule a job and query status</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /jobs
+{ "task_id": "send_email",
+  "schedule": "0 10 * * *",
+  "parameters": { "to": "john@example.com", "subject": "Daily Report" } }
+&rarr; 202 { "job_id": "job_8f21" }        # stored PENDING, first execution enqueued
+
+GET /jobs?user_id={id}&amp;status={status}&amp;start_time={t0}&amp;end_time={t1}
+&rarr; 200 Job[]                            # this user's executions, filtered and paged</code></pre>
+      </details>
+      <div class="prose">
+        <p>Create returns <strong>202 Accepted</strong>, not 200: the job is durably recorded, but its actual run happens later and asynchronously.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The store is a horizontally scalable key-value database (DynamoDB, or Cassandra for open-source shops) rather than a relational one — there are few relationships and no need for strong consistency, so easy partitioning matters more than joins. The pivotal move is to <strong>split the job definition from its execution instances</strong>, exactly as a calendar keeps a recurring event separate from each occurrence. A <strong>Jobs table</strong> holds the definition (partitioned by <code>job_id</code>: <code>user_id</code>, <code>task_id</code>, <code>schedule</code>, <code>parameters</code>). An <strong>Executions table</strong> holds one row per due run, partitioned by a <code>time_bucket</code> — the execution time rounded down to the hour, <code>(t // 3600) * 3600</code> — with the exact <code>execution_time</code> plus <code>job_id</code> as the sort key. Bucketing by hour means "what's due soon?" touches only one or two partitions instead of scanning every CRON expression in the system. When a recurring job's run completes, the scheduler writes its <em>next</em> execution row; the definition never changes.</p>
+        <p>Reads come in two shapes. Workers ask "which executions are due in the next few minutes and still <code>PENDING</code>?" — served straight off the time-bucketed partition. Users ask "how are <em>my</em> jobs doing?" — served by a global secondary index on the Executions table keyed by <code>user_id</code> then <code>execution_time</code>, so per-user listing, filtering and paging never scan the base table. Execution then runs in two phases, described in the deep dives: a low-frequency database poll feeds a <a href="../patterns/messaging/message-queue.html">delay queue</a>, and a fleet of workers pulls jobs off it as they come due.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client"]
+    API["Job service"]
+    Jobs[("Jobs table · definitions")]
+    Execs[("Executions table · instances")]
+    Cron["Scheduler · polls every 5 min"]
+    Queue["Delay queue (SQS)"]
+    Workers["Worker fleet"]
+    DLQ["Dead-letter queue"]
+    Client -->|"POST /jobs"| API
+    API -->|"write definition"| Jobs
+    API -->|"write first execution"| Execs
+    API -.->|"due in under 5 min"| Queue
+    Cron -->|"read due executions"| Execs
+    Cron -->|"enqueue with delay"| Queue
+    Queue -->|"visible at run time"| Workers
+    Workers -->|"execute + update status"| Execs
+    Workers -.->|"retries exhausted"| DLQ
+    Client -->|"GET /jobs?status"| API
+        </pre>
+        <figcaption>The scheduler poll (every 5&nbsp;min, low database load) is decoupled from execution (workers drain the queue as fast as jobs become visible). Near-term jobs skip the poll and go straight to the queue.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Firing within two seconds — the two-phase scheduler</h3>
+        <p>In a single-loop design, the poll frequency <em>is</em> the precision ceiling: poll every two minutes and jobs land up to two minutes late. Polling every two seconds to hit the target is worse than it sounds — at 10k/sec each query would sweep ~20k rows across a two-second window, and even an indexed read of that size, plus network and serialisation, can burn hundreds of milliseconds and keep the database under constant heavy load. So split the concern in two. <strong>Phase one</strong> polls the Executions table every few minutes for everything due in the next ~5 minutes — cheap, infrequent, database-friendly. <strong>Phase two</strong> hands those jobs to a queue that only makes each one visible at its exact run time; workers pull and execute the instant it appears. The poll cadence no longer caps precision.</p>
+        <p>The queue's one hard requirement is <em>delayed visibility</em>. A strictly-ordered log like Kafka fails here: a newly created urgent job would queue behind everything already buffered and miss its window. Three options deliver deferred delivery. A <strong>Redis sorted set</strong> scores entries by timestamp and pops those with <code>score &lt; now</code> — sub-millisecond, but you build retries, failure handling and replication yourself. <strong>RabbitMQ</strong> can fake it with per-message TTL plus a dead-letter exchange, but high availability needs quorum queues and the TTL trick is fiddly. <strong>SQS</strong> wins for a managed stack: <code>DelaySeconds</code> gives native per-message delay (capped at 15 minutes, which comfortably covers the 5-minute lookahead), visibility timeouts recover from worker failure, and it auto-scales across availability zones. Jobs created with under 5 minutes of lead time skip the poll entirely and go straight to the queue with the right delay. Workers form a pool of <a href="../patterns/messaging/competing-consumers.html">competing consumers</a>, each message handled by exactly one of them.</p>
+
+        <h3>2 · Scaling the pipeline to 10k jobs a second</h3>
+        <p>Work left to right and fix bottlenecks one at a time. <strong>Creates</strong> peak below 10k/sec (recurring jobs write once, fire often); the stateless service tier scales out and the database absorbs the writes directly, so a buffering queue in front of creation is tempting but usually over-engineering — keep it simple until the write path actually strains. <strong>The Jobs table</strong> scales cleanly: partitioned by <code>job_id</code>, writes spread evenly. <strong>The Executions table</strong> is the real hazard: partitioning by hourly <code>time_bucket</code> concentrates a whole hour of writes on a single partition — a classic <a href="../hazards/hot-key.html">hot partition</a>. The fix is <a href="../patterns/distributed/routing/sharding.html">write sharding</a>: append a random suffix to the key (<code>time_bucket#shard_3</code>) to fan writes across N partitions, and have the poller query all shards for a bucket in parallel. Old executions age out to object storage after ~a year.</p>
+        <p>The queue side barely needs attention — 3 million messages a window at a couple hundred bytes each is well within a standard SQS queue's throughput, and it distributes across consumers automatically, so extra queues would only ever be for functional separation (priority, job type), not scaling. That leaves the <strong>workers</strong>. Serverless functions auto-scale instantly and suit short jobs, but cold starts can blow the 2-second budget and cost more at steady high volume. Long-lived containers on ECS or Kubernetes are more cost-effective for a predictable 10k/sec load and hold state between runs; the price is more operational overhead. Containers win here — with <a href="../patterns/distributed/routing/autoscaling.html">autoscaling</a> driven by queue depth, a pre-warmed baseline pool for steady load, and spot instances to trim cost.</p>
+
+        <h3>3 · Running each job at least once</h3>
+        <p>At-least-once means two failure modes must both be caught. A <strong>visible failure</strong> — a bug or bad parameters — surfaces as an exception: wrap the task, log it, mark the execution <code>RETRYING</code> with its attempt count, and re-enqueue with <a href="../patterns/distributed/resilience/retry-backoff.html">exponential backoff</a> (5s, 25s, 125s) by raising <code>DelaySeconds</code> per attempt. After a bounded number of tries the row goes <code>FAILED</code> and the message lands in a <a href="../patterns/messaging/dead-letter-channel.html">dead-letter queue</a> for inspection rather than looping forever. An <strong>invisible failure</strong> — the worker itself dies before reporting anything — is harder, because nothing raises. Polling health-check endpoints does not scale to thousands of workers and invents its own single point of failure. A database lease works: a worker writes its id and an expiry onto the execution and renews it while running, so an expired lease lets another worker retry — but at 10k/sec with 5-second leases that is ~50k renewal writes a second, plus clock-skew and partition edge cases. The cleanest answer reuses the queue's own <a href="../patterns/distributed/coordination/distributed-lock.html">lease</a> semantics: an SQS message goes invisible when received and reappears automatically if the worker never deletes it, and a periodic <code>ChangeMessageVisibility</code> heartbeat extends ownership for long jobs — recovery in ~30 seconds with no extra infrastructure.</p>
+        <p>At-least-once has a corollary the caller must honour: because a job can run more than once, task code has to be <a href="../patterns/messaging/idempotency.html">idempotent</a>. Executing blindly is dangerous — a retried money transfer moves funds twice. A deduplication table keyed by <code>job_id</code> + execution time works but adds a read-before-write and needs pruning. Best is to design the task so repetition is harmless: use an idempotency key with conditional operations ("set the counter to X", not "increment"; check a "welcome email sent" flag before sending), pushing the guarantee down into the work itself.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Precision decoupled from database load: an infrequent poll feeds a delay queue, so 2-second firing survives 10k jobs/sec.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">"What's due soon?" and "how are my jobs?" are both cheap — one via time-bucketed partitions, the other via a per-user index.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Worker crashes self-heal: an unacknowledged message reappears, and bounded backoff plus a dead-letter queue contain poison jobs.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">At-least-once pushes idempotency onto every task author; a non-idempotent job will eventually double-execute.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">The hourly execution partition is a hot spot that only write-sharding tames — and sharding then forces fan-out reads across every shard.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Leaning on a managed queue (SQS <code>DelaySeconds</code>, visibility timeouts) buys simplicity at the cost of portability; a self-hosted stack must rebuild delay, retries and leasing by hand.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a coherent high-level design with a clean data model, and sensible responses when prompted on durability, precise timing, and retries. Reaching every answer unaided is not expected; collaborating toward reasonable ones is.</li>
+          <li><strong>Senior</strong> — drives the conversation through two deep dives, and articulates the need for a two-phase scheduler (database poll plus delay queue) unprompted — even if choosing Redis or another queue over SQS. Surfaces "what if a worker dies mid-job?" without being asked.</li>
+          <li><strong>Staff+</strong> — moves briskly through setup and high-level design to spend the time leading deep dives, names the hot-partition and idempotency bottlenecks early, and justifies each trade-off from hands-on experience with the tech.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="message-queue"><a href="../patterns/messaging/message-queue.html">Message Queue</a><span class="rel-note">a delay queue makes each job visible only at its exact run time, decoupling the durable database poll from precise execution</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="competing-consumers"><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a><span class="rel-note">a fleet of interchangeable workers drains the shared queue, each job handled by exactly one of them</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">at-least-once delivery forces task code to be safe to run more than once via idempotency keys and conditional writes</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="retry-backoff"><a href="../patterns/distributed/resilience/retry-backoff.html">Retry with Backoff</a><span class="rel-note">failed executions are re-enqueued with growing DelaySeconds (5s, 25s, 125s) before being given up on</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="dead-letter-channel"><a href="../patterns/messaging/dead-letter-channel.html">Dead Letter Channel</a><span class="rel-note">jobs that exhaust their retry budget move to a dead-letter queue instead of looping forever</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">write-sharding the hot hourly execution partition fans a whole hour of writes across many partitions</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="distributed-lock"><a href="../patterns/distributed/coordination/distributed-lock.html">Distributed Lock</a><span class="rel-note">each in-flight job is leased via SQS visibility timeout plus a heartbeat, so a crashed worker's job auto-releases</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="autoscaling"><a href="../patterns/distributed/routing/autoscaling.html">Autoscaling</a><span class="rel-note">the worker pool scales on queue depth, with a pre-warmed baseline and spot instances for spikes</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

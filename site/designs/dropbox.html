@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dropbox · Patterns</title>
+  <meta name="description" content="Design a file storage and sync service — 50GB uploads that never touch the app server, direct-to-blob transfer with presigned URLs, CDN downloads, and chunked, resumable, delta-synced files.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#dropbox",
+  "identifier": "dropbox",
+  "name": "Dropbox",
+  "description": "Store, share, and sync files up to 50GB by moving bytes directly between client and blob storage — the app server signs URLs but never touches the data",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/routing/valet-key.html#valet-key",
+      "name": "Valet Key",
+      "kb:note": "the File Service hands the client a presigned URL — a signed, time-limited grant to write to or read from one exact blob location"
+    },
+    {
+      "@id": "../patterns/distributed/routing/object-storage.html#object-storage",
+      "name": "Object Storage",
+      "kb:note": "file bytes live in an S3-style blob store, not on the app servers or in the metadata database"
+    },
+    {
+      "@id": "../patterns/distributed/routing/cdn.html#cdn",
+      "name": "CDN",
+      "kb:note": "downloads are served from the edge cache nearest the user, with only a miss reaching origin blob storage"
+    },
+    {
+      "@id": "../patterns/distributed/routing/api-gateway.html#api-gateway",
+      "name": "API Gateway",
+      "kb:note": "an LB and API gateway front the File Service, handling routing, TLS termination, rate limiting, and request validation"
+    },
+    {
+      "@id": "../patterns/distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "the File Service signs URLs locally and holds no per-request state, so it scales out horizontally behind the load balancer"
+    },
+    {
+      "@id": "../patterns/messaging/pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "the server publishes file change events over a persistent per-device connection so edits propagate to other devices in real time"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "resumable chunked uploads rely on re-reported or re-uploaded chunks being safe no-ops, with a content fingerprint deduplicating identical uploads"
+    },
+    {
+      "@id": "../patterns/security/least-privilege.html#least-privilege",
+      "name": "Least Privilege",
+      "kb:note": "signed URLs are scoped to one object and expire in minutes, optionally bound to an IP or auth cookie, granting the narrowest access for the shortest time"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="dropbox" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Store, share, and sync files up to 50GB by moving bytes directly between client and blob storage — the app server signs URLs but never touches the data" data-kb-order="22" data-kb-aliases='["file sync","cloud storage","Google Drive"]' data-kb-tags='["system-design","availability","durability","latency","scalability"]' data-kb-solves='["I need users to upload huge files but a single request times out and my API gateway caps the body size","my users lose the whole upload when their connection drops halfway and have to start over from scratch","downloads are painfully slow for users far from my one data center","listing every file shared with a given user means scanning the permission list of every file I store","an edit made on a laptop should appear on the phone within seconds without anyone pressing refresh"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Dropbox</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Dropbox</h1>
+      <p class="doc-essence">A file storage service keeps a folder reachable from any device and identical on all of them. The scope is upload, download, share, and sync — but one constraint reshapes the whole design: files run as large as 50GB, so the bytes must never flow through the app server. The server signs URLs; the client talks to storage directly.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="dropbox">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>The service stores files in the cloud, makes them reachable from any device, lets a user share with others, and keeps a folder in sync everywhere it is installed. Editing and in-browser preview are out of scope. Two decisions dominate everything downstream. The first is <strong>file size</strong>: files can be 50GB, which shatters the assumption baked into ordinary request/response design that a payload fits in one round trip — the bytes cannot pass through the app tier at all. The second is <strong>CAP posture</strong>: availability is chosen over consistency, because a few seconds of delay before a change appears on another device is harmless here (unlike a trade that must settle globally before the next order can proceed).</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Upload a file from any device.</li>
+            <li>Download a file from any device.</li>
+            <li>Share a file with other users, and see the files shared with you.</li>
+            <li>Automatically keep a folder in sync across all of a user's devices.</li>
+          </ol>
+          <p class="prose">Out of scope: editing files and viewing them without downloading — named explicitly so the design stays narrow.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Availability</strong> — favoured over consistency; a few seconds of sync lag is acceptable.</li>
+            <li><strong>Large files</strong> — support single files up to 50GB.</li>
+            <li><strong>Durability</strong> — secure and reliable; files recoverable if lost or corrupted.</li>
+            <li><strong>Latency</strong> — upload, download, and sync as fast as the network allows.</li>
+          </ul>
+          <p class="prose">Out of scope: per-user storage quotas, file versioning, and virus scanning.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Transfer time.</strong> A single 50GB upload over a 100&nbsp;Mbps link takes 50&nbsp;GB × 8 bits/byte ÷ 100&nbsp;Mbps ≈ <strong>4,000&nbsp;seconds — about 1.1 hours</strong>. No client or server timeout tolerates a request open that long, so one big <code>PUT</code> is off the table before anything else.</p>
+        <p><strong>Payload caps.</strong> Managed front doors cap request bodies hard — Amazon API Gateway at 10&nbsp;MB, not raisable. A 50GB body cannot cross that boundary even in principle, which forces the file to be broken into pieces.</p>
+        <p><strong>Chunk count.</strong> At 5–10&nbsp;MB per chunk, a 50GB file is roughly <strong>5,000–10,000 chunks</strong>, each independently retryable and small enough to fit any gateway limit.</p>
+        <p><strong>What the backend actually carries.</strong> Because the bytes travel client-to-storage directly, the app tier only handles metadata operations — small and frequent. The service sizes on control-plane calls, not on terabytes of file traffic, which is what makes 50GB files affordable at all.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Four entities, split cleanly between where bytes live and where facts about them live:</p>
+        <ul>
+          <li><strong>File</strong> — the raw bytes. Lives in blob storage, never in the database.</li>
+          <li><strong>FileMetadata</strong> — <code>id</code> (a UUID), <code>name</code>, <code>size</code>, <code>mimeType</code>, <code>uploadedBy</code>, and a <code>status</code> of <code>uploading</code> or <code>uploaded</code>. For resumable uploads it also carries per-chunk status, and a content <code>fingerprint</code> for deduplication.</li>
+          <li><strong>User</strong> — the account that owns and shares files.</li>
+          <li><strong>SharedFile</strong> — a <code>(userId, fileId)</code> row recording that a file is shared with a user. It is a separate table, deliberately <em>not</em> a list embedded on the file.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>One endpoint per requirement — and, crucially, the upload and download endpoints return a <em>URL to talk to storage</em> rather than accepting or returning the bytes themselves. Identity always rides in the headers as a session token or JWT, never in the body, which the client can tamper with.</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — the request surface</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /files/presigned-url        { fileMetadata } &rarr; { presignedUrl }
+  # backend saves metadata with status "uploading", returns a signed write URL
+
+PUT  &lt;presignedUrl&gt;              &lt;bytes&gt;            # client &rarr; blob storage, direct
+
+GET  /files/{fileId}/presigned-url &rarr; { presignedUrl }   # CDN-signed read URL
+
+POST /files/{fileId}/share       { users: [ ... ] }
+
+GET  /files/changes?since={ts}   &rarr; ChangeEvent[]   # poll fallback for sync
+  # ChangeEvent = { fileId, type: created|updated|deleted, metadata }
+
+PATCH /files/{fileId}/chunks     { chunks: [ { id, status, eTag } ] }</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The organising idea is that the app server is a <strong>control plane, not a data plane</strong>. A <strong>File Service</strong> sits behind a load balancer and <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> — which does routing, TLS termination, rate limiting, and request validation — and its only jobs are to read and write metadata, enforce share permissions, and hand the client a <em>presigned URL</em>: a signed, time-limited grant to write to (or read from) one exact <a href="../patterns/distributed/routing/object-storage.html">blob-storage</a> location. That URL is a textbook <a href="../patterns/distributed/routing/valet-key.html">valet key</a> — the service generates it locally with the storage SDK using its own credentials, so signing costs nothing and never calls storage. The client then <code>PUT</code>s the bytes <strong>straight to blob storage</strong>. When the upload lands, storage fires a completion notification back to the File Service, which flips the metadata to <code>uploaded</code> — the handshake that keeps "bytes present" and "metadata says present" from drifting apart. Because it holds no per-request state, the File Service is a <a href="../patterns/distributed/routing/stateless-service.html">stateless service</a> that scales out horizontally.</p>
+        <p>Downloads are the mirror image, but through a <a href="../patterns/distributed/routing/cdn.html">CDN</a>: the File Service issues a CDN-signed URL, the edge serves the file from the cache nearest the user, and only a cache miss reaches origin storage — the fix for a single-region blob store being slow for distant users. <strong>Sharing</strong> is the separate <code>SharedFiles</code> table keyed on <code>(userId, fileId)</code>: "my files" is an index scan on <code>uploadedBy</code>, and "files shared with me" is an index scan on the shares table — neither one has to scan every file's permission list, which is exactly what an embedded share-list would force. <strong>Sync</strong> runs a hybrid: one persistent WebSocket/SSE connection per device carries change events the server <a href="../patterns/messaging/pubsub.html">publishes</a> in real time, backed by a periodic poll of <code>/files/changes?since=</code> so a dropped socket still converges — eventual consistency by construction. Local edits are caught by the OS file-watcher (<code>FSEvents</code>, <code>FileSystemWatcher</code>), queued, and pushed; conflicts resolve last-write-wins.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client — uploader &amp; downloader"]
+    GW["LB &amp; API gateway"]
+    FS["File service (control plane)"]
+    DB[("File metadata DB")]
+    S3[("Blob storage")]
+    CDN["CDN edge"]
+    Client -->|"request presigned URL"| GW
+    GW -->|"route, authenticate"| FS
+    FS -->|"read / write metadata + shares"| DB
+    FS -.->|"signed URL"| Client
+    Client -->|"PUT chunks directly"| S3
+    S3 -.->|"upload-complete notification"| FS
+    Client -->|"GET file"| CDN
+    CDN -->|"cache miss"| S3
+    FS -.->|"push change events"| Client
+        </pre>
+        <figcaption>The File Service signs URLs and moves metadata; the file bytes flow client&rarr;storage and storage&rarr;edge&rarr;client, never through the app tier.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Uploading a 50GB file</h3>
+        <p>A single request is impossible (the 1.1-hour and 10&nbsp;MB limits above), and even if it weren't, it would give no progress and no way to resume. The answer is <strong>chunking on the client</strong> — 5–10&nbsp;MB pieces. Chunking must happen client-side: doing it on the server would require the whole file to reach the server first, which is the very thing we are avoiding, and it is a common candidate mistake to get this backwards.</p>
+        <ul>
+          <li><strong>Multipart mechanics.</strong> The client asks the backend to begin an upload; the backend calls storage's <code>CreateMultipartUpload</code>, gets an <code>uploadId</code>, and returns one presigned URL <em>per chunk</em> (keyed by <code>uploadId</code> + <code>partNumber</code>). Chunks then upload in parallel or in sequence to their own URLs.</li>
+          <li><strong>Progress and resume.</strong> Progress is simply the fraction of chunks finished. Resumability comes from persisting each chunk's status in <code>FileMetadata.chunks</code>, so a dropped connection resumes from the first unfinished chunk rather than byte zero.</li>
+          <li><strong>Trust but verify.</strong> The client <code>PATCH</code>es chunk status for a snappy progress bar, but a buggy or malicious client could claim chunks are done that aren't, corrupting its own file into a hard-to-debug state. So before flipping the file to <code>uploaded</code>, the backend verifies against storage itself — <code>ListParts</code> and ETags — instead of trusting the client's word, and only calls <code>CompleteMultipartUpload</code> once every part checks out. Retrying is safe throughout: a re-reported or re-uploaded chunk is a no-op, which is <a href="../patterns/messaging/idempotency.html">idempotency</a> doing the heavy lifting for resume.</li>
+          <li><strong>Identity by content, not name.</strong> Filenames collide across users and uploads; a SHA-256 <em>fingerprint</em> of the content does not. The fingerprint drives deduplication (identical content already stored need not be re-uploaded) and resume detection (which parts already exist), while the UUID <code>fileId</code> stays the row's unique key.</li>
+        </ul>
+        <h3>2 · Making uploads, downloads, and sync fast</h3>
+        <p>Three levers, one per direction.</p>
+        <ul>
+          <li><strong>Download</strong> — the CDN already shortens the distance bytes travel by serving from the edge; nothing else moves the origin closer.</li>
+          <li><strong>Upload</strong> — chunks uploaded in parallel saturate available bandwidth, and chunk size can adapt to current network conditions.</li>
+          <li><strong>Sync</strong> — transfer only the chunks that <em>changed</em>, not the whole file. Fixed-size chunking sabotages this: inserting one byte near the start shifts every later boundary and changes every downstream fingerprint. <strong>Content-Defined Chunking</strong> — boundaries chosen by a rolling hash (Rabin fingerprinting) — means a small edit perturbs only the chunks near it, keeping delta sync cheap.</li>
+        </ul>
+        <p><strong>Compression</strong> happens on the client, since the backend is off the data path — compress before upload, decompress after download. It pays for text (a 5GB log can drop below 1GB) but barely helps already-compressed media (a PNG hardly moves), so the client decides by file type, size, and network. <code>zstd</code> is a strong client-side default; Brotli edges it on text. One firm rule: always compress <em>before</em> encrypting, because ciphertext is effectively random and will not compress.</p>
+        <h3>3 · Keeping files secure</h3>
+        <p>Encryption is the easy half: HTTPS in transit, and storage-side encryption at rest with a per-object key held separately from the data. Access control is the shares table acting as the ACL — a download URL is only minted for an authorized user. The subtle risk is the <strong>signed URL itself</strong>: it is a bearer token, so anyone holding a valid, unexpired one can use it, and an authorized user might leak it. The defense is a short expiry (around five minutes) so a leaked link dies quickly; higher-security setups additionally bind the URL to an IP or require it alongside an auth cookie. This is <a href="../patterns/security/least-privilege.html">least privilege</a> applied to a URL — the narrowest grant, for the shortest time. The CDN or storage validates the signature against its registered public key and checks expiry and any restriction before serving a byte.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">The app tier never touches file bytes, so a 50GB transfer costs the backend only a couple of small metadata calls, and upload/download scale with storage and the edge rather than with the servers.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Chunking delivers resumable, parallel, progress-tracked uploads and cheap delta sync that moves only what changed.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Direct-to-blob writes plus CDN reads keep latency low for users anywhere in the world.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">With bytes bypassing the server, it cannot inspect or transform them in flight — no server-side virus scanning, transcoding, or content validation without adding a separate pipeline.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Signed URLs are bearer tokens; a short expiry limits but never eliminates the exposure of a leaked link.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Choosing availability means a change can be visible on one device before another, and last-write-wins silently drops the losing edit of a genuine conflict.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Server-side chunk verification (<code>ListParts</code>) adds round trips and moving parts over simply trusting the client's progress reports.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end design: clear endpoints and a metadata model, upload/download/share/sync sketched at a high level, and blob storage for the files. Not expected to reach presigned URLs or chunking unprompted, but should get there when nudged — "you're uploading the file twice, how do you avoid that?" or "how do you show progress and let the user resume?"</li>
+          <li><strong>Senior</strong> — moves quickly through the high-level design to spend real time on large-file handling; argues the blob-storage and CDN trade-offs from experience, often knows the multipart-upload API first-hand, and anticipates bottlenecks instead of only reacting to them.</li>
+          <li><strong>Staff+</strong> — races through the basics (REST, normalization) to go deep on the interesting parts: delta sync and content-defined chunking, trust-but-verify integrity, signed-URL security, and the availability-over-consistency posture — driving the discussion and treating the interviewer as a peer.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="valet-key"><a href="../patterns/distributed/routing/valet-key.html">Valet Key</a><span class="rel-note">the File Service hands the client a presigned URL — a signed, time-limited grant to write to or read from one exact blob location</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-storage"><a href="../patterns/distributed/routing/object-storage.html">Object Storage</a><span class="rel-note">file bytes live in an S3-style blob store, not on the app servers or in the metadata database</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cdn"><a href="../patterns/distributed/routing/cdn.html">CDN</a><span class="rel-note">downloads are served from the edge cache nearest the user, with only a miss reaching origin blob storage</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="api-gateway"><a href="../patterns/distributed/routing/api-gateway.html">API Gateway</a><span class="rel-note">an LB and API gateway front the File Service, handling routing, TLS termination, rate limiting, and request validation</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">the File Service signs URLs locally and holds no per-request state, so it scales out horizontally behind the load balancer</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pubsub"><a href="../patterns/messaging/pubsub.html">Publish-Subscribe</a><span class="rel-note">the server publishes file change events over a persistent per-device connection so edits propagate to other devices in real time</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">resumable chunked uploads rely on re-reported or re-uploaded chunks being safe no-ops, with a content fingerprint deduplicating identical uploads</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="least-privilege"><a href="../patterns/security/least-privilege.html">Least Privilege</a><span class="rel-note">signed URLs are scoped to one object and expire in minutes, optionally bound to an IP or auth cookie, granting the narrowest access for the shortest time</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Correlation Identifier · Patterns</title>
+  <meta name="description" content="Correlation Identifier — tags related messages with a shared token so replies, retries, and logs can be matched back to the request that produced them.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#correlation-identifier",
+  "identifier": "correlation-identifier",
+  "name": "Correlation Identifier",
+  "description": "Tags related messages so replies can be matched up",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "messaging",
+  "kb:group": "messaging",
+  "kb:combines-with": [
+    {
+      "@id": "./scatter-gather.html#scatter-gather",
+      "name": "Scatter-Gather",
+      "kb:note": "Correlate responses back to the request"
+    },
+    {
+      "@id": "../distributed/coordination/saga.html#saga",
+      "name": "Saga",
+      "kb:note": "Correlate the steps of one saga"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../designs/chatgpt.html#chatgpt",
+      "name": "ChatGPT",
+      "kb:note": "the runId is the correlation identifier that ties asynchronous token output back to its originating request across a fully decoupled path"
+    },
+    {
+      "@id": "../../designs/persona-identification.html#persona-identification",
+      "name": "Persona Identification & Sanction Check",
+      "kb:note": "one flowId threading a persona-verification saga's vendor calls, logs, and webhook payload end to end"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/observability.html#observability",
+      "name": "Observability",
+      "kb:role": "Stitch one request across services"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="correlation-identifier" data-kb-kind="pattern" data-kb-band="messaging" data-kb-group="messaging" data-kb-essence="Tags related messages so replies can be matched up" data-kb-order="95" data-kb-aliases="[&quot;correlation ID&quot;]" data-kb-tags="[&quot;messaging&quot;,&quot;observability&quot;,&quot;integration&quot;]" data-kb-solves="[&quot;replies land on a shared channel and I cannot tell which one answers which request&quot;,&quot;I have to grep six services logs by timestamp to piece together what happened to one order&quot;,&quot;responses come back out of order and my client hands the wrong answer to the wrong caller&quot;,&quot;a customer reports a failure and I have no way to follow that one request across our services&quot;,&quot;I fired ten requests at once and their answers are interleaved with everyone elses&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-msg-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-msg-h">Messaging</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Correlation Identifier</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Messaging</p>
+      <h1 class="doc-title">Correlation Identifier</h1>
+      <p class="doc-essence">Stamps every request with a unique token that each downstream reply, retry, or log line copies verbatim — so a flood of concurrent, asynchronous messages on a shared channel can still be traced back to the one conversation that produced them.</p>
+      <div class="doc-metarow">
+        <span class="badge">Messaging</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="correlation-identifier">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>correlation identifier</strong> is a token — a GUID, a monotonic sequence number, or a business key already known to be unique — that a sender stamps into a message's header when it fires off a request. Every participant that produces a downstream message tied to that request copies the same token into whatever it emits, unchanged. Its shape means nothing to the messaging infrastructure; it exists purely so a listener can ask "which conversation does this belong to?" and get one unambiguous answer.</p>
+        <p>The forces it resolves show up wherever request and reply aren't connected by an open call stack or a synchronous socket. A client fires many requests at a shared queue or topic before any answers return; replies land in whatever order the network and the receivers happen to produce, interleaved with traffic from other clients and other requests. Without something in the message declaring its lineage, a listener has no reliable way to say which pending request a given reply belongs to — and a match that resolves incorrectly under load is worse than one that fails loudly.</p>
+        <p>The pattern generalizes past a single request/reply pair. Thread the same identifier through every hop of a longer chain — a message that fans out to several services, a saga's sequence of compensating steps, a request that crosses five microservices before it produces a response — and every log line, span, and metric emitted along the way can be filtered down to the one logical operation, even though the systems that emitted them share nothing else in common.</p>
+        <p>It's deliberately distinct from a message ID. A message ID names this one message and dies with it; a correlation ID names the conversation or operation the message is part of, and many messages across many systems can legitimately share it.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant R as Requestor
+    participant Ch as Channel
+    R->>Ch: Request A, CorrelationId=aaa
+    R->>Ch: Request B, CorrelationId=bbb
+    Ch-->>R: Reply B, CorrelationId=bbb
+    Ch-->>R: Reply A, CorrelationId=aaa
+    Note over R: match each reply by id, arrival order does not matter
+        </pre>
+        <figcaption>Two requests are in flight at once; their replies come back in the opposite order they were sent. The correlation id, not arrival order, tells the requestor which reply answers which request.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Message-header correlation ID</dt>
+        <dd>The classic form — a GUID placed in a header field (<code>JMSCorrelationID</code>, AMQP's <code>correlation_id</code>) that the responder copies straight from the request into the reply.</dd>
+        <dt id="variations-item-2">Business key as correlation ID</dt>
+        <dd>Reuse a domain identifier that's already unique — an order id, a session id — instead of minting a synthetic token. Cheaper, but only safe when that key genuinely can't repeat across concurrent conversations.</dd>
+        <dt id="variations-item-3"><a href="./scatter-gather.html">Scatter-Gather aggregation key</a></dt>
+        <dd>One correlation id ties every parallel reply back to a single fan-out request, so the aggregator knows when it has collected them all.</dd>
+        <dt id="variations-item-4">Distributed trace ID</dt>
+        <dd>The same idea propagated across every hop of a call chain (W3C <code>traceparent</code>, <code>X-Request-Id</code>) so logs and spans from otherwise unrelated services join into one trace.</dd>
+        <dt id="variations-item-5"><a href="../distributed/coordination/saga.html">Saga correlation</a></dt>
+        <dd>One id threads every step of a long-running saga, so its completion, compensation, and timeout handlers all know which instance they belong to.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Lets one channel or queue carry many concurrent conversations without cross-talk between them.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Replies can arrive in any order, or interleaved with unrelated traffic, and still land on the right pending request.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Costs almost nothing to add — one extra header field, copied verbatim at every hop.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Extends directly into distributed tracing: the same mechanism stitches a whole multi-service call into one story.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Every hop must copy the id correctly — one component that drops or regenerates it silently breaks the chain.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">The requestor must track pending correlation ids itself, with timeouts, or a reply that never arrives leaks memory forever.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">A collision or an accidentally reused id attributes a reply to the wrong requestor.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">It only marks messages as related — it provides no ordering and no guarantee that every expected reply actually arrived.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Multiple requests are in flight at once over the same asynchronous channel or queue.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Replies can arrive out of order, or interleaved with unrelated messages, and still must land on the right caller.</li>
+            <li id="usage-when-3" data-kb-polarity="when">One logical operation spans several services or processes and needs to be traced as a single unit.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The exchange is a synchronous request/reply call — the open connection already correlates request and response for free.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Only one request is ever outstanding at a time, so there's nothing to disambiguate.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">You need the workflow around the correlated messages managed, not just the matching — reach for <a href="./scatter-gather.html">Scatter-Gather</a> or <a href="../distributed/coordination/saga.html">Saga</a>.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — matching replies to pending requests</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface Reply { correlationId: string; payload: unknown; }
+
+class CorrelatingClient {
+  private pending = new Map&lt;string, (reply: Reply) =&gt; void&gt;();
+
+  async request(payload: unknown): Promise&lt;Reply&gt; {
+    const correlationId = crypto.randomUUID();
+    return new Promise&lt;Reply&gt;((resolve) =&gt; {
+      this.pending.set(correlationId, resolve);
+      channel.send({ correlationId, payload });
+    });
+  }
+
+  // Called whenever a message arrives on the reply channel.
+  onMessage(msg: Reply) {
+    const resolve = this.pending.get(msg.correlationId);
+    if (!resolve) return; // unknown, late, or already-handled reply
+    this.pending.delete(msg.correlationId);
+    resolve(msg);
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="w3c-trace-context"><strong>W3C Trace Context</strong><span>Standardizes the traceparent header — version, 16-byte trace-id, 8-byte span-id, and flags — plus a tracestate header for vendor data, so every service in a call chain propagates one trace id that joins otherwise unrelated spans into a single trace.</span></div>
+        <div class="wild-item" data-kb-example="jms-correlation-id"><strong>JMS JMSCorrelationID</strong><span>A standard JMS header the responder copies from the request into the reply so the requestor can match it against its pending calls; typically paired with JMSReplyTo, which names the queue the reply should return on.</span></div>
+        <div class="wild-item" data-kb-example="amqp-correlation-id"><strong>AMQP correlation_id</strong><span>A dedicated message property carried alongside reply_to; the RabbitMQ RPC tutorial documents using the two together to implement request/reply over queues, the responder echoing the correlation_id back on the reply-to queue.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Pending-request timeout</strong> — How long the requestor keeps a correlation entry waiting for its reply before expiring it and reclaiming the memory — the guard against a never-arriving reply leaking state.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>ID generation scheme</strong> — Random UUID versus a reused business key; determines collision resistance when many conversations are in flight on one channel at once.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Propagation header</strong> — The specific header that carries the id (traceparent, X-Request-Id, JMSCorrelationID) — every hop must read it and re-emit it unchanged for the chain to hold.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Outstanding pending correlations</strong> — Size of the requestor pending map; steady growth means replies that never arrive are leaking entries.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Unmatched reply rate</strong> — Replies whose correlation id has no pending entry — late, unknown, or an id that was dropped or regenerated somewhere upstream.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Request-to-reply latency</strong> — Time from stamping the id on a request to matching its reply, measured per correlation.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Leaked pending entries</strong> — A reply that never arrives, with no timeout on the pending map, grows the requestor state without bound.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Dropped or regenerated id</strong> — One hop that fails to copy the id verbatim breaks the chain, and every reply behind it becomes unmatchable.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Collision or reuse</strong> — A repeated or accidentally reused id attributes a reply to the wrong requestor — a silent, load-dependent mismatch.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Put a timeout on every pending correlation entry so a lost reply cannot leak memory forever.</li>
+            <li id="production-check-2" data-kb-polarity="check">Use a collision-resistant id (UUID) unless a business key is provably unique across concurrent conversations.</li>
+            <li id="production-check-3" data-kb-polarity="check">Assert the id is present on ingress and propagate it unchanged at every hop.</li>
+            <li id="production-check-4" data-kb-polarity="check">Bound or monitor the size of the pending-correlation map.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="scatter-gather"><a href="./scatter-gather.html">Scatter-Gather</a><span class="rel-note">Correlate responses back to the request</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="saga"><a href="../distributed/coordination/saga.html">Saga</a><span class="rel-note">Correlate the steps of one saga</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="chatgpt"><a href="../../designs/chatgpt.html">ChatGPT</a><span class="rel-note">the runId is the correlation identifier that ties asynchronous token output back to its originating request across a fully decoupled path</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="persona-identification"><a href="../../designs/persona-identification.html">Persona Identification &amp; Sanction Check</a><span class="rel-note">one flowId threading a persona-verification saga's vendor calls, logs, and webhook payload end to end</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    CI["Correlation Identifier"]
+    CI --- SG["Scatter-Gather"]
+    CI --- SA["Saga"]
+    click SG "./scatter-gather.html"
+    click SA "../distributed/coordination/saga.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="observability"><a href="../../themes/observability.html">Observability</a><span>Stitch one request across services</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./dead-letter-channel.html">&larr; Dead Letter Channel</a>
+      <a class="up" href="../../index.html">&uarr; The Map</a>
+      <a class="next" href="./scatter-gather.html">Scatter-Gather &rarr;</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

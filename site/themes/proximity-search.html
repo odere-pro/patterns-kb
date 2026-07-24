@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proximity Search · Patterns</title>
+  <meta name="description" content="Answering 'what is near this location' without scanning everything: a spatial tree or an encoded cell key, always finished with an exact-distance post-filter.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#proximity-search",
+  "identifier": "proximity-search",
+  "name": "Proximity Search",
+  "description": "Answering 'what is near this location' without scanning everything",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "theme",
+  "kb:band": "theme",
+  "kb:group": "theme",
+  "kb:tours": [
+    {
+      "@id": "../patterns/distributed/routing/geohash.html#geohash",
+      "name": "Geohash",
+      "kb:role": "Encode space into a sortable key so a plain index answers nearby"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:role": "Partition the space by region or prefix so each shard owns an area"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc theme">
+  <main class="doc-wrap" data-kb-id="proximity-search" data-kb-kind="theme" data-kb-band="theme" data-kb-group="theme" data-kb-essence="Answering 'what is near this location' without scanning everything" data-kb-order="14" data-kb-aliases="[&quot;geospatial search&quot;,&quot;nearby search&quot;]" data-kb-tags="[&quot;read-optimization&quot;,&quot;data-modeling&quot;,&quot;latency&quot;,&quot;scalability&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#themes-h">Themes</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Proximity Search</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Theme</p>
+      <h1 class="doc-title">Proximity Search</h1>
+      <p class="doc-essence">A one-dimensional index cannot preserve two-dimensional adjacency, so "what is near here" is answered one of two ways — walk a true spatial tree, or encode space into sortable keys — and either way it finishes with an exact-distance post-filter over a small candidate set. This is the lens for choosing between those families and the patterns that carry them.</p>
+      <div class="doc-metarow">
+        <span class="badge">Theme</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="proximity-search">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="framing" aria-labelledby="h-framing" data-kb-block="framing">
+      <h2 class="doc-h" id="h-framing">The question</h2>
+      <div class="prose">
+        <p>Proximity search means querying by <em>location</em> rather than by id or exact value: the nearest available driver, restaurants within two kilometres, friends near me right now. It is a recurring system-design problem — "design Uber", "design Yelp", "find nearby" — and it is harder than it looks, because the index you already trust quietly fails at it.</p>
+        <p>A range query on one sorted column — users aged 20 to 25 — is cheap on a B-tree: the keys are physically ordered and packed onto adjacent disk pages, so the answer is one seek and a short sequential read. Distance is not like that. It depends on latitude and longitude <strong>jointly</strong>. Index latitude alone and you select a horizontal band across the whole planet; a composite <code>(lat, lon)</code> index still orders primarily by the first column and only tie-breaks on the second, so it is effectively still a one-dimensional sort — the band it returns holds millions of unranked rows, and you are back to computing distance on every one. The root cause is unavoidable: <strong>a one-dimensional sort order cannot preserve two-dimensional adjacency</strong>. Two points next to each other on the map can land far apart in the index.</p>
+        <p>So there are two families of answers — build a data structure that natively understands two dimensions (a spatial tree), or flatten location into a single sortable key an ordinary index can use (an encoded cell). And there is one rule that holds no matter which you pick: the spatial index never returns the final answer. It shrinks "scan everything" down to a small candidate set; exact distance or geometry math on that set produces the real result. <strong>You always post-filter.</strong></p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradespace" aria-labelledby="h-tradespace" data-kb-block="tradespace">
+      <h2 class="doc-h" id="h-tradespace">The trade-space</h2>
+      <div class="prose">
+        <p>The two families divide by the <strong>shape of the data</strong>. Geometric data — polygons, roads, delivery zones, where you ask containment and intersection questions — wants a spatial tree. Point data that updates constantly — drivers, live users, devices — wants an encoded cell on an ordinary index.</p>
+        <p><strong>Spatial trees</strong> are purpose-built structures reshaped to behave like a B-tree on disk: balanced, page-sized nodes, predictable depth. They come as a progression, each fixing the previous one's flaw. A <strong>quadtree</strong> recursively splits each overfull cell into four quadrants, so it adapts to density — a dense city subdivides deeply while open ocean stays one coarse cell — but it always cuts at the geometric midpoint regardless of where the data actually sits, so its depth (and latency) is location-dependent, and as a pointer-chasing structure it goes disk-bound at scale. It stays excellent in memory (map tiles, game collision detection). A <strong>k-d tree</strong> fixes the balance problem by alternating the split axis per level and cutting at the <em>median point</em> rather than the midpoint, staying balanced at depth about log n regardless of skew; its <strong>BKD (block k-d) tree</strong> variant groups points into page-sized blocks built once in a batch — effectively write-once, a real constraint for data that moves. Elasticsearch's geo fields are built on a BKD tree. The <strong>R-tree</strong> was the first spatial index designed from scratch for on-disk database use: it wraps every object — a point, a highway, a county polygon — in a Minimum Bounding Rectangle, nests nearby rectangles under larger ones, and keeps every leaf at the same depth like a B-tree. That is what lets it answer true geometry: is this address inside this delivery zone, does this road cross this county. Its rectangles can <em>overlap</em>, so a query point inside two boxes forces descending both subtrees; the <strong>R*-tree</strong> refines the insertion heuristic to minimise that overlap and is the basis of most real implementations. PostGIS builds its spatial index on Postgres's GiST framework, giving R-tree-style bounding-box behaviour over points, lines, and polygons alike.</p>
+        <p><strong>Encoded cells</strong> skip the custom tree entirely: convert <code>(lat, lon)</code> into one sortable cell id and use it with a plain existing index, reusing infrastructure every database already ships. <strong>Geohash</strong> threads a space-filling curve through 2-D space and flattens each point to a short base-32 string, so a shared prefix means the same cell and a "nearby" query is a prefix or range scan; Redis stores it as a 52-bit integer on a sorted-set score. <strong>S2</strong> (Google) answers geohash's biggest weakness — a flat lat/lon grid distorts cell area badly by latitude — by projecting the sphere onto the six faces of a cube along a Hilbert curve, giving roughly uniform-area cells and 64-bit hierarchical ids; it backs MongoDB's <code>2dsphere</code> index. <strong>H3</strong> (Uber) uses hexagonal cells, whose six neighbours are all roughly equidistant — cleaner for "N rings out" queries and heatmap analytics — and is used operationally for dispatch and surge. Their shared virtue is cheap writes: a moving driver's location update is a single small key write, which scales to enormous update rates.</p>
+        <p>Two things are present no matter which family you choose. First, the <strong>exact-distance post-filter</strong>: the index gives candidates, never answers, so you always finish with real distance or geometry math on the small set. Second, the <strong>cell-boundary problem</strong>: a point near the edge of its cell has near neighbours sitting in adjacent cells, so a correct query scans a <em>ring</em> of neighbouring cells — the 3×3 ring for a grid scheme — rather than a single exact cell. Encoded cells are also effectively points-only; representing a shape still calls for a tree.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tour" aria-labelledby="h-tour" data-kb-block="tour">
+      <h2 class="doc-h" id="h-tour">Patterns that carry the load</h2>
+      <div class="tour">
+        <div class="tour-step" data-kb-member="geohash" data-kb-role="Encode space into a sortable key so a plain index answers nearby">
+          <h3><a href="../patterns/distributed/routing/geohash.html">Geohash</a></h3>
+          <p>The encoded-cell answer. Flatten each point to a short, prefix-sortable key so nearest-neighbour becomes a range scan on the B-tree or sorted set you already have — at the cost of scanning the 3×3 ring of neighbouring cells and post-filtering by exact distance. Its cheap single-key writes make it the natural home for constantly moving points, and S2 and H3 are the same idea with uniform-area or hexagonal cells.</p>
+        </div>
+        <div class="tour-step" data-kb-member="sharding" data-kb-role="Partition the space by region or prefix so each shard owns an area">
+          <h3><a href="../patterns/distributed/routing/sharding.html">Sharding</a></h3>
+          <p>At scale one node cannot hold the whole map or absorb every location update. Partition the space itself — by geohash prefix or by region — so nearby points colocate on the same shard and a local-area query touches one shard instead of fanning out to all of them. An encoded cell key doubles as a locality-preserving shard key, which is exactly what keeps proximity queries local.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="decide" aria-labelledby="h-decide" data-kb-block="decide">
+      <h2 class="doc-h" id="h-decide">How to decide</h2>
+      <div class="table-scroll">
+        <table class="decision">
+          <thead>
+            <tr><th>If your situation is…</th><th>Reach for</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Points that move constantly (drivers, live users), huge update rate</td><td>Encoded cells — <a href="../patterns/distributed/routing/geohash.html">geohash</a> / S2 / H3 on an ordinary index</td><td>Each update is one small key write; candidate generation is a prefix or ring scan</td></tr>
+            <tr><td>Point-and-radius "what is within N km" on a key-value store</td><td>Geohash on a sorted set (e.g. Redis geo)</td><td>Reuses the index you already run; scan the 3×3 ring, then post-filter</td></tr>
+            <tr><td>Polygon containment or line intersection ("is this inside the zone")</td><td>Spatial tree — R-tree via PostGIS / GiST</td><td>Only trees represent shapes and answer containment and intersection</td></tr>
+            <tr><td>Static or DB-managed geometry, mixed points, lines, polygons</td><td>R-tree (PostGIS) or BKD (Elasticsearch)</td><td>Balanced on-disk index built for shapes; BKD is essentially write-once</td></tr>
+            <tr><td>Uniform cell area across latitudes, "N rings out" analytics</td><td>S2 (uniform area) or H3 (hexagonal rings)</td><td>Flat geohash cells distort by latitude; hexagons give equidistant neighbours</td></tr>
+            <tr><td>The location index outgrows one node</td><td><a href="../patterns/distributed/routing/sharding.html">Shard</a> the space by region or geohash prefix</td><td>Colocate nearby points so a local-area query stays on one shard</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose">
+        <p>Every row still ends the same way: the index narrows to a candidate set, and an exact-distance or exact-geometry check produces the answer. The mnemonic worth carrying: <strong>a spatial tree for shapes, encoded cells for moving points, and always post-filter.</strong> In an interview, being able to explain <em>why</em> a plain index fails on raw latitude and longitude, and reasoning the trade-offs aloud, matters more than naming the exact cell system.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="siblings" aria-labelledby="h-siblings" data-kb-block="siblings">
+      <h2 class="doc-h" id="h-siblings">Related areas</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="./scalability.html">Scalability</a><span>Sharding and replicating the location index is what keeps proximity search working across millions of constantly moving points.</span></div>
+        <div class="fluency-item"><a href="./performance.html">Performance</a><span>The whole game is turning a full scan into a small candidate set — proximity search is a read-optimisation problem at heart.</span></div>
+        <div class="fluency-item"><a href="./system-design-interview.html">System Design Interview</a><span>"Design Uber", "design Yelp", "find nearby" are recurring prompts, and this is the toolkit for answering them.</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#themes-h">← Themes</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#themes-h">Themes →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

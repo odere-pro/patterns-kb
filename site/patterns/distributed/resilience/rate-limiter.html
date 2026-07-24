@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rate Limiter · Patterns</title>
+  <meta name="description" content="Rate Limiter — caps how many requests a client can make in a time window, shedding the rest to protect shared capacity.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#rate-limiter",
+  "identifier": "rate-limiter",
+  "name": "Rate Limiter",
+  "description": "Caps how many requests a client can make in a window",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-resilience",
+  "kb:combines-with": [
+    {
+      "@id": "../routing/api-gateway.html#api-gateway",
+      "name": "API Gateway",
+      "kb:note": "The gateway is where limits are usually enforced"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "./load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "Shed excess vs. buffer it"
+    }
+  ],
+  "kb:has-variant": [
+    {
+      "@id": "./token-bucket.html#token-bucket",
+      "name": "Token Bucket",
+      "kb:note": "Token- and leaky-bucket are the classic algorithms"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "./bulkhead.html#bulkhead",
+      "name": "Bulkhead",
+      "kb:note": "Isolate resources vs. cap request rate"
+    },
+    {
+      "@id": "../../concurrency/backpressure.html#backpressure",
+      "name": "Backpressure",
+      "kb:note": "Reject over-rate vs. ask upstream to slow"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/distributed-rate-limiter.html#distributed-rate-limiter",
+      "name": "Distributed Rate Limiter",
+      "kb:note": "shows the pattern's mechanics realised across a gateway fleet: identify client, check quota, reject overflow with headers"
+    },
+    {
+      "@id": "../../../designs/web-crawler.html#web-crawler",
+      "name": "Web Crawler",
+      "kb:note": "per-domain request rate is bounded to keep the crawler a polite guest on every site"
+    },
+    {
+      "@id": "../../../designs/chatgpt.html#chatgpt",
+      "name": "ChatGPT",
+      "kb:note": "admission control keyed to a per-user budget is a rate limiter deliberately measuring the resource that actually costs money"
+    },
+    {
+      "@id": "../../../designs/camelcamelcamel.html#camelcamelcamel",
+      "name": "CamelCamelCamel",
+      "kb:note": "respecting the ~1 req/sec/IP ceiling on outbound crawling is the rate limit that shapes the entire system"
+    },
+    {
+      "@id": "../../../designs/persona-identification.html#persona-identification",
+      "name": "Persona Identification & Sanction Check",
+      "kb:note": "capping a client's request rate on a persona-verification API so one client cannot exhaust a shared vendor quota"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/system-design-interview.html#system-design-interview",
+      "name": "System Design Interview",
+      "kb:role": "Protect the system from overload"
+    },
+    {
+      "@id": "../../../themes/spike-handling.html#spike-handling",
+      "name": "Handling Spikes",
+      "kb:role": "Shed load above a safe rate"
+    },
+    {
+      "@id": "../../../themes/api-design.html#api-design",
+      "name": "API Design",
+      "kb:role": "Cap what any one caller can consume so the boundary stays fair"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="rate-limiter" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-resilience" data-kb-essence="Caps how many requests a client can make in a window" data-kb-order="52" data-kb-aliases="[&quot;throttling&quot;,&quot;throttle&quot;]" data-kb-tags="[&quot;backpressure&quot;,&quot;resilience&quot;]" data-kb-solves="[&quot;one client is making thousands of calls a second and starving everyone else&quot;,&quot;a buggy script stuck in a loop took down our api overnight&quot;,&quot;we burned through our paid quota on a third-party api in two days&quot;,&quot;i need free users capped at a hundred calls an hour but cannot enforce it across servers&quot;,&quot;scrapers keep pounding my endpoints and driving database load through the roof&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Resilience</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Rate Limiter</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Resilience</p>
+      <h1 class="doc-title">Rate Limiter</h1>
+      <p class="doc-essence">Caps how many requests a client can make in a fixed window, rejecting or delaying the rest so no single caller can overrun shared capacity.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Resilience</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="rate-limiter">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>rate limiter</strong> caps how many requests a caller — an API key, a user, an IP address, a downstream service — may make within a fixed time window. Cross the limit and the excess is turned away, typically with an HTTP <code>429 Too Many Requests</code> and a <code>Retry-After</code> header telling the caller when it's safe to try again.</p>
+        <p>The force it resolves is finite, shared capacity. A database, a paid third-party API with a quota, a compute cluster — all have a ceiling well below what every client combined could throw at them. Without a cap, one noisy client, a runaway retry loop, or an ordinary traffic spike can starve every other consumer and drag the whole system down with it.</p>
+        <p>It's deliberately a <em>shedding</em> strategy, not an absorbing one — the excess is dropped, not queued. That's what separates it from <a href="./load-leveling.html">Queue-Based Load Leveling</a>, which buffers the overflow instead of rejecting it, and from <a href="../../concurrency/backpressure.html">Backpressure</a>, which asks the upstream caller to slow down cooperatively rather than refusing it outright.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    Req["Request arrives"] --> Bucket{"Token available?"}
+    Bucket -->|yes| Allow["Consume token, forward request"]
+    Bucket -->|no| Deny["Reject, 429 plus Retry-After"]
+    Refill["Refiller adds tokens on schedule"] --> Bucket
+        </pre>
+        <figcaption>A token bucket in action. Each request spends one token if one is available; refills happen continuously on their own schedule, independent of request arrival.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Token Bucket</dt>
+        <dd>Tokens accumulate at a fixed rate up to a cap; each request spends one, so bursts up to the bucket size are allowed as long as tokens remain.</dd>
+        <dt id="variations-item-2">Leaky Bucket</dt>
+        <dd>Requests queue and drain at a constant rate instead of bursting through — it smooths traffic into a steady outflow rather than admitting spikes.</dd>
+        <dt id="variations-item-3">Fixed window counter</dt>
+        <dd>Count requests per key inside a whole-second or whole-minute window. Simple, but a burst straddling the window boundary can momentarily double the intended rate.</dd>
+        <dt id="variations-item-4">Sliding window (log or counter)</dt>
+        <dd>Weight the current and previous window by elapsed time, or keep a rolling log of timestamps, to smooth out the boundary problem at some extra memory cost.</dd>
+        <dt id="variations-item-5">Distributed rate limiting</dt>
+        <dd>Back the counter with a shared store — Redis, Memcached — so the limit holds across a fleet of instances instead of resetting per process.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Protects shared capacity from being monopolized by one noisy or abusive client.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Keeps load on downstream systems and databases predictable and bounded.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Cheap to implement and reason about — a counter, a clock, and a key.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Gives callers an explicit, machine-readable signal to back off instead of silent failure.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Legitimate bursts get rejected right alongside abusive ones unless tuned carefully.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Per-instance counters miscount without a shared store, so distributed enforcement needs infrastructure.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Choosing window size and rate is a tuning exercise, not a fixed answer.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">A hard cap turns a rare spike into visible errors rather than degraded-but-working service.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">A shared resource — an API, a database, a downstream service — must survive noisy or abusive clients.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You need to enforce a fair-use policy or a paid-tier quota.</li>
+            <li id="usage-when-3" data-kb-polarity="when">Predictable load matters more than accepting every request that arrives.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">You need to absorb bursts rather than reject them — a <a href="./load-leveling.html">queue</a> buffers, a limiter sheds.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The bottleneck is concurrent work in flight, not request rate — isolate it with a <a href="./bulkhead.html">Bulkhead</a> instead.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The caller can be told to slow down cooperatively — that's <a href="../../concurrency/backpressure.html">Backpressure</a>, not a hard cap.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a per-key token bucket</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">class TokenBucket {
+  private tokens: number;
+  private last = Date.now();
+
+  constructor(private capacity: number, private refillPerSec: number) {
+    this.tokens = capacity;
+  }
+
+  private refill() {
+    const now = Date.now();
+    const elapsed = (now - this.last) / 1000;
+    this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.refillPerSec);
+    this.last = now;
+  }
+
+  tryConsume(cost = 1): boolean {
+    this.refill();
+    if (this.tokens &lt; cost) return false;
+    this.tokens -= cost;
+    return true;
+  }
+}
+
+// One bucket per API key
+const buckets = new Map&lt;string, TokenBucket&gt;();
+function limiterFor(key: string): TokenBucket {
+  let b = buckets.get(key);
+  if (!b) buckets.set(key, (b = new TokenBucket(100, 10))); // burst 100, refill 10/s
+  return b;
+}
+
+if (!limiterFor(apiKey).tryConsume()) {
+  throw new Error("429 Too Many Requests");
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="nginx"><strong>NGINX</strong><span>The limit_req module applies a leaky bucket per key defined by limit_req_zone (commonly client IP): the burst parameter sets how many excess requests may queue, nodelay serves them immediately up to that burst, and limit_req_status sets the rejection code (503 by default).</span></div>
+        <div class="wild-item" data-kb-example="envoy"><strong>Envoy</strong><span>A local token-bucket filter enforces per-route limits in-process, while the global rate-limit service — a gRPC endpoint (the reference implementation is backed by Redis) — evaluates request descriptors so a limit holds across the fleet at the edge or between services.</span></div>
+        <div class="wild-item" data-kb-example="stripe-api"><strong>Stripe API</strong><span>Caps requests per second per account and answers over-rate callers with HTTP 429 Too Many Requests, documenting exponential backoff as the client's expected response.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Rate and window</strong> — The allowed requests per unit time per key — the ceiling itself (limit_req rate, requests/second).</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Burst / bucket capacity</strong> — How much accumulated allowance a caller may spend at once (token-bucket capacity, NGINX burst) — sized to admit legitimate bursts without breaching the sustained rate.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Key dimension</strong> — What the limit is counted against — API key, authenticated user, client IP, or route. IP alone is shared behind NAT and easy to rotate.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Algorithm</strong> — Token bucket (allows bursts), leaky bucket (smooths to a steady outflow), or sliding window (avoids the fixed-window boundary spike).</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Reject behavior</strong> — The response for over-rate callers — status code (429 or a configured status), a Retry-After header, or delaying rather than dropping.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Throttle / rejection rate</strong> — The fraction of requests turned away (429s) per key — distinguishes one abusive caller from a fleet-wide cap set too low.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Counter-store latency and availability</strong> — When the limiter is backed by a shared store like Redis, that store is on every request path; its latency and uptime become the limiter's.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Utilization against the limit</strong> — How close each key runs to its cap — the signal for whether limits are too tight or have headroom.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Fixed-window boundary burst</strong> — A burst straddling the edge of a fixed window can admit up to twice the intended rate in a short span.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Per-instance undercount</strong> — Without a shared store each instance counts independently, so the effective fleet-wide limit is the configured one times the number of instances.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Shared store on the critical path</strong> — A central counter store is a single point of latency and failure; when it is unreachable you must have decided in advance whether to fail open (admit all) or closed (reject all).</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Clock skew across instances</strong> — Windows keyed on wall-clock time drift apart across hosts with unsynchronized clocks, mistiming resets.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Choose the key dimension deliberately — IP alone is shared behind NAT and easy to rotate.</li>
+            <li id="production-check-2" data-kb-polarity="check">Back the counter with a shared store for fleet-wide enforcement, and decide fail-open versus fail-closed when it is down.</li>
+            <li id="production-check-3" data-kb-polarity="check">Return 429 with a Retry-After header so clients can back off instead of hammering.</li>
+            <li id="production-check-4" data-kb-polarity="check">Size the burst allowance to admit legitimate bursts, not just the steady rate.</li>
+            <li id="production-check-5" data-kb-polarity="check">Load-test the boundary behavior of the chosen algorithm before relying on it.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="api-gateway"><a href="../routing/api-gateway.html">API Gateway</a><span class="rel-note">The gateway is where limits are usually enforced</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="load-leveling"><a href="./load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">Shed excess vs. buffer it</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Has variant</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="has-variant" data-kb-to="token-bucket"><span>Token Bucket</span><span class="rel-note">Token- and leaky-bucket are the classic algorithms</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="bulkhead"><a href="./bulkhead.html">Bulkhead</a><span class="rel-note">Isolate resources vs. cap request rate</span></div>
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="backpressure"><a href="../../concurrency/backpressure.html">Backpressure</a><span class="rel-note">Reject over-rate vs. ask upstream to slow</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="distributed-rate-limiter"><a href="../../../designs/distributed-rate-limiter.html">Distributed Rate Limiter</a><span class="rel-note">shows the pattern's mechanics realised across a gateway fleet: identify client, check quota, reject overflow with headers</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="web-crawler"><a href="../../../designs/web-crawler.html">Web Crawler</a><span class="rel-note">per-domain request rate is bounded to keep the crawler a polite guest on every site</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="chatgpt"><a href="../../../designs/chatgpt.html">ChatGPT</a><span class="rel-note">admission control keyed to a per-user budget is a rate limiter deliberately measuring the resource that actually costs money</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="camelcamelcamel"><a href="../../../designs/camelcamelcamel.html">CamelCamelCamel</a><span class="rel-note">respecting the ~1 req/sec/IP ceiling on outbound crawling is the rate limit that shapes the entire system</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="persona-identification"><a href="../../../designs/persona-identification.html">Persona Identification &amp; Sanction Check</a><span class="rel-note">capping a client's request rate on a persona-verification API so one client cannot exhaust a shared vendor quota</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    RL["Rate Limiter"]
+    RL --- BH["Bulkhead"]
+    RL --- AG["API Gateway"]
+    RL --- BP["Backpressure"]
+    RL --- QL["Queue-Based Load Leveling"]
+    click BH "./bulkhead.html"
+    click AG "../routing/api-gateway.html"
+    click BP "../../concurrency/backpressure.html"
+    click QL "./load-leveling.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="system-design-interview"><a href="../../../themes/system-design-interview.html">System Design Interview</a><span>Protect the system from overload</span></div>
+        <div class="fluency-item" data-kb-theme="spike-handling"><a href="../../../themes/spike-handling.html">Handling Spikes</a><span>Shed load above a safe rate</span></div>
+        <div class="fluency-item" data-kb-theme="api-design"><a href="../../../themes/api-design.html">API Design</a><span>Cap what any one caller can consume so the boundary stays fair</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./load-leveling.html">&larr; Queue-Based Load Leveling</a>
+      <a class="up" href="../../../index.html">&uarr; The Map</a>
+      <a class="next" href="./timeout-deadline.html">Timeout / Deadline &rarr;</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

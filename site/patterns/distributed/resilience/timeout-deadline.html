@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Timeout / Deadline · Patterns</title>
+  <meta name="description" content="Timeout / Deadline — caps how long a call may take before giving up, and bounds an entire chain of calls to one shared budget.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#timeout-deadline",
+  "identifier": "timeout-deadline",
+  "name": "Timeout / Deadline",
+  "description": "Caps how long a call may take before giving up",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-resilience",
+  "kb:combines-with": [
+    {
+      "@id": "./retry-backoff.html#retry-backoff",
+      "name": "Retry with Backoff",
+      "kb:note": "Bound the attempt, then decide to retry"
+    }
+  ],
+  "kb:enables": [
+    {
+      "@id": "./circuit-breaker.html#circuit-breaker",
+      "name": "Circuit Breaker",
+      "kb:note": "You can't trip on slowness without timeouts"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../../hazards/deadlock.html#deadlock",
+      "name": "Deadlock",
+      "kb:note": "A lock-acquisition timeout breaks an otherwise indefinite circular wait"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/leetcode.html#leetcode",
+      "name": "LeetCode",
+      "kb:note": "a bounded deadline caps work that could otherwise run forever and pin a core"
+    },
+    {
+      "@id": "../../../designs/payment-system.html#payment-system",
+      "name": "Payment System",
+      "kb:note": "payments illustrate the subtlety that a deadline expiring means 'unknown', not 'did not happen'"
+    },
+    {
+      "@id": "../../../designs/persona-identification.html#persona-identification",
+      "name": "Persona Identification & Sanction Check",
+      "kb:note": "bounding an ID-verification and a sanction-check call that publish no latency guarantee of their own"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/resilience.html#resilience",
+      "name": "Resilience",
+      "kb:role": "Never wait forever"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="timeout-deadline" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-resilience" data-kb-essence="Caps how long a call may take before giving up" data-kb-order="53" data-kb-tags="[&quot;resilience&quot;,&quot;latency&quot;,&quot;resource-management&quot;]" data-kb-solves="[&quot;my request just hangs forever and never comes back&quot;,&quot;a stuck call is holding a connection open and now the pool is dry&quot;,&quot;the user waited nine seconds because three chained services each waited three&quot;,&quot;one slow backend makes the entire page take forever to load&quot;,&quot;i promise a two second response but nothing in my code actually enforces it&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Resilience</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Timeout / Deadline</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Resilience</p>
+      <h1 class="doc-title">Timeout / Deadline</h1>
+      <p class="doc-essence">Caps how long any single call may run, and lets a deadline bound an entire chain of calls to one shared budget, so a caller gives up cleanly instead of waiting forever.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Resilience</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="timeout-deadline">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>timeout</strong> bounds how long one operation is allowed to take before the caller gives up and treats it as failed. A <strong>deadline</strong> bounds something larger: an absolute point in time — computed once and propagated across however many hops a request makes — that every downstream call must respect regardless of how it got there. A timeout answers <em>how long is this attempt allowed to run</em>; a deadline answers <em>how much time is left for the whole thing</em>.</p>
+        <p>The force behind both is the same: nothing in a distributed system is guaranteed to respond, and a caller that waits unconditionally on the network is at the mercy of whatever it called. A hung dependency ties up a thread, a socket, or a connection-pool slot for as long as the caller is willing to wait — which, unbounded, is forever. Multiply that across enough concurrent requests and the caller exhausts its own resources waiting on someone else's problem, before it ever gets the chance to report an error.</p>
+        <p>Propagation is what turns isolated timeouts into a real deadline. If each hop in a call chain sets its own fresh timeout, a client-side budget of 500 ms can balloon into seconds once three services each wait out their full allotment before giving up. Passing the <em>remaining</em> budget forward — as a context value, a gRPC deadline, an HTTP header — lets every hop shrink its own timeout to whatever time is actually left, so the total latency the caller experiences is capped exactly once, at the top.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant C as Caller
+    participant A as Service A
+    participant B as Service B
+    C->>A: call, deadline 500ms from now
+    A->>B: forward, budget now 320ms
+    Note over B: budget expires before reply
+    B->>A: deadline exceeded
+    A->>C: deadline exceeded, abort
+        </pre>
+        <figcaption>A deadline set once at the top shrinks as it's forwarded through each hop. Whichever hop is still working when the budget hits zero aborts, and the error propagates straight back to the caller.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Timeout vs. deadline</dt>
+        <dd>A timeout resets with every retry; a deadline does not — three retries at a 200 ms timeout can burn 600 ms even though the caller only budgeted 300 ms total.</dd>
+        <dt id="variations-item-2">Absolute vs. relative deadline</dt>
+        <dd>Propagate a fixed wall-clock instant rather than a duration, so clock skew and processing delay between hops don't silently eat into the remaining budget.</dd>
+        <dt id="variations-item-3">Idle vs. total timeout</dt>
+        <dd>An idle timeout bounds the gap between bytes on a connection; a total timeout bounds the whole operation — a slow trickle can satisfy the first while blowing through the second.</dd>
+        <dt id="variations-item-4">Deadline propagation mechanisms</dt>
+        <dd>Carried as a context value, a gRPC deadline, or an HTTP header, so every service in the chain enforces the same shared clock instead of inventing its own.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Guarantees no caller waits indefinitely on a hung or unresponsive dependency.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Frees the thread, socket, or connection-pool slot a stuck call would otherwise hold hostage.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Propagated end-to-end, it caps the total latency of an entire call chain, not just one hop.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Costs almost nothing to add — one value threaded through calls, no new infrastructure.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Set too tight, it aborts calls that would have succeeded a moment later.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Set too loose, it barely helps — the resource exhaustion it's meant to prevent still has time to happen.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Without propagation, each hop's fresh timeout can multiply total wait time far past what the caller intended.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">A timeout only tells you the caller gave up — the remote side may have already committed the work.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Any call crosses a process, network, or disk boundary and could hang or run unexpectedly long.</li>
+            <li id="usage-when-2" data-kb-polarity="when">A request fans out across several chained services that should share one latency budget.</li>
+            <li id="usage-when-3" data-kb-polarity="when">A stuck dependency could tie up your own threads, sockets, or connection-pool slots.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The operation is local, in-process, and bounded by nature — there's nothing to time out on.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The work is fire-and-forget with no caller waiting on the result — there's no one to give up on its behalf.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">You need the underlying work truly cancelled, not just ignored — pair it with real cancellation, or the call keeps running after you've stopped waiting on it.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a shrinking deadline shared across hops</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">class Deadline {
+  private readonly at: number;
+
+  constructor(ms: number) {
+    this.at = Date.now() + ms;
+  }
+
+  remaining(): number {
+    return Math.max(0, this.at - Date.now());
+  }
+
+  async run&lt;T&gt;(fn: (signal: AbortSignal) =&gt; Promise&lt;T&gt;): Promise&lt;T&gt; {
+    if (this.remaining() === 0) throw new Error("deadline already exceeded");
+    const controller = new AbortController();
+    const timer = setTimeout(() =&gt; controller.abort(), this.remaining());
+    try {
+      return await fn(controller.signal);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+// One deadline, propagated through every hop it makes.
+const deadline = new Deadline(500);
+await deadline.run(signal =&gt; fetchServiceA(signal));
+await deadline.run(signal =&gt; fetchServiceB(signal)); // shares what's left</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="grpc"><strong>gRPC</strong><span>Deadlines are first-class and absolute: the client sets one, it travels with the request as the grpc-timeout header, a server can read the time remaining from its context, and a breach surfaces as the DEADLINE_EXCEEDED status — propagating through chained calls when the context is forwarded.</span></div>
+        <div class="wild-item" data-kb-example="go-context"><strong>Go context</strong><span>context.WithTimeout and WithDeadline return a context whose Done channel closes when time runs out and whose Err reports context.DeadlineExceeded; threading it through a call tree gives every function a shared cancellation deadline to select on.</span></div>
+        <div class="wild-item" data-kb-example="envoy"><strong>Envoy</strong><span>A per-route timeout (default 15s) bounds the whole proxied request so a hung upstream cannot hold the connection open indefinitely; a separate per-try timeout bounds each retry attempt and an idle timeout reaps quiet connections.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Per-attempt timeout</strong> — The bound on a single call — how long this one attempt may run before the caller gives up and treats it as failed.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>End-to-end deadline / budget</strong> — An absolute time budget computed once at the top and propagated across every hop, so the total latency is capped exactly once rather than per hop.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Idle vs. total timeout</strong> — Separate dials for the gap between bytes on a connection (idle) and the whole operation (total) — a slow trickle can satisfy one while blowing through the other.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Propagation mechanism</strong> — How the remaining budget is carried forward — a gRPC deadline, a context value, or an HTTP header — so each hop shrinks its timeout to the time actually left.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Timeout rate</strong> — The fraction of calls aborted by hitting the timeout — rising when the limit is too tight or a dependency is degrading.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Latency headroom vs. the cutoff</strong> — How close p99/p99.9 latency runs to the timeout value; little headroom means normal slow calls are being aborted.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Resource occupancy</strong> — Threads, sockets, or connection-pool slots held waiting on in-flight calls — the resource an unbounded wait would exhaust.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Too tight</strong> — A timeout below real latency aborts calls that would have succeeded, converting slow responses into failures and often into extra retry load.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>No propagation</strong> — Without a shared deadline, each hop starts a fresh timeout and the waits stack, so the caller can wait far past the budget it set at the top.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Abandoned but still running</strong> — A timeout only stops the caller waiting; without real cancellation the remote side keeps working and may commit the operation after the caller gave up.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Clock skew on absolute deadlines</strong> — An absolute wall-clock deadline propagated across hosts with unsynchronized clocks can arrive early or late, mis-budgeting the remaining time.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Give every call that crosses a process, network, or disk boundary a timeout — no unbounded waits.</li>
+            <li id="production-check-2" data-kb-polarity="check">Propagate one end-to-end deadline and shrink each hop to the time remaining.</li>
+            <li id="production-check-3" data-kb-polarity="check">Pair the timeout with real cancellation so abandoned work actually stops.</li>
+            <li id="production-check-4" data-kb-polarity="check">Set the timeout from measured p99 latency with headroom, not a round guess.</li>
+            <li id="production-check-5" data-kb-polarity="check">Ensure retried attempts share the deadline rather than resetting it.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="retry-backoff"><a href="./retry-backoff.html">Retry with Backoff</a><span class="rel-note">Bound the attempt, then decide to retry</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="enables" data-kb-to="circuit-breaker"><a href="./circuit-breaker.html">Circuit Breaker</a><span class="rel-note">You can't trip on slowness without timeouts</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="deadlock"><a href="../../../hazards/deadlock.html">Deadlock</a><span class="rel-note">A lock-acquisition timeout breaks an otherwise indefinite circular wait</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="leetcode"><a href="../../../designs/leetcode.html">LeetCode</a><span class="rel-note">a bounded deadline caps work that could otherwise run forever and pin a core</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="payment-system"><a href="../../../designs/payment-system.html">Payment System</a><span class="rel-note">payments illustrate the subtlety that a deadline expiring means 'unknown', not 'did not happen'</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="persona-identification"><a href="../../../designs/persona-identification.html">Persona Identification &amp; Sanction Check</a><span class="rel-note">bounding an ID-verification and a sanction-check call that publish no latency guarantee of their own</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    TD["Timeout / Deadline"]
+    TD --- CB["Circuit Breaker"]
+    TD --- RB["Retry with Backoff"]
+    click CB "./circuit-breaker.html"
+    click RB "./retry-backoff.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Never wait forever</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./rate-limiter.html">← Rate Limiter</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../routing/api-gateway.html">API Gateway →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

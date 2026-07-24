@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Consistent Hashing · Patterns</title>
+  <meta name="description" content="Consistent Hashing — distributes keys across nodes so adding or removing one remaps only a thin slice of them.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#consistent-hashing",
+  "identifier": "consistent-hashing",
+  "name": "Consistent Hashing",
+  "description": "Distributes keys so adding a node reshuffles the least",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-routing",
+  "kb:combines-with": [
+    {
+      "@id": "./load-balancer.html#load-balancer",
+      "name": "Load Balancer",
+      "kb:note": "Hash to pin a client to an instance"
+    },
+    {
+      "@id": "../coordination/replication.html#replication",
+      "name": "Replication",
+      "kb:note": "Place primary and replicas around the ring"
+    },
+    {
+      "@id": "./cdn.html#cdn",
+      "name": "CDN",
+      "kb:note": "Edge nodes are chosen by hashing"
+    },
+    {
+      "@id": "../coordination/gossip-protocol.html#gossip-protocol",
+      "name": "Gossip Protocol",
+      "kb:note": "Gossip membership feeds the hash ring"
+    },
+    {
+      "@id": "../../caching/distributed-cache.html#distributed-cache",
+      "name": "Distributed Cache",
+      "kb:note": "Picks the owning cache node in a clustered cache"
+    }
+  ],
+  "kb:enables": [
+    {
+      "@id": "./sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "Consistent hashing is how shards are placed"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/design-distributed-cache.html#design-distributed-cache",
+      "name": "Distributed Cache",
+      "kb:note": "demonstrates the ring both distributing keys evenly and doubling as a client-side routing table"
+    },
+    {
+      "@id": "../../../designs/distributed-rate-limiter.html#distributed-rate-limiter",
+      "name": "Distributed Rate Limiter",
+      "kb:note": "keeps one client pinned to one node while spreading load, and limits key remapping when shards are added"
+    },
+    {
+      "@id": "../../../designs/tinder.html#tinder",
+      "name": "Tinder",
+      "kb:note": "consistent hashing keeps related swipes co-located as the Redis cluster scales horizontally"
+    },
+    {
+      "@id": "../../../designs/fb-live-comments.html#fb-live-comments",
+      "name": "Facebook Live Comments",
+      "kb:note": "hashing viewers by video id routes a stable subset of connections to each server and tolerates servers joining and leaving"
+    },
+    {
+      "@id": "../../../designs/google-docs.html#google-docs",
+      "name": "Google Docs",
+      "kb:note": "hash(documentId) maps keys onto a ring of nodes, keeping churn minimal when membership changes"
+    },
+    {
+      "@id": "../../../designs/online-chess.html#online-chess",
+      "name": "Online Chess",
+      "kb:note": "routing hundreds of thousands of stateful sessions with minimal reshuffling on scale-up or failure is exactly the job consistent hashing exists for"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/system-design-interview.html#system-design-interview",
+      "name": "System Design Interview",
+      "kb:role": "Pick a shard with minimal reshuffle"
+    },
+    {
+      "@id": "../../../themes/performance.html#performance",
+      "name": "Performance",
+      "kb:role": "Route to the node that already has the data warm"
+    },
+    {
+      "@id": "../../../themes/scalability.html#scalability",
+      "name": "Scalability",
+      "kb:role": "Place partitions with minimal reshuffle"
+    },
+    {
+      "@id": "../../../themes/realtime-updates.html#realtime-updates",
+      "name": "Real-Time Updates",
+      "kb:role": "Assign each connection to an owning server"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="consistent-hashing" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-routing" data-kb-essence="Distributes keys so adding a node reshuffles the least" data-kb-order="59" data-kb-aliases="[&quot;hash ring&quot;,&quot;ring hashing&quot;]" data-kb-tags="[&quot;partitioning&quot;,&quot;caching&quot;,&quot;scalability&quot;]" data-kb-solves="[&quot;adding one cache node made the entire cache go cold&quot;,&quot;our hit rate collapses every time the cluster is resized&quot;,&quot;going from eight nodes to nine moved almost every key to a different machine&quot;,&quot;we cannot add a machine without a maintenance window to reshuffle all the data&quot;,&quot;losing one node dumped its entire share of traffic onto a single neighbour&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Routing &amp; Scale</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Consistent Hashing</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Routing &amp; Scale</p>
+      <h1 class="doc-title">Consistent Hashing</h1>
+      <p class="doc-essence">Maps nodes and keys onto the same ring so that adding, removing, or resizing a node remaps only a thin slice of the keyspace — never all of it.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Routing &amp; Scale</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="consistent-hashing">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Consistent hashing</strong> maps both nodes and keys onto the same fixed circular space — hash each node's identity and each key onto a ring of, say, 0 to 2<sup>32</sup>-1, and assign a key to the first node found walking clockwise from its position. Because nodes and keys share one hash space, a node's arrival or departure only touches the keys between it and its neighbor on the ring; everything else stays exactly where it was.</p>
+        <p>The problem it resolves is the fragility of naive hashing. A scheme like <code>hash(key) % N</code> ties every key's location to the total node count <code>N</code>. Add or remove a single node and <code>N</code> changes, so nearly every key remaps to a different node in one step — a million-entry cache goes cold on a routine deploy, or a store re-shuffles almost all its data just to add one machine. Consistent hashing decouples placement from <code>N</code>: only the fraction of keys near the changed node ever moves.</p>
+        <p>A single ring position per physical node would still own an uneven, unpredictable arc, and losing that node dumps its whole arc onto one neighbor. Real implementations give each physical node many points on the ring — virtual nodes — so load smooths out across all neighbors and no single failure or join swings capacity too far in either direction.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    A["Node A"] --> B["Node B"]
+    B --> C["Node C"]
+    C --> A
+    K((Key hash)) -.owned by.-> B
+        </pre>
+        <figcaption>Nodes and keys share one ring. A key's hash lands between Node A and Node B; ownership goes to the first node clockwise, Node B.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Virtual nodes (vnodes)</dt>
+        <dd>Each physical node is hashed to dozens or hundreds of ring points instead of one, spreading its load across many neighbors and bounding the blast radius of any single node's churn.</dd>
+        <dt id="variations-item-2">Bounded-load consistent hashing</dt>
+        <dd>Caps any node at roughly (1 + &epsilon;) times the average load; requests that would push it past the cap fall through to the next node on the ring, trading a pure single-hash lookup for a fairness guarantee.</dd>
+        <dt id="variations-item-3">Rendezvous (highest random weight) hashing</dt>
+        <dd>Skips the ring entirely: compute a weight per node per key and take the max. No sorted structure to maintain, and membership changes remap just as few keys.</dd>
+        <dt id="variations-item-4">Jump consistent hash</dt>
+        <dd>A tiny, allocation-free function that maps a key to a bucket index in O(log n) time with no stored ring — at the cost of only supporting removal from the end of the bucket list, not from the middle.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Adding or removing a node remaps only about 1/N of keys, not the whole keyspace.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Lets a cluster scale horizontally without a coordinated full re-shard.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Underpins distributed caches, DHTs, and sharded databases at large scale.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">With virtual nodes, load stays even even as membership keeps changing.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">One ring point per node gives uneven load; fixing it with vnodes adds memory and lookup cost.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Ring lookup is O(log n) against a sorted structure, slower than O(1) modulo hashing.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Every node needs a consistent view of ring membership — a stale view means two nodes disagree about who owns a key.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Doesn't fix hot-key skew: one very popular key still overloads whichever single node owns it.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Nodes come and go — scaling, failures, rolling deploys — and you need placement to survive that.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Minimizing data movement or cache invalidation on membership change matters.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You're building a distributed cache, a DHT, a sharded store, or a load balancer that should stick clients to backends.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The node count is fixed and essentially never changes — a static mod-N hash is simpler and needs no ring bookkeeping.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Strict, real-time load balancing matters more than minimal movement — pair with a bounded-load variant or a dedicated load balancer instead.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">A small, centralized directory of key-to-node assignments is simpler than propagating ring membership everywhere.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a ring with virtual nodes</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">class HashRing {
+  private ring = new Map&lt;number, string&gt;(); // ring position -&gt; node id
+  private positions: number[] = [];
+  private readonly vnodes = 100;
+
+  addNode(node: string): void {
+    for (let i = 0; i &lt; this.vnodes; i++) {
+      this.ring.set(hash(`${node}#${i}`), node);
+    }
+    this.positions = [...this.ring.keys()].sort((a, b) =&gt; a - b);
+  }
+
+  removeNode(node: string): void {
+    for (let i = 0; i &lt; this.vnodes; i++) {
+      this.ring.delete(hash(`${node}#${i}`));
+    }
+    this.positions = [...this.ring.keys()].sort((a, b) =&gt; a - b);
+  }
+
+  getNode(key: string): string {
+    const h = hash(key);
+    const idx = this.positions.findIndex((pos) =&gt; pos &gt;= h);
+    const pos = idx === -1 ? this.positions[0] : this.positions[idx]; // wrap
+    return this.ring.get(pos)!;
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="cassandra"><strong>Apache Cassandra</strong><span>Places data on a token ring; the num_tokens setting gives each node many virtual nodes so ownership and churn spread across neighbours, and the replication factor places copies on the next nodes clockwise.</span></div>
+        <div class="wild-item" data-kb-example="dynamo"><strong>Amazon Dynamo</strong><span>The 2007 Amazon paper that brought the ring plus virtual nodes into mainstream practice, pairing it with quorum replication and gossip-based membership; the design line behind Cassandra and Riak.</span></div>
+        <div class="wild-item" data-kb-example="ketama"><strong>Ketama</strong><span>The consistent-hashing scheme most memcached clients implement to pick a server; it hashes each server to many points on the ring so adding or removing one server reshuffles only its share of keys, not the whole cache.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Virtual nodes per physical node</strong> — How many ring points (tokens) each node owns; more evens out load but adds ring metadata and lookup cost.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Replication factor</strong> — How many consecutive nodes clockwise around the ring hold a copy of each key.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Bounded-load factor</strong> — If using the bounded-load variant, the cap of (1 + epsilon) times average load before a node overflows to the next on the ring.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Hash function</strong> — The function mapping keys and nodes onto the ring; it must spread inputs uniformly or the ring is skewed from the start.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Per-node load distribution</strong> — How evenly keys and request volume spread across nodes — the thing vnodes exist to flatten.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Data movement on membership change</strong> — The fraction of keys that remap when a node joins or leaves.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Hot-key / hot-partition rate</strong> — Request rate concentrated on a single key or partition regardless of ring balance.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Ring-membership convergence</strong> — How long nodes take to agree on the current ring, and how many hold a divergent view.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Uneven load from too few vnodes</strong> — One physical node owns an oversized arc and runs hot while others idle.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Stale ring view</strong> — Nodes disagree on who owns a key, so requests are misrouted or a key is briefly double-owned during churn.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Hot key</strong> — A single very popular key overloads whichever node owns it, which balancing across the ring cannot fix.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Correlated churn</strong> — Losing or adding several nodes at once still moves a large slice of keys, cooling caches.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Virtual-node count tuned for even distribution against ring metadata and lookup overhead.</li>
+            <li id="production-check-2" data-kb-polarity="check">Membership propagation (e.g. gossip) tested for convergence time under node churn.</li>
+            <li id="production-check-3" data-kb-polarity="check">Per-node load distribution monitored, not assumed uniform.</li>
+            <li id="production-check-4" data-kb-polarity="check">Hot-key mitigation — extra replication or a front cache — in place for known skewed keys.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="load-balancer"><a href="./load-balancer.html">Load Balancer</a><span class="rel-note">Hash to pin a client to an instance</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="replication"><a href="../coordination/replication.html">Replication</a><span class="rel-note">Place primary and replicas around the ring</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="cdn"><a href="./cdn.html">CDN</a><span class="rel-note">Edge nodes are chosen by hashing</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="gossip-protocol"><a href="../coordination/gossip-protocol.html">Gossip Protocol</a><span class="rel-note">Gossip membership feeds the hash ring</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="distributed-cache"><a href="../../caching/distributed-cache.html">Distributed Cache</a><span class="rel-note">Picks the owning cache node in a clustered cache</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="enables" data-kb-to="sharding"><a href="./sharding.html">Sharding</a><span class="rel-note">Consistent hashing is how shards are placed</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="design-distributed-cache"><a href="../../../designs/design-distributed-cache.html">Distributed Cache</a><span class="rel-note">demonstrates the ring both distributing keys evenly and doubling as a client-side routing table</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="distributed-rate-limiter"><a href="../../../designs/distributed-rate-limiter.html">Distributed Rate Limiter</a><span class="rel-note">keeps one client pinned to one node while spreading load, and limits key remapping when shards are added</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="tinder"><a href="../../../designs/tinder.html">Tinder</a><span class="rel-note">consistent hashing keeps related swipes co-located as the Redis cluster scales horizontally</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="fb-live-comments"><a href="../../../designs/fb-live-comments.html">Facebook Live Comments</a><span class="rel-note">hashing viewers by video id routes a stable subset of connections to each server and tolerates servers joining and leaving</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="google-docs"><a href="../../../designs/google-docs.html">Google Docs</a><span class="rel-note">hash(documentId) maps keys onto a ring of nodes, keeping churn minimal when membership changes</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="online-chess"><a href="../../../designs/online-chess.html">Online Chess</a><span class="rel-note">routing hundreds of thousands of stateful sessions with minimal reshuffling on scale-up or failure is exactly the job consistent hashing exists for</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    CH["Consistent Hashing"]
+    CH --- LB["Load Balancer"]
+    CH --- SH["Sharding"]
+    CH --- RE["Replication"]
+    CH --- CDN["CDN"]
+    CH --- GP["Gossip Protocol"]
+    click LB "./load-balancer.html"
+    click SH "./sharding.html"
+    click RE "../coordination/replication.html"
+    click CDN "./cdn.html"
+    click GP "../coordination/gossip-protocol.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="system-design-interview"><a href="../../../themes/system-design-interview.html">System Design Interview</a><span>Pick a shard with minimal reshuffle</span></div>
+        <div class="fluency-item" data-kb-theme="performance"><a href="../../../themes/performance.html">Performance</a><span>Route to the node that already has the data warm</span></div>
+        <div class="fluency-item" data-kb-theme="scalability"><a href="../../../themes/scalability.html">Scalability</a><span>Place partitions with minimal reshuffle</span></div>
+        <div class="fluency-item" data-kb-theme="realtime-updates"><a href="../../../themes/realtime-updates.html">Real-Time Updates</a><span>Assign each connection to an owning server</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./load-balancer.html">← Load Balancer</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./sharding.html">Sharding →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thread Confinement · Patterns</title>
+  <meta name="description" content="Thread Confinement — remove races by giving each thread sole ownership of a slice of state, so there is nothing shared to lock or race on.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#thread-confinement",
+  "identifier": "thread-confinement",
+  "name": "Thread Confinement",
+  "description": "Remove races by giving each thread sole ownership of its data",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "concurrency",
+  "kb:group": "concurrency",
+  "kb:alternative-to": [
+    {
+      "@id": "./monitor-object.html#monitor-object",
+      "name": "Monitor Object",
+      "kb:note": "Don't guard shared state with a lock — remove the sharing so no lock is needed"
+    }
+  ],
+  "kb:generalizes": [
+    {
+      "@id": "./actor-model.html#actor-model",
+      "name": "Actor Model",
+      "kb:note": "The actor model is one realization: message-passing confinement"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/race-condition.html#race-condition",
+      "name": "Race Condition",
+      "kb:note": "No sharing means no interleaving — the race cannot exist"
+    },
+    {
+      "@id": "../../hazards/deadlock.html#deadlock",
+      "name": "Deadlock",
+      "kb:note": "No shared locks to acquire in conflicting orders, so no cycle can form"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc lens">
+  <main class="doc-wrap" data-kb-id="thread-confinement" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="Remove races by giving each thread sole ownership of its data" data-kb-order="86" data-kb-aliases="[&quot;shared-nothing&quot;,&quot;thread ownership&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;isolation&quot;,&quot;partitioning&quot;,&quot;state-management&quot;]" data-kb-solves="[&quot;locks everywhere are killing throughput and I still get races&quot;,&quot;I want correctness without reasoning about every possible interleaving&quot;,&quot;two threads keep corrupting the same shared structure&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Thread Confinement</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Thread Confinement</h1>
+      <p class="doc-essence">Eliminate synchronization by partitioning state so each thread exclusively owns its slice — with nothing shared, there is no lock to take and no race to reason about.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="thread-confinement">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>Every race condition needs two ingredients: mutable state, and more than one thread touching it at once. Locks, monitors, and atomic variables all attack the second — they discipline the concurrent access. Thread confinement attacks the first. Give each piece of mutable state a single owning thread and forbid any other thread from touching it, and there is nothing left to share: no lock to take, no interleaving to reason about. The race is not guarded against, it is impossible by construction. This is the general "shared-nothing" technique.</p>
+        <p>The move is to partition the state by owner. Instead of one seat map that every booking thread contends for behind a lock, thread&nbsp;1 owns sections A&ndash;M and thread&nbsp;2 owns N&ndash;Z, each with its own private map; a request is routed to the thread that owns its data and runs there, alone. What this buys you is the removal of synchronization itself — not just the correctness bugs (races, and the deadlocks that come from acquiring fine-grained locks in inconsistent orders) but the throughput tax of every thread queuing on a shared lock and the CPU burned parking, waking, and context-switching around it. Take the sharing out of the hot path and that whole tax goes with it.</p>
+        <p>Confinement appears at every scale. A thread-local holds one private instance of a variable per thread. A single-threaded command loop confines an entire store's state to one thread, serializing every mutation without a single lock — its concurrency comes from non-blocking I/O around the loop, not from more threads on the data. Sharded engines partition a keyspace so each shard is owned by exactly one thread or core, keeping the hot path lock-free. The actor model is the message-passing realization: state lives inside one actor and is mutated only by its own loop. The catch is that confinement demands a clean partition of the state by owner, and any work that spans partitions — booking two seats in different sections — can no longer just take two locks; it needs message passing or a coordinator, architectural complexity traded for the synchronization complexity you removed. And the guarantee holds only while it is strictly enforced: one thread reaching into another's slice quietly reintroduces every race you eliminated.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    R["incoming requests"] --> D{"route by key"}
+    D -->|keys A-M| T1
+    D -->|keys N-Z| T2
+    subgraph T1["Thread 1 (sole owner)"]
+      S1[("state A-M")]
+    end
+    subgraph T2["Thread 2 (sole owner)"]
+      S2[("state N-Z")]
+    end
+        </pre>
+        <figcaption>Each partition of state is touched by exactly one thread, so no lock guards the hot path; a request is routed to whichever thread owns its key.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Stack confinement</dt>
+        <dd>The simplest form, and free: state that lives only in a method's local variables and never escapes is reachable by exactly one thread — the caller. No mechanism at all, just discipline about not publishing a reference. It stops being confined the moment the object leaks out.</dd>
+
+        <dt id="variations-item-2">Thread-local storage</dt>
+        <dd>Each thread gets its own private instance of a variable — a non-thread-safe formatter, a scratch buffer, a per-thread database connection. The runtime keys the storage by thread, so there is no shared instance to guard. Finest grain; watch for leaks on pooled threads that outlive the value's usefulness.</dd>
+
+        <dt id="variations-item-3">Single-threaded event loop</dt>
+        <dd>All state mutation runs on one thread, so everything it touches is confined by construction. Concurrency comes from non-blocking I/O multiplexed around the loop, not from more threads on the data — the model behind Redis's command execution and Node's event loop.</dd>
+
+        <dt id="variations-item-4">Sharded / thread-per-core ownership</dt>
+        <dd>Split the dataset into N partitions, each pinned to one thread or core, and route each request to its shard's owner. This scales confinement across many cores while keeping every shard's hot path lock-free — the shape of thread-per-core storage engines.</dd>
+
+        <dt id="variations-item-5">Actor model (message passing)</dt>
+        <dd>The shared-nothing idea realized as isolated actors that own their state and communicate only by messages. Cross-partition work becomes an explicit message rather than a shared memory access, which is exactly how confinement handles operations that span owners.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Races are impossible by construction, not merely guarded — with nothing shared there is no interleaving to get wrong.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">No locks on the hot path — no contention, no lock-ordering deadlocks, no CPU parked spinning or context-switching on a mutex.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Each owner is a plain single-threaded program you can reason about sequentially — far simpler than auditing every possible interleaving.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Scales across cores by adding partitions — a thread-per-shard design turns more cores into more throughput without more lock contention.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Needs a clean partition of state by owner — if the data does not divide naturally, confinement does not apply.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Cross-partition work is expensive — an operation spanning two owners cannot just take two locks; it needs message passing or a coordinator, and its own consistency story.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Load can skew — a hot partition pins one thread at full while its peers idle, and the busy owner becomes the bottleneck because no other thread may help with its data.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">The guarantee is only as good as its enforcement — one thread reaching into another's slice silently brings back every race you removed, and nothing stops it by default.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con">Trades synchronization complexity for architectural complexity — the hard part moves from locks to partitioning and routing rather than disappearing.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">State partitions cleanly by owner — a keyspace, a shard key, a per-connection or per-session scope — and most operations stay inside one partition.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Lock contention is the measured bottleneck — threads queue on shared locks instead of doing work — and you would rather remove the sharing than keep tuning the locking.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You want correctness you can reason about sequentially, one owner per thread, instead of auditing every interleaving — often in a thread-per-core or sharded engine whose hot path must stay lock-free.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Operations routinely span partitions — the cross-owner message passing or coordination costs more than the locking it replaces.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The state will not divide cleanly by owner — a forced partition just relocates the races into the seams between shards.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">A plain lock or monitor already suffices — for human-triggered, low-contention work, confinement is architectural overkill.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a sharded store where each key routes to one owning shard</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// Each shard is owned by exactly one worker thread — its Map is never
+// shared, so no lock ever guards it.
+class Shard {
+  private readonly data = new Map&lt;string, string&gt;();  // private to this thread
+  get(key: string): string | undefined { return this.data.get(key); }
+  set(key: string, value: string): void { this.data.set(key, value); }
+}
+
+class ShardedStore {
+  private readonly shards: Shard[];
+
+  constructor(private readonly n: number) {
+    this.shards = Array.from({ length: n }, () =&gt; new Shard());
+  }
+
+  // A key always routes to the same shard — and thus the same owning thread.
+  private ownerOf(key: string): Shard {
+    let h = 0;
+    for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) | 0;
+    return this.shards[Math.abs(h) % this.n];
+  }
+
+  get(key: string) { return this.ownerOf(key).get(key); }
+  set(key: string, value: string) { this.ownerOf(key).set(key, value); }
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="dragonfly"><strong>Dragonfly</strong><span>A Redis-compatible in-memory store that partitions the keyspace across threads so each key is owned by exactly one thread. Most operations dispatch to their owning shard and run without locks on the hot path — a shared-nothing, thread-per-core design rather than one global lock.</span></div>
+        <div class="wild-item" data-kb-example="single-threaded-store"><strong>Single-threaded command execution</strong><span>A store that runs every command on one thread confines all of its state to that thread: because only one thread ever mutates the data, there are no locks and no data races by construction. Concurrency comes from non-blocking I/O around the loop, not from multiple threads on the data — the classic single-threaded event-loop store design.</span></div>
+        <div class="wild-item" data-kb-example="java-threadlocal"><strong>Java ThreadLocal</strong><span>Gives each thread its own private instance of a value keyed by thread — the standard fix for sharing a non-thread-safe object like SimpleDateFormat, or holding a per-thread connection or scratch buffer, without any synchronization. Values on pooled threads must be cleared to avoid leaking across reused threads.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="monitor-object"><a href="./monitor-object.html">Monitor Object</a><span class="rel-note">Don't guard shared state with a lock — remove the sharing so no lock is needed</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Generalizes</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="generalizes" data-kb-to="actor-model"><a href="./actor-model.html">Actor Model</a><span class="rel-note">The actor model is one realization: message-passing confinement</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="race-condition"><a href="../../hazards/race-condition.html">Race Condition</a><span class="rel-note">No sharing means no interleaving — the race cannot exist</span></div>
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="deadlock"><a href="../../hazards/deadlock.html">Deadlock</a><span class="rel-note">No shared locks to acquire in conflicting orders, so no cycle can form</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#lens-conc-h">← Concurrency</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="../../index.html#lens-conc-h">Concurrency →</a>
+    </nav>
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

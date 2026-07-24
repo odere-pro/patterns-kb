@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HyperLogLog · Patterns</title>
+  <meta name="description" content="HyperLogLog — estimate the number of distinct items in a massive stream using a few kilobytes of registers, reading leading-zero runs in hashes as evidence of scale for cardinality within about a percent.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#hyperloglog",
+  "identifier": "hyperloglog",
+  "name": "HyperLogLog",
+  "description": "Estimate the number of distinct items in a stream in ~kilobytes",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:often-confused-with": [
+    {
+      "@id": "./count-min-sketch.html#count-min-sketch",
+      "name": "Count-Min Sketch",
+      "kb:note": "Same sketch family, different question: distinct-count here, per-item frequency there"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="hyperloglog" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Estimate the number of distinct items in a stream in ~kilobytes" data-kb-order="85" data-kb-aliases="[&quot;HLL&quot;]" data-kb-tags="[&quot;scalability&quot;,&quot;performance&quot;,&quot;resource-management&quot;,&quot;observability&quot;]" data-kb-solves="[&quot;I need unique-visitor counts over billions of events without storing every id&quot;,&quot;counting distinct values exactly uses far too much memory&quot;,&quot;approximate cardinality is fine if it fits in a few kilobytes&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">HyperLogLog</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network</p>
+      <h1 class="doc-title">HyperLogLog</h1>
+      <p class="doc-essence">A fixed bank of small registers that estimates how many distinct items a stream has contained — reading the rarest hash pattern each register has seen as evidence of scale, and averaging across registers so a few kilobytes can count into the billions within a fraction of a percent.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="hyperloglog">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>HyperLogLog</strong> estimates the number of <em>distinct</em> items a stream has contained — its cardinality — from a fixed, tiny bank of registers. The trick is in the hash. Hash each item and look at the leading bits: a hash beginning with a 1 turns up about half the time, one beginning with <code>01</code> a quarter of the time, <code>001</code> an eighth, and so on. So a long run of leading zeros is rare, and the rarest run you have seen is evidence of how many distinct items must have passed through to produce it — see a hash with <em>k</em> leading zeros and you have probably observed on the order of 2<sup><em>k</em></sup> distinct values.</p>
+        <p>A single longest-run counter would be wildly noisy, so HyperLogLog splits the work. The first few bits of each hash pick one of <em>m</em> registers; the rest supplies the leading-zero count, and each register keeps only the maximum it has seen. To read the cardinality, combine the registers with a harmonic mean (which tames the outliers) scaled by a bias constant, with small corrections at the very low and very high ends of the range. The standard error is about 1.04/√<em>m</em>, so accuracy improves predictably as you add registers — Redis's default of 16384 registers lands near 0.81%.</p>
+        <p>The force it resolves is counting uniques when keeping every id is untenable. An exact distinct count needs a set that grows with the number of distinct items — gigabytes for billions of visitors or IP addresses. HyperLogLog fixes its footprint at roughly 12KB regardless of how many distinct items flow through, trading a small, bounded error for that flat memory. Introduced by Flajolet, Fusy, Gandouet and Meunier in 2007 as the refinement of earlier LogLog estimators, it answers only "how many distinct" — not which ones, not how often, not whether a given item is among them. Registers merge by taking the element-wise maximum, so per-shard or per-day sketches union losslessly into a grand total.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    K["Item"] --> H["hash the item"]
+    H --> B["first bits → pick a register"]
+    H --> Z["rest → count leading zeros"]
+    B --> R["register = max(old, zeros + 1)"]
+    Z --> R
+    R --> M["harmonic mean of all registers"]
+    M --> E["Estimated distinct count"]
+        </pre>
+        <figcaption>Each item is hashed once; its leading bits choose a register and the run of leading zeros in the rest records the rarest pattern that register has seen. A harmonic mean across all registers turns "rare patterns imply scale" into a cardinality estimate.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">HyperLogLog++</dt>
+        <dd>Google's refinement: 64-bit hashes to avoid collisions at extreme scale, an empirically fitted bias correction that sharpens estimates at small cardinalities, and a sparse mode for small sets. More accurate across the range and smaller when the set is small.</dd>
+        <dt id="variations-item-2">Sparse vs dense representation</dt>
+        <dd>While the set is small, store only the registers actually touched as (index, value) pairs instead of the full flat array, switching to the dense array once enough registers fill. Keeps a near-empty sketch tiny rather than paying the full footprint from the first item.</dd>
+        <dt id="variations-item-3">LogLog and SuperLogLog</dt>
+        <dd>The predecessors that averaged register values with the arithmetic (or a truncated) mean. HyperLogLog's switch to the harmonic mean is what cut the variance and gave the family its accuracy at the same memory.</dd>
+        <dt id="variations-item-4">Streaming rollup vs one-pass scan</dt>
+        <dd>Because registers merge by element-wise maximum, sketches union losslessly. Maintain one incrementally per shard or per time window and combine them into a grand-total unique count — or compute one in a single scan over stored data — without ever re-reading raw events.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Tiny, fixed memory — roughly 12KB of registers estimates cardinalities into the billions, versus gigabytes for an exact set of the same keys.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Bounded, predictable error — the standard error is about 1.04/√m, so more registers buy tighter accuracy on a known curve.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Sketches merge losslessly by element-wise maximum — union per-shard or per-day sketches into a grand total without double-counting or re-reading events.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Insert is O(1): one hash, then a single max against one register.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Estimates only cardinality — it cannot tell you whether a specific item is present, how often it appeared, or list what it counted.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Always approximate: a small percentage error is inherent, so it is wrong for exact billing, dedup, or anything that must reconcile to the unit.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Overkill for small sets — its fixed footprint and correction terms are not justified below a few thousand distinct items, where a plain hash set is smaller and exact.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Intersections are hard — union is exact via max, but estimating the overlap of two sets by inclusion-exclusion compounds the error badly.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You need the count of distinct items — unique visitors, distinct IPs, distinct search terms — over a volume too large to keep every id.</li>
+            <li id="usage-when-2" data-kb-polarity="when">A fraction of a percent of error is acceptable and the win is fitting the whole running count in kilobytes.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You want to union counts across shards or time windows cheaply — daily sketches that roll up into a monthly unique total.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">You need an exact distinct count, or the number feeds billing or dedup that must reconcile exactly.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The expected cardinality is small — a plain hash set is smaller, exact, and simpler below a few thousand items.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">You need per-item frequency ("how many times") or membership ("is this one present") — that is a Count-Min Sketch or a Bloom filter, not a cardinality estimator.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal estimator</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">class HyperLogLog {
+  private readonly registers: Uint8Array;
+
+  // p bucket bits → m = 2^p registers; p = 14 gives ~0.81% standard error
+  constructor(private readonly p = 14) {
+    this.registers = new Uint8Array(1 &lt;&lt; p);
+  }
+
+  add(key: string): void {
+    const h = hash32(key);                    // a 32-bit hash
+    const bucket = h &gt;&gt;&gt; (32 - this.p);         // top p bits pick the register
+    const rest = (h &lt;&lt; this.p) | (1 &lt;&lt; (this.p - 1)); // remaining bits, with a tail guard
+    const rank = Math.clz32(rest) + 1;        // position of the leftmost 1-bit
+    if (rank &gt; this.registers[bucket]) this.registers[bucket] = rank;
+  }
+
+  count(): number {
+    const m = this.registers.length;
+    let sum = 0;
+    for (const r of this.registers) sum += 2 ** -r;   // harmonic-mean denominator
+    const alpha = 0.7213 / (1 + 1.079 / m);           // bias constant
+    return (alpha * m * m) / sum;                     // raw estimate, before range corrections
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="redis"><strong>Redis HyperLogLog</strong><span>PFADD adds items, PFCOUNT estimates the distinct count, and PFMERGE unions sketches; the dense encoding is about 12KB and holds a standard error near 0.81% up into the billions.</span></div>
+        <div class="wild-item" data-kb-example="postgresql-hll"><strong>PostgreSQL postgresql-hll</strong><span>Adds an hll column type with hll_add and hll_union_agg aggregates, so distinct counts can be pre-aggregated per group and unioned across rows entirely in SQL.</span></div>
+        <div class="wild-item" data-kb-example="bigquery"><strong>Google BigQuery</strong><span>APPROX_COUNT_DISTINCT, and the HLL_COUNT.INIT / MERGE / EXTRACT functions, estimate distinct values with HyperLogLog++ and let intermediate sketches be merged across queries.</span></div>
+        <div class="wild-item" data-kb-example="presto-trino"><strong>Presto / Trino</strong><span>approx_distinct() computes cardinality with HyperLogLog, taking an optional target standard error, and exposes an HLL type so partial sketches can be merged.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="count-min-sketch"><a href="./count-min-sketch.html">Count-Min Sketch</a><span class="rel-note">Same sketch family, different question: distinct-count here, per-item frequency there</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Caching · Patterns</title>
+  <meta name="description" content="Caching — trade storage and freshness for speed: where to place a cache, how reads and writes flow through it, and what to evict.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#caching",
+  "identifier": "caching",
+  "name": "Caching",
+  "description": "Where to place a cache, how reads and writes flow, and what to evict",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "theme",
+  "kb:band": "theme",
+  "kb:group": "theme",
+  "kb:tours": [
+    {
+      "@id": "../patterns/caching/distributed-cache.html#distributed-cache",
+      "name": "Distributed Cache",
+      "kb:role": "The default placement: a shared cache tier"
+    },
+    {
+      "@id": "../patterns/caching/in-process-cache.html#in-process-cache",
+      "name": "In-Process Cache",
+      "kb:role": "Fastest placement: the app's own memory"
+    },
+    {
+      "@id": "../patterns/caching/client-side-cache.html#client-side-cache",
+      "name": "Client-Side Cache",
+      "kb:role": "Placement on the user's device"
+    },
+    {
+      "@id": "../patterns/caching/cache-aside.html#cache-aside",
+      "name": "Cache-Aside",
+      "kb:role": "The default read-cache strategy"
+    },
+    {
+      "@id": "../patterns/caching/read-through.html#read-through",
+      "name": "Read-Through",
+      "kb:role": "Let the cache own the miss path"
+    },
+    {
+      "@id": "../patterns/caching/write-through.html#write-through",
+      "name": "Write-Through",
+      "kb:role": "Keep the cache and store in lockstep"
+    },
+    {
+      "@id": "../patterns/caching/write-behind.html#write-behind",
+      "name": "Write-Behind",
+      "kb:role": "Make writes feel instant"
+    },
+    {
+      "@id": "../patterns/caching/refresh-ahead.html#refresh-ahead",
+      "name": "Refresh-Ahead",
+      "kb:role": "Reload hot keys before they expire"
+    },
+    {
+      "@id": "../patterns/distributed/routing/cdn.html#cdn",
+      "name": "CDN",
+      "kb:role": "Cache at the network edge, near the user"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc theme">
+  <main class="doc-wrap" data-kb-id="caching" data-kb-kind="theme" data-kb-band="theme" data-kb-group="theme" data-kb-essence="Where to place a cache, how reads and writes flow, and what to evict" data-kb-order="10" data-kb-tags="[&quot;caching&quot;,&quot;performance&quot;,&quot;latency&quot;,&quot;read-optimization&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#themes-h">Themes</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Caching</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Theme · Building fluency</p>
+      <h1 class="doc-title">Caching</h1>
+      <p class="doc-essence">Caching trades a little storage and some staleness for a large speed win. The design space is three separate questions: where the cache sits relative to the request, how reads and writes move through it, and what gets evicted when it fills.</p>
+      <div class="doc-metarow">
+        <span class="badge">Theme</span>
+      </div>
+    </header>
+
+    <section class="doc-section" id="framing" aria-labelledby="h-framing" data-kb-block="framing">
+      <h2 class="doc-h" id="h-framing">The question</h2>
+      <div class="prose">
+        <p>A cache is a bet that the same data will be asked for again soon, and that a copy kept somewhere faster is worth the cost of keeping it. The economics are stark: reading from memory takes roughly a hundred nanoseconds, reading from an SSD-backed database takes about a millisecond, and a round trip across a continent takes hundreds of milliseconds. Caching exists to collapse whichever of those gaps is hurting — but every copy it keeps is a second source of truth that can drift, go stale, or evaporate at the worst moment.</p>
+        <p>That makes "add a cache" three decisions wearing one name. <strong>Where</strong> does the copy live relative to the request — inside the process, in a shared store, at the network edge, on the client device? <strong>How</strong> do reads and writes flow through it — does the application manage the cache by hand, or does the cache manage the store; do writes wait for durability or return the instant they land? And <strong>what</strong> gets thrown out when memory fills — the least recently used, the least frequently used, or simply whatever has aged past its time-to-live? Conflating these is how teams cache a consistency problem, or reach for a fancy write strategy when a plain read cache would have done.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradespace" aria-labelledby="h-tradespace" data-kb-block="tradespace">
+      <h2 class="doc-h" id="h-tradespace">The trade-space</h2>
+      <div class="prose">
+        <p><strong>Where to place it</strong> is a spectrum from closest-to-the-request to most-shared. A <em>client-side</em> cache — the browser's HTTP cache, an app's on-device storage — is the fastest of all because the data never leaves the device, but you have the least control over freshness once it's out there. A <em>CDN</em> or edge cache moves static and semi-static content to points of presence near the user, trading a continental round trip for a single-digit-millisecond one. An <em>external</em> shared cache like Redis or Memcached runs as its own service so every application instance sees the same entries — the default in most designs, at the cost of one network hop. An <em>in-process</em> cache lives in the application's own memory: the fastest server-side option because there's no hop at all, but each instance has its own copy, so entries can diverge and memory is duplicated across the fleet.</p>
+        <p><strong>How reads and writes flow</strong> is the second axis. On reads, the cache can be filled lazily — populated only after a miss — or eagerly refreshed before entries expire. On writes, the choice is where durability sits: write to the store synchronously so a read can never see stale data, or write to the cache now and let the store catch up asynchronously so the caller never waits. Lazy-and-shared is the safe default; the eager and asynchronous variants buy latency at the price of more moving parts and weaker guarantees.</p>
+        <p><strong>What to evict</strong> is the third, and it only matters because memory is finite. <em>Least Recently Used (LRU)</em> drops whatever hasn't been touched in the longest time — the balanced default that suits most workloads. <em>Least Frequently Used (LFU)</em> drops whatever is asked for least often, which fits sharply skewed access where a few keys dominate. <em>First-In-First-Out (FIFO)</em> drops the oldest entry regardless of use — dead simple, and rarely the right call. <em>Time-To-Live (TTL)</em> sidesteps the ranking entirely: each entry simply expires after a set time, which is what you want when freshness, not popularity, is the thing that decays.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tour" aria-labelledby="h-tour" data-kb-block="tour">
+      <h2 class="doc-h" id="h-tour">Patterns that implement the choice</h2>
+      <div class="tour">
+        <div class="tour-step" data-kb-member="distributed-cache" data-kb-role="The default placement: a shared cache tier">
+          <h3><a href="../patterns/caching/distributed-cache.html">Distributed Cache</a></h3>
+          <p>A caching service in its own tier — Redis, Memcached — that every application instance reaches over the network, so they all share one view of the cached data. It's where most designs put the cache, precisely because it's shared and outlives any single process.</p>
+        </div>
+        <div class="tour-step" data-kb-member="in-process-cache" data-kb-role="Fastest placement: the app's own memory">
+          <h3><a href="../patterns/caching/in-process-cache.html">In-Process Cache</a></h3>
+          <p>Keeps the hottest, smallest data in the application process's own memory, so a hit needs no network hop at all. The fastest cache there is — at the cost of each instance holding its own copy — and a natural L1 in front of a shared tier.</p>
+        </div>
+        <div class="tour-step" data-kb-member="client-side-cache" data-kb-role="Placement on the user's device">
+          <h3><a href="../patterns/caching/client-side-cache.html">Client-Side Cache</a></h3>
+          <p>Stores data on the user's own device — the browser's HTTP cache, local storage — so a repeated read makes no network request at all. Fastest of all and offline-capable, but with the least control over freshness.</p>
+        </div>
+        <div class="tour-step" data-kb-member="cache-aside" data-kb-role="The default read-cache strategy">
+          <h3><a href="../patterns/caching/cache-aside.html">Cache-Aside</a></h3>
+          <p>The application checks the cache first, and on a miss reads the source of truth and populates the cache itself. It's the default read strategy precisely because the cache can be empty, stale, or evicted at any moment without breaking correctness — the source is still there to fall back to.</p>
+        </div>
+        <div class="tour-step" data-kb-member="read-through" data-kb-role="Let the cache own the miss path">
+          <h3><a href="../patterns/caching/read-through.html">Read-Through</a></h3>
+          <p>Moves the fetch-or-populate dance into the caching layer itself: callers ask the cache, and the cache asks the backing store on a miss. Every call site stops reimplementing the same logic — and the single load path is where request coalescing can shield the store from a herd of simultaneous misses.</p>
+        </div>
+        <div class="tour-step" data-kb-member="write-through" data-kb-role="Keep the cache and store in lockstep">
+          <h3><a href="../patterns/caching/write-through.html">Write-Through</a></h3>
+          <p>Every write updates the cache and the backing store together, synchronously, so a read that follows a write can never see a stale value. The price is write latency and a cache that fills with data nobody may ever read back.</p>
+        </div>
+        <div class="tour-step" data-kb-member="write-behind" data-kb-role="Make writes feel instant">
+          <h3><a href="../patterns/caching/write-behind.html">Write-Behind</a></h3>
+          <p>Acknowledges a write the moment it lands in the cache and flushes it to the store asynchronously, usually in batches. Writes feel instant to the caller; the durability guarantee shifts to whatever drains the flush queue, and a crash before the flush loses data.</p>
+        </div>
+        <div class="tour-step" data-kb-member="refresh-ahead" data-kb-role="Reload hot keys before they expire">
+          <h3><a href="../patterns/caching/refresh-ahead.html">Refresh-Ahead</a></h3>
+          <p>Instead of waiting for a hot key to expire and miss, a background reload refreshes it just before its TTL runs out, so the entry never actually goes cold under load. It's the direct antidote to a popular key expiring and triggering a stampede.</p>
+        </div>
+        <div class="tour-step" data-kb-member="cdn" data-kb-role="Cache at the network edge, near the user">
+          <h3><a href="../patterns/distributed/routing/cdn.html">CDN</a></h3>
+          <p>Pushes static and semi-static content to edge nodes near the requester, so a read is answered a few milliseconds away instead of crossing a continent to origin. It's caching applied at the network layer — the same miss-then-fill logic, moved to where latency is geography, not disk.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="decide" aria-labelledby="h-decide" data-kb-block="decide">
+      <h2 class="doc-h" id="h-decide">When to reach for what</h2>
+      <div class="table-scroll">
+        <table class="decision">
+          <thead>
+            <tr><th>If you need…</th><th>Approach</th><th>Reach for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>A shared cache across many app instances</td><td>Put it in its own tier</td><td><a href="../patterns/caching/distributed-cache.html">Distributed Cache</a></td></tr>
+            <tr><td>Sub-millisecond reads on tiny, hot data</td><td>Keep it in the process</td><td><a href="../patterns/caching/in-process-cache.html">In-Process Cache</a></td></tr>
+            <tr><td>Zero network calls, offline support</td><td>Cache on the device</td><td><a href="../patterns/caching/client-side-cache.html">Client-Side Cache</a></td></tr>
+            <tr><td>Read-heavy traffic hitting a slow source</td><td>Cache the read lazily</td><td><a href="../patterns/caching/cache-aside.html">Cache-Aside</a>, <a href="../patterns/caching/read-through.html">Read-Through</a></td></tr>
+            <tr><td>Reads that must never return stale data</td><td>Write both, synchronously</td><td><a href="../patterns/caching/write-through.html">Write-Through</a></td></tr>
+            <tr><td>Writes that can't block the caller</td><td>Buffer, flush async</td><td><a href="../patterns/caching/write-behind.html">Write-Behind</a></td></tr>
+            <tr><td>A hot key that herds the source when it expires</td><td>Refresh before expiry</td><td><a href="../patterns/caching/refresh-ahead.html">Refresh-Ahead</a></td></tr>
+            <tr><td>Static assets served to a global audience</td><td>Push to the edge</td><td><a href="../patterns/distributed/routing/cdn.html">CDN</a></td></tr>
+            <tr><td>A general-purpose eviction default</td><td>Drop what's gone unused longest</td><td>LRU</td></tr>
+            <tr><td>Sharply skewed access, a few keys dominating</td><td>Keep the frequently-read</td><td>LFU</td></tr>
+            <tr><td>Data that goes stale on a clock, not on use</td><td>Expire on a timer</td><td>TTL</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="doc-section" id="siblings" aria-labelledby="h-siblings" data-kb-block="siblings">
+      <h2 class="doc-h" id="h-siblings">Related areas</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="./performance.html">Performance</a><span>Caching is one arm of performance; the theme also spans load balancing and cutting memory churn.</span></div>
+        <div class="fluency-item"><a href="./spike-handling.html">Handling Spikes</a><span>An edge or read cache is the cheapest way to absorb a sudden surge before it reaches origin.</span></div>
+        <div class="fluency-item"><a href="./consistency-and-replication.html">Consistency &amp; Replication</a><span>The mechanics behind a cache's staleness window — how copies of data are kept in agreement.</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Theme navigation">
+      <a class="prev" href="../index.html#themes-h">← Themes</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#themes-h">Themes →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Metrics &amp; Monitoring · Patterns</title>
+  <meta name="description" content="Design a metrics &amp; monitoring platform — ingest millions of points a second, serve dashboards over weeks of history, and fire alerts within a minute.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#metrics-monitoring",
+  "identifier": "metrics-monitoring",
+  "name": "Metrics & Monitoring",
+  "description": "Ingest five million metric points a second, serve dashboards over weeks of history, and fire alerts within a minute",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/messaging/message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:note": "Kafka sits between the ingestion service and the store, decoupling them so a spike is buffered rather than dropped"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "the queue smooths a bursty 5M-point/second firehose into a steady rate the write-limited store can sustain"
+    },
+    {
+      "@id": "../patterns/concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:note": "host agents batch and pre-aggregate points locally before shipping, and the ingest API itself is batched"
+    },
+    {
+      "@id": "../patterns/architecture/cqrs.html#cqrs",
+      "name": "CQRS",
+      "kb:note": "the read (query) path is split from the write (ingest) path so each scales, tunes, and caches independently"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/lsm-tree.html#lsm-tree",
+      "name": "LSM Tree",
+      "kb:note": "the time-series store's log-structured backbone turns the incoming firehose into cheap sequential appends"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "metrics are pre-aggregated into multi-resolution rollups so a month-long chart reads buckets, not billions of raw samples"
+    },
+    {
+      "@id": "../patterns/caching/cache-aside.html#cache-aside",
+      "name": "Cache-Aside",
+      "kb:note": "a cache in front of the query service serves repeated dashboard windows without re-scanning storage"
+    },
+    {
+      "@id": "../patterns/messaging/aggregator.html#aggregator",
+      "name": "Aggregator",
+      "kb:note": "the notification service collects breaches arriving in a short window and groups them by label into a single page"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/bloom-filter.html#bloom-filter",
+      "name": "Bloom Filter",
+      "kb:note": "a local bloom filter fronts the Redis series tracker so only possibly-new series pay for a round trip"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="metrics-monitoring" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Ingest five million metric points a second, serve dashboards over weeks of history, and fire alerts within a minute" data-kb-order="7" data-kb-aliases='["observability platform","metrics platform"]' data-kb-tags='["system-design","observability","scalability","throughput","latency"]' data-kb-solves='["half a million machines each report stats every few seconds and my ingestion tier keeps falling over under the write flood","my dashboard takes forever to render because every chart rescans weeks of raw data points","one failing cluster tripped a threshold and paged the on-call engineer a hundred times for what was really one incident","every new label my services attach silently multiplies my stored series until storage and memory blow up","a threshold breach is not caught until almost a minute after it happened and I need to know sooner"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Metrics &amp; Monitoring</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Metrics &amp; Monitoring</h1>
+      <p class="doc-essence">A metrics platform collects performance signals — CPU, memory, latency, custom counters — from a fleet of servers, stores them as time-series, charts them on dashboards, and pages a human when a threshold is breached. The shape is a firehose of writes on one side and sporadic, expensive reads on the other, so the design is really four sub-problems stacked in order: ingest, store, query, then alert.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="metrics-monitoring">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>This is the engine behind Datadog, Prometheus with Grafana, or CloudWatch: the thing operators stare at during an incident. Services emit numeric measurements over time; the platform ingests them, keeps them as time-series, lets people slice and chart them, and evaluates alert rules that fire a notification when something crosses a line. Everything downstream is decided by one asymmetry — writes arrive constantly and in enormous volume, while reads are bursty, human-driven, and can be brutally expensive. The interesting engineering is absorbing the write flood cheaply, then answering slow questions over a lot of history fast. Log search, distributed tracing, and ML anomaly detection are explicitly out of scope.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Ingest metrics — CPU, memory, latency, custom counters — emitted by services across the fleet.</li>
+            <li>Query and visualise those metrics on dashboards, with filters, aggregations, and arbitrary time ranges.</li>
+            <li>Define alert rules as a threshold over a window, e.g. <em>p99 latency &gt; 500&nbsp;ms for 5 minutes</em>.</li>
+            <li>Deliver notifications when a rule fires — Slack, PagerDuty, email.</li>
+          </ol>
+          <p class="prose">Out of scope: log aggregation and full-text search, span/trace collection, and ML-based anomaly detection.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Write scale</strong> — sustain ~5M metric points/second from ~500k servers.</li>
+            <li><strong>Query latency</strong> — dashboard queries return in seconds, even spanning days or weeks.</li>
+            <li><strong>Alert latency</strong> — under a minute from emission to a rule firing.</li>
+            <li><strong>Availability &gt; consistency</strong> — dashboards may be eventually consistent; alert evaluation must stay reliable, and late/out-of-order data is expected.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Writes.</strong> 500k servers, each reporting ~100 distinct measurements every 10&nbsp;seconds, is 500k × 100 ÷ 10 = <strong>5M points/second</strong> at peak. This is the number the whole architecture has to survive, and it never sleeps.</p>
+        <p><strong>Volume.</strong> A point — timestamp, value, and its labels — is ~100–200 bytes on the wire, so raw ingestion runs near <strong>1&nbsp;GB/second</strong>, roughly <strong>86&nbsp;TB/day</strong> before compression. A time-series store leans hard on delta and columnar compression to knock that down by an order of magnitude, and rollups plus retention keep old data from accumulating at full resolution.</p>
+        <p><strong>Reads.</strong> Dashboard traffic is a rounding error next to writes on average, but it spikes hard during an incident and a single panel can ask to scan billions of points. The alert path is steadier: rules × evaluation interval, a few thousand scheduled queries a minute.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three data concepts drive everything, and getting the relationship between them right is the whole game:</p>
+        <ul>
+          <li><strong>Metric</strong> — a named measurement, e.g. <code>cpu_usage</code>.</li>
+          <li><strong>Label</strong> — a key-value tag attached to a metric for slicing, e.g. <code>host="web-42"</code>, <code>region="us-east"</code>.</li>
+          <li><strong>Series</strong> — one unique combination of metric name + labels, tracked over time. <code>cpu_usage{host="web-42"}</code> is one series; <code>cpu_usage{host="web-43"}</code> is another. <strong>Series count is the central scaling variable</strong>: 500k hosts reporting one metric is already 500k series, and every additional distinguishing label multiplies it — the cardinality problem the deep dives keep returning to.</li>
+          <li><strong>Alert Rule</strong> — a saved query, a threshold, and a duration ("average CPU in us-east above 90% for 5 minutes"), plus where to notify.</li>
+          <li><strong>Dashboard</strong> — a collection of panels, each a saved query rendered as a chart; not modelled in depth, but it sets the read-query volume.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Three surfaces with very different traffic shapes: a high-volume batched write, an expensive read, and a low-frequency rule registration whose rows are then evaluated constantly. JSON is shown for readability; at 5M/s a real deployment ships a binary format like protobuf.</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — ingest, query, and alert rules</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /metrics/ingest            # batched, continuous, ~5M points/s
+{ "metrics": [
+    { "name": "cpu_usage",
+      "labels": { "host": "web-42", "region": "us-east" },
+      "value": 0.73, "ts": 1737331200 } ] }
+&rarr; 202 Accepted
+
+GET /metrics/query?q=avg(cpu_usage{region="us-east"})&amp;start=A&amp;end=B&amp;step=60
+&rarr; 200 { "timestamps": [...], "values": [...] }   # PromQL-style DSL
+
+POST /alerts/rules              # written rarely, evaluated every minute
+{ "name": "High CPU — us-east",
+  "query": "avg(cpu_usage{region='us-east'}) &gt; 0.9",
+  "for": "5m",
+  "notify": ["slack:#oncall", "pagerduty:team-infra"] }
+&rarr; 201 Created</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p><strong>Write path.</strong> Having every server POST straight into an ingestion service that writes straight to a database collapses at this volume, and simply adding ingestion instances only moves the flood downstream. So the fix works the edge and the middle: an <strong>agent</strong> on each host <a href="../patterns/concurrency/batching.html">batches</a> and pre-aggregates points locally before shipping them, and a <a href="../patterns/messaging/message-queue.html">message queue</a> (Kafka) sits between ingestion and storage. The queue decouples the two and does <a href="../patterns/distributed/resilience/load-leveling.html">load leveling</a> — a burst is absorbed into the log so the store sees a steady, survivable rate instead of the raw spike.</p>
+        <p><strong>Store and read.</strong> The store is a purpose-built <strong>time-series database</strong>, one of the rare cases where a specialised engine is clearly right: its <a href="../patterns/distributed/coordination/lsm-tree.html">LSM-tree</a> backbone turns the incoming firehose into sequential appends, exactly what a Postgres row-per-point layout can't sustain. In front of it, a separate <strong>query service</strong> translates the PromQL-style DSL into storage scans. Splitting the read path from the write path is deliberate <a href="../patterns/architecture/cqrs.html">command-query separation</a>: writes are constant and must never drop, reads are sporadic and expensive, so each scales and tunes independently — and a cache can be bolted onto the query side without touching ingestion.</p>
+        <p><strong>Alert and notify.</strong> Alerts are built <em>on top of</em> queries, not as a separate engine — the sub-minute budget allows it. Rules live in Postgres; an <strong>alert evaluator</strong> pulls them on a fixed interval and runs each as a scheduled query against the store (the Prometheus Alertmanager model — "alerts are just scheduled queries"). On breach it emits an event to a <strong>notification service</strong>, which is what stands between a breach and a human: it tracks each alert as firing or resolved and pages only on state transitions, and it <a href="../patterns/messaging/aggregator.html">aggregates</a> breaches arriving in a short window by label so a hundred servers tripping one threshold become one page, not a hundred.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Agents["Server agents: batch and buffer"]
+    Ingest["Ingestion: validate and cap cardinality"]
+    Redis[("Policy store and series tracker")]
+    Kafka[["Kafka buffer"]]
+    TSDB[("Time-series database")]
+    Query["Query service: cache and rollups"]
+    Dash["Dashboards"]
+    Eval["Alert evaluator: scheduled queries"]
+    Notify["Notification service: group and dedup"]
+    Channels["Slack, PagerDuty, email"]
+
+    Agents -->|"batched ingest"| Ingest
+    Ingest -->|"series allowed?"| Redis
+    Ingest -->|"publish"| Kafka
+    Kafka -->|"consume and write"| TSDB
+    Dash -->|"PromQL query"| Query
+    Query -->|"scan and rollups"| TSDB
+    Eval -->|"scheduled query"| TSDB
+    Eval -->|"breach event"| Notify
+    Notify -->|"one page per group"| Channels
+        </pre>
+        <figcaption>The write path (agent → queue → time-series store) is a steady firehose; the read path forks off it, and alerting rides the same store the dashboards query.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Sub-second dashboards over weeks of data</h3>
+        <p>"CPU for every production pod over the last 30 days" can touch billions of points; scanning full-resolution data on each request is hopeless. Two instincts apply — pre-compute, and cache.</p>
+        <ul>
+          <li><strong>Pre-computed rollups.</strong> Maintain the metric as a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> at several granularities — 1-minute, 1-hour, 1-day buckets. A month-long chart reads a few thousand daily buckets instead of billions of raw samples, and the query planner picks the coarsest resolution the requested <code>step</code> allows.</li>
+          <li><strong>Cache plus query splitting.</strong> Put a <a href="../patterns/caching/cache-aside.html">cache-aside</a> layer in front of the query service and split each request along the time axis, so overlapping and repeated windows (everyone reloads the same "last 6 hours" panel) are served from cache and only the uncached tail hits storage. Rollups shrink the work; the cache removes the repeated work entirely.</li>
+        </ul>
+        <h3>2 · Driving alert latency below a minute</h3>
+        <p>Polling every minute already meets the requirement for most rules, but a breach one second after a cycle isn't seen for ~59 seconds, and a few critical services want faster. Increasing the poll frequency is an incremental patch — it never removes the round trip. The real move is <strong>stream processing</strong>: evaluate the condition directly on the Kafka stream (kafka → stream → alert) instead of round-tripping through the database (kafka → db → alert), reacting to data in flight. It's genuine added complexity, so keep it a minority path — most alerts stay on the cheap polling loop, and only the few that need seconds go real-time. Evaluating a daily-grained metric in real time is pure overkill.</p>
+        <h3>3 · Staying up exactly when it matters</h3>
+        <p>A monitoring system that dies during an incident blinds you at the worst possible moment, so availability matters more here than almost anywhere. Both paths need redundancy: the ingest/data path so collection survives node loss, and the alert/notify path so breaches are still detected and delivered. The durable queue already double-buffers ingestion through transient failures. The recurring post-mortem trap is <strong>meta-monitoring</strong>: never run the monitoring system on the very infrastructure it watches, or it goes dark alongside the outage it should be reporting.</p>
+        <h3>4 · Taming cardinality explosion</h3>
+        <p>Every distinct metric-plus-label combination is a new series, and combinations multiply fast: <code>http_requests{host, region, endpoint, status, method}</code> across 1,000 hosts × 5 regions × 200 endpoints × 10 statuses × 5 methods is up to 50M series in theory. Each series costs index, metadata, and memory on the write side, and aggregating across millions of them is slow on the read side. The fix is an admission step wedged into the ingestion service, between validation and the queue, backed by two stores: a <strong>policy store</strong> (Postgres) mapping each metric to its allowed label keys and a maximum series count, and a fast <strong>series tracker</strong> (Redis) counting the unique series seen per metric. Ingestion strips non-allowlisted labels, hashes the rest into a series id, and checks whether that series is known and under cap — accepting and publishing if so, dropping and bumping a <code>dropped_metrics</code> counter if not. That counter becomes a first-class monitored signal (more monitoring of the monitor), and hitting a cap fires an alert through the existing notification path. A membership check per point at 5M/s is itself a cost, so a local <a href="../patterns/distributed/coordination/bloom-filter.html">bloom filter</a> fronts Redis as a cheap first pass: only combinations the filter says might be new pay for a round trip.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Agent batching plus a buffering queue absorb 5M-point/second bursts, so the store only ever sees a steady, survivable write rate.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Read and write paths scale independently — a query storm during an incident can't stall ingestion, and a cache slots onto the read side alone.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Alerts are just scheduled queries over the same store the dashboards use — one mental model, easy to debug — with grouping and dedup keeping a big incident to one page.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Buffering is double-edged: a multi-minute outage leaves a backlog that only drains if you run with spare headroom — for monitoring it's often better to drop data than fall permanently behind.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Cardinality caps silently drop real data when mis-tuned; per-metric policies assume you actually understand each metric's usage.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Dashboards are only eventually consistent and default alerting is near-minute; true sub-second detection needs the separate, more complex stream path.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — lays out the end-to-end flow (ingest → store → query → alert), reaches for a queue and some form of time-series storage, and has at least a naive "poll the database" answer for alerts. Should explain, when asked, why Kafka helps and why a TSDB beats Postgres here; may not raise cardinality unprompted.</li>
+          <li><strong>Senior</strong> — drives the write/read split, treats cardinality as a first-class problem and proposes controls, argues stream-vs-poll for alert latency, and brings rollups and retention for query speed — clear thinking on two or three core challenges.</li>
+          <li><strong>Staff+</strong> — goes deep on operations: meta-monitoring, backpressure and the drop-versus-catch-up policy, alert fatigue, and multi-tenant isolation. Holds experience-backed opinions on pull-versus-push collection and on histogram/percentile aggregation, and shows judgment about what to optimise now versus defer.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="message-queue"><a href="../patterns/messaging/message-queue.html">Message Queue</a><span class="rel-note">Kafka sits between the ingestion service and the store, decoupling them so a spike is buffered rather than dropped</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="load-leveling"><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">the queue smooths a bursty 5M-point/second firehose into a steady rate the write-limited store can sustain</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="batching"><a href="../patterns/concurrency/batching.html">Batching</a><span class="rel-note">host agents batch and pre-aggregate points locally before shipping, and the ingest API itself is batched</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cqrs"><a href="../patterns/architecture/cqrs.html">CQRS</a><span class="rel-note">the read (query) path is split from the write (ingest) path so each scales, tunes, and caches independently</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="lsm-tree"><a href="../patterns/distributed/coordination/lsm-tree.html">LSM Tree</a><span class="rel-note">the time-series store's log-structured backbone turns the incoming firehose into cheap sequential appends</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">metrics are pre-aggregated into multi-resolution rollups so a month-long chart reads buckets, not billions of raw samples</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cache-aside"><a href="../patterns/caching/cache-aside.html">Cache-Aside</a><span class="rel-note">a cache in front of the query service serves repeated dashboard windows without re-scanning storage</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="aggregator"><a href="../patterns/messaging/aggregator.html">Aggregator</a><span class="rel-note">the notification service collects breaches arriving in a short window and groups them by label into a single page</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="bloom-filter"><a href="../patterns/distributed/coordination/bloom-filter.html">Bloom Filter</a><span class="rel-note">a local bloom filter fronts the Redis series tracker so only possibly-new series pay for a round trip</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

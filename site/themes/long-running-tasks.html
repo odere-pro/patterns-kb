@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Long-Running Tasks · Themes</title>
+  <meta name="description" content="Long-Running Tasks — moving work that's too slow for the request path onto durable queues and background workers, with the redelivery, dead-lettering, backpressure, and idempotency that async processing demands.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#long-running-tasks",
+  "identifier": "long-running-tasks",
+  "name": "Long-Running Tasks",
+  "description": "Moving slow work off the request path onto durable queues and workers",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "theme",
+  "kb:band": "theme",
+  "kb:group": "theme",
+  "kb:tours": [
+    {
+      "@id": "../patterns/messaging/message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:role": "Hand the work off to a durable queue"
+    },
+    {
+      "@id": "../patterns/messaging/competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:role": "Drain the queue with a pool of workers"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:role": "Absorb bursts so workers aren't overwhelmed"
+    },
+    {
+      "@id": "../patterns/messaging/dead-letter-channel.html#dead-letter-channel",
+      "name": "Dead Letter Channel",
+      "kb:role": "Quarantine messages that keep failing"
+    },
+    {
+      "@id": "../patterns/concurrency/backpressure.html#backpressure",
+      "name": "Backpressure",
+      "kb:role": "Slow intake when the queue backs up"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:role": "Make at-least-once redelivery safe"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc theme">
+  <main class="doc-wrap" data-kb-id="long-running-tasks" data-kb-kind="theme" data-kb-band="theme" data-kb-group="theme" data-kb-essence="Moving slow work off the request path onto durable queues and workers" data-kb-order="18" data-kb-aliases="[&quot;async jobs&quot;,&quot;background jobs&quot;]" data-kb-tags="[&quot;asynchrony&quot;,&quot;messaging&quot;,&quot;resilience&quot;,&quot;throughput&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#themes-h">Themes</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Long-Running Tasks</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Theme · Building fluency</p>
+      <h1 class="doc-title">Long-Running Tasks</h1>
+      <p class="doc-essence">Work that's too slow to finish inside a request — transcoding a video, generating a report, sending a bulk campaign — accepted immediately with a job id and processed in the background by a pool of workers draining a durable queue. This theme is that pipeline, plus the failure handling that at-least-once processing demands.</p>
+      <div class="doc-metarow">
+        <span class="badge">Theme</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="long-running-tasks">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="framing" aria-labelledby="h-framing" data-kb-block="framing">
+      <h2 class="doc-h" id="h-framing">The question</h2>
+      <div class="prose">
+        <p>A profile fetch is a quick query — it returns in under a hundred milliseconds and the click feels instant. Generating a user's annual PDF report is not: it queries millions of rows, aggregates them, and renders charts, and it takes the better part of a minute. Serving that slow work synchronously breaks in two ways at once. Most web servers and load balancers cut a request off after 30–60 seconds, so it may never complete; and even when it does, the user stares at a spinner with no feedback, assumes it hung, and hits retry — doubling the work and making the load worse. Video transcoding, image resizing, bulk email, and large CSV imports all have the same shape: too slow for the request path.</p>
+        <p>The move is to split acceptance from processing. Validate the request, write a job record, return a job id in milliseconds — then let a separate pool of workers pull the job from a durable queue and do the heavy lifting at their own pace, updating status when done. The web tier becomes a lightweight router; the workers can run on hardware suited to the work — a GPU box for transcoding — and scale independently of the front end. This theme is the queue, the workers, and — because "process it later, elsewhere" quietly signs you up for redelivery, poison messages, and backlogs — the patterns that keep that pipeline correct under failure and under load.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradespace" aria-labelledby="h-tradespace" data-kb-block="tradespace">
+      <h2 class="doc-h" id="h-tradespace">The tradespace</h2>
+      <div class="prose">
+        <p>What you buy is decoupling: fast responses, fault isolation — a worker crashing on one job doesn't take down the API — and web servers and workers that scale on their own curves. What you pay is that the work isn't done when the call returns. The system is now eventually consistent, so a user may see stale state until processing finishes, and you've taken on real infrastructure: a queue to operate, job status to store and expose, and a new set of metrics to watch. The honest question isn't whether to go async — for genuinely slow work you have no choice — but how much of the failure surface you're prepared to handle, because a naive queue-and-worker setup has sharp edges.</p>
+        <p>Those edges are what the rest of the theme addresses. A worker can die mid-job, so redelivery has to be at-least-once — which means the same job can run twice, which means the work has to be idempotent. Some messages fail no matter how many times you retry, and left alone they retry forever and can crash a whole worker fleet, so they need somewhere else to go. And demand doesn't respect your worker count: a spike can grow the queue to millions of pending jobs faster than you can add capacity, so intake needs a way to push back. The choice of queue and worker runtime is real but secondary — Redis with Bull, SQS, RabbitMQ, or Kafka; plain servers, serverless functions, or containers — and it matters far less than getting the failure handling right.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    C["Client"] -->|"request"| W["Web tier: validate, enqueue, return job id"]
+    W -->|"job id (ms)"| C
+    W --> Q[("Durable queue")]
+    Q --> P["Worker pool drains at its own pace"]
+    P -->|"succeeds"| S["Store result, mark job complete"]
+    P -->|"keeps failing"| DL[("Dead-letter channel")]
+    Q -.->|"depth too high"| B["Backpressure: reject new work"]
+        </pre>
+        <figcaption>The web tier accepts and returns a job id immediately; workers drain a durable queue, completed jobs update status, poison messages divert to a dead-letter channel, and a backed-up queue pushes back on intake.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="tour" aria-labelledby="h-tour" data-kb-block="tour">
+      <h2 class="doc-h" id="h-tour">Patterns that run work in the background</h2>
+      <div class="tour">
+        <div class="tour-step" data-kb-member="message-queue" data-kb-role="Hand the work off to a durable queue">
+          <h3><a href="../patterns/messaging/message-queue.html">Message Queue</a></h3>
+          <p>The durable buffer at the center of the pattern. The web tier enqueues a job — typically just an id, with the payload stored elsewhere — and returns immediately; the queue holds it safely until a worker is ready, so nothing is lost if a worker crashes between accept and process. It's what lets acceptance and processing run at their own independent rates.</p>
+        </div>
+        <div class="tour-step" data-kb-member="competing-consumers" data-kb-role="Drain the queue with a pool of workers">
+          <h3><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a></h3>
+          <p>The worker pool that drains the queue. Point several identical, stateless workers at the same queue and let the broker hand each job to whichever is free; the delivery guarantee keeps two workers off the same job. Adding capacity for a backlog — month-end reports, a transcoding surge — becomes a deployment decision, not a code change.</p>
+        </div>
+        <div class="tour-step" data-kb-member="load-leveling" data-kb-role="Absorb bursts so workers aren't overwhelmed">
+          <h3><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a></h3>
+          <p>The queue framed as a shock absorber, not just a mailbox. Arrival is bursty; worker capacity — database throughput, a rate-limited downstream, a fixed pool — is comparatively fixed. Putting the queue between them turns a spike that would topple the workers into a managed backlog that drains over the following minutes, trading instant handling for reliable eventual handling.</p>
+        </div>
+        <div class="tour-step" data-kb-member="dead-letter-channel" data-kb-role="Quarantine messages that keep failing">
+          <h3><a href="../patterns/messaging/dead-letter-channel.html">Dead Letter Channel</a></h3>
+          <p>The escape hatch for jobs that will never succeed. A malformed payload or a code bug fails on every retry; left in place it wastes worker cycles, and a poison message can crash instance after instance. After a bounded number of attempts, route it to a separate channel where it can be inspected and replayed once fixed — keeping healthy work flowing past it.</p>
+        </div>
+        <div class="tour-step" data-kb-member="backpressure" data-kb-role="Slow intake when the queue backs up">
+          <h3><a href="../patterns/concurrency/backpressure.html">Backpressure</a></h3>
+          <p>The valve on intake. When a spike outpaces the workers, the queue can grow to millions of pending jobs, memory climbs, and wait times stretch to hours. Backpressure sets a depth limit and returns an immediate "system busy" rather than silently accepting work that can't be done in time — usually paired with autoscaling workers on queue depth, since by the time CPU looks high the queue is already backed up.</p>
+        </div>
+        <div class="tour-step" data-kb-member="idempotency" data-kb-role="Make at-least-once redelivery safe">
+          <h3><a href="../patterns/messaging/idempotency.html">Idempotency</a></h3>
+          <p>The safety net for at-least-once processing. A worker can finish a job and die before reporting success, so the queue redelivers and a second worker re-runs it; without care that means two charges or two emails. An idempotency key per logical job — checked before the irreversible action — makes a redelivered job a no-op, and is the same mechanism that collapses an impatient user's triple-click into one piece of work.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="decide" aria-labelledby="h-decide" data-kb-block="decide">
+      <h2 class="doc-h" id="h-decide">When to reach for what</h2>
+      <div class="table-scroll">
+        <table class="decision">
+          <thead>
+            <tr><th>If you need…</th><th>Strategy</th><th>Reach for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>To move slow work off the request path so the API returns fast</td><td>Accept and defer</td><td><a href="../patterns/messaging/message-queue.html">Message Queue</a></td></tr>
+            <tr><td>To drain a backlog faster by adding capacity</td><td>Parallelize workers</td><td><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a></td></tr>
+            <tr><td>To absorb bursts without toppling the workers</td><td>Buffer the rate mismatch</td><td><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a></td></tr>
+            <tr><td>To stop a message that always fails from blocking or crashing workers</td><td>Quarantine after N attempts</td><td><a href="../patterns/messaging/dead-letter-channel.html">Dead Letter Channel</a></td></tr>
+            <tr><td>To keep a traffic spike from growing the queue unbounded</td><td>Push back on intake</td><td><a href="../patterns/concurrency/backpressure.html">Backpressure</a></td></tr>
+            <tr><td>Redelivered or duplicate jobs to stay correct</td><td>Same effect on every attempt</td><td><a href="../patterns/messaging/idempotency.html">Idempotency</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="doc-section" id="siblings" aria-labelledby="h-siblings" data-kb-block="siblings">
+      <h2 class="doc-h" id="h-siblings">Related areas</h2>
+      <div class="fluency-list">
+        <div class="fluency-item"><a href="./spike-handling.html">Handling Spikes</a><span>A burst that outpaces the workers is a spike; load leveling and backpressure are how a queue turns one into a backlog instead of an outage.</span></div>
+        <div class="fluency-item"><a href="./resilience.html">Resilience</a><span>Redelivery, dead-lettering, idempotency, and backpressure are the resilience patterns that keep an async pipeline correct when workers and dependencies fail.</span></div>
+        <div class="fluency-item"><a href="./streaming.html">Streaming</a><span>Both push work through queues, but streaming keeps an unbounded, ordered flow moving continuously where this theme processes discrete jobs to completion.</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Theme navigation">
+      <a class="prev" href="./multi-step-processes.html">← Multi-Step Processes</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="./realtime-updates.html">Real-Time Updates →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

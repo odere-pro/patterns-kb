@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feature Engineering · Patterns</title>
+  <meta name="description" content="Feature engineering — choosing which signals a model sees, how to encode them, and how to keep them fresh and consistent between training and serving.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#feature-engineering",
+  "identifier": "feature-engineering",
+  "name": "Feature Engineering",
+  "description": "Choosing which signals a model sees, how to encode them, and how to keep them fresh",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "ml",
+  "kb:group": "ml",
+  "kb:combines-with": [
+    {
+      "@id": "./embeddings.html#embeddings",
+      "name": "Embeddings",
+      "kb:note": "Embeddings are the default representation for the high-cardinality and sequence signals you engineer"
+    },
+    {
+      "@id": "./generalization.html#generalization",
+      "name": "Generalization",
+      "kb:note": "Leakage, cold start, and drift are feature problems that wreck generalization"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/ml-system-design.html#ml-system-design",
+      "name": "ML System Design",
+      "kb:role": "The Data and Features phase: enumerate sources, encode, keep train and serve in sync"
+    },
+    {
+      "@id": "../../themes/harmful-content.html#harmful-content",
+      "name": "Harmful Content",
+      "kb:role": "Content, behavioural (age-corrected), and creator signals"
+    },
+    {
+      "@id": "../../themes/bot-detection.html#bot-detection",
+      "name": "Bot Detection",
+      "kb:role": "Activity, content, network-topology, metadata and real-time signals"
+    },
+    {
+      "@id": "../../themes/video-recommendations.html#video-recommendations",
+      "name": "Video Recommendations",
+      "kb:role": "Video and user signals, engagement normalised for age and velocity"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc lens">
+  <main class="doc-wrap" data-kb-id="feature-engineering" data-kb-kind="pattern" data-kb-band="ml" data-kb-group="ml" data-kb-essence="Choosing which signals a model sees, how to encode them, and how to keep them fresh" data-kb-order="1" data-kb-tags="[&quot;data-modeling&quot;,&quot;transformation&quot;,&quot;data-access&quot;,&quot;machine-learning&quot;]" data-kb-solves="[&quot;my model looks great offline but falls apart in production&quot;,&quot;a new user has no history so half of my features are blank&quot;,&quot;engagement rate is meaningless for an item with only a handful of views&quot;,&quot;the signal my model relies on keeps drifting and it goes stale&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-ml-h">Machine Learning</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Feature Engineering</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Machine Learning</p>
+      <h1 class="doc-title">Feature Engineering</h1>
+      <p class="doc-essence">Deciding which signals a model gets to see and how they reach it — enumerating the sources of signal, encoding each for a modern model, and keeping them fresh and consistent between training and serving. It is the design decision the model cannot make for itself.</p>
+      <div class="doc-metarow">
+        <span class="badge">ML</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="feature-engineering">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Feature engineering</strong> is the work of choosing which inputs a model sees and shaping them into a form it can learn from. A decade ago that meant hand-crafting numeric features — an <code>engagement_count_per_view</code> here, a bucketed file size there — for a logistic regression or a gradient-boosted tree. Modern systems push more of that work into the model: transformers and multimodal backbones ingest raw text, images, and event sequences directly and learn the interactions themselves.</p>
+        <p>The force it resolves is that a model can only reason about signals it is given. Choosing which data sources to expose is a human design decision the model cannot make for itself — and most "the model isn't learning what we want" failures trace back not to architecture but to a missing, stale, or inconsistently-computed data source. So the discipline reframes around four questions: what are the sources of signal, how is each encoded, how is it kept fresh, and how do training and serving stay in sync.</p>
+        <p>Nearly every problem draws on the same five sources — <strong>content/item</strong>, <strong>actor/user</strong>, <strong>behaviour</strong>, <strong>network/graph</strong>, and <strong>context/request</strong> — with different ones dominating per problem. A common failure is stopping at content signals and neglecting the other four.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    C["Content / item"] --> E["Encode"]
+    A["Actor / user"] --> E
+    B["Behaviour"] --> E
+    N["Network / graph"] --> E
+    X["Context / request"] --> E
+    E --> F["Feature store"]
+    F --> M["Model"]
+        </pre>
+        <figcaption>The five sources of signal are each encoded for a model — text and images through encoders, IDs through embedding tables, sequences as tokens, numerics by log or bucket — then served through a store whose cadence runs from static, to daily batch, to streaming, to request-time. The serving cadence, not the feature list, is the real design lever.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Raw text and images</dt>
+        <dd>Tokenize text through an encoder and patch-encode images through a vision backbone, either trained jointly with the model or fine-tuned from a pretrained backbone. Manual extraction (bag-of-words counts, colour histograms) is now rare.</dd>
+        <dt id="variations-item-2">Sparse categoricals</dt>
+        <dd>Item IDs, user IDs, and enums become an embedding table — one learned vector per category, looked up by ID. For very high cardinality, the hashing trick maps IDs into a fixed bucket count so heavy users keep clean signal while the long tail converges toward an average.</dd>
+        <dt id="variations-item-3">Sequences</dt>
+        <dd>Lists such as recent watches or clicks are either mean-aggregated (cheap, order-free, for light rankers filtering millions of candidates) or fed as tokens through a transformer that learns temporal structure (for heavy rankers maximising quality).</dd>
+        <dt id="variations-item-4">Numeric scalars</dt>
+        <dd>The one place classic feature engineering still earns its keep: log-scale power-law values, bucket-and-embed non-monotonic ones, and stabilise low-denominator rates with Bayesian smoothing rather than trusting a raw ratio over three views.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Enumerating sources before individual features gives broad, structured coverage and avoids both the blank-page freeze and the thirty-feature stream-of-consciousness dump.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Good signal selection outweighs model choice — the right sources with a modest model beat a sophisticated model starved of signal.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Narrating serving cadence (static → batch → streaming → request-time) surfaces the infrastructure cost of each signal before it is built.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Naming the pitfalls a problem is exposed to — leakage, cold start, drift, adversarial evasion — is exactly what distinguishes a senior answer.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Behavioural signals are the source with the most engineering pain — drift, leakage, and train/serve inconsistency cluster here.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">A tempting fast-moving signal can quietly demand a whole streaming pipeline; not every signal justifies the bottom tier of cadence.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Leaked features look excellent offline and fail online, and the leak is often subtle enough to require squinting to spot.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Hand-crafted numeric features are increasingly a minority of what feeds top-of-funnel ranking, so over-investing there can read as dated.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You are designing any ML system and need to decide which data the model should see — roughly a third of a system-design interview is this discussion.</li>
+            <li id="usage-when-2" data-kb-polarity="when">A model performs worse in production than offline and you suspect a missing, stale, or inconsistently-computed signal rather than the architecture.</li>
+            <li id="usage-when-3" data-kb-polarity="when">A rate feature (negatives per view, click rate) is unstable or undefined at low counts and needs smoothing or a prior.</li>
+            <li id="usage-when-4" data-kb-polarity="when">A new entity has no history, so history-dependent features are blank and need an explicit missing-value strategy.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The problem is genuinely a raw-content task a foundation model handles end to end, and hand-crafting many features just adds noise and maintenance.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">You would spend interview or engineering time enumerating features exhaustively rather than picking the highest-impact few and moving on.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — Bayesian smoothing stabilizes a low-denominator rate feature</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// A raw rate over few observations is noise. Smooth it toward a prior:
+//   smoothed = (events + alpha * C) / (trials + C)
+// alpha = prior rate, C = pseudo-count (how many trials it takes to overcome it).
+function smoothedRate(events: number, trials: number, alpha = 0.02, C = 50): number {
+  return (events + alpha * C) / (trials + C);
+}
+
+// A: heavy traffic, clearly bad.  B: tiny sample, looks worst raw.  C: heavy, genuinely bad.
+const items = [
+  { id: "A", neg: 240,  views: 12000 },
+  { id: "B", neg: 4,    views: 8 },
+  { id: "C", neg: 1800, views: 9000 },
+];
+
+for (const it of items) {
+  const raw = it.neg / it.views;
+  console.log(it.id, "raw", raw.toFixed(3), "smoothed", smoothedRate(it.neg, it.views).toFixed(3));
+}
+// B's raw 0.500 looks worst, but with only 8 views the prior dominates:
+// its smoothed rate falls near 8.6%, while C stays near its real 20%.</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="pinterest-transact"><strong>Pinterest TransActV2</strong><span>Feeds up to 16,000 lifelong user actions as a raw sequence through a self-attention transformer, rather than compressing them into hand-engineered counts — the sequence-as-tokens approach for a heavy ranker.</span></div>
+        <div class="wild-item" data-kb-example="stripe-radar"><strong>Stripe Radar</strong><span>Scores over a thousand signals per transaction and leans heavily on cross-merchant, card-network-level features, because having seen roughly 90% of cards before makes network-level signal outweigh any single merchant's own fraud history.</span></div>
+        <div class="wild-item" data-kb-example="doordash-dashclip"><strong>DoorDash DashCLIP</strong><span>A CLIP-style contrastive model trained on tens of millions of query-product pairs that aligns product images, product text, and search queries into a shared embedding space, then feeds those vectors into the ranker as features.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="embeddings"><a href="./embeddings.html">Embeddings</a><span class="rel-note">Embeddings are the default representation for the high-cardinality and sequence signals you engineer</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="generalization"><a href="./generalization.html">Generalization</a><span class="rel-note">Leakage, cold start, and drift are feature problems that wreck generalization</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="ml-system-design"><a href="../../themes/ml-system-design.html">ML System Design</a><span>The data-and-features phase: enumerate sources, encode, keep train and serve in sync</span></div>
+        <div class="fluency-item" data-kb-theme="harmful-content"><a href="../../themes/harmful-content.html">Harmful Content</a><span>Content, behavioural (age-corrected), and creator signals</span></div>
+        <div class="fluency-item" data-kb-theme="bot-detection"><a href="../../themes/bot-detection.html">Bot Detection</a><span>Activity, content, network-topology, metadata, and real-time signals</span></div>
+        <div class="fluency-item" data-kb-theme="video-recommendations"><a href="../../themes/video-recommendations.html">Video Recommendations</a><span>Video and user signals, engagement normalised for age and velocity</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#lens-ml-h">← Machine Learning</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./embeddings.html">Embeddings →</a>
+    </nav>
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

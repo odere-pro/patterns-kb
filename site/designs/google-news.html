@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google News · Patterns</title>
+  <meta name="description" content="Design a news aggregator — fan thousands of publishers into precomputed regional feeds and serve an infinite scroll in under 200 ms.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#google-news",
+  "identifier": "google-news",
+  "name": "Google News",
+  "description": "Aggregate thousands of publishers into precomputed regional feeds and serve an infinite scroll to 100M users in under 200 ms",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "each region's feed is a Redis sorted set precomputed and maintained incrementally, so a read never assembles it from the store"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/change-data-capture.html#change-data-capture",
+      "name": "Change Data Capture",
+      "kb:note": "every article write emits a change event that workers consume to splice the article into affected regional feeds within seconds"
+    },
+    {
+      "@id": "../patterns/caching/cache-aside.html#cache-aside",
+      "name": "Cache-Aside",
+      "kb:note": "the baseline serves each regional feed from Redis with misses falling through to the article store before the design upgrades to CDC"
+    },
+    {
+      "@id": "../patterns/distributed/routing/cdn.html#cdn",
+      "name": "CDN",
+      "kb:note": "thumbnails are cached at edge POPs in front of object storage, giving sub-200ms global loads and cutting origin requests by 90%+"
+    },
+    {
+      "@id": "../patterns/distributed/routing/object-storage.html#object-storage",
+      "name": "Object Storage",
+      "kb:note": "the system downloads its own resized thumbnail copy into S3-style object storage and keeps binary blobs out of the database"
+    },
+    {
+      "@id": "../patterns/distributed/routing/api-gateway.html#api-gateway",
+      "name": "API Gateway",
+      "kb:note": "a single gateway fronts the Feed Service for routing, auth, rate limiting, and request validation before requests reach it"
+    },
+    {
+      "@id": "../patterns/distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "Feed Service instances hold no per-request state, so auto-scaling groups add and drop them freely during a breaking-news spike"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/replication.html#replication",
+      "name": "Replication",
+      "kb:note": "a regional Redis master takes writes while ~100 read replicas absorb the feed reads, with Sentinel promoting on master failure"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="google-news" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Aggregate thousands of publishers into precomputed regional feeds and serve an infinite scroll to 100M users in under 200 ms" data-kb-order="11" data-kb-aliases='["news aggregator","news feed"]' data-kb-tags='["system-design","caching","read-optimization","event-driven","scalability"]' data-kb-solves='["my feed takes seconds to load because I query and rank millions of rows on every request","new items keep shifting my pages so users see the same post twice or skip past others while scrolling","reads outnumber writes a million to one and one database cannot survive a traffic spike","content shows up hours late because I only poll each source every few hours","my cache expires and every request for the same page stampedes the database at once"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Google News</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Google News</h1>
+      <p class="doc-essence">A news aggregator pulls articles from thousands of publishers and presents each reader a single, endlessly scrollable feed for their region. Nobody reads the whole catalogue — they read the top of a regional slice, over and over — so the design is read-first: precompute the feed each region needs and keep it in memory, rather than assembling it from millions of rows on every request.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="google-news">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Two jobs sit at opposite ends of the system. On one side, <strong>ingest</strong> content from thousands of independent publishers — each with its own feed format, update cadence and reliability — and normalise it into one shape. On the other, <strong>serve</strong> that content to hundreds of millions of readers who scroll a feed and, when something catches their eye, click through to the publisher's own site. The aggregator hosts none of the articles; it hosts the <em>index</em> of them. The load is wildly lopsided — a trickle of new articles against a flood of feed reads — and that asymmetry, more than anything else, decides the architecture. This is the read-heavy playbook: the interesting engineering is not in collecting articles but in delivering the right slice of them fast, fresh, and at scale.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>View an aggregated feed of recent articles drawn from thousands of publishers, scoped to the reader's region.</li>
+            <li>Scroll that feed &ldquo;infinitely&rdquo; — page after page, without duplicates or gaps.</li>
+            <li>Click an article and be redirected to the publisher's website for the full content.</li>
+          </ol>
+          <p class="prose">Out of scope: interest-based customisation, saving articles, and social sharing — named explicitly so the core stays narrow. (Categories and personalisation return as extensions at the end.)</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Availability &gt; consistency</strong> — a reader would rather see a slightly stale feed than an error page, so the CAP trade tips toward availability.</li>
+            <li><strong>Latency</strong> — a feed page returns in under 200&nbsp;ms.</li>
+            <li><strong>Freshness</strong> — a published article reaches the relevant feeds within about 30&nbsp;minutes (tightened to seconds for cooperating publishers).</li>
+            <li><strong>Scale</strong> — 100M daily actives, spiking toward 500M, and up to ~10M concurrent readers in one region during a major story.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Reads.</strong> 100M DAU refreshing 5&ndash;10 times a day is 0.5&ndash;1B feed requests/day &asymp; <strong>~11,500 req/s</strong> on average. News is bursty, though, and the number that actually sizes the system is the breaking-news peak the brief hands us: <strong>~10M concurrent readers in a single hot region</strong>. Everything hangs off surviving that.</p>
+        <p><strong>Writes.</strong> Across thousands of publishers, even a busy news hour yields only 50&ndash;100 new articles &mdash; a handful of writes per second. Reads outrun writes by roughly a million to one, which is the whole reason the design is built around a read cache rather than a fast database.</p>
+        <p><strong>Working set.</strong> A reader only ever sees the top of the feed, so what has to be fast is the last <strong>~1,000&ndash;2,000 articles per region</strong>, not the whole archive. As sorted article ids plus light metadata that is a few megabytes per region &mdash; it fits in memory comfortably, no sharding required.</p>
+        <p><strong>Cache fan-out.</strong> One Redis instance serves on the order of <strong>~100k req/s</strong>. To absorb 10M concurrent readers in a peak region you need roughly <em>10M &divide; 100k &asymp; 100 replicas</em> of that region's feed &mdash; a read-throughput problem, not a storage one, since the data itself is tiny.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three entities carry the whole system:</p>
+        <ul>
+          <li><strong>Article</strong> — the unit of content: <code>id</code>, <code>title</code>, <code>summary</code>, <code>thumbnail_url</code>, <code>published_at</code>, <code>publisher_id</code>, <code>region</code>, and the canonical <code>url</code> on the publisher's site. Note there is no article <em>body</em> — the aggregator only indexes, it does not host.</li>
+          <li><strong>Publisher</strong> — a content source: <code>id</code>, <code>name</code>, <code>site_url</code>, <code>feed_url</code>, <code>region</code>, and a priority tier that decides how often it is polled.</li>
+          <li><strong>User</strong> — <code>id</code> and <code>region</code>, the latter inferred from IP or set explicitly. Tracked even for anonymous readers, because region alone selects which feed to serve.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>One read endpoint does the work. It starts as offset pagination and is upgraded, in the first deep dive, to an opaque cursor — the client just echoes back whatever <code>next_cursor</code> it was handed:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — fetch a feed page, then click through</summary>
+<pre><code class="language-http" data-kb-lang="http">GET /feed?region=US&amp;limit=20&amp;cursor={opaque}
+&rarr; 200 {
+     "articles": [ { "id", "title", "summary",
+                     "thumbnail_url", "url", "published_at" }, ... ],
+     "next_cursor": "opaque-token-for-the-next-page"
+   }
+
+# Clicking an article is client-side: the browser navigates to
+# article.url on the publisher's site. A real product would route
+# the click through a tracking redirect for analytics:
+GET /article/{id}   &rarr; 302 Found  Location: https://publisher.example/story</code></pre>
+      </details>
+      <div class="prose">
+        <p>There is deliberately no &ldquo;get one article&rdquo; endpoint — the full story lives on the publisher, and the feed row already carries the URL the browser needs.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Split the system along its load asymmetry into an <strong>ingestion side</strong> and a <strong>serving side</strong>, deployed and scaled independently because they have nothing in common: one is write-light, batchy and background; the other is read-heavy, spiky and user-facing.</p>
+        <p>The <strong>Data Collection Service</strong> polls each publisher's RSS feed (a lightweight XML-over-HTTP syndication format), extracts and normalises each article, downloads its lead image, and writes two places: article metadata to the <strong>article store</strong>, and a resized thumbnail to <a href="../patterns/distributed/routing/object-storage.html">object storage</a> — the system keeps its <em>own</em> copy rather than hotlinking, so a slow or vanished publisher image never breaks the feed UI. Every write to the store emits a <a href="../patterns/distributed/coordination/change-data-capture.html">change-data-capture</a> event; <strong>Feed Generation Workers</strong> consume those events and splice the new article into each affected region's feed. That regional feed is the heart of the design — a Redis sorted set, ordered by publish time, holding just the recent articles a region needs. It is a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of the store, maintained incrementally, so a read never has to assemble it.</p>
+        <p>On the serving side, the client hits an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> (routing, auth, rate limiting, validation), which forwards to the <strong>Feed Service</strong>. That service does almost nothing: one <code>ZREVRANGE</code> against the region's sorted set and it has the page. Thumbnails are served straight from a <a href="../patterns/distributed/routing/cdn.html">CDN</a> in front of object storage, never touching the application tier.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Pub["Publishers · RSS / webhooks"]
+    Ingest["Data Collection Service"]
+    DB[("Article store")]
+    Obj[("Object storage · thumbnails")]
+    CDC["Change Data Capture"]
+    Workers["Feed Generation Workers"]
+    Redis[("Redis · regional feed sorted sets")]
+    Client["Client / browser"]
+    Gateway["API Gateway"]
+    Feed["Feed Service"]
+    CDN["CDN / edge"]
+    Pub -->|"poll / push"| Ingest
+    Ingest -->|"write article"| DB
+    Ingest -->|"store thumbnail"| Obj
+    DB -->|"row change"| CDC
+    CDC -->|"event"| Workers
+    Workers -->|"ZADD + trim"| Redis
+    Client -->|"GET /feed"| Gateway
+    Gateway --> Feed
+    Feed -->|"ZREVRANGE"| Redis
+    Obj -->|"origin"| CDN
+    CDN -->|"thumbnails"| Client
+        </pre>
+        <figcaption>Ingestion (left branch) writes the store and, via CDC, keeps the regional feed caches current. Serving (right branch) is one sorted-set read; thumbnails go client&harr;CDN, bypassing the app tier.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Keeping pagination stable while the feed grows</h3>
+        <p>Offset pagination (<code>OFFSET (page-1)*limit</code>) is the obvious first move and it quietly breaks. New articles are inserted at the top while a reader scrolls, which shifts every row down: articles they already saw reappear on the next page, and articles in between get skipped entirely. During a busy news hour that drift hits within a single browsing session.</p>
+        <ul>
+          <li><strong>Timestamp cursor.</strong> Return the <code>published_at</code> of the last row and page with <code>WHERE published_at &lt; cursor ORDER BY published_at DESC</code>. Because the query anchors to a fixed point instead of a moving offset, inserts no longer shift the window. But batch imports produce many articles sharing one timestamp, and a strict <code>&lt;</code> silently skips same-timestamp siblings.</li>
+          <li><strong>Composite cursor.</strong> Break the tie by pairing timestamp with id — <code>WHERE (published_at, id) &lt; (cur_ts, cur_id)</code> with a composite index on <code>(published_at, id)</code>. This is the tuple-comparison approach large timelines use; it is correct but adds cursor encoding and a slightly larger index.</li>
+          <li><strong>Monotonic ids (chosen).</strong> If article ids are time-ordered from birth — ULIDs, or a sequence — the id alone <em>is</em> the ordering. The cursor collapses to <code>WHERE id &lt; cursor_id ORDER BY id DESC</code> against one index: no timestamps, no ties. For chronological data like a news feed this is both the simplest and the fastest, at the cost of committing to the id scheme up front (a real migration if you started with random UUIDs).</li>
+        </ul>
+        <h3>2 · Serving a feed page in under 200&nbsp;ms</h3>
+        <p>At 0.5&ndash;1B feed requests a day, a per-request database query — filter millions of articles by region, sort by time, paginate — will blow the latency budget even with perfect indexing. The fix is to stop querying on read and serve a precomputed feed from memory.</p>
+        <ul>
+          <li><strong>TTL cache-aside.</strong> Cache each region's feed in a Redis sorted set (<code>feed:US</code>) with, say, a 30-minute TTL; on a miss, query the store, populate, return. This is <a href="../patterns/caching/cache-aside.html">cache-aside</a>, and it has two problems. Up to 30 minutes of staleness fights the freshness goal, and — worse — when a hot region's entry expires, every concurrent request misses at once and stampedes the database, a <em>thundering herd</em> that degrades latency for minutes at a time.</li>
+          <li><strong>CDC-driven precompute (chosen).</strong> Drop the TTL and keep the feed continuously fresh instead. When ingestion writes an article, a change-data-capture event reaches the Feed Generation Workers, which <code>ZADD</code> it (score = publish time) into every affected regional set and then <code>ZREMRANGEBYRANK</code> to trim back to the recent ~1&ndash;2k — bounding memory without any TTL. Reads become a pure <code>ZREVRANGE</code> in under 5&nbsp;ms, freshness is measured in seconds, and there is no expiry to stampede. The cost is a real pipeline (CDC, a queue, workers) to operate and a rebuild path for when a worker or cache falls over.</li>
+        </ul>
+      </div>
+      <details class="sketch">
+        <summary>Redis — maintain a regional feed, then read a page</summary>
+<pre><code class="language-python" data-kb-lang="python"># worker, on a CDC "new article" event
+for region in affected_regions(article):
+    ZADD  f"feed:{region}"  score=article.id  member=article_json
+    ZREMRANGEBYRANK  f"feed:{region}"  0  -2001   # keep newest ~2000
+
+# Feed Service, on GET /feed?region=US&amp;cursor=ID
+#   ids are monotonic, so the cursor is just an id / score
+ZREVRANGEBYSCORE  "feed:US"  (cursor_id  -inf  LIMIT 0 20</code></pre>
+      </details>
+      <div class="prose">
+        <h3>3 · Getting breaking news in within 30 minutes</h3>
+        <p>Baseline polling runs every 3&ndash;6 hours — fine for a magazine, useless for a fast-moving story readers already saw on social media. Freshness is a spectrum of cooperation with the publisher.</p>
+        <ul>
+          <li><strong>Tiered polling.</strong> Poll by priority — major outlets every 5&ndash;10 minutes, mid-tier every 30, niche every few hours — and use ETags / <code>Last-Modified</code> to skip unchanged feeds. Cheap and unilateral, but still reactive: even 5-minute polling lags real time, and newer publishers may have no RSS at all.</li>
+          <li><strong>Intelligent scraping.</strong> For publishers without a feed, crawl their homepage for new links via known selectors and a fingerprint set of seen URLs, then normalise into the same ingestion pipeline. A fallback, not a primary path — HTML changes break extractors, and it raises legal questions.</li>
+          <li><strong>Webhooks + fallback (chosen).</strong> Flip pull to push: cooperating publishers <code>POST /webhooks/article-published</code> the instant they publish, authenticated by a shared secret. Content lands in feeds within ~30 seconds via the same CDC-to-cache path. It needs publisher buy-in, so it can't be rolled out unilaterally — hence the hybrid: webhooks for premium partners, frequent polling for cooperative feeds, scraping for the rest.</li>
+        </ul>
+        <h3>4 · Thumbnails without melting the origin</h3>
+        <p>Only thumbnails render in-feed (the full story is on the publisher), but at 100M+ readers even thumbnails are a delivery problem.</p>
+        <ul>
+          <li><strong>Blobs in the database.</strong> Storing 20&ndash;50&nbsp;KB of image bytes per row alongside metadata bloats backups, evicts real query workload from memory, and collapses past a few thousand articles. A textbook example of what object storage exists to prevent — rejected outright.</li>
+          <li><strong>S3 with direct links.</strong> Downsize once, upload to object storage, store the URL; browsers load images directly, off the app tier. Better, but distant readers pay latency to a single region and there is one fixed size for every screen.</li>
+          <li><strong>Object storage + CDN, multiple sizes (chosen).</strong> Keep object storage as origin, front it with a CDN, and generate a few sizes (mobile / desktop / retina) chosen client-side via <code>srcset</code>. Edge caching gives sub-200&nbsp;ms global loads and cuts origin requests by 90%+, so serving <em>more</em> variants costs <em>less</em> overall.</li>
+        </ul>
+        <h3>5 · Surviving a breaking-news spike</h3>
+        <p>News consumption is inherently regional — Americans want US news, Europeans want EU news — which is the structural gift that makes 10M concurrent tractable. Deploy per region so each cluster handles only its own traffic; a spike in one region leaves the others at baseline. Then walk each tier under peak load:</p>
+        <ul>
+          <li><strong>Feed Service.</strong> One app server handles tens of thousands of connections, nowhere near 10M. Because instances are <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>, they scale out horizontally behind a load balancer — <a href="../patterns/distributed/routing/autoscaling.html">auto-scaling</a> groups spin instances up on CPU pressure and back down when the story cools.</li>
+          <li><strong>Cache tier.</strong> This is the real scaling target, since it now absorbs essentially all read traffic. A region holds only ~2,000 articles, so a single master fits the whole dataset — no sharding needed. The axis is pure read throughput, solved by <a href="../patterns/distributed/coordination/replication.html">replication</a>: writes hit the master, reads fan out across a fleet of read replicas (~100 in a peak region), and Redis Sentinel promotes a replica if the master dies. Replication lag stays under ~200&nbsp;ms — invisible on a news feed.</li>
+          <li><strong>Database.</strong> Never in the read path once the cache is precomputed, so it never sees 10M concurrent reads at all — the cache shields it entirely.</li>
+        </ul>
+        <h3>6 · Beyond one regional feed — categories and personalisation</h3>
+        <p>Two common extensions, and in both the tempting answer over-builds:</p>
+        <ul>
+          <li><strong>Categories.</strong> Rather than maintain a separate sorted set per category-and-region pair (25 categories &times; 10 regions = 250 caches to invalidate), store full article metadata as the cached member and <em>filter in memory</em>: pull the region's top ~1,000 with one <code>ZREVRANGE</code> and keep the ones tagged <code>sports</code>. Reading 1,000 members plus filtering is ~10&nbsp;ms, each article is still stored once, and the CDC cache is reused unchanged — the straightforward option wins.</li>
+          <li><strong>Personalisation.</strong> Scoring thousands of articles against 100M profiles on every request is billions of calculations an hour — hopeless inside 200&nbsp;ms. Per-user feed caches explode memory (1,000 articles &times; 50M active users). The workable answer stores a tiny per-user preference vector and <em>assembles</em> a feed on demand by mixing a handful of existing category caches (e.g. 60% tech + 30% business + 10% trending), boosting trending weight during breaking news. Roughly 100&times; less memory than per-user caches, with an ML model tuning the mix — the heavy ranking itself is left as a black box, out of scope here.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">A feed page is one in-memory sorted-set read (~5&nbsp;ms), so the 200&nbsp;ms budget holds even at a 10M-concurrent regional peak.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">CDC keeps feeds fresh to within seconds and removes the TTL-expiry stampede that plagues cache-aside.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Ingestion and serving scale on independent axes — one batchy and write-light, the other spiky and read-heavy.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Regional deployment contains blast radius: a spike in one region never touches another's capacity.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The precomputed feed duplicates article data across regional (and category) caches — more memory and a pipeline to keep in sync.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Availability is chosen over consistency: a just-published article is briefly absent, and a replica can trail the master by ~200&nbsp;ms.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">CDC, a queue and workers are real operational surface — corruption or a worker crash needs an explicit cache-rebuild path.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Seconds-level freshness depends on publisher cooperation; without webhooks you fall back to polling and its minutes-to-hours lag.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end flow: a collector polls sources into a store, a feed service returns a region's recent articles, pagination works, and clicks redirect to the publisher. Recognises that reads dominate and that a cache helps.</li>
+          <li><strong>Senior</strong> — drives the read-first framing, replaces offset pagination with cursors unprompted, designs the precomputed feed cache <em>and</em> its freshness mechanism (why TTL isn't enough, why CDC is), and separates ingestion from serving on their different scaling profiles.</li>
+          <li><strong>Staff+</strong> — treats the system as regional from the first minute, volunteers the CDC pipeline with its failure and rebuild story, sizes the Redis replica fleet for a breaking-news spike, and reasons about the freshness ladder, thumbnail delivery, and categories/personalisation as extensions of the same cache rather than rewrites.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">each region's feed is a Redis sorted set precomputed and maintained incrementally, so a read never assembles it from the store</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="change-data-capture"><a href="../patterns/distributed/coordination/change-data-capture.html">Change Data Capture</a><span class="rel-note">every article write emits a change event that workers consume to splice the article into affected regional feeds within seconds</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cache-aside"><a href="../patterns/caching/cache-aside.html">Cache-Aside</a><span class="rel-note">the baseline serves each regional feed from Redis with misses falling through to the article store before the design upgrades to CDC</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cdn"><a href="../patterns/distributed/routing/cdn.html">CDN</a><span class="rel-note">thumbnails are cached at edge POPs in front of object storage, giving sub-200ms global loads and cutting origin requests by 90%+</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-storage"><a href="../patterns/distributed/routing/object-storage.html">Object Storage</a><span class="rel-note">the system downloads its own resized thumbnail copy into S3-style object storage and keeps binary blobs out of the database</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="api-gateway"><a href="../patterns/distributed/routing/api-gateway.html">API Gateway</a><span class="rel-note">a single gateway fronts the Feed Service for routing, auth, rate limiting, and request validation before requests reach it</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">Feed Service instances hold no per-request state, so auto-scaling groups add and drop them freely during a breaking-news spike</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="replication"><a href="../patterns/distributed/coordination/replication.html">Replication</a><span class="rel-note">a regional Redis master takes writes while ~100 read replicas absorb the feed reads, with Sentinel promoting on master failure</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

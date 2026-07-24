@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect Four · Patterns</title>
+  <meta name="description" content="Low-level design of Connect Four — where the turn rules live, where the grid math lives, and how an enum makes an impossible game state unwritable.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#connect-four",
+  "identifier": "connect-four",
+  "name": "Connect Four",
+  "description": "Drop discs into a 7×6 grid and detect four in a row — an OOP design about where the game rules, the grid math, and the game's state each belong",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../principles/separation-of-concerns.html#separation-of-concerns",
+      "name": "Separation of Concerns",
+      "kb:note": "Grid geometry lives on Board, turn and state rules on Game, so the two reasons to change never mix"
+    },
+    {
+      "@id": "../principles/single-responsibility.html#single-responsibility",
+      "name": "Single Responsibility Principle",
+      "kb:note": "Each class carries one job — Board the grid, Game the flow, Player the data — and one reason to change"
+    },
+    {
+      "@id": "../principles/dry.html#dry",
+      "name": "Don't Repeat Yourself (DRY)",
+      "kb:note": "Four win directions collapse to one countInDirection helper driven by (dr,dc) vectors, so a fix lands once not four times"
+    },
+    {
+      "@id": "../principles/yagni.html#yagni",
+      "name": "You Aren't Gonna Need It (YAGNI)",
+      "kb:note": "A per-direction WinChecker Strategy is refused because Connect Four's win geometry is fixed forever"
+    },
+    {
+      "@id": "../principles/kiss.html#kiss",
+      "name": "Keep It Simple (KISS)",
+      "kb:note": "A three-value GameState enum replaces three coupled booleans, killing the impossible combinations"
+    },
+    {
+      "@id": "../patterns/ddd/value-object.html#value-object",
+      "name": "Value Object",
+      "kb:note": "Player is a name-and-colour data holder with no logic, and Move records (player,row,col) for undo"
+    },
+    {
+      "@id": "../principles/composition-over-inheritance.html#composition-over-inheritance",
+      "name": "Composition over Inheritance",
+      "kb:note": "A computer opponent is a separate BotEngine collaborator, not a BotPlayer subclass, keeping Player pure"
+    },
+    {
+      "@id": "../principles/open-closed.html#open-closed",
+      "name": "Open/Closed Principle",
+      "kb:note": "Board size, undo, and a bot opponent each slot in behind makeMove and Board without editing the core rules"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="connect-four" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Drop discs into a 7×6 grid and detect four in a row — an OOP design about where the game rules, the grid math, and the game's state each belong" data-kb-order="35" data-kb-aliases='[]' data-kb-tags='["low-level-design","domain-modeling","separation-of-concerns","encapsulation","state-management"]' data-kb-solves='["I have three boolean status flags and half their combinations are impossible states I keep having to guard against","adding another win direction means editing four nearly identical checker classes that differ by two numbers","one class knows the grid math and the turn rules and the win detection all at once","I want to bolt on a computer opponent without rewriting the rules of the game","where should win detection live — on the thing that runs the game or the thing that holds the board"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Connect Four</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Connect Four</h1>
+      <p class="doc-essence">Two players alternate dropping discs into a seven-column, six-row grid; a disc falls to the lowest free cell, and the first to line up four of one colour — vertical, horizontal, or diagonal — wins, or a full board draws. As a low-level design it is almost entirely about responsibility: which object enforces the turn, which owns the grid and its win geometry, and how to model the game's state so an impossible combination cannot be written down.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="connect-four">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>On a turn, the current player names a column 0–6 and the disc drops to the lowest empty row of that column. The game ends the instant someone connects four of their discs in a straight line — vertical, horizontal, or either diagonal — or in a draw when the last cell fills with no line. There is no scale story: one game, two players, a fixed forty-two-cell board, backend only, no rendering. Everything interesting is object modelling — naming the right classes, giving each exactly the state and behaviour it needs, and rejecting an illegal move (a full column, a move out of turn, a move after the game is over) without corrupting anything.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Two players alternate dropping discs into a fixed 7-column, 6-row board; a disc lands in the lowest free row of the chosen column.</li>
+            <li>Detect a win the moment a player connects four discs in a line — vertical, horizontal, or either diagonal.</li>
+            <li>Declare a draw when the board fills with no winner.</li>
+            <li>Reject every invalid move clearly — a full column, a move out of turn, or any move after the game has ended — without mutating state.</li>
+          </ol>
+          <p class="prose">Out of scope: UI and rendering, concurrent games, move history and undo, and configurable board size. The core is turn enforcement, disc placement, and win detection.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional (constraints)</h3>
+          <ul>
+            <li><strong>Legal states only</strong> — the model should make "won and drawn at once" or "over but no winner" impossible to write down.</li>
+            <li><strong>Encapsulation</strong> — grid rules live behind the board; a caller drives the whole game through one small public surface.</li>
+            <li><strong>Fail closed</strong> — an illegal move returns a clear rejection and leaves the board untouched.</li>
+            <li><strong>Evolvability</strong> — a bot opponent, a different board size, or undo should slot in without rewriting the core.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three classes and two enums — and a deliberate refusal to add more:</p>
+        <ul>
+          <li><strong>Game</strong> — the orchestrator and public entry point. Holds the two players, whose turn it is, the board, and the game's state. On a move it validates turn and state, delegates the physical placement to the board, asks the board whether that placement won, and advances the turn.</li>
+          <li><strong>Board</strong> — the 7×6 grid and every rule about it: whether a column has room, where a dropped disc lands, whether the board is full, and whether a given placement completed four in a row. It knows nothing about turns or whose game it is.</li>
+          <li><strong>Player</strong> — a pure data holder: a name for identity and a disc colour. No game logic lives here, on purpose.</li>
+          <li><strong>GameState / DiscColor</strong> — two small enums. <code>GameState</code> is <code>IN_PROGRESS | WON | DRAW</code>; <code>DiscColor</code> is <code>RED | YELLOW</code>. The board stores colours rather than players, so it stays testable without mocking a Player.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Game is the only object a caller touches, and <code>makeMove</code> is its single state-mutating method — everything else is read-only. Board exposes just enough for Game to drive it and returns a <code>-1</code> sentinel rather than throwing, so Game's happy path stays a straight line:</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — the public surfaces</summary>
+<pre><code class="language-python" data-kb-lang="python">class Game:
+    makeMove(player, column) -&gt; bool     # validate, place, check win/draw, switch turn
+    getCurrentPlayer()       -&gt; Player
+    getGameState()           -&gt; GameState
+    getWinner()              -&gt; Player?   # null until someone wins
+    getBoard()               -&gt; Board
+
+class Board:
+    canPlace(column)              -&gt; bool
+    placeDisc(column, color)      -&gt; int         # returns the landing row, or -1 if illegal
+    checkWin(row, column, color)  -&gt; bool
+    isFull()                      -&gt; bool
+    getCell(row, column)          -&gt; DiscColor?</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Game owns a Board and two Players and holds the state enum plus a nullable winner. <code>makeMove</code> is the one choke point: it rejects the move if the game is already over or it is the wrong player's turn, then calls <code>placeDisc</code>, which returns the landing row or <code>-1</code>. On a valid landing Game asks <code>checkWin</code> at that cell — a win sets <code>state = WON</code> and records the winner, a full board sets <code>DRAW</code>, otherwise the turn switches. The board owns all grid math; Game only reads the board's answers and updates its own state from them.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+classDiagram
+    class Game {
+        -Board board
+        -Player player1
+        -Player player2
+        -Player currentPlayer
+        -GameState state
+        -Player winner
+        +makeMove(player, column) bool
+        +getCurrentPlayer() Player
+        +getGameState() GameState
+        +getWinner() Player
+    }
+    class Board {
+        -int rows
+        -int cols
+        -List~List~DiscColor~~ grid
+        +placeDisc(column, color) int
+        +checkWin(row, column, color) bool
+        +isFull() bool
+        +canPlace(column) bool
+    }
+    class Player {
+        -String name
+        -DiscColor color
+        +getName() String
+        +getColor() DiscColor
+    }
+    class GameState {
+        &lt;&lt;enumeration&gt;&gt;
+        IN_PROGRESS
+        WON
+        DRAW
+    }
+    class DiscColor {
+        &lt;&lt;enumeration&gt;&gt;
+        RED
+        YELLOW
+    }
+    Game "1" o-- "1" Board : owns
+    Game "1" o-- "2" Player : tracks
+    Game ..&gt; GameState : holds
+    Board ..&gt; DiscColor : stores
+    Player ..&gt; DiscColor : has
+        </pre>
+        <figcaption>Game orchestrates; Board owns the grid and its win geometry; Player is pure data. The board's cells hold a DiscColor, not a Player, so it stays testable in isolation. <code>winner</code> is null until someone wins.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Modelling game state — an enum, not a bag of booleans</h3>
+        <p>The state a Game must expose is exactly one of three values: in progress, won, or drawn. The tempting first cut is three boolean flags — <code>isOver</code>, <code>hasWinner</code>, <code>isDraw</code> — beside a nullable <code>winner</code>.</p>
+        <ul>
+          <li><strong>Three booleans, eight worlds.</strong> Three flags encode 2³ = 8 combinations for a domain that has 3 legal states. <code>isOver=false, hasWinner=true</code> (won but not over?) and <code>isOver=true, isDraw=true, hasWinner=true</code> (a win <em>and</em> a draw?) are both writable, and each one has to be kept consistent by hand on every move. The type system is now working against you.</li>
+          <li><strong>One enum, three states (chosen).</strong> A single <code>GameState</code> collapses those eight ghosts to three real states; the field holds exactly one, and "won and drawn at once" simply cannot be expressed. Adding <code>PAUSED</code> or <code>ABANDONED</code> later is one new enum value, not another boolean and a fresh round of coordination logic everywhere. This is the design leaning on <a href="../principles/kiss.html">KISS</a> and, more sharply, on making illegal states unrepresentable.</li>
+          <li><strong>The honest gap.</strong> <code>winner</code> is still a separate nullable field, so <code>state=WON</code> with <code>winner=null</code> remains technically writable. Languages with tagged unions — Rust, Swift, Kotlin sealed classes, TypeScript discriminated unions — can fold the winner into the <code>WON</code> case and close it; Java, Python, C#, and Go cannot do it cleanly, so a plain enum plus a nullable winner is the pragmatic call. Naming the ideal shows depth without over-building the real thing.</li>
+        </ul>
+        <h3>2 · One win-check, four directions — not four checkers</h3>
+        <p>Win detection is where the design most invites over-engineering. From the cell just played, the board must look for four in a row along four axes: horizontal, vertical, and the two diagonals.</p>
+        <ul>
+          <li><strong>Four checker classes.</strong> The over-built answer is a <code>WinChecker</code> interface with a <code>HorizontalWinChecker</code>, a <code>VerticalWinChecker</code>, and two diagonal classes, looped over inside <code>checkWin</code> — a <a href="../patterns/gof/behavioral/strategy.html">Strategy</a> arrangement. But all four bodies are the identical "count contiguous discs both ways"; only a pair of step values differs. That is parameterisable data masquerading as polymorphism, and Connect Four's win geometry is fixed forever, so the extension point guards a requirement that will never change — a textbook <a href="../principles/yagni.html">YAGNI</a> violation and a misapplied Strategy.</li>
+          <li><strong>Directions as data (chosen).</strong> The unified version treats the four axes as vectors — <code>(0,1)</code>, <code>(1,0)</code>, <code>(1,1)</code>, <code>(-1,1)</code> — and reuses one <code>countInDirection(row, col, dr, dc, color)</code> helper for each vector and its opposite. Four lines of loop replace four classes. A fix to the counting logic lands once instead of four times, and extending to "five in a row" or a larger board is a one-method change. This is <a href="../principles/dry.html">DRY</a> doing real work: one behaviour, expressed once, driven by different parameters.</li>
+        </ul>
+        <h3>3 · Which object owns which rule</h3>
+        <p>The three classes only earn their keep if every rule has an obvious home.</p>
+        <ul>
+          <li><strong>Board owns grid rules.</strong> Bounds checking, the lowest-free-row scan, the full-board test, and win detection all live on Board, because they depend only on the grid — not on turns or players. <code>placeDisc</code> does its own validation and returns <code>-1</code> for an illegal column rather than making Game pre-check with <code>canPlace</code>, so grid validation stays in one place.</li>
+          <li><strong>Game owns game rules.</strong> Turn order, the state transitions, and rejecting a move out of turn or after the end live on Game. <code>makeMove</code> is the single mutating method and validates in a fixed order — game not over, then correct player, then a legal landing — before anything changes. This split is <a href="../principles/separation-of-concerns.html">separation of concerns</a> and the <a href="../principles/single-responsibility.html">single-responsibility principle</a> made concrete: two reasons to change — grid geometry versus game flow — live in two classes.</li>
+          <li><strong>Player owns nothing but data.</strong> A name and a colour, two getters, no logic — deliberately a <a href="../patterns/ddd/value-object.html">value object</a>, so identity and decision-making stay separate. Making Player an interface with Human and Bot subclasses would add abstraction a pure data holder cannot justify (a human "does" nothing), which is exactly why the bot opponent below is a separate collaborator instead.</li>
+        </ul>
+        <h3>4 · Extending without a rewrite</h3>
+        <p>Because the rules sit behind <code>makeMove</code> and the grid math behind Board, each common follow-up touches a small, predictable place — the design is <a href="../principles/open-closed.html">open for extension</a> without modifying the core.</p>
+        <ul>
+          <li><strong>Board size.</strong> <code>rows</code> and <code>cols</code> are already the only dimensions the placement and win logic reference; promote them to constructor parameters and an arbitrary board just works.</li>
+          <li><strong>Undo.</strong> Every move flows through <code>makeMove</code>, so a <code>moveHistory</code> stack of small <code>Move</code> value objects — <code>(player, row, col)</code> — lives naturally on Game; undo pops one, clears that cell on Board, and rewinds the turn. It reads like a lightweight <a href="../patterns/gof/behavioral/command.html">command</a> history and needs no change to how a move is made.</li>
+          <li><strong>A computer opponent.</strong> The rules do not move at all: a <code>BotEngine</code> inspects the board and returns a column, and Game sees an ordinary <code>makeMove(currentPlayer, column)</code>. Choosing a separate collaborator over a <code>BotPlayer</code> subclass keeps Player pure and favours <a href="../principles/composition-over-inheritance.html">composition over inheritance</a> — the bot is a decision layer bolted beside the game, not woven into it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">One state enum makes the impossible combinations of three boolean flags unwritable — the type holds exactly one of three real states.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Grid rules on Board, game rules on Game, nothing on Player — each reason to change lives in exactly one class, each testable alone.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">One direction-vector loop replaces four checker classes, so a win-logic fix or a rule variant is a single edit.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The enum closes seven of eight bad states but not all: <code>state=WON</code> with a null winner stays representable in languages without tagged unions.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con"><code>placeDisc</code> signals every illegal move with the same <code>-1</code> sentinel, so a full column and an out-of-bounds column are indistinguishable and callers must remember to check.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con"><code>checkWin</code> rescans from the placed cell and <code>placeDisc</code> rescans the column each move — trivial for forty-two cells, but a <code>heights[]</code> index would be needed if the board grew large.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Junior</strong> — decomposes into a board, players, and an orchestrator with roughly sensible responsibilities; <code>placeDisc</code> finds the lowest empty row; horizontal and vertical win checks are correct (diagonals may need a hint); a plain <code>return false</code> for a bad move is fine. Bar: a complete game that ends in a correct win or draw.</li>
+          <li><strong>Mid-level</strong> — clean separation without prompting (Game orchestrates, Board owns the grid and win detection, Player is data), <code>makeMove</code> validates state → turn → column in that order before mutating, win-checking uses the direction-vector form rather than four methods, and can place one extension (undo or board size) without coding it.</li>
+          <li><strong>Senior</strong> — boundaries read as production-reviewable and are justified aloud: why Player is pure data, why <code>GameState</code> is an enum over booleans, why win detection sits on Board. Catches edge cases unprompted, uses the single <code>countInDirection</code> helper, and weighs multiple extensions with trade-offs (a bot leaves the rules untouched and adds only a decision layer). Finishing early enough to discuss networked or spectator variants is a strong signal.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="separation-of-concerns"><a href="../principles/separation-of-concerns.html">Separation of Concerns</a><span class="rel-note">Grid geometry lives on Board, turn and state rules on Game, so the two reasons to change never mix</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="single-responsibility"><a href="../principles/single-responsibility.html">Single Responsibility Principle</a><span class="rel-note">Each class carries one job — Board the grid, Game the flow, Player the data — and one reason to change</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="dry"><a href="../principles/dry.html">Don't Repeat Yourself (DRY)</a><span class="rel-note">Four win directions collapse to one countInDirection helper driven by (dr,dc) vectors, so a fix lands once not four times</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="yagni"><a href="../principles/yagni.html">You Aren't Gonna Need It (YAGNI)</a><span class="rel-note">A per-direction WinChecker Strategy is refused because Connect Four's win geometry is fixed forever</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="kiss"><a href="../principles/kiss.html">Keep It Simple (KISS)</a><span class="rel-note">A three-value GameState enum replaces three coupled booleans, killing the impossible combinations</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="value-object"><a href="../patterns/ddd/value-object.html">Value Object</a><span class="rel-note">Player is a name-and-colour data holder with no logic, and Move records (player,row,col) for undo</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="composition-over-inheritance"><a href="../principles/composition-over-inheritance.html">Composition over Inheritance</a><span class="rel-note">A computer opponent is a separate BotEngine collaborator, not a BotPlayer subclass, keeping Player pure</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="open-closed"><a href="../principles/open-closed.html">Open/Closed Principle</a><span class="rel-note">Board size, undo, and a bot opponent each slot in behind makeMove and Board without editing the core rules</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

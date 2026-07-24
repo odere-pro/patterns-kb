@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Optimistic Concurrency Control · Patterns</title>
+  <meta name="description" content="Optimistic Concurrency Control — read a row with its version, do the work with no lock held, then write only if the version is still unchanged; on a conflict, reload and retry.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#optimistic-concurrency-control",
+  "identifier": "optimistic-concurrency-control",
+  "name": "Optimistic Concurrency Control",
+  "description": "Detect write conflicts with a version check and retry, instead of locking",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:alternative-to": [
+    {
+      "@id": "./pessimistic-locking.html#pessimistic-locking",
+      "name": "Pessimistic Locking",
+      "kb:note": "Detect-and-retry when collisions are rare; lock up front when they're frequent"
+    }
+  ],
+  "kb:specializes": [
+    {
+      "@id": "./conditional-write.html#conditional-write",
+      "name": "Conditional Write",
+      "kb:note": "Optimistic concurrency is the read-version / conditional-write / retry loop built on this primitive"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../../hazards/race-condition.html#race-condition",
+      "name": "Race Condition",
+      "kb:note": "A stale version fails the write, so a lost update is caught and retried"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/yelp.html#yelp",
+      "name": "Yelp",
+      "kb:note": "concurrent reviews for one business would clobber each other's rating without a check-and-retry on the version"
+    },
+    {
+      "@id": "../../../designs/gopuff.html#gopuff",
+      "name": "Gopuff",
+      "kb:note": "commit-time serialization-failure detection by the database is optimistic concurrency control with no explicit locking"
+    },
+    {
+      "@id": "../../../designs/google-docs.html#google-docs",
+      "name": "Google Docs",
+      "kb:note": "edits proceed optimistically without waiting for a lock or confirmation and are merged after the fact instead of blocking"
+    },
+    {
+      "@id": "../../../designs/online-chess.html#online-chess",
+      "name": "Online Chess",
+      "kb:note": "the lock-free compare-and-claim on a hot, heavily contended pool is optimistic concurrency at its purpose-built best"
+    },
+    {
+      "@id": "../../../designs/ticketmaster.html#ticketmaster",
+      "name": "Ticketmaster",
+      "kb:note": "the last-line double-booking guard is a version check that lets a single concurrent write commit and rejects the rest"
+    },
+    {
+      "@id": "../../../designs/online-auction.html#online-auction",
+      "name": "Online Auction",
+      "kb:note": "auction bidding is the ideal OCC case since true collisions are rare, so a lock-free conditional retry beats holding a lock"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/dealing-with-contention.html#dealing-with-contention",
+      "name": "Dealing with Contention",
+      "kb:role": "Bet no one else wrote, verify the bet at write time, retry the rare loser"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="optimistic-concurrency-control" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Detect write conflicts with a version check and retry, instead of locking" data-kb-order="78" data-kb-aliases="[&quot;OCC&quot;,&quot;optimistic locking&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;consistency&quot;,&quot;transactions&quot;,&quot;performance&quot;]" data-kb-solves="[&quot;locking every read kills throughput but real conflicts are rare&quot;,&quot;two users edit the same record and the last save silently wipes the first's change&quot;,&quot;I don't want to hold a database lock across a user's think-time&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Optimistic Concurrency Control</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network</p>
+      <h1 class="doc-title">Optimistic Concurrency Control</h1>
+      <p class="doc-essence">A concurrency strategy that bets conflicts are rare: read a record together with a version marker, do the work without holding any lock, then commit the write only if the version is still what you read — and if another writer got there first, reload the fresh state and try again.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="optimistic-concurrency-control">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>Optimistic concurrency control lets a read-modify-write cycle run without holding a lock, and catches the collision at the end instead of preventing it up front. You read a row along with a value that changes on every write — most often a <code>version</code> integer — do whatever work you need, then write conditionally: <code>UPDATE ... SET ..., version = version + 1 WHERE id = ? AND version = ?</code>, supplying the version you originally read. If nobody has touched the row in between, one row updates and the version advances. If someone else committed first, the version no longer matches, zero rows change, and you know your write lost — so you reload the current state and retry from the top.</p>
+        <p>It exists to resolve the lost update without paying for a lock. The pessimistic answer is to lock the row the instant you read it and hold that lock until you write, so no one else can interleave. That is correct, but it serializes every reader behind a writer and, worse, pins the lock across "think-time" — the seconds a user spends editing a form, or the round-trip of an external call — during which the row is frozen for everyone. When genuine conflicts are rare, almost all of that blocking is wasted: you paid to prevent collisions that were never going to happen.</p>
+        <p>OCC inverts the bet. It assumes two writers will seldom race for the same row, so it holds nothing and simply verifies its assumption at commit time. That verification is a conditional write on the version, which makes OCC the read-modify-write cycle built on top of the conditional-write primitive. The trade is that when the bet is wrong the loser's work is thrown away and redone, so under heavy contention the retries pile into a storm and OCC does more work than a lock would — and because the check is an equality test, a version that leaves and returns to the same value (the ABA problem) can slip a stale write through unless the version strictly increments on every write.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant A as Client A
+    participant B as Client B
+    participant DB as Store (row: version=42)
+    A->>DB: SELECT ... (reads version 42)
+    B->>DB: SELECT ... (reads version 42)
+    Note over A,B: both work off version 42, no lock held
+    A->>DB: UPDATE ... SET version=43 WHERE version=42
+    DB-->>A: 1 row changed — A commits
+    B->>DB: UPDATE ... SET version=43 WHERE version=42
+    DB-->>B: 0 rows changed — conflict
+    B->>DB: SELECT ... (reload: version=43)
+    B->>DB: UPDATE ... SET version=44 WHERE version=43
+    DB-->>B: 1 row changed — retry succeeds
+        </pre>
+        <figcaption>No lock is held across think-time; the losing writer detects the conflict from the unchanged version, reloads, and retries against the fresh state.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Dedicated version column</dt>
+        <dd>A <code>version</code> integer bumped by one on every write, regardless of whether any business field changed. The safest form: because it only ever increases, the equality check cannot be fooled by a value round-tripping back to what you read.</dd>
+
+        <dt id="variations-item-2">Business value as version</dt>
+        <dd>Reuse a column that already changes — a seat count, the current high bid — as the concurrency token, avoiding an extra column. Sound only if that value moves in one direction; otherwise it is exposed to the ABA problem, where a review count of 100 dips to 99 and returns to 100 and the check sees "unchanged" while something happened in between.</dd>
+
+        <dt id="variations-item-3">Full-row / whole-record compare</dt>
+        <dd>With no version column, put every field you read into the <code>WHERE</code> clause so the write applies only if the entire row still matches. Heavier, but it catches any change including a round-trip — the fallback when you cannot add a version.</dd>
+
+        <dt id="variations-item-4">Store-native row version</dt>
+        <dd>Let the engine supply the token instead of hand-rolling one: PostgreSQL's <code>xmin</code> system column, an Elasticsearch document's <code>_seq_no</code>/<code>_primary_term</code>, an etcd key's mod-revision, or an HTTP <code>ETag</code>. The commit conditions on the value the store handed you at read time.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li data-kb-polarity="pro" id="tradeoffs-pro-1">No lock is held across think-time, so readers never block on a writer and connections are not pinned waiting.</li>
+            <li data-kb-polarity="pro" id="tradeoffs-pro-2">Cheap on the common path — when conflicts are rare the whole cost is one extra column in a <code>WHERE</code> clause.</li>
+            <li data-kb-polarity="pro" id="tradeoffs-pro-3">No lock manager to run and no deadlocks: there is no lock to acquire in the wrong order.</li>
+            <li data-kb-polarity="pro" id="tradeoffs-pro-4">Works where a shared lock cannot reach — across stateless app servers, or over HTTP with an <code>ETag</code>, where there is no connection to hold a lock on.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li data-kb-polarity="con" id="tradeoffs-con-1">Thrashes under high contention: many writers on one hot row means most of them lose, retry, and lose again — a retry storm that does more work than a lock would.</li>
+            <li data-kb-polarity="con" id="tradeoffs-con-2">The loser's work is discarded and redone; without bounded retries and backoff, contention can turn into livelock.</li>
+            <li data-kb-polarity="con" id="tradeoffs-con-3">An equality version check is blind to the ABA problem unless the token strictly increments on every write.</li>
+            <li data-kb-polarity="con" id="tradeoffs-con-4">The caller owns the reload-and-retry loop; skip it and a conflict becomes a silent lost update instead of a caught one.</li>
+            <li data-kb-polarity="con" id="tradeoffs-con-5">Retries assume the work can simply replay — awkward when the read-modify-write had visible side effects between the read and the failed commit.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li data-kb-polarity="when" id="usage-when-1">Conflicts are the exception and reads dominate writes — most e-commerce, admin edits, collaborative work spread across distinct records.</li>
+            <li data-kb-polarity="when" id="usage-when-2">A read-modify-write cycle needs application logic between the read and the write, so a single conditional write is not enough.</li>
+            <li data-kb-polarity="when" id="usage-when-3">You must not hold a database lock across a user's think-time or an external call.</li>
+            <li data-kb-polarity="when" id="usage-when-4">The coordination must span stateless servers or a stateless protocol where no shared lock exists — a version attribute or an <code>ETag</code> travels with the data.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li data-kb-polarity="avoid" id="usage-avoid-1">Contention on a single row is high — retries pile up and pessimistic locking, which serializes cleanly, is cheaper overall.</li>
+            <li data-kb-polarity="avoid" id="usage-avoid-2">The redone work is expensive or has side effects that cannot simply be replayed on retry.</li>
+            <li data-kb-polarity="avoid" id="usage-avoid-3">The invariant spans multiple rows with no single row to version (write skew) — that needs a stricter isolation level, not a per-row check.</li>
+            <li data-kb-polarity="avoid" id="usage-avoid-4">There is no monotonic token available and the value you would compare on can round-trip — the equality check would miss the change.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — read a version, work, commit-if-unchanged, retry on conflict</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// Read the row + its version, mutate off-line, then write conditioned on the
+// version. Zero rows changed means someone committed first: reload and retry.
+async function updateWithOcc(
+  db: Db,
+  id: string,
+  mutate: (row: Row) =&gt; Row,
+  maxAttempts = 5,
+): Promise&lt;Row&gt; {
+  for (let attempt = 0; attempt &lt; maxAttempts; attempt++) {
+    const row = await db.one(`SELECT * FROM docs WHERE id = $1`, [id]);
+    const next = mutate(row); // think-time — no lock is held here
+
+    const { rowCount } = await db.query(
+      `UPDATE docs SET body = $1, version = version + 1
+       WHERE id = $2 AND version = $3`,
+      [next.body, id, row.version],
+    );
+    if (rowCount === 1) return next; // our version was still current — we won
+
+    // Lost the race. Back off a little, then reload the fresh state and retry.
+    await sleep(2 ** attempt * 10);
+  }
+  throw new Error(`OCC gave up after ${maxAttempts} conflicting attempts`);
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="elasticsearch-occ"><strong>Elasticsearch optimistic concurrency</strong><span>Every document carries a _seq_no and _primary_term; an index or update request can supply if_seq_no and if_primary_term, and Elasticsearch applies the write only if the document still matches those values, returning 409 Conflict otherwise. It is Elasticsearch's built-in optimistic concurrency control.</span></div>
+        <div class="wild-item" data-kb-example="dynamodb-version"><strong>DynamoDB conditional update on a version attribute</strong><span>The common OCC recipe on DynamoDB: keep a numeric version attribute on the item and issue UpdateItem with a ConditionExpression like version = :expected while setting version = version + 1; a concurrent writer working from a stale version fails with ConditionalCheckFailedException and retries.</span></div>
+        <div class="wild-item" data-kb-example="postgres-version"><strong>PostgreSQL</strong><span>Application-level OCC adds an explicit version column checked and incremented in the UPDATE ... WHERE id = ? AND version = ?; an affected-row count of zero signals a conflict. Postgres also exposes the xmin system column, the row-version left by MVCC, which can serve as the token without a hand-rolled column.</span></div>
+        <div class="wild-item" data-kb-example="http-etag-ifmatch"><strong>HTTP ETag + If-Match</strong><span>A resource is served with an ETag validator; a later PUT or PATCH sends If-Match with that ETag, and the origin applies the change only if the resource still carries it, replying 412 Precondition Failed (or 409 Conflict) on a stale write — optimistic concurrency across a stateless protocol with no lock to hold.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="pessimistic-locking"><a href="./pessimistic-locking.html">Pessimistic Locking</a><span class="rel-note">Detect-and-retry when collisions are rare; lock up front when they're frequent</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Specializes</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="specializes" data-kb-to="conditional-write"><a href="./conditional-write.html">Conditional Write</a><span class="rel-note">Optimistic concurrency is the read-version / conditional-write / retry loop built on this primitive</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="race-condition"><a href="../../../hazards/race-condition.html">Race Condition</a><span class="rel-note">A stale version fails the write, so a lost update is caught and retried</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="yelp"><a href="../../../designs/yelp.html">Yelp</a><span class="rel-note">concurrent reviews for one business would clobber each other's rating without a check-and-retry on the version</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="gopuff"><a href="../../../designs/gopuff.html">Gopuff</a><span class="rel-note">commit-time serialization-failure detection by the database is optimistic concurrency control with no explicit locking</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="google-docs"><a href="../../../designs/google-docs.html">Google Docs</a><span class="rel-note">edits proceed optimistically without waiting for a lock or confirmation and are merged after the fact instead of blocking</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="online-chess"><a href="../../../designs/online-chess.html">Online Chess</a><span class="rel-note">the lock-free compare-and-claim on a hot, heavily contended pool is optimistic concurrency at its purpose-built best</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="ticketmaster"><a href="../../../designs/ticketmaster.html">Ticketmaster</a><span class="rel-note">the last-line double-booking guard is a version check that lets a single concurrent write commit and rejects the rest</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="online-auction"><a href="../../../designs/online-auction.html">Online Auction</a><span class="rel-note">auction bidding is the ideal OCC case since true collisions are rare, so a lock-free conditional retry beats holding a lock</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="dealing-with-contention"><a href="../../../themes/dealing-with-contention.html">Dealing with Contention</a><span>Bet no one else wrote, verify the bet at write time, retry the rare loser</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>
