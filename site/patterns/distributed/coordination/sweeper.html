@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sweeper · Patterns</title>
+  <meta name="description" content="Sweeper — a scheduled scan that finds work which failed by not happening: expired leases, exhausted retries, and records past their deadline.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#sweeper",
+  "identifier": "sweeper",
+  "name": "Sweeper",
+  "description": "Scans on a clock for work that failed by not happening",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:combines-with": [
+    {
+      "@id": "../../concurrency/scheduling.html#scheduling",
+      "name": "Scheduling",
+      "kb:note": "the clock that runs it — interval or cron, with leader election so it fires once across replicas"
+    },
+    {
+      "@id": "./distributed-lock.html#distributed-lock",
+      "name": "Distributed Lock",
+      "kb:note": "a lease with a TTL is what makes an abandoned claim detectable; the sweeper is what acts on the expiry"
+    },
+    {
+      "@id": "../../messaging/dead-letter-channel.html#dead-letter-channel",
+      "name": "Dead Letter Channel",
+      "kb:note": "where work that exhausted its retries is parked — the sweeper is what decides it is exhausted"
+    },
+    {
+      "@id": "../resilience/timeout-deadline.html#timeout-deadline",
+      "name": "Timeout / Deadline",
+      "kb:note": "the deadline is the line; the sweeper is what enforces it when the call simply never returns"
+    },
+    {
+      "@id": "./leader-election.html#leader-election",
+      "name": "Leader Election",
+      "kb:note": "the sweep is a singleton: elect one runner, or N replicas escalate the same row N times"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "./conditional-write.html#conditional-write",
+      "name": "Conditional Write",
+      "kb:note": "check-and-act on read leaves no timing dependency; a sweep is for when something must actively happen at the deadline"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/persona-identification.html#persona-identification",
+      "name": "Persona Identification & Sanction Check",
+      "kb:note": "a long-running KYC flow where every failure is silence — a dead worker, an onboardee who never uploaded, a vendor that never called back"
+    },
+    {
+      "@id": "../../../designs/bookmyshow.html#bookmyshow",
+      "name": "BookMyShow",
+      "kb:note": "seat holds expire on a clock: the sweep is what makes an abandoned checkout release inventory instead of stranding it"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="sweeper" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Scans on a clock for work that failed by not happening" data-kb-order="84" data-kb-aliases="[&quot;reaper&quot;,&quot;janitor&quot;,&quot;scavenger&quot;,&quot;expiry sweep&quot;]" data-kb-tags="[&quot;resilience&quot;,&quot;lifecycle&quot;,&quot;coordination&quot;,&quot;error-handling&quot;,&quot;resource-management&quot;]" data-kb-solves="[&quot;a worker died holding a task and nothing ever picks it up again&quot;,&quot;abandoned checkouts keep seats locked forever&quot;,&quot;a request got stuck halfway and nobody was ever told&quot;,&quot;rows pile up in a pending state and no one notices until a customer complains&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Sweeper</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network</p>
+      <h1 class="doc-title">Sweeper</h1>
+      <p class="doc-essence">A job that runs on a clock and queries for records sitting in a state they should have left by now — a lease whose holder died, a task that exhausted its retries, an item past its deadline — then drives each one back onto a legal path: reclaimed, escalated, or expired.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="sweeper">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A sweeper is a scheduled job whose entire input is a query for records that should have moved on by now. It runs every N seconds or minutes, selects rows matching a staleness predicate — <code>locked_at &lt; now() - interval</code>, <code>attempts &gt; budget</code>, <code>state = 'pending' AND created_at &lt; deadline</code> — and applies one resolution per row: reclaim it for another worker, escalate it to a dead state and tell somebody, or expire it and release whatever it was holding. It is the janitor of a distributed system, and it is almost always a handful of indexed queries rather than a service.</p>
+        <p>The force it resolves is that <strong>failure by absence produces no event</strong>. Every other component in a system is driven by something happening: a request arrives, a message is delivered, a callback fires. But the worker that died mid-task sends nothing. The user who abandoned checkout clicks nothing. The vendor that never called back generates no callback. These failures announce themselves with silence, and silence has no listener — so the only way to notice is for someone to go looking on a clock. That is the whole pattern: a periodic scan is the event source for non-events.</p>
+        <p>The hard part is what the sweeper does to your failure model. Once it exists, correctness depends on a background job running on time. A sweep that lags, crashes, or silently stops leaves leases held and resources locked — and because sweeps fall behind precisely when the system is busiest, it degrades exactly when the damage is worst. This is why mature designs push work out of the sweeper wherever they can: give the record a TTL so the store expires it, or check expiry lazily when the record is next read, so no external actor decides correctness. What stays in the sweeper is what genuinely needs an <em>action</em> — notifying a client that their request failed, alerting an operator, releasing a resource that nobody will read again soon. A sweeper that only had to answer "is this expired?" should not have been a sweeper.</p>
+        <p>Two properties are non-negotiable in the implementation. It must be <strong>idempotent</strong> — the same row swept twice, or swept by two instances, must not double-escalate or double-release. And it must <strong>guard its writes against live workers</strong>, because it is racing them by design: the task it judges abandoned may be a slow worker still holding it. A conditional update (<code>WHERE locked_by = $seen AND locked_at = $seen</code>) turns that race into a write that affects zero rows rather than a task stolen from a healthy worker.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    CLK["Clock — every N seconds"] --> S["Sweeper"]
+    S -->|"indexed query per predicate"| DB[("Records with state + timestamps")]
+    S -->|"lease expired"| R["Reclaim — back to pending"]
+    S -->|"attempts exhausted"| D["Escalate — dead state, alert, notify"]
+    S -->|"past deadline"| E["Expire — release the resource"]
+    R --> DB
+    D --> DB
+    E --> DB
+        </pre>
+        <figcaption>One job, one clock, three predicates: what has been held too long, what has failed too often, and what has waited past its deadline — each with a different resolution.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Lease reclaim</dt>
+        <dd>Find claims whose holder stopped renewing — <code>status = 'processing' AND locked_at &lt; now() - lease</code> — and return them to the pending pool for another worker. The most common form, and the one that makes an at-least-once queue survive worker crashes. Pair it with a guarded update so a slow-but-alive holder's later write lands on zero rows instead of double-applying.</dd>
+
+        <dt id="variations-item-2">Deadline and SLA escalation</dt>
+        <dd>Find records sitting in one state past the time the business promised, and escalate rather than retry: alert an operator, surface it in a support view, emit a failure event to the customer. Distinct from reclaim because the resolution is telling a human, not re-running a machine.</dd>
+
+        <dt id="variations-item-3">Retry exhaustion</dt>
+        <dd>Find work whose attempts exceeded budget and park it in a dead state — inspectable, re-runnable once the cause is fixed, never silently dropped. This is the <a href="../../messaging/dead-letter-channel.html">dead-letter channel</a> implemented as a table plus a sweep, for systems with no broker to provide one.</dd>
+
+        <dt id="variations-item-4">Orphan collection</dt>
+        <dd>Find records whose counterpart never arrived: an upload row with no blob, a blob with no row, a reservation whose payment never came. Usually a two-sided query with a grace period long enough that in-flight work is never mistaken for an orphan.</dd>
+
+        <dt id="variations-item-5">Lazy expiry instead of a sweep</dt>
+        <dd>No job at all: store the expiry timestamp, and treat the record as expired the next time anything reads it. Correctness stops depending on a job running on time, and the cost moves into every read path. The right default when nothing needs to <em>happen</em> at the moment of expiry — but it leaves the resource nominally held until someone looks, so it cannot free capacity on its own.</dd>
+
+        <dt id="variations-item-6">Self-expiring records</dt>
+        <dd>Let the store do it: a TTL on the key, a visibility timeout on the message, a session-bound ephemeral node. Zero code and no timing dependency, at the cost of needing a store that offers it and giving up any hook at the moment of expiry — nobody is told, nothing is escalated.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Catches the one failure class nothing else reports — the crash, the abandonment, the callback that never came. Without it those records sit forever.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">One place owns "what should have happened by now", instead of a timer scattered into every component that could stall.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Its resolutions can be actions — notify the customer, page an operator, release a hundred rows at once — which a passive expiry check can never do.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Needs no new infrastructure: an indexed query on a schedule, running against data the system already stores.</li>
+            <li id="tradeoffs-pro-5" data-kb-polarity="pro">Inspectable and reusable — the query that finds stuck work is the same one support runs to answer "why is this stuck?", and it doubles as an alerting signal.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Correctness starts depending on a job running on time — a lagging or dead sweep leaves resources held, and sweeps fall behind exactly when the system is busiest.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">It races the live workers it inspects: without a guarded, idempotent update it will steal a task from a slow-but-healthy holder, or escalate the same record twice.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Polling cost scales with table size, not with the amount of stuck work — an unindexed predicate turns into a full scan on a timer.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">It is usually a singleton, so it needs a lock or leader election to avoid running N times — and a sweeper that dies quietly fails silently, which raises the question of who sweeps the sweeper.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con">The staleness threshold is a tuning bind: too aggressive kills work that was merely slow, too lax leaves resources stranded past the point anyone cares.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">The failure mode is silence — a worker crashed mid-task, a human abandoned a flow, a vendor callback never arrived.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Something must actively happen at the deadline: a customer told, an operator paged, a queue of held resources released.</li>
+            <li id="usage-when-3" data-kb-polarity="when">Work is claimed under a lease that can outlive the process holding it, and an unreclaimed claim blocks progress.</li>
+            <li id="usage-when-4" data-kb-polarity="when">An SLA is promised per state, and a breach has to reach somebody rather than sit in a table.</li>
+            <li id="usage-when-5" data-kb-polarity="when">The store cannot expire records itself — a relational system of record with no TTL, holding the queue as a table.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">A check at read time would do — if the only question is "is this still valid?", answer it on read and skip the job entirely.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The store can expire the record itself and nobody needs to be told: a TTL, a visibility timeout, or a session-bound node is free and never falls behind.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Correctness cannot tolerate the sweep being late — prefer a self-expiring lease, and fence the resource so a stale holder's write is rejected.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid">The predicate cannot be indexed, and the sweep would scan a large hot table on every tick.</li>
+            <li id="usage-avoid-5" data-kb-polarity="avoid">You would be adding it to paper over work that silently fails — fix the reporting path first, or the sweeper becomes the place bugs go to hide.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — one tick, three predicates, every write guarded</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">const LEASE_MS = 60_000;      // a claim not renewed within this is presumed dead
+const MAX_ATTEMPTS = 5;
+
+async function sweepOnce(db: Db, notify: Notifier): Promise&lt;void&gt; {
+  // 1 · Reclaim expired leases. The guard is `locked_at = seen`: if the holder
+  //     renewed its lease since this row was selected, the update hits 0 rows
+  //     and the healthy worker keeps its task.
+  const stale = await db.query(
+    `SELECT id, locked_by, locked_at FROM task
+      WHERE status = 'processing' AND locked_at &lt; now() - $1::interval`,
+    [`${LEASE_MS} milliseconds`]);
+
+  for (const t of stale.rows) {
+    await db.query(
+      `UPDATE task SET status = 'pending', locked_by = NULL, locked_at = NULL
+        WHERE id = $1 AND locked_by = $2 AND locked_at = $3`,
+      [t.id, t.locked_by, t.locked_at]);
+  }
+
+  // 2 · Escalate exhausted work to the dead state — once. The status guard is
+  //     what makes a second sweep (or a second sweeper) a no-op.
+  const dead = await db.query(
+    `UPDATE task SET status = 'dead'
+      WHERE status = 'pending' AND attempts &gt;= $1
+      RETURNING id, flow_id`, [MAX_ATTEMPTS]);
+
+  for (const t of dead.rows) await notify.operator(t);   // safe: only newly-dead rows return
+
+  // 3 · Breach the SLA out loud. `escalated_at IS NULL` is the idempotency key:
+  //     stamping it in the same statement means the customer is told exactly once.
+  const overdue = await db.query(
+    `UPDATE flow SET escalated_at = now()
+      WHERE escalated_at IS NULL AND state = $1 AND entered_state_at &lt; now() - $2::interval
+      RETURNING id`, ['awaiting_submission', '48 hours']);
+
+  for (const f of overdue.rows) await notify.customer(f);
+}
+
+// Run it under a lock so N replicas do not sweep N times.
+setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 30_000);
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="scheduling"><a href="../../concurrency/scheduling.html">Scheduling</a><span class="rel-note">the clock that runs it — interval or cron, with leader election so it fires once across replicas</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="distributed-lock"><a href="./distributed-lock.html">Distributed Lock</a><span class="rel-note">a lease with a TTL is what makes an abandoned claim detectable; the sweeper is what acts on the expiry</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="dead-letter-channel"><a href="../../messaging/dead-letter-channel.html">Dead Letter Channel</a><span class="rel-note">where work that exhausted its retries is parked — the sweeper is what decides it is exhausted</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="timeout-deadline"><a href="../resilience/timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">the deadline is the line; the sweeper is what enforces it when the call simply never returns</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="leader-election"><a href="./leader-election.html">Leader Election</a><span class="rel-note">the sweep is a singleton: elect one runner, or N replicas escalate the same row N times</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="conditional-write"><a href="./conditional-write.html">Conditional Write</a><span class="rel-note">check-and-act on read leaves no timing dependency; a sweep is for when something must actively happen at the deadline</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="persona-identification"><a href="../../../designs/persona-identification.html">Persona Identification &amp; Sanction Check</a><span class="rel-note">a long-running KYC flow where every failure is silence — a dead worker, an onboardee who never uploaded, a vendor that never called back</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="bookmyshow"><a href="../../../designs/bookmyshow.html">BookMyShow</a><span class="rel-note">seat holds expire on a clock: the sweep is what makes an abandoned checkout release inventory instead of stranding it</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

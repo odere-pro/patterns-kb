@@ -1,6 +1,6 @@
 # patterns-kb — an HTML5 knowledge base
 
-A cross-linked reference of **<!-- kb:counts -->169 software design patterns, 40 design case studies, 25 themes, 14 hazards and 11 principles — 259 pages in all<!-- /kb:counts -->**, written to be
+A cross-linked reference of **<!-- kb:counts -->170 software design patterns, 40 design case studies, 25 themes, 14 hazards and 11 principles — 260 pages in all<!-- /kb:counts -->**, written to be
 learned from: every page answers the same questions in the same order, and every page says
 how it relates to its neighbours.
 
@@ -52,7 +52,7 @@ node scripts/kb.mjs related circuit-breaker                        # typed neigh
 node scripts/kb.mjs ls --band caching
 ```
 
-`find` searches the full prose of all <!-- kb:page-count -->259<!-- /kb:page-count --> pages and prints the line that matched. It weights
+`find` searches the full prose of all <!-- kb:page-count -->260<!-- /kb:page-count --> pages and prints the line that matched. It weights
 differently depending on whether you are naming a pattern ("circuit breaker") or describing a
 symptom, because in the second case a name match is usually incidental. Add `--json` for
 structured output.

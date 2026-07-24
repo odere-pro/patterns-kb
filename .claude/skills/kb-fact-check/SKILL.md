@@ -1,0 +1,111 @@
+---
+name: kb-fact-check
+description: Corroborate patterns-kb pages against Wikipedia and other well-trusted sources — a dependency-free Node script fetches the source material into gitignored tmp/, then you diff each page's claims against it and write cited findings (fabrication risk in "In the wild"/production, factual errors, coverage gaps, missing variations, wrong tradeoffs, missing relationships). Sources are resolved through the Wikipedia API and never guessed; a page with no trustworthy source is recorded as such, not filled in. It writes findings only — applying a fix is a separate, approved kb-edit step. Use when someone asks to "fact-check the KB", "check this pattern against Wikipedia", "are our tradeoffs actually right", "is the In the wild block still accurate", "what are our pages missing", or wants pages verified against outside sources before an editing pass.
+---
+
+# kb-fact-check — corroborate the KB against outside sources
+
+A **two-stage pipeline**, mirroring `site-extract → kb-add`. This skill *fetches sources and
+writes cited findings*; **`kb-edit` applies them** as a separate, explicitly-approved step. It
+never writes to `site/`. Everything lands in gitignored `tmp/kb-fact-check/`.
+
+```
+resolve   kb id → Wikipedia title (4-stage ladder) + committed alt-source allowlist
+fetch     fetch.mjs pulls each source into tmp/  (raw.txt readable + norm.txt match-target)
+evaluate  diff KB blocks (kb.mjs get --json) against sources, BY BLOCK CLASS across the corpus
+verify    a second reader tries to REFUTE each finding; REJECTED ones are kept, flagged
+gate      eval-check.mjs re-verifies every quote and anchor mechanically
+roll up   rank by fix-class + severity — the human reads this, then hands the slice to kb-edit
+```
+
+## Why a script, and why block-class not page-by-page
+
+Wikipedia is a documented JSON API — resolution and fetch are deterministic, so `fetch.mjs` owns
+both (no browser, no model tokens). The **evaluation** is inverted: judge *all* `wild` blocks in
+one context, then all `production`, then prose — never page-by-page. A page-by-page sweep costs
+~1.8M tokens and reproduces the KB's own "many agents → drifting standards" failure. One agent
+per block class holds one consistent bar.
+
+## 1. Resolve
+
+```
+node .claude/skills/kb-fact-check/fetch.mjs plan     [--only a,b] --captured-at <ISO>
+node .claude/skills/kb-fact-check/fetch.mjs resolve  [--only a,b] --captured-at <ISO>
+```
+
+`plan` seeds `index.json` from `node scripts/kb.mjs ls --json` and merges the alt-source
+allowlist in [`sources.json`](sources.json). `resolve` runs the title ladder: sentence-cased name
+→ `"<name> pattern"`/qualified forms → gated aliases → `nearmatch` → band-context search. It
+**quarantines** wrong-sense hits (a design's company article, `The Blob`→1958 film) and records
+every miss. **A `none` result is a correct answer** — Wikipedia has no article for ~15-25% of
+patterns and almost no designs.
+
+## 2. Pin — when there is no source, say so
+
+```
+node .claude/skills/kb-fact-check/fetch.mjs pin <id> --wikipedia "<Exact Title>"
+node .claude/skills/kb-fact-check/fetch.mjs pin <id> --none --reason "KB coinage; no article"
+```
+
+The anti-fabrication valve: never let the pipeline guess a plausible-but-wrong article. Designs,
+themes, and house coinages usually `--none`; they are evaluated **internally** instead (§4).
+
+## 3. Fetch
+
+```
+node .claude/skills/kb-fact-check/fetch.mjs fetch [--only a,b] [--refresh] [--force] --captured-at <ISO>
+node .claude/skills/kb-fact-check/fetch.mjs status [--only a,b] --json      # exit 0 done / 2 pending
+```
+
+Serial, 1 req in flight, 1s delay, compliant `User-Agent`, `maxlag=5`, honours `Retry-After`.
+Idempotent: stores `revid`; unchanged pages skip. Wikipedia arrives as plain text via
+`prop=extracts`; alt HTML is reduced with the vendored parser. Each source is stored twice:
+`<sid>.raw.txt` (readable, carries `> Source:`) and `<sid>.norm.txt` (whitespace-collapsed — the
+quote gate matches against this). Add a one-off source with `alt add <id> --url … --label … --tier N`.
+
+## 4. Evaluate — by block class, honestly
+
+Read the KB via `kb.mjs get <id> --json` (add `--diagrams` — the `architecture`/`structure`
+blocks of designs and patterns are often mermaid). Write one
+`findings/<kind>/<id>.eval.json` per page. Every finding carries a closed `dimension`
+(fabrication `wild-false`/`production-false`, `factual-error`, `missing-tradeoff`,
+`missing-variation`, `missing-relationship`, …), a `severity`, a one-line `claim`, a `kb`
+block (`{block, anchor, quote}` + `absenceEvidence` for any `missing-*`), a `sources[]` array
+whose `quote` is a **verbatim substring** of the stored source, and a `proposedFix.intent` — the
+*claim to make in our own words, ≤2 sentences*, never prose to paste. `kb-ahead`, `source-weak`,
+and `verified-clean` are first-class NOTE outcomes: a page that yields only notes is a success.
+
+**Designs and themes have no external evaluator** — Wikipedia serves them at ~5%/~30%. Judge them
+with zero network instead: does the design's prose exercise the pattern each `demonstrates` edge
+names (`demonstrates-unsupported`/`-missing`), and is the `estimation` arithmetic self-consistent
+(`estimation-arithmetic`)?
+
+## 5. Verify + gate
+
+A second reader gets only `{claim, source quotes, kb quote, absenceEvidence}` — never the first
+reader's reasoning — and returns `CONFIRMED | PLAUSIBLE | REJECTED`. REJECTED findings stay in the
+file (so they are not re-raised) but are excluded from the roll-up. Then:
+
+```
+node .claude/skills/kb-fact-check/eval-check.mjs [--only a,b]     # exit 0 clean / 2 none / 3 issues
+```
+
+It re-verifies mechanically: **quote-or-drop** (every source quote is a real substring),
+**anchor-or-drop** (block ∈ `BLOCKS[kind]`, kb quote in that block), **prove-the-absence** (every
+`missing-*` term is genuinely absent from the page), **no-laundering** (no 8-word run of a fix
+intent appears in any source — Wikipedia is CC BY-SA; never copy prose into `site/`),
+**severity ceiling** (CRITICAL/HIGH needs ≥2 sources or 1 tier-1), and the closed enums.
+
+## 6. Roll up and hand off
+
+Rank `rollup.md` by fix-class then severity; lead with the CRITICAL count and the count of pages
+with zero findings (the honest denominator). Each finding's `proposedFix` is written to paste
+into a **`kb-edit`** session — the validated writers (`kb.mjs set` / `wild` / `production` /
+`link`) apply it, then `make all && make check`. Rewriting a wrong `wild`/`production` entry beats
+deleting it; a claim you cannot make accurate gets dropped.
+
+## Loop mode
+
+Once: `plan` + `resolve` the target set. Each iteration: `fetch --only <next 3-5>`, evaluate that
+block class, run `eval-check`. Stop when `status` exits 0 and `eval-check` is green. `tmp/` is
+gitignored and holds "all rights reserved" pages — delete it after the editing pass.

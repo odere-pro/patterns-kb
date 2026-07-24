@@ -123,6 +123,11 @@
       "@id": "../principles/kiss.html#kiss",
       "name": "Keep It Simple (KISS)",
       "kb:note": "one Postgres and stateless workers carry a confirmed hundred onboardings a week; every rejected broker and engine is priced against that number, with named exits instead of early adoption"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/sweeper.html#sweeper",
+      "name": "Sweeper",
+      "kb:note": "one scheduled job re-queues expired task locks, escalates exhausted tasks to a dead state, breaches the SLA out loud to operator and client, and runs both recheck clocks"
     }
   ]
 }
@@ -288,60 +293,109 @@
     <section class="doc-section" id="sizing" aria-labelledby="h-sizing" data-kb-block="sizing">
       <h2 class="doc-h" id="h-sizing">Right-sizing</h2>
       <div class="prose">
-        <p><strong>The problem:</strong> a flow that waits days on people and vendors — ~75 person-flows a day today (assumed: ~100 merchant onboardings a week, ×5 person checks), design target 10k/day. <strong>The solution the numbers allow:</strong> one Postgres per region plus object storage; every heavier candidate is struck below.</p>
+        <p><strong>The problem:</strong> a flow that waits days on people and vendors — ~75 person-flows a day today (assumed: ~100 merchant onboardings a week, ×5 person checks), design target 10k/day. <strong>The shape:</strong> event-driven, and the volumes do not decide it — the waits do. A request thread cannot be held for a day, a verdict must reach the client exactly once across crashes, and the regulator asks for the history itself, so every wait becomes a durable row and every state change an appended event. Current state is materialised on the flow row rather than folded from the log on each read: the audit obligation wants the append-only history, nothing in the requirements wants replay-on-read. <strong>The stores:</strong> four per region — operational Postgres (flows, history, queue, outbox/inbox), a separate encrypted vault for personal data, object storage for documents, and a small shared cache holding circuit-breaker state.</p>
         <p><strong>Required capabilities:</strong></p>
         <ul>
-          <li>Durable transactional store — state machine, idempotent creates, database-enforced tenant isolation (mandatory). <em>→ NFR: consistency; security &amp; tenancy.</em></li>
+          <li>Durable transactional store — the state machine and its append-only history; a transition and its consequences commit together or not at all (mandatory). <em>→ NFR: consistency.</em></li>
           <li>Work queue — ID vendor down ~6 h/week, person takes ~a day to submit; every step must be able to wait (mandatory). <em>→ NFR: availability &amp; resilience.</em></li>
+          <li>Coordination cache — one circuit-breaker record and one set of fallback weights per vendor, shared by every worker replica; also the rate-limit counters (mandatory). <em>→ NFR: availability &amp; resilience.</em></li>
+          <li>Rate limiting — vendor quotas are finite and the self-serve resend must not become a mail cannon (mandatory). <em>→ FR: invite resend; NFR: availability &amp; resilience.</em></li>
           <li>Object store — documents kept as evidence, in the client's region (mandatory). <em>→ NFR: compliance; security &amp; tenancy.</em></li>
-          <li>Private network — internal services and stores unreachable from the public internet; only the API, dashboard and webhook egress face it (mandatory). <em>→ NFR: security &amp; tenancy.</em></li>
           <li>Reliable webhook delivery — a repeat recognisable as a repeat (mandatory). <em>→ FR: result delivery; NFR: consistency.</em></li>
+          <li>Private network — internal services and stores unreachable from the public internet; only the API, dashboard and webhook egress face it (mandatory). <em>→ NFR: security &amp; tenancy.</em></li>
+          <li>Encrypted PII store with key custody — its own credentials, one envelope key per person, held by a key manager the application cannot export (additional). <em>→ FR: separate PII store, access audit; NFR: compliance.</em></li>
           <li>Scheduler — per-jurisdiction re-screening and re-verification cadences (additional). <em>→ FR: re-screening, re-verification.</em></li>
-          <li>Encrypted PII store — separation, access audit, right-to-forget (additional). <em>→ FR: separate PII store, access audit; NFR: compliance.</em></li>
         </ul>
         <p><strong>The numbers:</strong></p>
         <ul>
-          <li>Writes: 10k flows/day × 25–30 rows per flow ≈ <strong>3/s, peaking 5–6/s</strong> — three orders below a single tuned node. <em>→ NFR: scale.</em></li>
-          <li>Storage: ~1 KB metadata × 5 years ≈ <strong>18 GB</strong>; ID photos 2 MB × 10k/day × 1-year retention ≈ <strong>7 TB</strong> in object storage. <em>→ NFR: scale; compliance.</em></li>
-          <li>Waiting (Little's law): ~24 h mean submission wait parks <strong>~10k open flows</strong> — each a row, not a connection; the human wait forbids a synchronous design. <em>→ NFR: consistency.</em></li>
-          <li>Screening (additional tier): ~3.6M concluded persons after a year × quarterly cadence ≈ 40k re-checks/day ≈ <strong>0.5 calls/s</strong> — 4× the intake rate; drives vendor spend and grows with the book forever. <em>→ NFR: scale.</em></li>
+          <li>Writes: ~28 rows per flow (12 inserts — flow, person, document, link, ~5 transitions, ~3 outbox/inbox — plus ~8 task rows claimed and completed, so twice touched) × 10k flows/day ≈ <strong>3 row-writes/s into Postgres</strong>; ×2 for business-hours and campaign bunching ≈ <strong>5–6/s peak</strong>. A single primary is untroubled below ~100/s, wants tuning by 1k/s and tops out around 10k–50k/s: this design sits two rungs below the first one that asks a question. <em>→ NFR: scale.</em></li>
+          <li>Storage: ~1 KB metadata × 5 years ≈ <strong>18 GB</strong>; ID photos 2 MB × 10k/day × 1-year retention ≈ <strong>7 TB</strong> in object storage, expired by lifecycle rule. <em>→ NFR: scale; compliance.</em></li>
+          <li>Waiting (Little's law): ~24 h mean submission wait parks <strong>~10k open flows</strong> — inert rows the claim query never scans, resolved by the 48-hour link expiry and a scheduled <a href="../patterns/distributed/coordination/sweeper.html">sweeper</a> that re-invites or escalates a failure event. <em>→ NFR: consistency.</em></li>
+          <li>Re-screening load (additional tier): ~3.6M concluded persons after a year × quarterly cadence ≈ 40k re-checks/day ≈ <strong>0.5 outbound vendor calls/s</strong> and ~2 extra row-writes each — a rounding error on a store that is bored below 100 writes/s. <em>→ NFR: scale.</em></li>
         </ul>
         <p><strong>Verdict per candidate:</strong></p>
         <ul>
-          <li>Message broker — struck: 5–6 writes/s peak fits a task table in the same store. <em>→ NFR: scale.</em></li>
-          <li>Cache — struck: 18 GB and no read pressure. <em>→ NFR: scale.</em></li>
-          <li>Search index — struck: the dashboard view is a primary-key lookup. <em>→ FR: flow view.</em></li>
-          <li>Workflow engine — struck: a state column plus a transitions table. <em>→ FR: history.</em></li>
-          <li>Object store — kept: evidence and residency force it, not scale. <em>→ NFR: compliance.</em></li>
-          <li>Encrypted PII store + scheduler — kept: the additional tier's governance; it changes the bill, not the shape. <em>→ NFR: compliance; evolvability.</em></li>
+          <li>Synchronous request/response — <strong>rejected</strong>: the person takes ~a day and the ID vendor is down ~6 h/week, so a thread or connection held per in-flight flow exhausts the pool at trivial concurrency. <em>→ NFR: availability &amp; resilience.</em></li>
+          <li>Event-driven core — <strong>adopted</strong>: every wait becomes a durable row and every state change an appended transition, so the history the regulator asks for is a by-product of running the flow rather than a second write path that could disagree. <em>→ FR: history; NFR: consistency.</em></li>
+          <li>Work queue as a table in the system of record — <strong>adopted</strong>: the task insert commits in the same transaction as the state change that spawned it, and <code>FOR UPDATE SKIP LOCKED</code> is a competent competing-consumers queue at 5–6 writes/s. <em>→ NFR: consistency; availability &amp; resilience.</em></li>
+          <li>Outbox and inbox — <strong>adopted</strong>: the outbox closes the write-then-crash-before-publish gap that silently un-tells a client; the inbox dedups on the vendor's own request id, so a duplicate arriving before our first write still collides. <em>→ FR: result delivery; NFR: consistency.</em></li>
+          <li>Scheduler as a query on a cadence — <strong>adopted</strong>: both recheck clocks are due-dated rows a sweep picks up, so recurrence costs a predicate rather than a timer service. <em>→ FR: re-screening, re-verification.</em></li>
+          <li>Separate encrypted vault + key manager — <strong>adopted</strong>: erasure must be provable, so it is key destruction, not a delete; separate credentials keep a compromised API tier from reading personal data. <em>→ NFR: compliance; security &amp; tenancy.</em></li>
+          <li>Object store — <strong>adopted</strong>: evidence and residency force it; at 7 TB of immutable blobs it is also the cheapest place they could live. <em>→ NFR: compliance.</em></li>
+          <li>Coordination cache — <strong>adopted</strong>: correctness, not speed. Per-process breakers make N replicas absorb N× the vendor's failures, then send N probes at a recovering vendor. <em>→ NFR: availability &amp; resilience.</em></li>
+          <li>Read cache — <strong>rejected</strong>: 18 GB of metadata, dashboard reads by primary key, no hot set worth a second copy to invalidate. <em>→ FR: flow view.</em></li>
+          <li>Search index — <strong>rejected</strong>: the dashboard answers "show me this flow", never "find flows matching text". <em>→ FR: flow view.</em></li>
+          <li>Message broker — <strong>deferred</strong>: it would trade away the shared transaction to solve throughput this system does not have; trigger is measured task-table churn, roughly sustained 100k flows/day. <em>→ NFR: scale.</em></li>
+          <li>Workflow engine — <strong>deferred</strong>: a state column plus a transitions table already gives durable, inspectable orchestration; trigger is flow variants multiplying, and the price is losing the append-only history to the engine's own. <em>→ NFR: evolvability.</em></li>
+          <li>Read replica — <strong>deferred</strong>: trigger is dashboard and reporting reads competing with worker claims. <em>→ NFR: scale.</em></li>
         </ul>
-        <p><strong>What invalidates this:</strong> the queue living inside Postgres is the part that wears out first. Every task row is updated several times (claim, retry, complete); each update leaves a dead tuple for vacuum to reclaim. At 10k flows/day vacuum keeps up invisibly; near sustained ~2M requests the dead-tuple rate outruns it — the task table and its indexes bloat, and claim queries slow. Exits in order, priced in the deep dives: partial indexes and aggressive cleanup of completed tasks, a broker for the queue (the outbox boundary survives), sharding by client. Deferring them is safe because resilience is bought by protocol (idempotency, retries, outbox replay), not by infrastructure. <em>→ NFR: scale.</em></p>
+        <p><strong>When this stops being right.</strong> The queue-in-Postgres wears out first. Every update leaves a dead copy of the row behind for a background cleanup (autovacuum) to reclaim, and each task row is written three times — claimed, retried, completed. Past roughly 2M sustained requests the garbage outruns the cleanup, the <code>task</code> table bloats, and the claim query slows. <strong>The signal: dead-tuple ratio on <code>task</code> and age of the oldest pending row, climbing together.</strong> Exits in order, priced in the deep dives: index and prune the task table, a read replica, the broker (the outbox survives untouched), sharding by <code>client_id</code>. All safely deferred — resilience is bought by protocol, not infrastructure. <em>→ NFR: scale.</em></p>
       </div>
     </section>
 
     <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
       <h2 class="doc-h" id="h-entities">Core entities &amp; data design</h2>
       <div class="prose">
-        <p>The entities split along two seams: <em>business truth vs operational bookkeeping</em>, and <em>PII vs everything else</em>. Both seams are enforced by the schema, not by convention:</p>
-        <ul>
-          <li><strong>Client</strong> — the tenant. Every table carries <code>client_id</code>, and row-level security makes the tenant filter impossible to forget.</li>
-          <li><strong>Flow</strong> — the unit a client starts: current business state (the five-state model's enum, nothing else), an opaque reference into the PII vault, an optimistic-lock version.</li>
-          <li><strong>FlowTransition</strong> — append-only history of every state change. The state machine is the source of truth; <strong>the audit log is a projection over this table</strong>, never a second place to write.</li>
-          <li><strong>Person (PII vault)</strong> — email and submitted personal data, encrypted under a per-person envelope key. Referenced by id only; erasure destroys the key.</li>
-          <li><strong>MagicLinkKey</strong> — hash of the invite key, 48-hour expiry, single-use marker. A resend invalidates its predecessors.</li>
-          <li><strong>Document</strong> — the ID photo's metadata row, written <em>before</em> the presigned upload so a failed upload leaves a visible stub, never an orphan blob. Bytes live in object storage.</li>
-          <li><strong>VerificationSession / SanctionsCheck</strong> — one verification attempt, carrying the verified document's expiry date (what the re-verification clock reads); one row per sanction list (the scatter-gather legs the collector joins).</li>
-          <li><strong>Task</strong> — the work queue. All <em>operation</em> state lives here: pending/processing, attempts, locks, run-after. None of it ever touches the Flow enum.</li>
-          <li><strong>Outbox</strong> — one row per event the client must hear about, written in the same transaction as the transition that caused it.</li>
-          <li><strong>Inbox</strong> — one row per vendor callback, unique on (flow, step, provider request id), inserted in the same transaction as the callback's effect.</li>
-          <li><strong>WebhookDelivery</strong> — per-attempt delivery record: what was sent, when, what the endpoint answered.</li>
-          <li><strong>AuditLog</strong> — the compliance papertrail of PII access (who read what, when). Flow history it does not duplicate — that is FlowTransition's projection.</li>
-        </ul>
+        <p>Two seams, both enforced by the schema, not by convention: business truth (<code>flow</code> and its append-only <code>flow_transition</code> history) never mixes with operational bookkeeping (<code>task</code> attempts, locks, backoff), and PII lives in a separate vault the operational store references only by opaque id. Current state is materialised on the flow row; history is appended, never rewritten — the audit view is a projection over transitions, not a second write path. Two constraints do most of the work: the partial unique index <code>one_open_flow</code> <em>is</em> the duplicate-invite rule, and the inbox's three-column uniqueness <em>is</em> the callback dedup (deep dive 2). Constraints that encode rules beat code that remembers them.</p>
       </div>
-      <details class="sketch">
-        <summary>The schema — with the constraints that carry the design</summary>
+      <div class="entity-group">
+        <h3>Tenancy &amp; identity — operational Postgres + PII vault</h3>
+        <div class="entity">
+          <h4>Client</h4>
+          <p>The tenant. Every client-scoped table carries <code>client_id</code>, and row-level security makes the tenant filter impossible to forget.</p>
+          <details class="sketch" open>
+            <summary>schema — client</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE client (
+  id                 uuid PRIMARY KEY,
+  region             text NOT NULL,     -- recorded at onboarding; PII and documents stay in it
+  webhook_url        text NOT NULL,
+  webhook_secret_ref text NOT NULL      -- points into the secret store, never the secret itself
+  -- … name, timestamps …
+);
+
+-- Tenant isolation the application cannot forget — same policy on every client-scoped table:
+ALTER TABLE flow ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON flow
+  USING (client_id = current_setting('app.client_id')::uuid);</code></pre>
+          </details>
+        </div>
+        <div class="entity">
+          <h4>Person</h4>
+          <p>Email and submitted personal data, encrypted under a per-person envelope key. Lives in the vault, referenced by id only; erasure destroys the key.</p>
+          <details class="sketch" open>
+            <summary>schema — person</summary>
+<pre><code class="language-sql" data-kb-lang="sql">-- In the encrypted vault — a separate store with its own credentials, one per region.
+CREATE TABLE person (
+  id             uuid PRIMARY KEY,      -- the person_ref the operational store carries
+  client_id      uuid NOT NULL,
+  encrypted_data bytea NOT NULL,        -- email + submitted personal data, sealed as one blob
+  key_id         text  NOT NULL         -- per-person envelope key, held by the key manager
+);
+-- Right-to-forget = destroy the key named by key_id; the blob becomes noise.</code></pre>
+          </details>
+        </div>
+        <div class="entity">
+          <h4>MagicLinkKey</h4>
+          <p>Hash of the invite key — 48-hour expiry, single-use. A resend invalidates its predecessors.</p>
+          <details class="sketch" open>
+            <summary>schema — magic_link_key</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE magic_link_key (
+  key_hash   bytea PRIMARY KEY,       -- never the key itself
+  flow_id    uuid NOT NULL,
+  expires_at timestamptz NOT NULL,    -- issued_at + 48h
+  used_at    timestamptz              -- single-use
+);</code></pre>
+          </details>
+        </div>
+      </div>
+      <div class="entity-group">
+        <h3>Flow lifecycle — operational Postgres</h3>
+        <div class="entity">
+          <h4>Flow</h4>
+          <p>The unit a client starts: current business state (the five-state model's enum, nothing else), an opaque reference into the PII vault, an optimistic-lock version.</p>
+          <details class="sketch" open>
+            <summary>schema — flow</summary>
 <pre><code class="language-sql" data-kb-lang="sql">-- Business state: the five-state model — four in flight, a three-way terminal branch.
--- Nothing operational in it.
 CREATE TYPE flow_state AS ENUM (
   'initiated', 'awaiting_submission', 'awaiting_id_verification',
   'awaiting_sanctions_check',
@@ -353,16 +407,22 @@ CREATE TABLE flow (
   person_ref  uuid NOT NULL,                -- opaque ref into the PII vault
   email_hash  bytea NOT NULL,               -- for the duplicate-invite rule; raw email lives in the vault
   state       flow_state NOT NULL DEFAULT 'initiated',
-  version     int NOT NULL DEFAULT 0,       -- optimistic check on every transition
-  created_at  timestamptz NOT NULL DEFAULT now()
+  version     int NOT NULL DEFAULT 0        -- optimistic check on every transition
+  -- … timestamps …
 );
 
 -- The duplicate-invite rule: at most ONE open flow per (client, email).
 -- A second create finds this index and returns the existing flow.
 CREATE UNIQUE INDEX one_open_flow ON flow (client_id, email_hash)
-  WHERE state NOT IN ('clear', 'sanctioned', 'invalid_id');
-
-CREATE TABLE flow_transition (        -- append-only; the audit view projects from here
+  WHERE state NOT IN ('clear', 'sanctioned', 'invalid_id');</code></pre>
+          </details>
+        </div>
+        <div class="entity">
+          <h4>FlowTransition</h4>
+          <p>Append-only history of every state change. The state machine is the source of truth; the audit view is a projection over this table, never a second place to write.</p>
+          <details class="sketch" open>
+            <summary>schema — flow_transition</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE flow_transition (        -- append-only; the audit view projects from here
   flow_id    uuid NOT NULL,
   seq        int  NOT NULL,
   from_state flow_state,
@@ -370,9 +430,15 @@ CREATE TABLE flow_transition (        -- append-only; the audit view projects fr
   cause      text NOT NULL,           -- 'idv_passed', 'list_hit:ofac', 'sanctions_recheck', 'doc_expired', …
   at         timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (flow_id, seq)
-);
-
-CREATE TABLE task (                   -- ALL operation state lives here, not on flow
+);</code></pre>
+          </details>
+        </div>
+        <div class="entity">
+          <h4>Task</h4>
+          <p>The work queue. All <em>operation</em> state lives here — pending/processing, attempts, locks, run-after — and none of it ever touches the Flow enum.</p>
+          <details class="sketch" open>
+            <summary>schema — task</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE task (                   -- ALL operation state lives here, not on flow
   id         bigserial PRIMARY KEY,
   flow_id    uuid NOT NULL,
   kind       text NOT NULL,           -- send_invite | verify_id | check_list:&lt;list&gt; | deliver_webhook
@@ -381,70 +447,134 @@ CREATE TABLE task (                   -- ALL operation state lives here, not on 
   run_after  timestamptz NOT NULL DEFAULT now(),  -- backoff and queue-and-wait live here
   locked_by  text,
   locked_at  timestamptz
-);
-
-CREATE TABLE outbox (
+);</code></pre>
+          </details>
+        </div>
+      </div>
+      <div class="entity-group">
+        <h3>Verification evidence — operational Postgres + object store</h3>
+        <div class="entity">
+          <h4>Document</h4>
+          <p>The ID photo's metadata row, written <em>before</em> the presigned upload so a failed upload leaves a visible stub, never an orphan blob. Bytes live in object storage.</p>
+          <details class="sketch" open>
+            <summary>schema — document</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE document (
+  id          uuid PRIMARY KEY,
+  person_ref  uuid NOT NULL,
+  storage_key text NOT NULL,          -- row FIRST, then presigned upload → no orphan blobs
+  uploaded_at timestamptz             -- NULL = upload never completed; sweeper notices
+);</code></pre>
+          </details>
+        </div>
+        <div class="entity">
+          <h4>VerificationSession</h4>
+          <p>One verification attempt, carrying the verified document's expiry date — the re-verification clock reads it.</p>
+          <details class="sketch" open>
+            <summary>schema — verification_session</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE verification_session (
+  id              uuid PRIMARY KEY,
+  flow_id         uuid NOT NULL,
+  document_id     uuid NOT NULL REFERENCES document(id),
+  result          text,                 -- NULL while the vendor works
+  doc_expires_on  date,                 -- what the re-verification clock reads
+  reverify_due_at timestamptz           -- due-dated row the scheduler sweep picks up
+  -- … provider, timestamps …
+);</code></pre>
+          </details>
+        </div>
+        <div class="entity">
+          <h4>SanctionsCheck</h4>
+          <p>One row per sanction list — the scatter-gather legs the collector joins. Its due date is the re-screening clock.</p>
+          <details class="sketch" open>
+            <summary>schema — sanctions_check</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE sanctions_check (
+  flow_id        uuid NOT NULL,
+  list           text NOT NULL,          -- one leg per sanction list
+  verdict        text,                   -- NULL until this leg reports
+  recheck_due_at timestamptz,            -- per-jurisdiction cadence; the sweep's predicate
+  PRIMARY KEY (flow_id, list)
+  -- … checked_at …
+);</code></pre>
+          </details>
+        </div>
+      </div>
+      <div class="entity-group">
+        <h3>Integration &amp; delivery — operational Postgres</h3>
+        <div class="entity">
+          <h4>Outbox</h4>
+          <p>One row per event the client must hear about, written in the same transaction as the transition that caused it.</p>
+          <details class="sketch" open>
+            <summary>schema — outbox</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE outbox (
   id           bigserial PRIMARY KEY,
   flow_id      uuid NOT NULL,
   event_id     uuid NOT NULL UNIQUE,  -- the client's dedup key, stable across retries
   payload      jsonb NOT NULL,
   published_at timestamptz            -- NULL = still owed to the client
-);
-
-CREATE TABLE inbox (                  -- vendor callbacks, deduped at the boundary
+);</code></pre>
+          </details>
+        </div>
+        <div class="entity">
+          <h4>Inbox</h4>
+          <p>One row per vendor callback, inserted in the same transaction as the callback's effect.</p>
+          <details class="sketch" open>
+            <summary>schema — inbox</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE inbox (                  -- vendor callbacks, deduped at the boundary
   flow_id             uuid NOT NULL,
   step                text NOT NULL,
   provider_request_id text NOT NULL,  -- the VENDOR's id — collides even before our outbox write
   received_at         timestamptz NOT NULL DEFAULT now(),
   UNIQUE (flow_id, step, provider_request_id)
-);
-
-CREATE TABLE magic_link_key (
-  key_hash   bytea PRIMARY KEY,       -- never the key itself
-  flow_id    uuid NOT NULL,
-  expires_at timestamptz NOT NULL,    -- issued_at + 48h
-  used_at    timestamptz              -- single-use
-);
-
-CREATE TABLE document (
-  id          uuid PRIMARY KEY,
-  person_ref  uuid NOT NULL,
-  storage_key text NOT NULL,          -- row FIRST, then presigned upload → no orphan blobs
-  uploaded_at timestamptz             -- NULL = upload never completed; sweeper notices
-);
-
--- Tenant isolation the application cannot forget:
-ALTER TABLE flow ENABLE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON flow
-  USING (client_id = current_setting('app.client_id')::uuid);
--- same policy on every client-scoped table</code></pre>
-      </details>
-      <div class="prose">
-        <p>Two constraints do most of the work. The partial unique index <code>one_open_flow</code> <em>is</em> the duplicate-invite rule — no application code can race past it. The inbox's three-column uniqueness <em>is</em> the callback dedup — keyed on the vendor's own request id, so it holds even for a duplicate that arrives before this system has written anything else (deep dive 2). Constraints that encode rules beat code that remembers them.</p>
+);</code></pre>
+          </details>
+        </div>
+        <div class="entity">
+          <h4>WebhookDelivery</h4>
+          <p>Per-attempt delivery record: what was sent, when, and what the endpoint answered.</p>
+          <details class="sketch" open>
+            <summary>schema — webhook_delivery</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE webhook_delivery (
+  id              bigserial PRIMARY KEY,
+  outbox_id       bigint NOT NULL REFERENCES outbox(id),
+  attempt         int NOT NULL,
+  response_status int,                  -- NULL = no answer before timeout
+  sent_at         timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (outbox_id, attempt)
+);</code></pre>
+          </details>
+        </div>
+      </div>
+      <div class="entity-group">
+        <h3>Governance — operational Postgres</h3>
+        <div class="entity">
+          <h4>AuditLog</h4>
+          <p>The compliance papertrail of PII access — who read what, when, why. Flow history it does not duplicate; that is FlowTransition's projection.</p>
+          <details class="sketch" open>
+            <summary>schema — audit_log</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE audit_log (              -- append-only; PII access only, never flow history
+  id         bigserial PRIMARY KEY,
+  actor      text NOT NULL,           -- who: operator or service principal
+  person_ref uuid NOT NULL,           -- what
+  purpose    text NOT NULL,           -- why: 'support_case:1234', 'regulator_export'
+  at         timestamptz NOT NULL DEFAULT now()
+);</code></pre>
+          </details>
+        </div>
       </div>
     </section>
 
     <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
       <h2 class="doc-h" id="h-interface">The interface — API design</h2>
       <div class="prose">
-        <p>Five endpoints, no status poll. Every client-facing state-changing call returns <strong>202</strong> — work is recorded durably and done asynchronously; the one exception is the onboardee's submission, which returns <strong>201</strong> with the presigned upload URL it just created. The client's view of an in-flight flow is the dashboard; a missed terminal result is recovered by webhook replay, not by polling. What is <em>not</em> here is as deliberate as what is: no cancel, no in-flight status endpoint.</p>
+        <p>Every client-facing state-changing call returns <strong>202</strong> — work is recorded durably and done asynchronously; the one exception is the onboardee's submission, a <strong>201</strong> carrying the presigned upload URL it just created. No status poll and no cancel — recovery is webhook replay plus the dashboard, and a poll endpoint would duplicate the webhook's source of truth: <strong>push with replay beats push with poll</strong>. Idempotency lives at every boundary: <code>Idempotency-Key</code> guards the client's retry, <code>one_open_flow</code> the duplicate invite, the inbox's uniqueness the vendor's callback, <code>eventId</code> the delivery. The magic-link token is the onboardee's entire identity — no account; it authorises one flow's submission surface and nothing client-scoped.</p>
       </div>
-      <div class="table-scroll">
-        <table class="decision">
-          <thead>
-            <tr><th>Endpoint</th><th>Who calls it</th><th>Purpose</th><th>Key responses</th></tr>
-          </thead>
-          <tbody>
-            <tr><td><code>POST /flows</code></td><td>Client</td><td>Start a flow from an email; <code>Idempotency-Key</code> guards the retry, the open-flow index guards the duplicate invite</td><td><code>202</code> new · <code>200</code> existing open flow</td></tr>
-            <tr><td><code>POST /flows/{id}/invite/resend</code></td><td>Client or onboardee</td><td>Invalidate prior keys, issue a fresh single-use magic link with a new 48h expiry</td><td><code>202</code> · <code>409</code> already submitted</td></tr>
-            <tr><td><code>POST /submissions</code></td><td>Onboardee (magic-link token)</td><td>Submit personal info; returns a presigned upload URL for the ID photo</td><td><code>201</code> uploadUrl · <code>409</code> · <code>410</code> → resend</td></tr>
-            <tr><td><code>POST /flows/{id}/webhook/replay</code></td><td>Client</td><td>Re-emit a missed event from the outbox, same <code>eventId</code></td><td><code>202</code> · <code>409</code> not terminal</td></tr>
-            <tr><td><code>DELETE /persons/{id}</code></td><td>Client</td><td>Right-to-erasure: crypto-shred the vault entry, purge the photo</td><td><code>202</code> · <code>404</code></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <details class="sketch" open>
-        <summary>Start a flow — two guards against two different duplicates</summary>
+      <div class="endpoint-group">
+        <h3>Client API — authenticated tenant calls</h3>
+        <div class="endpoint">
+          <h4><code>POST /flows</code></h4>
+          <p>Start a flow from an email. Two guards against two different duplicates — a network retry and a genuinely repeated invite.</p>
+          <details class="sketch" open>
+            <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST /flows
 Idempotency-Key: 7c9e-4b1a-…                     client-generated, guards the RETRY
 {
@@ -459,9 +589,45 @@ Idempotency-Key: 7c9e-4b1a-…                     client-generated, guards the 
 # DIFFERENT key, same email     → 200 with the EXISTING open flow: the partial unique
 # index one_open_flow enforces one open flow per (client, email). Two guards,
 # two different duplicates: a network retry vs a genuinely repeated invite.</code></pre>
-      </details>
-      <details class="sketch">
-        <summary>Submission — magic-link session, then a presigned upload</summary>
+          </details>
+        </div>
+        <div class="endpoint">
+          <h4><code>POST /flows/{id}/invite/resend</code></h4>
+          <p>Invalidate prior keys, issue a fresh single-use magic link with a new 48-hour expiry. Reachable from the onboardee's resend page as well as by the client.</p>
+          <details class="sketch" open>
+            <summary>contract</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /flows/flow_9c31/invite/resend
+
+202 Accepted
+# All prior keys for the flow are invalidated, ONE fresh single-use key is issued
+# with a new 48h expiry, and the email goes out as a task — not inline.
+# Spends nothing but a rate-limit token: safe to expose behind the resend page.
+
+409 Conflict   { "error": "already submitted" }   nothing left to invite</code></pre>
+          </details>
+        </div>
+        <div class="endpoint">
+          <h4><code>POST /flows/{id}/webhook/replay</code></h4>
+          <p>Re-emit a missed result from the outbox, same <code>eventId</code> — the recovery path that replaces polling.</p>
+          <details class="sketch" open>
+            <summary>contract</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /flows/flow_9c31/webhook/replay
+
+202 Accepted
+# Re-emits the flow's terminal event from the outbox — the SAME eventId, so the
+# client's dedup absorbs it whether or not the original ever arrived.
+
+409 Conflict   { "error": "flow not terminal" }   nothing to replay yet</code></pre>
+          </details>
+        </div>
+      </div>
+      <div class="endpoint-group">
+        <h3>Onboardee surface — the magic-link token is the identity</h3>
+        <div class="endpoint">
+          <h4><code>POST /submissions</code></h4>
+          <p>Submit personal info against the magic-link session; returns a presigned upload URL for the ID photo. On <code>410</code> the onboardee sees the resend page, not a support address.</p>
+          <details class="sketch" open>
+            <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST /submissions
 Authorization: Bearer &lt;magic-link token&gt;         hash looked up, expiry + single-use checked
 { "personalInfo": { … } }
@@ -477,9 +643,39 @@ Authorization: Bearer &lt;magic-link token&gt;         hash looked up, expiry + 
 
 409 Conflict   { "error": "already submitted" }   single-use key already spent
 410 Gone       { "error": "invite expired" }      show the self-serve resend</code></pre>
-      </details>
-      <details class="sketch">
-        <summary>The webhook the client receives — the eventId contract</summary>
+          </details>
+        </div>
+      </div>
+      <div class="endpoint-group">
+        <h3>Vendor callbacks — deduped at the boundary</h3>
+        <div class="endpoint">
+          <h4><code>POST /callbacks/{provider}</code></h4>
+          <p>One inbound surface for IDV and sanctions-list callbacks, deduped on the vendor's own request id — redelivery is always safe.</p>
+          <details class="sketch" open>
+            <summary>contract</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /callbacks/idv-provider
+X-Signature: sha256=…                            vendor-authenticated, private ingress
+{
+  "requestId": "req_88a1",                       the VENDOR's id — the dedup key
+  "flowId":    "flow_9c31",
+  "result":    "passed"
+}
+
+202 Accepted
+# The inbox row and the callback's effect commit in one transaction; the
+# three-column uniqueness (flow, step, requestId) makes a redelivered callback
+# collide even if it arrives before anything else was written (deep dive 2).
+# A duplicate gets the same 202 — the vendor retries freely.</code></pre>
+          </details>
+        </div>
+      </div>
+      <div class="endpoint-group">
+        <h3>Outbound — the webhook the client receives</h3>
+        <div class="endpoint">
+          <h4><code>POST {webhookUrl}</code></h4>
+          <p>The result and failure events, at-least-once, HMAC-signed with the per-client secret. <code>eventId</code> is the client's dedup key — stable across retries and replays.</p>
+          <details class="sketch" open>
+            <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST https://client.example/hooks/kyc
 X-Signature: sha256=…                            HMAC of the body, per-client secret
 {
@@ -495,9 +691,27 @@ X-Signature: sha256=…                            HMAC of the body, per-client 
 # and the event stays replayable from the outbox with the SAME eventId.
 # The contract names eventId as the dedup key — duplicates are the client's
 # to absorb, which is only fair because the key is guaranteed stable.</code></pre>
-      </details>
-      <div class="prose">
-        <p>The magic-link token is the onboardee's entire identity — there is no account. It authorises exactly one flow's submission endpoints and nothing client-scoped. On <code>410</code> the onboardee sees a resend page, not a support address: <code>invite/resend</code> spends nothing but a rate-limit token and issues a fresh key. Landed decision: <strong>push with replay beats push with poll</strong> — a poll endpoint would duplicate the webhook's source of truth to answer a question the dashboard already answers.</p>
+          </details>
+        </div>
+      </div>
+      <div class="endpoint-group">
+        <h3>Governance — right-to-erasure</h3>
+        <div class="endpoint">
+          <h4><code>DELETE /persons/{id}</code></h4>
+          <p>Crypto-shred the vault entry and purge the photo; the flow's non-PII history remains.</p>
+          <details class="sketch" open>
+            <summary>contract</summary>
+<pre><code class="language-http" data-kb-lang="http">DELETE /persons/prs_7d02
+
+202 Accepted
+# Erasure runs as a task: destroy the person's envelope key (the vault blob
+# becomes noise), purge the photo from object storage, keep the flow's non-PII
+# history — the audit obligation survives the person's data (deep dive 7).
+# The access itself lands in audit_log: who, when, 'erasure_request'.
+
+404 Not Found                                    unknown or already erased</code></pre>
+          </details>
+        </div>
       </div>
     </section>
 
@@ -842,10 +1056,11 @@ flowchart LR
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="scatter-gather"><a href="../patterns/messaging/scatter-gather.html">Scatter-Gather</a><span class="rel-note">the sanctions step fans out one task per list and a collector transitions the flow exactly once, when every leg has reported</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="competing-consumers"><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a><span class="rel-note">stateless worker replicas compete for tasks with FOR UPDATE SKIP LOCKED, so two never claim the same row and adding capacity is just adding replicas</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="kiss"><a href="../principles/kiss.html">Keep It Simple (KISS)</a><span class="rel-note">one Postgres and stateless workers carry a confirmed hundred onboardings a week; every rejected broker and engine is priced against that number, with named exits instead of early adoption</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sweeper"><a href="../patterns/distributed/coordination/sweeper.html">Sweeper</a><span class="rel-note">one scheduled job re-queues expired task locks, escalates exhausted tasks to a dead state, breaches the SLA out loud to operator and client, and runs both recheck clocks</span></div>
         </div>
       </div>
 
-</section>
+    </section>
 
     <nav class="docnav" aria-label="Pattern navigation">
       <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
