@@ -273,6 +273,27 @@ classDiagram
         <h3>5 · Bounded memory and live config changes</h3>
         <p>Every unique <code>clientId</code> that ever calls leaves a bucket or log behind, and the maps grow forever — a latent <a href="../hazards/resource-leak.html">resource leak</a> that becomes an out-of-memory risk at millions of clients. Eviction closes it: track last-access per key and let a background sweep drop entries idle past a threshold, cap the map with an LRU, or (in a distributed variant) let Redis key TTLs do it. An evicted client's next request simply looks like a first-timer — acceptable, since it had gone quiet. The other evolution is live config: the blunt option rebuilds every limiter and atomically swaps the map, which is simple but resets all per-key state — fine when raising limits, dangerous when lowering them to stop an abuser who then gets a clean slate. The careful option adds <code>updateConfig</code> to the interface so each limiter mutates its own parameters in place and clamps existing state to the new capacity, preserving continuity; switching an endpoint's algorithm outright still requires a full replacement, since the two states are incompatible.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant A as Thread A (key alice)
+    participant B as Thread B (key alice)
+    participant K as Bucket (its own lock)
+    alt no lock — check-then-act race
+        A->>K: read tokens (= 1)
+        B->>K: read tokens (= 1)
+        A->>K: check ok, decrement to 0
+        B->>K: check ok, decrement to -1
+        Note over A,B: two allowed against a capacity of one
+    else per-bucket lock (chosen)
+        A->>K: acquire lock, spend to 0, release
+        B->>K: acquire lock, bucket empty
+        B-->>B: denied, retry-after returned
+    end
+        </pre>
+        <figcaption>Why do two requests for the same client over-admit — and why does locking the bucket, not the whole limiter, fix it? Different clients never contend; only same-key calls serialise.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

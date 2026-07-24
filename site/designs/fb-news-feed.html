@@ -182,7 +182,6 @@ GET /feed?pageSize={n}&amp;cursor={oldestSeenTimestamp}
         <pre class="mermaid">
 flowchart TB
     Client["Client / app"]
-    Gateway["API gateway / load balancer"]
     PostSvc["Post Service (stateless)"]
     PostDB[("Post store + creatorId/createdAt index")]
     Queue[["Fan-out queue"]]
@@ -190,15 +189,14 @@ flowchart TB
     FeedDB[("Precomputed feed store")]
     FeedSvc["Feed Service"]
     Cache[("Replicated post cache")]
-    Client --> Gateway
-    Gateway -->|"POST /posts"| PostSvc
-    Gateway -->|"GET /feed"| FeedSvc
-    PostSvc -->|"write post"| PostDB
+    Client -->|"POST /posts"| PostSvc
+    Client -->|"GET /feed"| FeedSvc
+    PostSvc -->|"write post + index"| PostDB
     PostSvc -->|"enqueue postId + creatorId"| Queue
-    Queue --> Workers
+    Queue -->|"deliver to worker"| Workers
     Workers -->|"prepend to each follower's feed"| FeedDB
     FeedSvc -->|"read post IDs"| FeedDB
-    FeedSvc -->|"hydrate bodies + pull live celebrity posts"| Cache
+    FeedSvc -->|"hydrate bodies + live celebrity posts"| Cache
     Cache -->|"miss"| PostDB
         </pre>
         <figcaption>The write path returns as soon as the post is queued; workers fan it out off the critical path, and the read path is served almost entirely from precomputed feeds and the cache.</figcaption>
@@ -225,6 +223,18 @@ flowchart TB
           <li><strong>Good — a post cache.</strong> Put a <a href="../patterns/caching/cache-aside.html">cache-aside</a> layer (Redis, keyed by post ID) in front of the store, with a long TTL because posts are rarely edited, and invalidate an entry only on the occasional edit. It absorbs most reads — but the hot key just moves to whichever cache shard owns the viral post, which is as hard to scale as the store shard was.</li>
           <li><strong>Great — replicate, don't shard, the cache.</strong> Keep the same long-TTL scheme but <a href="../patterns/distributed/coordination/replication.html">replicate</a> the cache so every instance can serve any post ID, with a load balancer spreading requests across all of them. A viral post's traffic now splits across all <em>N</em> replicas with zero coordination between them — <em>N×</em> the headroom for a hot key. The trade is a colder start (a newly viral post can miss on up to <em>N</em> instances, costing <em>N</em> store reads instead of 1) and fewer distinct posts cached overall; both are dwarfed by the millions of origin reads avoided.</li>
         </ul>
+        <figure class="diagram">
+          <pre class="mermaid">
+flowchart TB
+    FS["Feed Service"] -->|"get viral post body"| LB["Load balancer"]
+    LB -->|"spread across replicas"| C1["Post cache replica 1"]
+    LB -->|"spread across replicas"| C2["Post cache replica 2"]
+    LB -->|"spread across replicas"| C3["Post cache replica N"]
+    C1 -.->|"cold miss: long-TTL fill"| DB[("Post store")]
+    C3 -.->|"cold miss: long-TTL fill"| DB
+          </pre>
+          <figcaption>How does a viral post's read traffic split instead of pinning one shard? Replicate, not shard, so any replica serves any id.</figcaption>
+        </figure>
       </div>
     </section>
 

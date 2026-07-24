@@ -184,20 +184,26 @@ GET /feed?cursor={cursor}&amp;limit={page_size}
         <pre class="mermaid">
 flowchart TB
     Client["Client / app"]
-    Client -->|"POST /posts · GET /feed"| GW["API Gateway"]
-    GW -->|"create post"| Post["Post Service"]
-    GW -->|"read feed"| Feed["Feed Service"]
-    Post -->|"metadata"| DDB[("Posts DB")]
-    Post -->|"pre-signed upload"| S3[("Blob store (S3)")]
-    Post -->|"enqueue post_id"| Q[["Fan-out queue"]]
-    Q --> Fanout["Feed Fan-out worker"]
-    Fanout -->|"prepend to each follower"| Redis[("Redis feeds (ZSET)")]
+    Post["Post Service"]
+    Feed["Feed Service"]
+    Q[["Fan-out queue"]]
+    Fanout["Feed Fan-out worker"]
+    DDB[("Posts DB")]
+    Redis[("Redis feeds (ZSET)")]
+    Media["Blob store + CDN edge · S3"]:::ext
+    Client -->|"POST /posts"| Post
+    Client -->|"GET /feed"| Feed
+    Post -->|"write metadata"| DDB
+    Post -->|"pre-signed upload URL"| Media
+    Post -->|"enqueue post_id"| Q
+    Q -->|"deliver post"| Fanout
+    Fanout -->|"prepend to each follower feed"| Redis
     Feed -->|"top N post_ids"| Redis
-    Feed -->|"hydrate misses"| DDB
-    S3 --> CDN["CDN edge"]
-    CDN -->|"media bytes"| Client
+    Feed -->|"hydrate ids"| DDB
+    Media -->|"media bytes from edge"| Client
+    classDef ext stroke-dasharray:4 4;
         </pre>
-        <figcaption>The write path fans a new post out to followers' precomputed feeds asynchronously; the read path slices Redis and hydrates ids. Media flows client &rarr; S3 &rarr; edge, never through the app tier.</figcaption>
+        <figcaption>The write path fans a new post out to followers' precomputed feeds asynchronously; the read path slices Redis and hydrates ids. Media flows directly between client and the blob store's CDN edge, never through the app tier.</figcaption>
       </figure>
     </section>
 
@@ -233,6 +239,18 @@ metas += dynamo.batch_get_item(miss)                          # only the misses<
         <h3>3 · Holding at 500M DAU</h3>
         <p>Scale here is not one trick but the sum of the choices above. Precomputed hybrid feeds keep the read path a single Redis slice regardless of how many people a user follows. The CDN keeps media latency flat as the audience globalizes. Chunked, direct uploads keep large writes off the app tier. Metadata sits in a store <a href="../patterns/distributed/routing/sharding.html">sharded</a> by user id, with a composite <code>(created_at, post_id)</code> sort key so a user's posts come back already in chronological order. And cost is managed by <strong>tiering</strong>: warm bytes sit at the edge and in cache, cold media ages down to cheaper storage such as Glacier — walking the ladder from CDN → memory → SSD → HDD → tape as access frequency drops. Every service tier autoscales horizontally behind a load balancer on CPU and memory pressure.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Post["New post"] -->|"always store post_id"| DDB[("Posts DB")]
+    Post -->|"author &lt; 100k followers: enqueue"| Q[["Fan-out queue"]]
+    Q -->|"deliver"| Fanout["Feed Fan-out worker"]
+    Fanout -->|"prepend to each follower feed"| Redis[("Redis feeds (ZSET)")]
+    Feed["Feed Service"] -->|"top N precomputed"| Redis
+    Feed -->|"merge celebrities' recent posts live"| DDB
+        </pre>
+        <figcaption>The celebrity hybrid: ordinary authors fan out to followers' feeds on write; huge accounts (&ge; 100k) skip the fan-out storm and are merged into each feed live at read time.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

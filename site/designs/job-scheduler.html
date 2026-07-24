@@ -186,7 +186,7 @@ flowchart TB
     Jobs[("Jobs table · definitions")]
     Execs[("Executions table · instances")]
     Cron["Scheduler · polls every 5 min"]
-    Queue["Delay queue (SQS)"]
+    Queue["Delay queue · SQS"]
     Workers["Worker fleet"]
     DLQ["Dead-letter queue"]
     Client -->|"POST /jobs"| API
@@ -219,6 +219,20 @@ flowchart TB
         <p>At-least-once means two failure modes must both be caught. A <strong>visible failure</strong> — a bug or bad parameters — surfaces as an exception: wrap the task, log it, mark the execution <code>RETRYING</code> with its attempt count, and re-enqueue with <a href="../patterns/distributed/resilience/retry-backoff.html">exponential backoff</a> (5s, 25s, 125s) by raising <code>DelaySeconds</code> per attempt. After a bounded number of tries the row goes <code>FAILED</code> and the message lands in a <a href="../patterns/messaging/dead-letter-channel.html">dead-letter queue</a> for inspection rather than looping forever. An <strong>invisible failure</strong> — the worker itself dies before reporting anything — is harder, because nothing raises. Polling health-check endpoints does not scale to thousands of workers and invents its own single point of failure. A database lease works: a worker writes its id and an expiry onto the execution and renews it while running, so an expired lease lets another worker retry — but at 10k/sec with 5-second leases that is ~50k renewal writes a second, plus clock-skew and partition edge cases. The cleanest answer reuses the queue's own <a href="../patterns/distributed/coordination/distributed-lock.html">lease</a> semantics: an SQS message goes invisible when received and reappears automatically if the worker never deletes it, and a periodic <code>ChangeMessageVisibility</code> heartbeat extends ownership for long jobs — recovery in ~30 seconds with no extra infrastructure.</p>
         <p>At-least-once has a corollary the caller must honour: because a job can run more than once, task code has to be <a href="../patterns/messaging/idempotency.html">idempotent</a>. Executing blindly is dangerous — a retried money transfer moves funds twice. A deduplication table keyed by <code>job_id</code> + execution time works but adds a read-before-write and needs pruning. Best is to design the task so repetition is harmless: use an idempotency key with conditional operations ("set the counter to X", not "increment"; check a "welcome email sent" flag before sending), pushing the guarantee down into the work itself.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Pending: execution row written
+    Pending --> Running: worker pulls from delay queue
+    Running --> Done: task succeeds
+    Running --> Retrying: throws, or lease expires (worker died)
+    Retrying --> Running: re-enqueued with backoff
+    Retrying --> Failed: attempts exhausted
+    Done --> [*]
+    Failed --> [*]: moved to dead-letter queue
+        </pre>
+        <figcaption>What states does one execution move through under at-least-once? Both a crash and an exception route back through Retrying; the two terminals are Done and the dead-lettered Failed.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

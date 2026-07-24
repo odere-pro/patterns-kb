@@ -188,7 +188,6 @@ flowchart TB
     Client["Client / browser"]
     GW["API Gateway — auth, rate limit, routing"]
     Auction["Auction Service"]
-    Producer["Bid producer"]
     Queue[("Kafka — partitioned by auctionId")]
     Bid["Bid Service consumer"]
     DB[("Auction store — sharded by auctionId")]
@@ -197,9 +196,8 @@ flowchart TB
     Client -->|"POST /auctions, GET"| GW
     Client -->|"POST /bids"| GW
     GW -->|"create / read listing"| Auction
-    GW -->|"enqueue bid"| Producer
-    Auction --> DB
-    Producer -->|"append, ack"| Queue
+    GW -->|"append bid, ack"| Queue
+    Auction -->|"persist listing"| DB
     Queue -->|"consume in order"| Bid
     Bid -->|"conditional update max_bid"| DB
     Bid -->|"publish new high"| PS
@@ -243,6 +241,27 @@ UPDATE auctions
         <h3>5 · Ending the auction</h3>
         <p>A fixed end date is trivial. "End an hour after the last bid" is not — it is a scheduling problem. The cheap version stores a running <code>end_time</code> on the auction row and lets a periodic sweep close whatever has expired. The precise version uses a delayed-task <a href="../patterns/concurrency/scheduling.html">scheduler</a> — a Redis sorted set keyed by fire time, or a durable job queue — that on each bid schedules a check for one hour later; when it fires, it closes the auction only if that bid is still the latest. Doing it well pulls in clock drift and concurrent termination attempts, which is exactly the kind of adjacent complexity a staff answer surfaces unprompted.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant A as Bidder A
+    participant B as Bidder B
+    participant DB as Auction row
+    A->>DB: SELECT max_bid
+    DB-->>A: 10
+    B->>DB: SELECT max_bid
+    DB-->>B: 10 (stale read)
+    A->>DB: UPDATE WHERE max_bid = 10, set 100
+    DB-->>A: 1 row — A now leads
+    B->>DB: UPDATE WHERE max_bid = 10, set 20
+    DB--xB: 0 rows — raced, lost
+    B->>DB: re-read max_bid
+    DB-->>B: 100
+    Note over B: 20 &lt; 100 — reject, prompt higher bid
+        </pre>
+        <figcaption>How optimistic compare-and-set resolves two bids racing on the same auction.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

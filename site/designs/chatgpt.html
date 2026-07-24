@@ -220,6 +220,29 @@ flowchart LR
         <p>The naïve "replay everything each turn" grows cost and latency turn over turn and eventually exceeds the context window. Truncation — keep the newest N turns, drop the rest — bounds the prompt with a simple <code>ORDER BY createdAt DESC LIMIT N</code>, but makes the assistant visibly forgetful, a bad look for a product whose appeal is that it remembers. The better pairing keeps memory without paying full price. <strong>Prefix caching</strong> exploits that most of the prompt (system prompt plus everything already said) is identical turn to turn: the inference server caches the model's intermediate state — the KV cache — for a stable prefix and only processes the new tail, cutting both cost and the time-to-first-token, and it pairs naturally with routing a conversation's turns back to a worker that already has its prefix warm. A <strong>rolling summary</strong> handles the hard context-window ceiling that caching can't: older history is compressed into a running summary while recent turns stay verbatim, so the prompt shape becomes system prompt → summary of old turns → last few turns → new message. The two complement each other, but the summary must update on a slower cadence, because rewriting it every turn would invalidate the prefix cache it depends on.</p>
         <p><strong>Cancellation, and why a dropped tab isn't one.</strong> When a user hits stop, the client calls the plain-HTTP <code>cancel</code> side-channel; the Chat Service flips the Generation to <code>cancelled</code> and publishes a signal on a control channel keyed by <code>runId</code>, and the worker — checking between token batches — drops the sequence and reclaims the GPU immediately rather than burning compute on an abandoned answer. Crucially, closing the tab is <em>not</em> a cancel: the Redis-Stream-plus-reconnect design exists precisely so a dropped connection isn't read as termination. Generation continues in the background, and the user can reconnect or refetch the finished message from Postgres. Cancellation must be an explicit signal, never inferred from a network drop.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant A1 as Chat instance 1
+    participant A2 as Chat instance 2
+    participant S as Redis Stream (runId)
+    participant W as GPU worker
+    W->>S: XADD each token delta
+    A1->>S: XREAD from last-seen id
+    S-->>A1: deltas
+    A1-->>B: SSE token events
+    alt instance 1 drops (deploy / crash)
+        A1--xB: SSE connection lost
+        B->>A2: reconnect, last-seen id
+        A2->>S: XREAD from last-seen id
+        S-->>A2: replay missed deltas
+        A2-->>B: resume live
+    end
+        </pre>
+        <figcaption>How does a stream survive an instance dropping mid-sentence? The Redis Stream is the buffer: on reconnect to any other instance, XREAD replays exactly the missed deltas from the client's last-seen id.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

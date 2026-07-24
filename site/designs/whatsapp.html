@@ -189,16 +189,14 @@ flowchart LR
     PS(("Redis pub/sub — per-user channels"))
     CS2["Chat server B"]
     Recipient["Recipient client"]
-    Attach["Attachment service"]
-    Blob[("Object storage")]
+    Attach[("Attachment service — object storage")]
     Sender -->|"sendMessage over WebSocket"| LB
-    LB --> CS1
+    LB -->|"route socket"| CS1
     CS1 -->|"persist message and per-recipient inbox"| Store
     CS1 -->|"publish to recipient's channel"| PS
     PS -->|"recipient subscribed here"| CS2
     CS2 -->|"newMessage push, awaits ack"| Recipient
-    Sender -.->|"upload media first"| Attach
-    Attach --> Blob
+    Sender -.->|"upload media, get attachmentId (claim check)"| Attach
         </pre>
         <figcaption>Durability first (write to store), then real-time delivery via a per-user pub/sub channel that hides which server holds the recipient. Media detours through the attachment service.</figcaption>
       </figure>
@@ -220,6 +218,30 @@ flowchart LR
         <h3>6 · "Last seen" without hammering the database</h3>
         <p>Writing to the database on every heartbeat would be a torrent of writes for a low-value signal. Presence is already knowable for free: a user is online exactly when they hold an active socket and channel subscription. Derive "last seen" from that connection state rather than persisting it, and the feature costs almost nothing.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Origin as Sender's chat server
+    participant PS as Redis pub/sub
+    participant Dest as Recipient's chat server
+    participant Store as Inbox / Message store
+    participant Client as Recipient client
+    Origin->>Store: write message, seq N (durable)
+    Origin->>PS: publish to recipient channel
+    alt subscriber listening at publish
+        PS-->>Dest: deliver
+        Dest->>Client: push newMessage, seq N
+    else no subscriber (at-most-once drop)
+        PS--xDest: message dropped
+        Client->>Dest: heartbeat carries last seq N-1
+        Dest-->>Client: gap detected, seq N missing
+        Client->>Store: fetch missing range
+        Store-->>Client: message N
+    end
+        </pre>
+        <figcaption>A connected client missed a live push — how does it notice and recover the message? The Inbox write makes it durable; per-chat sequence numbers on the heartbeat expose the hole.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

@@ -185,16 +185,13 @@ Content-Type: application/json
       <figure class="diagram">
         <pre class="mermaid">
 flowchart TB
-    Client["Client request"] --> GW["API Gateway"]
-    GW --> ID["Identify client: user ID / IP / API key"]
-    ID --> Hash{"Consistent hash on client id"}
-    Hash --> S1[("Redis shard 1 · token bucket + Lua")]
-    Hash --> S2[("Redis shard N · token bucket + Lua")]
-    S1 --> Decide{"Token available?"}
-    S2 --> Decide
-    Decide -->|"yes — consume 1"| Backend["Backend service"]
-    Decide -->|"no"| Reject["429 + X-RateLimit headers"]
-    S1 -.->|"master to replica"| Rep[("Replica · auto-failover")]
+    Client["Client request"]:::ext -->|"HTTP + auth headers"| GW["API gateway · reads JWT / IP / API-key"]
+    GW -->|"hash(id) picks shard, consume 1"| Redis[("Redis shard · token bucket in Lua")]
+    Redis -->|"remaining tokens"| GW
+    GW -->|"allow"| Backend["Backend service"]:::ext
+    GW -->|"deny"| Reject["429 + X-RateLimit headers"]
+    Redis -.->|"master to replica"| Rep[("Replica · auto-failover")]
+    classDef ext stroke-dasharray:4 4;
         </pre>
         <figcaption>Every request is identified, routed to exactly one shard by a hash of the client id, and allowed or denied by an atomic token-bucket check on that shard.</figcaption>
       </figure>
@@ -237,6 +234,28 @@ return {1, tokens}                                  -- allow, tokens remaining</
         <h3>6 · Hot keys, viral content, and abuse</h3>
         <p>A single client throwing tens of thousands of requests a second at one shard is a <a href="../hazards/hot-key.html">hot key</a> — sometimes a legitimate analytics pipeline or an over-eager mobile refresh loop, often a bot or a DDoS. Legitimate high-volume clients are handled by encouraging client-side throttling that respects the response headers, letting them batch operations into fewer calls, and offering premium tiers with higher limits on dedicated capacity. Abusive traffic gets a blunter tool: a client that trips its limit repeatedly (say ten times in a minute) is dropped onto a blocklist — cheap to store on a shard and checked only on a cache miss — and outright floods are best absorbed upstream by a DDoS layer such as Cloudflare or AWS Shield before they ever reach the limiter. Legitimate IP sharing (corporate NATs, public WiFi) should be planned for up front with generous IP limits that lean on authenticated user limits, rather than patched after a false positive. Finally, limits should be reconfigurable without a redeploy — a launch may need a temporary bump — and a push-based config channel beats polling because a change takes effect in seconds instead of a poll interval later.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant A as Gateway A
+    participant B as Gateway B
+    participant R as Redis shard (alice:bucket)
+    alt read-modify-write in app code
+        A->>R: HMGET tokens (= 1)
+        B->>R: HMGET tokens (= 1)
+        A->>R: HSET tokens = 0
+        B->>R: HSET tokens = 0
+        Note over R: both admitted — one slot over-sold
+    else one Lua script per shard (chosen)
+        A->>R: EVAL check-and-spend
+        R-->>A: allow, 0 left
+        B->>R: EVAL check-and-spend
+        R-->>B: deny, 0 left
+    end
+        </pre>
+        <figcaption>Why does an application-side HMGET-then-HSET over-admit under two gateways, and how does one atomic Lua script close the window? The decision must live inside the same indivisible step as the write.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

@@ -195,17 +195,17 @@ def extract(id):
       <figure class="diagram">
         <pre class="mermaid">
 flowchart TB
-    Seeds["Seed URLs"] --> Frontier[("Frontier queue")]
-    Frontier -->|"URL"| Fetcher["URL Fetchers"]
-    Fetcher -->|"resolve host"| DNS["DNS"]
-    Fetcher -->|"GET page"| Web["External sites"]
+    Seeds["Seed URLs"] -->|"seed"| Frontier[("Frontier queue")]
+    Frontier -->|"next URL"| Fetcher["URL Fetchers"]
+    Fetcher -->|"GET page"| Web["External sites"]:::ext
     Fetcher -->|"raw HTML"| Blob[("Blob storage")]
-    Fetcher -->|"record"| Meta[("Metadata DB")]
-    Fetcher -->|"row id"| Extract[("Extraction queue")]
+    Fetcher -->|"record URL + domain"| Meta[("Metadata DB")]
+    Fetcher -->|"HTML row id"| Extract[("Extraction queue")]
     Extract -->|"id"| Parser["Parser Workers"]
     Parser -->|"read HTML / write text"| Blob
     Parser -->|"new links"| Frontier
     Parser -->|"hash, depth"| Meta
+    classDef ext stroke-dasharray:4 4;
         </pre>
         <figcaption>Two pipelined stages pass work through queues; raw HTML and extracted text land in blob storage, the queue messages carry only ids, and discovered links loop back into the frontier.</figcaption>
       </figure>
@@ -229,6 +229,20 @@ flowchart TB
         <p>Efficiency also means not crawling the same thing twice. Two layers of deduplication: <strong>URL-level</strong> — check the Metadata DB before enqueueing and skip URLs already seen; and <strong>content-level</strong> — different URLs can serve identical bytes (<code>example.com</code> vs <code>www.example.com</code>, mirrors, syndicated pages), so hash the fetched content and check membership before the expensive parse. Either index the hash column in the Metadata DB (simple, and modern indexes handle the scale fine) or keep a <a href="../patterns/distributed/coordination/bloom-filter.html">bloom filter</a> of seen hashes — a probabilistic set that says "definitely never seen" or "probably seen," trading a small false-positive rate (occasionally skipping a page you didn't actually crawl) for tiny memory. RedisBloom's <code>BF.ADD</code>/<code>BF.EXISTS</code> is the ready-made tool, though for this case the indexed column is arguably enough.</p>
         <p>Finally, crawler traps — self-linking loops and link farms — can hold a fetcher on one site forever. Cap the crawl <em>depth</em> (link hops from a seed, not URL path segments) by carrying a <code>depth</code> field per URL and abandoning a branch once it passes a threshold (~15–20). Beyond the core, a few natural extensions: a <code>HEAD</code> request to read <code>Content-Length</code> and skip oversized files before downloading them; a headless browser (Puppeteer) for JavaScript-rendered pages; and, if the one-time crawl becomes a recurring one, a URL Scheduler that decides what to re-crawl from last-crawl-time and popularity instead of parsers writing links straight to the frontier.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Queued: URL on the frontier
+    Queued --> Fetching: fetcher dequeues, visibility timeout hides message
+    Fetching --> Stored: HTML in blob storage, message deleted
+    Fetching --> Backoff: fetch fails or worker dies
+    Backoff --> Fetching: visibility timeout expires, message resurfaces
+    Backoff --> DeadLetter: maxReceiveCount exceeded, site treated as offline
+    Stored --> [*]
+    DeadLetter --> [*]
+        </pre>
+        <figcaption>How does one URL survive fetch failures and worker crashes without losing progress or retrying forever?</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

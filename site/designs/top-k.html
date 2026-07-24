@@ -184,7 +184,7 @@ flowchart TB
     Precompute -->|"scatter query each shard, merge local top-K"| Store
     Precompute -->|"warm ahead of expiry"| Cache
     Client -->|"GET /views/top-k"| LB
-    LB --> TopK
+    LB -->|"route read"| TopK
     TopK -->|"read only"| Cache
         </pre>
         <figcaption>Writes are absorbed by Flink and fan into sharded window tables; a precompute job keeps each window's answer warm in cache, so the read path never touches the store.</figcaption>
@@ -209,6 +209,17 @@ flowchart TB
         <h3>5 · Trading exactness for memory with approximation</h3>
         <p>If the interviewer relaxes exactness, the gaps between top videos are usually thousands of views — the ranking is about direction, not a precise tally — which opens the door to a <a href="../patterns/distributed/coordination/count-min-sketch.html">Count-Min Sketch</a>. It estimates per-item frequencies in a fixed 2D counter array via several hash functions, using hundreds of MB where an exact hash table would need hundreds of GB. The catch is that the sketch stores frequencies, not identities: it can answer "how many times has X been seen?" but cannot list its own top items. So it is paired with a sorted set — on each view, increment the sketch, read back the estimate, and upsert that item into a per-window sorted set trimmed to 1,000. Redis does this natively (<code>CMS.INCRBY</code> → <code>CMS.QUERY</code> → <code>ZADD</code>), skipping the <code>ZADD</code> for items already below the top-1,000 floor; the risk is a durability gap between updating the sketch and the sorted set. Keeping both structures inside Flink's checkpointed state removes that gap and, uniquely, supports the decrement a sliding window needs — Redis exposes no <code>CMS.DECRBY</code>.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    View["view event"] -->|"CMS.INCRBY item"| Sketch[("Count-Min Sketch — frequency estimates")]
+    Sketch -->|"CMS.QUERY estimated count"| Gate{"above top-1,000 floor?"}
+    Gate -->|"yes: ZADD"| ZSet[("Per-window sorted set — trimmed to 1,000")]
+    Gate -->|"no: skip ZADD"| Drop["dropped from ranking"]
+    ZSet -->|"read top-K"| Out["top-K answer"]
+        </pre>
+        <figcaption>How does a Count-Min Sketch produce a top-K list when it stores only frequencies, not the item identities?</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

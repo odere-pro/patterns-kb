@@ -191,36 +191,31 @@ GET /orders?cursor=…                         # paginated, scoped to the caller
       </div>
       <figure class="diagram">
         <pre class="mermaid">
-flowchart TB
-    Client["Client app"]
-    LB["Load balancer · sticky"]
-    Symbol["Symbol service · SSE"]
-    Cache[("Price cache")]
-    Redis[("Redis pub/sub")]
-    Processor["Price processor"]
-    Order["Order service"]
-    Gateway["Order dispatch gateway"]
-    Exchange["External exchange"]
-    OrderDB[("Order store · sharded by user")]
-    Trades["Trade processor"]
-
-    Client -->|"GET /subscribe"| LB
-    LB --> Symbol
+flowchart LR
+    Client["Client app"] -->|"GET /subscribe (SSE)"| LB["Load balancer · sticky"]
+    LB -->|"pin to owning server"| Symbol["Symbol service · SSE"]
+    Processor["Price processor"] -->|"one feed subscription"| Exchange["Exchange feed"]:::ext
+    Processor -->|"mirror tick"| Redis[("Redis pub/sub")]
+    Processor -->|"refresh snapshot"| Cache[("Price cache")]
     Symbol -->|"initial snapshot"| Cache
-    Symbol -->|"subscribe per symbol"| Redis
-    Processor -->|"publish tick"| Redis
-    Processor -->|"refresh"| Cache
-    Redis -->|"fan out"| Symbol
-    Symbol -.->|"push updates"| Client
-    Processor -->|"one feed subscription"| Exchange
-    Client -->|"POST /order"| Order
-    Order -->|"pending row"| OrderDB
-    Order -->|"submit"| Gateway
-    Gateway --> Exchange
-    Exchange -->|"trade feed"| Trades
-    Trades -->|"reflect fills"| OrderDB
+    Redis -->|"fan out tick"| Symbol
+    Symbol -.->|"push live price"| Client
+    classDef ext stroke-dasharray:4 4;
         </pre>
-        <figcaption>The price path (processor &rarr; Redis &rarr; symbol service &rarr; client) never lets a client touch the exchange; the order path (order service &rarr; gateway &rarr; exchange, with the trade processor closing the loop) keeps state consistent.</figcaption>
+        <figcaption>The price path: how does one exchange subscription reach every subscribed client without a client ever touching the exchange?</figcaption>
+      </figure>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    Client["Client app"] -->|"POST /order"| Order["Order service"]
+    Order -->|"validate, pending row"| OrderDB[("Order store · sharded by user")]
+    Order -->|"submit"| Gateway["Order dispatch gateway"]
+    Gateway -->|"paced, deduped order"| Exchange["Exchange"]:::ext
+    Exchange -->|"trade feed"| Trades["Trade processor"]
+    Trades -->|"reflect fill"| OrderDB
+    classDef ext stroke-dasharray:4 4;
+        </pre>
+        <figcaption>The order path: how does an order reach the exchange through one controlled egress, and how does a fill get reflected back into the user's state?</figcaption>
       </figure>
     </section>
 
@@ -244,6 +239,31 @@ flowchart TB
         </ul>
         <p>Each failure has a defined resolution. A failed initial write just fails the request. A failed submission marks the order <code>failed</code>. The dangerous case is a submission that <em>succeeded</em> but whose follow-up write did not — the exchange now holds an order the store doesn't know the id of. A background clean-up job handles it: it scans stalled <code>pending</code> orders and asks the exchange about them using the client-supplied order id it sent along, an <a href="../patterns/messaging/idempotency.html">idempotency</a> key that lets it query — and safely re-submit if needed — without ever double-placing. Cancellation mirrors the shape: flip to <code>pending_cancel</code> first, then cancel upstream, then confirm, and let the same clean-up drive any stuck cancel to completion. The clean-up reconciler is what lets the system favour consistency across a boundary it can only talk to, never control.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant O as Order service
+    participant S as Order store
+    participant X as Exchange
+    participant K as KV index
+    C->>O: place order
+    O->>S: write order, pending
+    O->>X: submit order
+    alt submitted and recorded
+        X-->>O: externalOrderId
+        O->>K: map externalOrderId to order, user
+        O->>S: mark submitted
+        O-->>C: accepted
+    else submitted but follow-up write lost
+        X-->>O: externalOrderId
+        O--xK: crash before record
+        Note over O,X: clean-up job re-queries by client order id, then records or re-submits
+    end
+        </pre>
+        <figcaption>How placing an order stays recoverable across the store, exchange, and index.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

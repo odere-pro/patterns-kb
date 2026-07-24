@@ -192,26 +192,20 @@ flowchart TB
     Driver["Driver app"]
     GW["API Gateway"]
     Ride["Ride Service"]
-    Maps["Mapping API"]
-    DB[("Ride / Fare store")]
     Q[["Request queue"]]
     Match["Ride Matching Service"]
     Loc["Location Service"]
     Geo[("Redis · geo + locks")]
-    Notif["Notification Service"]
 
-    Rider -->|"POST /fare · /rides"| GW
+    Rider -->|"POST /rides"| GW
     Driver -->|"POST /drivers/location"| GW
-    GW -->|"fare · ride"| Ride
-    Ride -->|"distance + ETA"| Maps
-    Ride -->|"persist"| DB
+    GW -->|"ride request"| Ride
     Ride -->|"enqueue request"| Q
     Q -->|"drain"| Match
     GW -->|"location pings"| Loc
     Loc -->|"GEOADD"| Geo
     Match -->|"GEOSEARCH · lock"| Geo
-    Match -->|"offer ride"| Notif
-    Notif -->|"APNs / FCM"| Driver
+    Match -->|"push offer (APNs / FCM)"| Driver
         </pre>
         <figcaption>The request path (gateway &rarr; queue &rarr; matcher) is decoupled from the location path (pings &rarr; Location Service &rarr; geo store); the matcher joins them by searching live positions.</figcaption>
       </figure>
@@ -260,6 +254,18 @@ GEOSEARCH drivers:geo FROMLONLAT &lt;long&gt; &lt;lat&gt; BYRADIUS 3 km ASC COUN
         <h3>5 · Scaling out to cut latency</h3>
         <p>Vertical scaling is barely worth the breath at this size — expensive, capped, and a single point of failure. The real lever is geography. <a href="../patterns/distributed/routing/sharding.html">Shard</a> services, queues, and stores by region so a rider in one city talks to nearby infrastructure, which both scales horizontally and shortens the physical round-trip. Consistent hashing spreads load evenly and makes rebalancing survivable, and read replicas lift read throughput. The only cross-shard cost is a scatter-gather when a proximity search straddles a shard boundary near a city edge — rare enough to handle as the exception rather than design around.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Offering: rider request, offer top driver
+    Offering --> Offering: declined / timed out, advance to next driver
+    Offering --> Accepted: driver accepts within 10s
+    Offering --> Exhausted: driver list exhausted
+    Accepted --> [*]
+    Exhausted --> [*]
+        </pre>
+        <figcaption>How does the match fall through to the next driver on a decline or timeout without ever dropping the rider or double-assigning?</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

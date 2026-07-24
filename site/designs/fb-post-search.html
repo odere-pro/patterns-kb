@@ -181,7 +181,6 @@ GET /search?keyword=taylor&amp;sortBy=likes   # sortBy = recency | likes
       <figure class="diagram">
         <pre class="mermaid">
 flowchart TB
-    Client["Client"]
     Gateway["API gateway (auth, rate limit)"]
     Search["Search service (stateless)"]
     Cache[("Search cache / CDN edge")]
@@ -190,19 +189,15 @@ flowchart TB
     Ingest["Ingestion service (tokenizer)"]
     Creation[("Creation index (Redis list)")]
     Likes[("Likes index (Redis sorted set)")]
-    Cold[("Cold blob storage")]
 
-    Client -->|"GET /search"| Gateway
-    Gateway --> Search
+    Gateway -->|"GET /search"| Search
     Search -->|"hit"| Cache
     Search -->|"miss"| Creation
     Search -->|"miss"| Likes
-    Client -->|"POST /posts, /likes"| PostSvc
-    PostSvc --> Kafka
-    Kafka --> Ingest
+    PostSvc -->|"publish posts + likes"| Kafka
+    Kafka -->|"consume + tokenize"| Ingest
     Ingest -->|"append post id per keyword"| Creation
     Ingest -->|"update score per keyword"| Likes
-    Creation -.->|"evict cold keywords"| Cold
         </pre>
         <figcaption>Reads flow gateway &rarr; search &rarr; cache &rarr; index; writes flow through Kafka into the ingestion tokenizer, which fans each post out across many keyword entries in both indexes.</figcaption>
       </figure>
@@ -217,6 +212,26 @@ flowchart TB
         <p>Sorting at request time is the trap. A keyword like "taylor" might match tens of millions of posts; fetching every ID, looking up its timestamp and like count, and sorting in the Search service means hundreds of megabytes on the wire and millions of lookups — nowhere near the 500&nbsp;ms budget. Instead, keep the results pre-ordered by storing two indexes per keyword. The <strong>creation index</strong> is a Redis list: writes append, and because posts arrive roughly in time order, the most recent results are simply the tail. The <strong>likes index</strong> is a Redis sorted set keyed on the like count, which keeps entries ordered as scores change with comparable insert and read cost. A search reads from whichever index matches <code>sortBy</code> and takes the top slice — no query-time sort at all. The price is doubled index storage and, because likes are so frequent, a steady stream of score updates into the sorted set.</p>
         <h3>3 · Multi-word phrases</h3>
         <p>A query like "Taylor Swift" is two keywords that must appear together. The straightforward approach is <em>intersect and filter</em>: pull the ID set for each word, intersect them, hydrate the survivors, and keep only those where the words are actually adjacent (ruling out "my friend Taylor made a swift exit"). It works but the per-word sets are enormous, so the intersection and the false-positive filtering are both expensive. The sharper move is to index <strong>bigrams</strong> (adjacent word pairs, borrowing Lucene's "shingles"): "I saw Taylor Swift" yields "i saw", "saw taylor", "taylor swift", so the phrase query hits a single entry directly with no intersection. Bigrams are far more numerous than single words, though — the key space can jump from ~10M to 100M+ — so you only index the pairs likely to be searched, estimating that frequency with a <a href="../patterns/distributed/coordination/count-min-sketch.html">count-min sketch</a> and falling back to intersect-and-filter when no bigram entry exists.</p>
+        <figure class="diagram">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Search service
+    participant I as Inverted index
+    C-&gt;&gt;S: GET /search phrase taylor swift
+    S-&gt;&gt;I: lookup bigram taylor swift
+    alt bigram indexed
+        I--&gt;&gt;S: post ids from one entry
+    else no bigram entry
+        S-&gt;&gt;I: fetch ids for taylor and swift
+        I--&gt;&gt;S: two large id sets
+        S-&gt;&gt;S: intersect, then adjacency filter
+    end
+    S--&gt;&gt;C: matching post ids
+          </pre>
+          <figcaption>How is a two-word phrase answered — a direct bigram hit, or fall back to intersect-and-filter?</figcaption>
+        </figure>
         <h3>4 · Absorbing the write firehose</h3>
         <p>Two write sources stress the index for different reasons. <strong>Post creation</strong> is heavy because each post fans out into many keyword appends, and a burst can overwhelm a single ingester and drop events. Putting a Kafka log in front turns that burst into a buffer — <a href="../patterns/distributed/resilience/load-leveling.html">queue-based load levelling</a> — so many ingestion workers can consume in parallel, and <a href="../patterns/distributed/routing/sharding.html">sharding</a> the indexes by keyword spreads the appends across Redis instances instead of hot-spotting one. <strong>Likes</strong> are worse: far more frequent, and each one is a score update. Two tactics compound. First, <a href="../patterns/concurrency/batching.html">batch</a> likes over a short window — 500 likes on a viral post in 30 seconds collapse into one <code>+500</code> — though this does nothing for a post that gets one like a minute all day. Second, and more powerful, only write the count at <em>milestones</em>: persist at 1, 2, 4, 8, … (powers of two or ten) rather than on every increment, turning 1,000 writes into ten. The stored count is now deliberately approximate — labelled something like <code>approxLikes</code> so nobody mistakes it for exact — but ordering stays roughly right (10k likes still outranks 1). To return N precise results you over-fetch the top N×2 from the likes index, ask the Like service for each post's exact current count, and re-rank on the fresh numbers. Approximate storage, precise final answer — a common shape in information retrieval.</p>
         <h3>5 · Serving reads and storing 3.6&nbsp;PB</h3>

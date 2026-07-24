@@ -192,21 +192,18 @@ POST /bookings/{bookingId}/confirm  { paymentToken }
         <pre class="mermaid">
 flowchart TB
     Client["Client / browser"]
-    Gateway["API Gateway"]
-    Client --> Gateway
-    Gateway -->|"GET /events/:id"| Event["Event Service"]
-    Gateway -->|"GET /events/search"| Search["Search Service"]
-    Gateway -->|"POST /bookings"| Queue["Virtual waiting queue"]
-    Queue -->|"admitted"| Booking["Booking Service"]
-    Event --> Cache[("Cache")]
-    Cache -->|"miss"| DB[("Events + Bookings DB")]
-    Search --> ES[("Elasticsearch")]
-    DB -->|"CDC stream"| ES
+    Client -->|"browse / search / book"| Gateway["API Gateway — auth, rate limit"]
+    Gateway -->|"GET /events/:id"| Event["Event Service — read cache"]
+    Gateway -->|"GET /events/search"| Search["Search Service — CDC-synced index"]
+    Gateway -->|"POST /bookings"| Booking["Booking Service"]
+    Event -->|"cached read, miss → DB"| DB[("Postgres — events + bookings")]
+    DB -->|"CDC stream"| Search
     Booking -->|"SET NX EX seat lock"| Redis[("Redis lock store")]
-    Booking --> DB
-    Booking <-->|"charge + webhook"| Stripe["Stripe"]
+    Booking -->|"write booking, ACID"| DB
+    Booking <-->|"charge + webhook"| Stripe["Stripe"]:::ext
+    classDef ext stroke-dasharray:4 4;
         </pre>
-        <figcaption>Reads (view, search) scale out on the left; the one contended write path (queue &rarr; lock &rarr; DB &rarr; Stripe) is serialised on the right.</figcaption>
+        <figcaption>Reads (cached view, CDC-synced search) scale out independently; the one consistency-critical path (seat lock &rarr; ACID booking &rarr; Stripe) runs through the Booking Service on the shared store.</figcaption>
       </figure>
     </section>
 
@@ -231,6 +228,31 @@ flowchart TB
         <h3>4 · Making keyword search fast</h3>
         <p>Naïve search leans on <code>LIKE '%taylor%'</code>, which forces a full table scan and cannot meet a 500&nbsp;ms budget. Plain B-tree indexes don't help partial-string matches. The real fix is a search-optimised store: Postgres full-text (<code>tsvector</code> + GIN) handles it in-database, but at high volume a dedicated <strong>Elasticsearch</strong> cluster with inverted indexes wins, and it adds typo-tolerant fuzzy matching that SQL struggles with. Elasticsearch is kept in sync with Postgres through <a href="../patterns/distributed/coordination/change-data-capture.html">change data capture</a> — inserts, updates, and deletes stream across for near-real-time freshness. To shave repeated queries further, cache popular non-personalised result sets (keyed by search parameters, with a TTL) and push them to a <a href="../patterns/distributed/routing/cdn.html">CDN</a> so identical searches are answered close to the user; because the same query yields the same results for everyone, edge caching is safe here in a way it never is on the personalised booking path.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant F as Fan
+    participant B as Booking Service
+    participant R as Redis lock store
+    participant DB as Postgres
+    participant S as Stripe
+    F->>B: select seat
+    B->>R: SET ticket=buyer NX EX 600
+    R-->>B: held for 10 min
+    F->>B: confirm with card token
+    B->>S: create PaymentIntent
+    S-->>B: webhook paid (idempotent on booking ID)
+    B->>DB: flip to sold, OCC check
+    alt this buyer wins the row
+        DB-->>B: confirmed
+    else TTL lapsed, seat already sold
+        DB--xB: conflict
+        B->>S: auto-refund the loser
+    end
+        </pre>
+        <figcaption>How is a seat held during checkout, and what stops a double-sell when the hold expires mid-payment?</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

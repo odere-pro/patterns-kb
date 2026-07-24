@@ -184,30 +184,25 @@ GET /article/{id}   &rarr; 302 Found  Location: https://publisher.example/story<
       <figure class="diagram">
         <pre class="mermaid">
 flowchart TB
-    Pub["Publishers · RSS / webhooks"]
+    Pub["Publishers · RSS feeds"]:::ext
     Ingest["Data Collection Service"]
     DB[("Article store")]
-    Obj[("Object storage · thumbnails")]
-    CDC["Change Data Capture"]
+    Obj[("Object storage + CDN · thumbnails")]
     Workers["Feed Generation Workers"]
     Redis[("Redis · regional feed sorted sets")]
+    Feed["Feed Service · behind API gateway"]
     Client["Client / browser"]
-    Gateway["API Gateway"]
-    Feed["Feed Service"]
-    CDN["CDN / edge"]
-    Pub -->|"poll / push"| Ingest
+    Pub -->|"poll RSS feed"| Ingest
     Ingest -->|"write article"| DB
     Ingest -->|"store thumbnail"| Obj
-    DB -->|"row change"| CDC
-    CDC -->|"event"| Workers
-    Workers -->|"ZADD + trim"| Redis
-    Client -->|"GET /feed"| Gateway
-    Gateway --> Feed
-    Feed -->|"ZREVRANGE"| Redis
-    Obj -->|"origin"| CDN
-    CDN -->|"thumbnails"| Client
+    DB -->|"CDC event"| Workers
+    Workers -->|"ZADD + trim region feed"| Redis
+    Client -->|"GET /feed"| Feed
+    Feed -->|"ZREVRANGE region set"| Redis
+    Obj -->|"thumbnail bytes via edge"| Client
+    classDef ext stroke-dasharray:4 4;
         </pre>
-        <figcaption>Ingestion (left branch) writes the store and, via CDC, keeps the regional feed caches current. Serving (right branch) is one sorted-set read; thumbnails go client&harr;CDN, bypassing the app tier.</figcaption>
+        <figcaption>How does a published article reach a reader's feed? Ingestion writes the store and, via CDC, keeps each region's feed set current; serving is one sorted-set read, and thumbnails go client&harr;CDN, bypassing the app tier.</figcaption>
       </figure>
     </section>
 
@@ -261,6 +256,19 @@ ZREVRANGEBYSCORE  "feed:US"  (cursor_id  -inf  LIMIT 0 20</code></pre>
           <li><strong>Cache tier.</strong> This is the real scaling target, since it now absorbs essentially all read traffic. A region holds only ~2,000 articles, so a single master fits the whole dataset — no sharding needed. The axis is pure read throughput, solved by <a href="../patterns/distributed/coordination/replication.html">replication</a>: writes hit the master, reads fan out across a fleet of read replicas (~100 in a peak region), and Redis Sentinel promotes a replica if the master dies. Replication lag stays under ~200&nbsp;ms — invisible on a news feed.</li>
           <li><strong>Database.</strong> Never in the read path once the cache is precomputed, so it never sees 10M concurrent reads at all — the cache shields it entirely.</li>
         </ul>
+        <figure class="diagram">
+          <pre class="mermaid">
+flowchart TB
+    Workers["Feed Generation Workers"] -->|"ZADD + trim, writes only"| Master[("Redis master · region feed")]
+    Master -->|"replicate, lag &lt;200 ms"| R1["Read replica 1"]
+    Master -->|"replicate, lag &lt;200 ms"| R2["Read replica ~100"]
+    Feed["Feed Service fleet"] -->|"ZREVRANGE reads"| R1
+    Feed -->|"ZREVRANGE reads"| R2
+    Sentinel["Redis Sentinel"] -->|"monitor"| Master
+    Sentinel -.->|"promote on master failure"| R1
+          </pre>
+          <figcaption>How does one region's cache tier absorb ~10M concurrent readers without sharding? Replicate the single master, fan reads across replicas.</figcaption>
+        </figure>
         <h3>6 · Beyond one regional feed — categories and personalisation</h3>
         <p>Two common extensions, and in both the tempting answer over-builds:</p>
         <ul>

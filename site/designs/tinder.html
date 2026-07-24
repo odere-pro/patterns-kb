@@ -183,21 +183,16 @@ POST /swipe/{targetUserId}                 Authorization: Bearer &lt;jwt&gt;
       <figure class="diagram">
         <pre class="mermaid">
 flowchart TB
-    Client["Mobile client"]
     Gateway["API Gateway"]
-    Client -->|"/profile, /feed, /swipe"| Gateway
-    Gateway -->|"profile writes"| Profile["Profile Service"]
+    Gateway -->|"profile writes (rare)"| Profile["Profile Service"]
     Gateway -->|"GET /feed"| Feed["Feed Service"]
     Gateway -->|"POST /swipe"| Swipe["Swipe Service"]
-    Profile --> ProfileDB[("Profile store")]
-    Feed -->|"precomputed stack"| FeedCache[("Feed cache")]
-    Feed -->|"geo + filter on miss"| Search[("Geo search index")]
-    ProfileDB -.->|"CDC"| Search
-    Swipe -->|"atomic match check"| Redis[("Redis")]
+    Feed -->|"read precomputed stack"| FeedCache[("Feed cache")]
+    Feed -->|"geo filter on miss"| Search[("Geo search index")]
+    Swipe -->|"atomic mutual-match check"| Redis[("Redis")]
     Swipe -->|"durable append"| Cass[("Cassandra")]
-    Redis -.->|"async push on match"| Push["APNS / FCM"]
         </pre>
-        <figcaption>Profile, feed, and swipe paths split behind the gateway, each onto a store matched to its workload; a match notifies the second swiper inline and the first swiper via push.</figcaption>
+        <figcaption>How do profile, feed, and swipe requests diverge behind one gateway, each onto a store matched to its workload?</figcaption>
       </figure>
     </section>
 
@@ -227,6 +222,29 @@ flowchart TB
         <h3>3 · Never re-showing a swiped profile</h3>
         <p>Re-showing someone the user already dismissed reads as a bug, and worse, suggests their swipes weren't recorded. The obvious approach — query swipe history and filter the feed against it — has two problems: under an availability-leaning store a very recent swipe may not have replicated to the replica the feed reads from, and a heavy swiper's history grows into an ever more expensive contains-check. Both get solved on the way to the client. Because a user is on a single device, a <a href="../patterns/caching/client-side-cache.html">client-side cache</a> of the last K swipes filters anything just swiped out of the next stack, closing the replication-lag window with no server-side cache to maintain. For users whose history is genuinely enormous, keep a per-user <a href="../patterns/distributed/coordination/bloom-filter.html">Bloom filter</a> of everything they've swiped and test candidates against it: it never re-shows a swiped profile (no false negatives) and only, rarely, hides a fresh one (a false positive), with the error rate traded against memory. It is arguably over-engineered for the median user — which is the point: it earns its keep only in the long tail.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as Swiper
+    participant Sw as Swipe Service
+    participant C as Cassandra (system of record)
+    participant R as Redis (recent swipes)
+    participant P as APNS / FCM
+    U->>Sw: swipe right on other
+    Sw->>C: persist swipe, pair key lo:hi
+    Sw->>R: Lua: set my swipe, read theirs (one atomic step)
+    alt both sides yes
+        R-->>Sw: reciprocal yes
+        Sw-->>U: match (synchronous)
+        Sw->>P: async push to the earlier swiper
+    else no reciprocal yet
+        R-->>Sw: their swipe absent
+        Sw-->>U: swipe recorded
+    end
+        </pre>
+        <figcaption>How is a mutual match detected atomically when two people swipe right at the same instant?</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

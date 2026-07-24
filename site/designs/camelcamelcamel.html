@@ -181,19 +181,18 @@ POST /prices           # extension &rarr; backend, not public
       <figure class="diagram">
         <pre class="mermaid">
 flowchart LR
-    Ext["Chrome extension · 1M users"] -->|"report price"| Ingest["Price ingest + validation"]
-    Crawler["Web crawler · rate-limited"] -->|"scrape + backstop"| Ingest
-    Ingest -->|"append"| PriceDB[("Price DB · time-series")]
-    Client["Website / extension"] -->|"GET price history"| Gateway["API gateway"]
-    Client -->|"POST subscription"| Gateway
-    Gateway -->|"chart read"| History["Price history service"]
-    Gateway -->|"manage subs"| Subs["Subscription service"]
-    History -->|"query"| PriceDB
-    Subs --> PrimaryDB[("Primary DB · users, subs")]
-    PriceDB -->|"CDC change events"| Bus["Kafka topic"]
-    Bus --> Notifier["Notification service"]
-    Notifier -->|"threshold check"| PrimaryDB
-    Notifier -->|"email alert"| User["Subscriber"]
+    Client["Extension + website"] -->|"report price"| GW["API gateway · auth, throttle"]
+    Client -->|"GET price history"| GW
+    Client -->|"POST subscription"| GW
+    GW -->|"append point"| PriceDB[("Price DB · time-series")]
+    Crawler["Backstop crawler · &le;1 req/s to Amazon"] -->|"append point"| PriceDB
+    GW -->|"chart read"| History["Price history service · pre-aggregated"]
+    GW -->|"manage subs"| Subs["Subscription service"]
+    History -->|"range query"| PriceDB
+    Subs -->|"CRUD"| PrimaryDB[("Primary DB · users, subs")]
+    PriceDB -->|"price-change event"| Notifier["Notification consumer"]
+    Notifier -->|"who subscribed?"| PrimaryDB
+    Notifier -->|"email alert"| Client
         </pre>
         <figcaption>Collection (left) feeds an append-only time-series store; reads serve charts from it; a change stream drives who-cares alerting. The crawler is the one rate-limited boundary.</figcaption>
       </figure>
@@ -229,6 +228,17 @@ flowchart LR
           <li><strong>TimescaleDB (chosen).</strong> A time-series extension for the same Postgres that already holds users and subscriptions, so there is no second system to run. It aggregates on demand — <code>time_bucket('1 day', ts), avg(price) &hellip; GROUP BY 1</code> — returning millisecond results over billions of rows via automatic partitioning and compression, at any range or granularity, with no pre-aggregation job to maintain. ClickHouse was considered for raw analytical throughput, but TimescaleDB won on the operational simplicity of one unified Postgres stack.</li>
         </ul>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    R["Price report arrives"] -->|"accept immediately"| A["Alert subscribers now"]
+    A -->|"big drop / weak reporter / hot product"| V["Verification crawl — 1–5 min, elevated priority"]
+    A -->|"looks routine"| Keep["Kept as-is"]
+    V -->|"crawl confirms"| Keep
+    V -->|"crawl contradicts"| C["Send correction, dock trust score"]
+        </pre>
+        <figcaption>Trust-but-verify (dive 2): how does a stranger's report become an alert without a bad one doing lasting damage? Alert fires first; only suspicious reports pay for a verification crawl.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

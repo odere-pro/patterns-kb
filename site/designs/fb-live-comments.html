@@ -185,18 +185,16 @@ flowchart TB
     DB[("Comments DB — DynamoDB")]
     Bus["Redis pub/sub — partitioned by hash(liveVideoId)"]
     RT["Realtime Messaging Servers — hold SSE connections"]
-    Cache[("Shared Redis — recent-comment cache")]
-    CDN["CDN snapshot — mega-streams"]
+    CDN["CDN edge — mega-streams"]
+    Viewer -->|"open live tail"| LB
+    LB -->|"co-locate same-video viewers"| RT
     Viewer -->|"POST /comments/:id"| Write
     Write -->|"persist"| DB
     Write -->|"publish"| Bus
     Bus -->|"deliver to subscribed channel"| RT
     RT -->|"SSE stream"| Viewer
-    Viewer -->|"open live tail via"| LB
-    LB -->|"co-locate same-video viewers"| RT
-    RT -->|"replay recent on reconnect"| Cache
     Write -.->|"snapshot every 1s"| CDN
-    CDN -.->|"poll for mega-streams"| Viewer
+    CDN -.->|"serve mega-streams"| Viewer
         </pre>
         <figcaption>The write path (persist &rarr; publish) is small; the read path fans one comment out across the messaging tier to every subscribed viewer. Mega-streams switch from push (SSE) to pull (CDN snapshots).</figcaption>
       </figure>
@@ -229,6 +227,29 @@ flowchart TB
           <li><strong>Ignore it.</strong> On reconnect, just resume from now; anything posted during the gap is gone. A five-second drop during a tense moment loses exactly the reactions the viewer came for. Rejected.</li>
           <li><strong>Last-Event-ID plus client tracking (chosen).</strong> Every SSE message carries the comment id as its event id; on an auto-reconnect the browser resends the last one it saw in the <code>Last-Event-ID</code> header, and the server replays what came after before resuming the live stream. The client also stores that id locally, so it can ask for catch-up explicitly (<code>GET …?cursor={last}&amp;limit=100</code>) and animate the gap smoothly or show "you missed 47 comments". Because a reconnect usually lands on a <em>different</em> server, replay reads from a <a href="../patterns/caching/distributed-cache.html">shared Redis cache</a> of recent comments that any server can serve. The subtlety is the seam between the replayed history and the resumed live stream: comments can arrive on both paths at once, so the client dedupes by comment id — receiving the same comment twice is a no-op, which keeps the merge <a href="../patterns/messaging/idempotency.html">idempotent</a>. Replay is bounded (the last few minutes, not the last hour) with graceful degradation beyond that.</li>
         </ul>
+        <figure class="diagram">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant A as Messaging Server A
+    participant B as Messaging Server B
+    participant R as Redis recent-comments
+    C-&gt;&gt;A: subscribe SSE, track last id
+    A--&gt;&gt;C: id c_42, comment
+    A--xC: connection drops
+    C-&gt;&gt;B: reconnect, Last-Event-ID c_42
+    alt gap within replay window
+        B-&gt;&gt;R: read comments after c_42
+        R--&gt;&gt;B: c_43 .. c_47
+        B--&gt;&gt;C: replay missed, then resume live
+    else gap older than window
+        B--&gt;&gt;C: resume from now, degraded
+    end
+    Note over C: dedupe by comment id, repeat is a no-op
+          </pre>
+          <figcaption>How does a viewer who drops and reconnects recover missed comments without gaps or duplicates?</figcaption>
+        </figure>
       </div>
     </section>
 

@@ -181,31 +181,26 @@ GET /ads/123/metrics?from=1640000000&to=1640003600&granularity=1m
       </div>
       <figure class="diagram">
         <pre class="mermaid">
-flowchart LR
-    APS["Ad Placement Service"]
-    Browser["User / browser"]
-    LB["Load balancer"]
-    CP["Click Processor"]
-    Cache[("Redis dedup cache")]
-    Stream[("Kafka / Kinesis (sharded by ad_id)")]
+flowchart TB
+    Browser["User / browser"]:::ext
+    CP["Click Processor: verify, dedup"]
+    Stream[("Kafka / Kinesis, sharded by ad_id")]
     Flink["Flink stream processor"]
     OLAP[("OLAP store")]
     Lake[("S3 raw-event lake")]
     Spark["Spark reconciliation"]
-    Adv["Advertiser dashboard"]
+    Adv["Advertiser dashboard"]:::ext
 
-    APS -->|"signed impression id"| Browser
-    Browser -->|"GET /click"| LB
-    LB --> CP
-    CP -->|"check + set id"| Cache
-    CP -->|"append event"| Stream
+    Browser -->|"GET /click (signed id)"| CP
     CP -.->|"302 redirect"| Browser
-    Stream --> Flink
+    CP -->|"append event"| Stream
+    Stream -->|"per-shard read"| Flink
     Stream -->|"raw sink"| Lake
     Flink -->|"per-minute upsert"| OLAP
-    Lake --> Spark
+    Lake -->|"re-derive aggregates"| Spark
     Spark -->|"correct counts"| OLAP
     Adv -->|"query metrics"| OLAP
+    classDef ext stroke-dasharray:4 4;
         </pre>
         <figcaption>The write path (verify &rarr; dedup &rarr; stream &rarr; aggregate) carries ~10k clicks/sec; the read path is a single query against pre-computed rollups. The lake + Spark loop is the correctness backstop.</figcaption>
       </figure>
@@ -240,6 +235,32 @@ WHERE  ad_id = 123
         <h3>5 · Keeping big-range queries fast</h3>
         <p>Pre-aggregation already makes the common query — one ad over a recent window — instant. The slow tail is the wide query: a year of a campaign is millions of minute-buckets to sum on read. The answer is more of the same medicine one level up: a nightly job rolls the minute buckets into daily and weekly tables, and a query hits the coarsest table that satisfies its range, drilling down to finer granularity only where needed. It is caching by another name — spend storage on the query shapes advertisers actually run, to buy back read latency.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant CP as Click Processor
+    participant R as Redis dedup set
+    participant S as Stream
+    B->>CP: GET /click (impression_id, ad_id, HMAC)
+    CP->>CP: verify HMAC signature
+    alt forged signature
+        CP--xB: reject
+    else valid
+        CP->>R: is impression_id seen?
+        alt duplicate (hit)
+            R-->>CP: present
+            CP--xS: drop, no write
+        else new (miss)
+            R-->>CP: absent
+            CP->>S: append click event
+            CP->>R: record impression_id
+        end
+    end
+        </pre>
+        <figcaption>How is each click counted exactly once? Dedup by signed impression id, and write to the stream <em>before</em> recording the id — so a cache failure double-writes (reconciliation fixes it) rather than losing a click.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

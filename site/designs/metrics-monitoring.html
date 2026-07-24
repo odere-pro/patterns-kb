@@ -193,26 +193,23 @@ POST /alerts/rules              # written rarely, evaluated every minute
       <figure class="diagram">
         <pre class="mermaid">
 flowchart TB
-    Agents["Server agents: batch and buffer"]
+    Agents["Server agents: batch and pre-aggregate"]
     Ingest["Ingestion: validate and cap cardinality"]
-    Redis[("Policy store and series tracker")]
     Kafka[["Kafka buffer"]]
     TSDB[("Time-series database")]
-    Query["Query service: cache and rollups"]
-    Dash["Dashboards"]
+    Query["Query service: dashboards, cache and rollups"]
     Eval["Alert evaluator: scheduled queries"]
     Notify["Notification service: group and dedup"]
-    Channels["Slack, PagerDuty, email"]
+    Channels["Slack, PagerDuty, email"]:::ext
 
-    Agents -->|"batched ingest"| Ingest
-    Ingest -->|"series allowed?"| Redis
+    Agents -->|"batched points"| Ingest
     Ingest -->|"publish"| Kafka
     Kafka -->|"consume and write"| TSDB
-    Dash -->|"PromQL query"| Query
-    Query -->|"scan and rollups"| TSDB
+    Query -->|"PromQL scan and rollups"| TSDB
     Eval -->|"scheduled query"| TSDB
     Eval -->|"breach event"| Notify
     Notify -->|"one page per group"| Channels
+    classDef ext stroke-dasharray:4 4;
         </pre>
         <figcaption>The write path (agent → queue → time-series store) is a steady firehose; the read path forks off it, and alerting rides the same store the dashboards query.</figcaption>
       </figure>
@@ -234,6 +231,29 @@ flowchart TB
         <h3>4 · Taming cardinality explosion</h3>
         <p>Every distinct metric-plus-label combination is a new series, and combinations multiply fast: <code>http_requests{host, region, endpoint, status, method}</code> across 1,000 hosts × 5 regions × 200 endpoints × 10 statuses × 5 methods is up to 50M series in theory. Each series costs index, metadata, and memory on the write side, and aggregating across millions of them is slow on the read side. The fix is an admission step wedged into the ingestion service, between validation and the queue, backed by two stores: a <strong>policy store</strong> (Postgres) mapping each metric to its allowed label keys and a maximum series count, and a fast <strong>series tracker</strong> (Redis) counting the unique series seen per metric. Ingestion strips non-allowlisted labels, hashes the rest into a series id, and checks whether that series is known and under cap — accepting and publishing if so, dropping and bumping a <code>dropped_metrics</code> counter if not. That counter becomes a first-class monitored signal (more monitoring of the monitor), and hitting a cap fires an alert through the existing notification path. A membership check per point at 5M/s is itself a cost, so a local <a href="../patterns/distributed/coordination/bloom-filter.html">bloom filter</a> fronts Redis as a cheap first pass: only combinations the filter says might be new pay for a round trip.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Point["Incoming point: metric + labels"]
+    Ingest["Ingestion admission"]
+    Policy[("Policy store: allowed keys, max series")]
+    Bloom["Local bloom filter"]
+    Redis[("Series tracker: unique series per metric")]
+    Queue[["Kafka buffer"]]
+    Drop["Drop and bump dropped_metrics"]
+    Notify["Notification service"]
+
+    Point -->|"strip non-allowlisted labels, hash to series id"| Ingest
+    Ingest -->|"read allowed keys, cap"| Policy
+    Ingest -->|"seen this series?"| Bloom
+    Bloom -->|"definitely seen, under cap"| Queue
+    Bloom -->|"maybe new"| Redis
+    Redis -->|"known and under cap"| Queue
+    Redis -->|"new but over cap"| Drop
+    Drop -->|"cap breached"| Notify
+        </pre>
+        <figcaption>How the ingestion admission step accepts or drops each point to bound cardinality.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

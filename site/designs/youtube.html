@@ -189,23 +189,21 @@ GET /videos/{videoId}
 flowchart TB
     Client["Client / player"]
     Gateway["API Gateway + Load Balancer"]
-    Video["Video Service (stateless)"]
+    Video["Video Service · stateless"]
     Cache[("Metadata cache")]
     Meta[("Metadata DB — Cassandra")]
     Blob[("Blob store — S3")]
-    Orch["Pipeline Orchestrator"]
-    Workers["Transcode Workers"]
+    Pipeline["Processing pipeline — orchestrator + transcode workers"]
     CDN["CDN / edge"]
 
     Client -->|"POST /presigned_url, GET /videos"| Gateway
-    Gateway --> Video
+    Gateway -->|"route"| Video
     Video -->|"read/write metadata"| Cache
     Cache -->|"miss"| Meta
-    Video -->|"presigned URL"| Blob
+    Video -->|"issue presigned URL"| Blob
     Client -->|"direct chunked upload"| Blob
-    Blob -->|"ObjectCreated event"| Orch
-    Orch -->|"schedule DAG"| Workers
-    Workers -->|"segments + manifests"| Blob
+    Blob -->|"ObjectCreated event"| Pipeline
+    Pipeline -->|"segments + manifests"| Blob
     Blob -->|"segments + manifests"| CDN
     CDN -->|"adaptive segments"| Client
         </pre>
@@ -223,6 +221,22 @@ flowchart TB
         <h3>3 · Scaling reads, hot videos, and streaming distance</h3>
         <p>The Video Service is a <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> tier of presigned-URL and point-lookup handlers, so it scales out behind the load balancer without ceremony. Metadata sits in Cassandra, partitioned by <code>videoId</code> — the design only needs point look-ups, never bulk scans, so a horizontally-partitioned leaderless store is a clean fit. The classic failure mode is the <strong>hot key</strong>: a viral video pins its partition to one node that then buckles under the read load. Two fixes stack — <a href="../patterns/distributed/coordination/replication.html">replicate</a> popular metadata onto a few extra nodes so several can share the queries, and put a distributed cache keyed by <code>videoId</code> in front so the hottest records are served from memory and never reach the database at all. The video bytes have their own hot-spot problem: a bucket lives in one region, so a viewer far away sees slow starts and buffering. The answer is the <a href="../patterns/distributed/routing/cdn.html">CDN</a> — push segments and manifests to edge servers near the viewer, and once everything a player needs is at the edge, streaming never touches the origin. Upload bursts, meanwhile, are absorbed by a queue in front of the pipeline whose depth drives elastic worker scaling.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Blob[("Blob store — S3")] -->|"ObjectCreated event"| Orch
+    subgraph Pipeline["Processing pipeline"]
+        direction TB
+        Orch["Workflow orchestrator (Temporal)"] -->|"split with ffmpeg"| Split["Segmenter"]
+        Split -->|"independent segments, a DAG"| Transcode["Transcode workers — fan out"]
+        Transcode -->|"all segments done"| Manifest["Manifest generator"]
+    end
+    Transcode -->|"per-segment renditions"| Blob
+    Manifest -->|"primary + media manifests"| Blob
+    Manifest -->|"mark upload complete"| Meta[("Metadata DB")]
+        </pre>
+        <figcaption>Inside the Processing pipeline: how does one uploaded file become transcoded segments and manifests? The orchestrator builds the DAG; the transcode stage fans out because segments have no cross-dependencies.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

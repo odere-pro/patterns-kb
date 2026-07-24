@@ -185,19 +185,17 @@ GET /payment-intents/{paymentIntentId}
         <pre class="mermaid">
 flowchart TB
     Merchant["Merchant server"]
-    Merchant -->|"POST /payment-intents"| Gateway["API Gateway (auth, rate limit)"]
+    Merchant -->|"POST /payment-intents"| Gateway["API Gateway — auth, rate limit"]
     Merchant -->|"POST .../transactions"| Gateway
     Gateway -->|"create / read intent"| PI["PaymentIntent Service"]
-    Gateway -->|"charge card"| Tx["Transaction Service"]
+    Gateway -->|"charge card"| Tx["Transaction Service — sole PCI scope"]
     PI -->|"read / write"| DB[("Operational DB")]
     Tx -->|"read / write"| DB
-    Tx -.->|"authorize / capture"| Network["External Payment Network"]
-    DB -->|"tail write-ahead log"| CDC["Change Data Capture"]
-    CDC -->|"publish change events"| Kafka[("Event stream")]
-    Kafka --> Audit["Audit Service"]
-    Kafka --> Recon["Reconciliation Service"]
-    Kafka --> Webhook["Webhook Service"]
-    Webhook -.->|"POST callback"| Merchant
+    Tx -.->|"authorize / capture"| Network["Payment network"]:::ext
+    DB -->|"CDC tails write-ahead log"| Stream[("Event stream")]
+    Stream -->|"change events, read independently"| Consumers["Audit · Reconciliation · Webhooks"]
+    Consumers -.->|"signed webhook callback"| Merchant
+    classDef ext stroke-dasharray:4 4;
         </pre>
         <figcaption>The request path (gateway → services → DB → network) stays lean; every committed change is captured out of band and fanned out to independent consumers.</figcaption>
       </figure>
@@ -222,6 +220,21 @@ flowchart TB
         <h3>5 · Pushing status instead of polling</h3>
         <p>Polling <code>GET /payment-intents/{id}</code> works, but merchants usually want to be told so they can fulfil an order the moment a charge succeeds. A webhook service consumes the same event stream; when a merchant has subscribed to an event type, it signs a payload with a shared secret and POSTs it to their callback URL. Delivery is server-to-server and inherently unreliable, so every attempt is recorded and failures <a href="../patterns/distributed/resilience/retry-backoff.html">retry with exponential backoff</a> — 5s, 25s, 125s, up to about an hour — until the merchant returns a 2xx. It reuses the durability spine rather than standing up a parallel one, which is why webhooks, reconciliation and audit all read from the same log.</p>
       </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Created
+    Created --> Authorized: network approves
+    Created --> Declined: network declines
+    Created --> Pending: network timeout
+    Pending --> Authorized: reconciler finds success
+    Pending --> Declined: reconciler finds decline
+    Authorized --> Captured: funds captured
+    Captured --> [*]
+    Declined --> [*]
+        </pre>
+        <figcaption>What states a payment attempt can reach, and how a network timeout resolves through reconciliation.</figcaption>
+      </figure>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">

@@ -186,8 +186,8 @@ flowchart TB
     Ops[("Operations DB — Cassandra")]
     Compact["Compaction Service"]
     Client -->|"POST /docs"| Gateway
-    Gateway --> Meta
-    Meta --> MetaDB
+    Gateway -->|"create doc"| Meta
+    Meta -->|"write metadata"| MetaDB
     Client -->|"WS /docs/id"| Doc
     Doc -->|"which server owns this doc?"| Ring
     Doc -->|"append transformed ops"| Ops
@@ -216,6 +216,29 @@ flowchart TB
 
         <h3>3 · Scaling to millions of sockets</h3>
         <p>One Document Service instance is both a bottleneck and a single point of failure. The constraint that makes this tricky is that all sockets for a document must converge on one owner — they cannot be sprayed across the fleet by a plain load balancer. The answer is a <a href="../patterns/distributed/routing/consistent-hashing.html">consistent hash ring</a>: each server owns a range of the hash space, ZooKeeper holds the ring configuration and coordinates membership, and <code>hash(documentId)</code> picks the owner. A client opens a plain HTTP connection to any server; if that server does not own the document's hash range it replies with a redirect to the one that does; the client connects there directly, the connection upgrades to a WebSocket, and that owner loads the operations and starts serving — a <a href="../patterns/distributed/routing/sticky-session.html">document-pinned session</a> where every collaborator on one document deterministically shares a server. Consistent hashing keeps churn small: adding or removing a server reshuffles only a slice of documents rather than all of them. The cost is that a scaling event is not free — displaced sockets must be dropped and reconnected, and the moving document's operations must migrate to the new owner, so robust reconnect logic and hotspot monitoring are part of the deal. Terminating the sockets at the edge and exposing a plain internal API keeps the rest of the system from having to know about connections at all.</p>
+        <figure class="diagram">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant A as Any server
+    participant O as Owner server
+    participant DB as Ops store
+    C-&gt;&gt;A: HTTP connect for docId
+    alt A owns the hash range for docId
+        A-&gt;&gt;DB: load operations
+        DB--&gt;&gt;A: op log
+        A--&gt;&gt;C: upgrade to WebSocket, replay ops
+    else A is not the owner
+        A--&gt;&gt;C: redirect to owner
+        C-&gt;&gt;O: connect, upgrade to WebSocket
+        O-&gt;&gt;DB: load operations
+        DB--&gt;&gt;O: op log
+        O--&gt;&gt;C: replay ops, session live
+    end
+          </pre>
+          <figcaption>How does every editor of one document land on the single server that owns and orders it?</figcaption>
+        </figure>
 
         <h3>4 · Keeping storage and memory bounded</h3>
         <p>Every operation lives forever by default, and a hot document can reach millions of them — expensive to replay to each new joiner and a memory drain while loaded. The fix is <strong>compaction</strong>: periodically collapse a long run of operations into a tiny equivalent one (ideally a single insert of the current text), which is really a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of the operation log. Doing it safely is the interesting part, because Cassandra only offers row-level transactions while a document spans many rows. The trick is a <code>documentVersionId</code> on the metadata record: clients read the current version before loading operations, so they always fetch a consistent set, and only the Document Service is allowed to flip the pointer from the old version to the new one. An <em>offline</em> compaction service can read, collapse, and write a new version, then ask the Document Service to flip — but it must skip documents that are live to avoid corrupting in-flight edits, and throttle itself so it does not become its own load problem. The cleaner <em>online</em> variant lets the owning server compact its own documents, and the natural trigger is the moment the last editor disconnects: the operations are already in memory and nobody else holds the document, so it hands them to a low-priority background process, writes the new version, and flips — isolating the work so it never inflates the tail latency of live edits.</p>
