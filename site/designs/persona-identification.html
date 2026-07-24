@@ -97,7 +97,7 @@
     {
       "@id": "../patterns/messaging/idempotency.html#idempotency",
       "name": "Idempotency",
-      "kb:note": "client creates, vendor callbacks, email sends and webhook deliveries each carry a dedup key, so any retry at any boundary is a safe no-op"
+      "kb:note": "four boundaries, four dedup keys, each minted by whichever side can actually see the duplicate — a stored client key, the vendor's own request id, the task row's id, the event id"
     },
     {
       "@id": "../patterns/messaging/correlation-identifier.html#correlation-identifier",
@@ -110,6 +110,11 @@
       "kb:note": "ID photos go straight to an object store by presigned upload, referenced by key from a metadata row written before the upload"
     },
     {
+      "@id": "../patterns/distributed/routing/valet-key.html#valet-key",
+      "name": "Valet Key",
+      "kb:note": "the ID photo goes up on a presigned URL scoped to one object for fifteen minutes, so the API tier decides who may upload and then leaves the data path entirely"
+    },
+    {
       "@id": "../patterns/messaging/claim-check.html#claim-check",
       "name": "Claim Check",
       "kb:note": "workers pass the photo's storage key between steps, never the image bytes"
@@ -118,6 +123,11 @@
       "@id": "../patterns/security/secure-logger.html#secure-logger",
       "name": "Secure Logger",
       "kb:note": "log lines carry flow and person ids only — the encrypted vault is the single place raw PII exists, so logs never become a second copy of it"
+    },
+    {
+      "@id": "../patterns/security/secure-session-manager.html#secure-session-manager",
+      "name": "Secure Session Manager",
+      "kb:note": "the onboardee has no account: their session is the magic link's hash — server-side state, single-use, 48-hour expiry, revoked the moment a resend supersedes it"
     },
     {
       "@id": "../patterns/distributed/resilience/rate-limiter.html#rate-limiter",
@@ -325,6 +335,7 @@
           <li>Coordination cache — <strong>adopted</strong>: correctness, not speed. Per-process breakers make N replicas absorb N× the vendor's failures, then send N probes at a recovering vendor. <em>→ NFR: availability &amp; resilience.</em></li>
           <li>Read cache — <strong>rejected</strong>: 18 GB of metadata, dashboard reads by primary key, no hot set worth a second copy to invalidate. <em>→ FR: flow view.</em></li>
           <li>Search index — <strong>rejected</strong>: the dashboard answers "show me this flow", never "find flows matching text". <em>→ FR: flow view.</em></li>
+          <li>Cache with a TTL as the invite-link store — <strong>rejected</strong>: the 48-hour expiry has to trigger a re-invite, tell an expired link from an unknown one, and be spent in the submission's own transaction, so it is a predicate on a durable row rather than an eviction — and ~20k live rows buy nothing by moving. <em>→ FR: invite resend; NFR: consistency.</em></li>
           <li>Message broker — <strong>deferred</strong>: it would trade away the shared transaction to solve throughput this system does not have; trigger is measured task-table churn, roughly sustained 100k flows/day. <em>→ NFR: scale.</em></li>
           <li>Workflow engine — <strong>deferred</strong>: a state column plus a transitions table already gives durable, inspectable orchestration; trigger is flow variants multiplying, and the price is losing the append-only history to the engine's own. <em>→ NFR: evolvability.</em></li>
           <li>Read replica — <strong>deferred</strong>: trigger is dashboard and reporting reads competing with worker claims. <em>→ NFR: scale.</em></li>
@@ -336,7 +347,7 @@
     <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
       <h2 class="doc-h" id="h-entities">Core entities &amp; data design</h2>
       <div class="prose">
-        <p>Two seams, both enforced by the schema, not by convention: business truth (<code>flow</code> and its append-only <code>flow_transition</code> history) never mixes with operational bookkeeping (<code>task</code> attempts, locks, backoff), and PII lives in a separate vault the operational store references only by opaque id. Current state is materialised on the flow row; history is appended, never rewritten — the audit view is a projection over transitions, not a second write path. Two constraints do most of the work: the partial unique index <code>one_open_flow</code> <em>is</em> the duplicate-invite rule, and the inbox's three-column uniqueness <em>is</em> the callback dedup (deep dive 2). Constraints that encode rules beat code that remembers them.</p>
+        <p>Two seams, both enforced by the schema, not by convention: business truth (<code>flow</code> and its append-only <code>flow_transition</code> history) never mixes with operational bookkeeping (<code>task</code> attempts, locks, backoff), and PII lives in a separate vault the operational store references only by opaque id. Current state is materialised on the flow row; history is appended, never rewritten — the audit view is a projection over transitions, not a second write path. Three constraints do most of the work: the partial unique index <code>one_open_flow</code> <em>is</em> the duplicate-invite rule, the inbox's three-column uniqueness <em>is</em> the callback dedup (deep dive 2), and <code>idempotency_key</code>'s composite primary key <em>is</em> the client-retry guard. Constraints that encode rules beat code that remembers them.</p>
       </div>
       <div class="entity-group">
         <h3>Tenancy &amp; identity — operational Postgres + PII vault</h3>
@@ -376,15 +387,20 @@ CREATE TABLE person (
         </div>
         <div class="entity">
           <h4>MagicLinkKey</h4>
-          <p>Hash of the invite key — 48-hour expiry, single-use. A resend invalidates its predecessors.</p>
+          <p>Hash of the invite key — 48-hour expiry, single-use, superseded by a resend. Expiry is a <em>predicate the redemption query reads</em>, never a store TTL: an evicted key reads as a forged one, and the sweeper needs the row to re-invite from (deep dive Q4).</p>
           <details class="sketch" open>
             <summary>schema — magic_link_key</summary>
 <pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE magic_link_key (
-  key_hash   bytea PRIMARY KEY,       -- never the key itself
-  flow_id    uuid NOT NULL,
-  expires_at timestamptz NOT NULL,    -- issued_at + 48h
-  used_at    timestamptz              -- single-use
-);</code></pre>
+  key_hash       bytea PRIMARY KEY,   -- SHA-256 of a 256-bit CSPRNG token; never the token
+  client_id      uuid NOT NULL REFERENCES client(id),  -- so the same RLS policy covers it
+  flow_id        uuid NOT NULL,
+  issued_at      timestamptz NOT NULL DEFAULT now(),
+  expires_at     timestamptz NOT NULL,  -- issued_at + 48h; a predicate, not an eviction
+  used_at        timestamptz,           -- spent
+  invalidated_at timestamptz            -- superseded by a resend — a different fact from spent
+);
+-- Retention, not TTL: a scheduled retention sweep deletes spent and expired rows on the
+-- jurisdiction's clock — the same due-dated-predicate machinery as the recheck clocks.</code></pre>
           </details>
         </div>
       </div>
@@ -529,6 +545,24 @@ CREATE UNIQUE INDEX one_open_flow ON flow (client_id, email_hash)
           </details>
         </div>
         <div class="entity">
+          <h4>IdempotencyKey</h4>
+          <p>The client-inbound retry guard, one row per tenant, route and key. The <em>insert is the lock</em>: a concurrent retry either creates the row and owns the work, or collides and replays the stored response.</p>
+          <details class="sketch" open>
+            <summary>schema — idempotency_key</summary>
+<pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE idempotency_key (        -- client retries only; vendors dedup via inbox
+  client_id     uuid NOT NULL REFERENCES client(id),
+  endpoint      text NOT NULL,        -- a key is unique per tenant AND per route
+  key           text NOT NULL,        -- the client's opaque value — never parsed
+  request_hash  bytea NOT NULL,       -- digest, not the body: the email stays in the vault
+  status        text NOT NULL,        -- in_progress | completed
+  response_code int,                  -- replayed verbatim, so a retry is byte-identical
+  response_body jsonb,
+  expires_at    timestamptz NOT NULL, -- 24h; must outlast the client's own retry budget
+  PRIMARY KEY (client_id, endpoint, key)
+);</code></pre>
+          </details>
+        </div>
+        <div class="entity">
           <h4>WebhookDelivery</h4>
           <p>Per-attempt delivery record: what was sent, when, and what the endpoint answered.</p>
           <details class="sketch" open>
@@ -566,7 +600,7 @@ CREATE UNIQUE INDEX one_open_flow ON flow (client_id, email_hash)
     <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
       <h2 class="doc-h" id="h-interface">The interface — API design</h2>
       <div class="prose">
-        <p>Every client-facing state-changing call returns <strong>202</strong> — work is recorded durably and done asynchronously; the one exception is the onboardee's submission, a <strong>201</strong> carrying the presigned upload URL it just created. No status poll and no cancel — recovery is webhook replay plus the dashboard, and a poll endpoint would duplicate the webhook's source of truth: <strong>push with replay beats push with poll</strong>. Idempotency lives at every boundary: <code>Idempotency-Key</code> guards the client's retry, <code>one_open_flow</code> the duplicate invite, the inbox's uniqueness the vendor's callback, <code>eventId</code> the delivery. The magic-link token is the onboardee's entire identity — no account; it authorises one flow's submission surface and nothing client-scoped.</p>
+        <p>Every client-facing state-changing call returns <strong>202</strong> — work is recorded durably and done asynchronously; the one exception is the onboardee's submission, a <strong>201</strong> carrying the presigned upload URL it just created. No status poll and no cancel — recovery is webhook replay plus the dashboard, and a poll endpoint would duplicate the webhook's source of truth: <strong>push with replay beats push with poll</strong>. Idempotency lives at every boundary, each keyed by the side that can actually see the duplicate: a <em>stored</em> <code>Idempotency-Key</code> guards the client's retry, <code>one_open_flow</code> the duplicate invite, the inbox's uniqueness the vendor's callback, <code>eventId</code> the delivery — and a call already repeatable by construction, like replay, is given no key at all. The magic-link token is the onboardee's entire identity — no account; it authorises one flow's submission surface and nothing client-scoped.</p>
       </div>
       <div class="endpoint-group">
         <h3>Client API — authenticated tenant calls</h3>
@@ -576,7 +610,7 @@ CREATE UNIQUE INDEX one_open_flow ON flow (client_id, email_hash)
           <details class="sketch" open>
             <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST /flows
-Idempotency-Key: 7c9e-4b1a-…                     client-generated, guards the RETRY
+Idempotency-Key: 7c9e-4b1a-…                     client-generated UUID, opaque to us
 {
   "email":      "jane@example.com",
   "webhookUrl": "https://client.example/hooks/kyc"
@@ -585,25 +619,29 @@ Idempotency-Key: 7c9e-4b1a-…                     client-generated, guards the 
 202 Accepted
 { "flowId": "flow_9c31", "state": "initiated" }
 
-# Same Idempotency-Key retried  → same 202, same flowId (the create raced a timeout).
-# DIFFERENT key, same email     → 200 with the EXISTING open flow: the partial unique
-# index one_open_flow enforces one open flow per (client, email). Two guards,
-# two different duplicates: a network retry vs a genuinely repeated invite.</code></pre>
+# Same key, completed  → the stored 202 replayed, byte-identical (the create raced a timeout).
+# Same key, in flight  → 409 Conflict + Retry-After — never a second execution.
+# Same key, other body → 422: the request_hash mismatch stops a client accidentally
+#                        serving itself the result of a different request.
+# DIFFERENT key, same email → 200 with the EXISTING open flow, per the partial unique
+#                        index one_open_flow: one open flow per (client, email).</code></pre>
           </details>
         </div>
         <div class="endpoint">
           <h4><code>POST /flows/{id}/invite/resend</code></h4>
-          <p>Invalidate prior keys, issue a fresh single-use magic link with a new 48-hour expiry. Reachable from the onboardee's resend page as well as by the client.</p>
+          <p>Invalidate prior keys, issue a fresh single-use magic link with a new 48-hour expiry; reachable from the onboardee's resend page as well as by the client. The call that most needs the stored key — a retried resend would otherwise invalidate the link it just issued and send a second email.</p>
           <details class="sketch" open>
             <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST /flows/flow_9c31/invite/resend
+Idempotency-Key: b41f-90ac-…                     without it, a retry invites twice
 
 202 Accepted
-# All prior keys for the flow are invalidated, ONE fresh single-use key is issued
-# with a new 48h expiry, and the email goes out as a task — not inline.
+# Prior keys are stamped invalidated_at, ONE fresh single-use key is issued with a
+# new 48h expiry, and the email goes out as a task — not inline.
 # Spends nothing but a rate-limit token: safe to expose behind the resend page.
 
-409 Conflict   { "error": "already submitted" }   nothing left to invite</code></pre>
+409 Conflict   { "error": "already submitted" }   nothing left to invite
+409 Conflict   { "error": "retry in progress" }   same key, first call still running</code></pre>
           </details>
         </div>
         <div class="endpoint">
@@ -616,6 +654,8 @@ Idempotency-Key: 7c9e-4b1a-…                     client-generated, guards the 
 202 Accepted
 # Re-emits the flow's terminal event from the outbox — the SAME eventId, so the
 # client's dedup absorbs it whether or not the original ever arrived.
+# No Idempotency-Key: replay is repeatable by construction, and a key on a call that
+# already repeats safely is ceremony (deep dive Q8).
 
 409 Conflict   { "error": "flow not terminal" }   nothing to replay yet</code></pre>
           </details>
@@ -818,7 +858,7 @@ flowchart TB
         <h3>2 · The reliability core — outbox out, inbox in</h3>
         <p><strong>Every transition commits with its consequences, or not at all.</strong> The write side: "record the state change" and "tell the client" are two systems with no transaction spanning them — write-then-crash-before-publish means the database says <code>clear</code> while the client hears nothing, forever. The outbox closes the gap by turning "publish" into a second local write: transition, outbox event, and follow-up tasks in one Postgres transaction. The dispatcher then retries delivery against a durable row; <code>published_at IS NULL</code> is always the honest list of what is still owed.</p>
         <p><strong>The receive side is the trap most designs miss.</strong> Vendors deliver callbacks at-least-once, and a duplicate can arrive <em>before this system has written anything</em> — before any outbox row, before any event of ours exists. A dedup key we generate at publish time cannot catch that: there is nothing for the duplicate to collide with yet. The inbox fixes the keying: the dedup key is <em>the sender's</em> — <code>(flow_id, step, provider_request_id)</code> — and the inbox insert shares a transaction with the callback's effect. Now whichever copy commits first wins, the second hits the unique constraint and rolls back its whole transaction, and arrival order stops mattering entirely.</p>
-        <p><strong>Outbound calls carry our idempotency key for the same reason in reverse.</strong> The invite email and the webhook both go to systems that might see our retry as a new request. Each send carries a key derived from the task (email) or the event (<code>eventId</code>), so the email vendor can collapse a re-sent invite and the client can collapse a re-delivered result. At-least-once internally, at-most-once <em>effect</em> at every boundary.</p>
+        <p><strong>Outbound calls carry our idempotency key for the same reason in reverse.</strong> The invite email and the webhook both go to systems that might see our retry as a new request. Each send carries a key derived from the task (email) or the event (<code>eventId</code>), so the email vendor can collapse a re-sent invite and the client can collapse a re-delivered result. The rule that makes it work is the easy one to miss: <em>the key is derived from the durable row's id, never generated at send time</em> — a retry re-reads the row and presents the same key, while a freshly minted one differs on every attempt and therefore collapses nothing (deep dive Q8). At-least-once internally, at-most-once <em>effect</em> at every boundary.</p>
         <details class="sketch">
           <summary>One transaction, five facts — the whole core in SQL</summary>
 <pre><code class="language-sql" data-kb-lang="sql">-- The IDV callback arrives: verify_id passed for flow F.
@@ -917,7 +957,7 @@ flowchart LR
         <p><strong>Nothing changes until ~2M requests; the first real bottleneck is the task table, not the flow table.</strong> Task rows are updated repeatedly (claims, retries, completions), which at high volume means dead tuples, vacuum pressure and index churn — classic queue-in-DB costs. The exits, in the order they earn their keep: partial indexes on <code>status = 'pending'</code> so claims scan only live work; partition or truncate completed tasks aggressively; a read replica for dashboard and reporting reads; then <strong>move the queue to a broker</strong> while keeping the outbox, once churn is measured rather than feared; and only at sustained multi-million volume, <strong>shard by <code>client_id</code></strong> — the natural key, since no query spans tenants — and split worker fleets into services when team ownership demands it. Each step is additive; none is a rewrite, because the outbox boundary was in place from V1.</p>
 
         <h3>11 · Follow-up questions this design must answer</h3>
-        <p>Seven questions that probe exactly where designs like this usually break. Verdict first; the expansion unfolds.</p>
+        <p>Eight questions that probe exactly where designs like this usually break. Verdict first; the expansion unfolds.</p>
         <p><strong>Q1 — A vendor retries its callback and the duplicate arrives <em>before</em> you have written anything. Does your idempotency hold?</strong><br>Yes — because the dedup key is the vendor's, not ours.</p>
         <details class="sketch">
           <summary>Why publisher-generated keys fail this exact case</summary>
@@ -936,7 +976,8 @@ flowchart LR
         <p><strong>Q4 — The magic link expired and the person clicks it. What do they see?</strong><br>A self-serve resend that issues a fresh single-use key with a new 48-hour expiry — never a support address.</p>
         <details class="sketch">
           <summary>The resend path</summary>
-          <div class="prose"><p>The <code>410</code> from the token check routes straight to a resend page backed by <code>POST /flows/{id}/invite/resend</code>: prior keys are invalidated, a fresh key is issued (hash stored), the email goes out again, rate-limited per flow so the endpoint cannot be used to spam. "Contact support" as the answer converts an expired timestamp into a ticket queue and a lost onboarding; a resend converts it into one more click.</p></div>
+          <div class="prose"><p>The <code>410</code> from the token check routes straight to a resend page backed by <code>POST /flows/{id}/invite/resend</code>: prior keys are invalidated, a fresh key is issued (hash stored), the email goes out again, rate-limited per flow so the endpoint cannot be used to spam. "Contact support" as the answer converts an expired timestamp into a ticket queue and a lost onboarding; a resend converts it into one more click.</p>
+          <p>That answer is only available because the link is a <em>durable row</em>. The cheaper-looking home — a key in the shared cache under a 48-hour TTL — fails three ways. An evicted key cannot be told from a forged one, so the <code>410</code> that routes to this page degrades into a <code>404</code>. Expiry here <em>owes work</em> rather than cleanup: the sweeper that re-invites or escalates the abandoned flow needs the row to act on, and eviction leaves it nothing to sweep. And <code>used_at</code> must be stamped in the same transaction as the submission it authorises, which a cache cannot join. At ~20k live rows the TTL saves nothing worth any of that. <strong>Expiry is a predicate; reclamation is retention</strong> — a scheduled sweep deletes on the jurisdiction's clock, not on a countdown.</p></div>
         </details>
         <p><strong>Q5 — Several worker replicas: where does circuit-breaker state live?</strong><br>In the shared cache — one breaker per vendor, not one per process.</p>
         <details class="sketch">
@@ -952,6 +993,13 @@ flowchart LR
         <details class="sketch">
           <summary>Two principals, two mechanisms</summary>
           <div class="prose"><p>The given service authenticates tenants: API keys for the API, SSO for the dashboard. The onboardee has no account and should never need one — their identity <em>is</em> possession of the single-use link, so their session is the link's hash: scoped to one flow's submission endpoints, expiring with the key, spent on use. An onboardee token that could reach client-scoped endpoints would be a privilege-escalation path from an email inbox; the scopes are disjoint by construction.</p></div>
+        </details>
+        <p><strong>Q8 — Three different things here are called a key. Are they constructed the same way?</strong><br>No — three constructions, because they defend against three different failures.</p>
+        <details class="sketch">
+          <summary>Who mints it, and what it is made of</summary>
+          <div class="prose"><p>The client's <code>Idempotency-Key</code> is <em>theirs</em>: a UUID they generate, opaque to us, never parsed. It is unique only within <code>(client_id, endpoint, key)</code> — so one tenant cannot collide with another, and the same key replayed against a different route is caught rather than silently served. It is bound to a digest of the request body, and that binding is the part people skip: without it, a client that reuses a key by accident is served the answer to an earlier question instead of an error.</p>
+          <p>The keys <em>we</em> mint outbound follow one rule — derive them from the durable row that survives the retry, never generate them at send time. The webhook's is <code>outbox.event_id</code>; the email vendor's is derived from the task row's id. A key minted at the moment of sending is fresh on every attempt and therefore collapses nothing; the whole point is that attempt two presents attempt one's key.</p>
+          <p>The magic-link token is not an idempotency key at all and is built to a different standard: 256 bits from a CSPRNG, stored only as its SHA-256, because it defends against <em>guessing</em>, not duplication. It is deliberately not a self-validating token — single-use and revoke-on-resend are both requirements, and a token that validates itself can honour neither. Which leaves the case that gets over-engineered most often: an operation already repeatable by construction earns no key at all. Webhook replay re-emits the same <code>eventId</code>, so running it twice <em>is</em> running it once.</p></div>
         </details>
       </div>
     </section>
@@ -1048,7 +1096,7 @@ flowchart LR
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="competing-consumers"><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a><span class="rel-note">stateless worker replicas compete for tasks with FOR UPDATE SKIP LOCKED, so two never claim the same row and adding capacity is just adding replicas</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="dead-letter-channel"><a href="../patterns/messaging/dead-letter-channel.html">Dead Letter Channel</a><span class="rel-note">a task that exhausts its retries is parked in a dead state — alerted to an operator, surfaced to the client as a failure event, re-runnable after the cause is fixed</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="scatter-gather"><a href="../patterns/messaging/scatter-gather.html">Scatter-Gather</a><span class="rel-note">the sanctions step fans out one task per list and a collector transitions the flow exactly once, when every leg has reported</span></div>
-          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">client creates, vendor callbacks, email sends and webhook deliveries each carry a dedup key, so any retry at any boundary is a safe no-op</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">four boundaries, four dedup keys, each minted by whichever side can actually see the duplicate — a stored client key, the vendor's own request id, the task row's id, the event id</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="correlation-identifier"><a href="../patterns/messaging/correlation-identifier.html">Correlation Identifier</a><span class="rel-note">one flow id threads transitions, tasks, vendor calls and delivery attempts, so support reconstructs any flow with a single query</span></div>
         </div>
       </div>
@@ -1057,6 +1105,7 @@ flowchart LR
         <p class="rel-type">Payloads &amp; PII</p>
         <div class="rel-list">
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-storage"><a href="../patterns/distributed/routing/object-storage.html">Object Storage</a><span class="rel-note">ID photos go straight to an object store by presigned upload, referenced by key from a metadata row written before the upload</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="valet-key"><a href="../patterns/distributed/routing/valet-key.html">Valet Key</a><span class="rel-note">the ID photo goes up on a presigned URL scoped to one object for fifteen minutes, so the API tier decides who may upload and then leaves the data path entirely</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="claim-check"><a href="../patterns/messaging/claim-check.html">Claim Check</a><span class="rel-note">workers pass the photo's storage key between steps, never the image bytes</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="secure-logger"><a href="../patterns/security/secure-logger.html">Secure Logger</a><span class="rel-note">log lines carry flow and person ids only — the encrypted vault is the single place raw PII exists, so logs never become a second copy of it</span></div>
         </div>
@@ -1065,12 +1114,14 @@ flowchart LR
       <div class="rel-group">
         <p class="rel-type">Tenancy &amp; restraint</p>
         <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="secure-session-manager"><a href="../patterns/security/secure-session-manager.html">Secure Session Manager</a><span class="rel-note">the onboardee has no account: their session is the magic link's hash — server-side state, single-use, 48-hour expiry, revoked the moment a resend supersedes it</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="rate-limiter"><a href="../patterns/distributed/resilience/rate-limiter.html">Rate Limiter</a><span class="rel-note">per-client limits at the API edge keep one tenant's onboarding burst from consuming the shared vendor quota, and bound the invite-resend endpoint</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="kiss"><a href="../principles/kiss.html">Keep It Simple (KISS)</a><span class="rel-note">one Postgres and stateless workers carry a confirmed hundred onboardings a week; every rejected broker and engine is priced against that number, with named exits instead of early adoption</span></div>
         </div>
       </div>
 
-    </section>
+
+</section>
 
     <nav class="docnav" aria-label="Pattern navigation">
       <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
