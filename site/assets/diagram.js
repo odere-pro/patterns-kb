@@ -45,6 +45,8 @@
         clusterBkg: paperRaised,
         clusterBorder: line,
         edgeLabelBackground: paperRaised,
+        actorTextColor: ink,
+        sequenceNumberColor: paperRaised,
         fontSize: "14px"
       }
     });
