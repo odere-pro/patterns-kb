@@ -29,11 +29,20 @@ function withFixture(mutate) {
   return root;
 }
 
-function run(script, root) {
-  return spawnSync(process.execPath, [join(REPO, "scripts", script)], {
+function run(script, root, ...args) {
+  return spawnSync(process.execPath, [join(REPO, "scripts", script), ...args], {
     env: { ...process.env, KB_ROOT: root },
     encoding: "utf8",
   });
+}
+
+/* kb.mjs resolves an id to a path through graph.json, so the fixture needs building
+ * before it can be read or written by id. */
+function built(mutate) {
+  const root = withFixture(mutate);
+  const r = run("build.mjs", root);
+  assert.equal(r.status, 0, r.stderr);
+  return root;
 }
 
 function edit(root, rel, from, to) {
@@ -112,6 +121,78 @@ test("check-links.mjs fails on a dangling mermaid click target", () => {
     const r = run("check-links.mjs", root);
     assert.equal(r.status, 1, "dangling mermaid click must fail the check");
     assert.match(r.stderr, /gone\.html.*mermaid click/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("kb.mjs unlink removes the edge from both pages, leaving the corpus buildable", () => {
+  const root = built();
+  try {
+    const r = run("kb.mjs", root, "unlink", "alpha", "beta");
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /alpha: removed combines-with → beta/);
+    assert.match(r.stdout, /beta: removed combines-with → alpha/);
+
+    for (const page of [ALPHA, BETA]) {
+      assert.doesNotMatch(readFileSync(join(root, page), "utf8"), /data-kb-rel/,
+        `${page} still declares a relation`);
+    }
+    // The real proof: half an unlink is a one-way edge, which the build rejects.
+    assert.equal(run("build.mjs", root).status, 0, "corpus must still build after unlink");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("kb.mjs unlink fails when there is no edge to remove", () => {
+  const root = built();
+  try {
+    assert.equal(run("kb.mjs", root, "unlink", "alpha", "beta").status, 0);
+    const again = run("kb.mjs", root, "unlink", "alpha", "beta");
+    assert.equal(again.status, 1, "a second unlink has nothing to remove");
+    assert.match(again.stderr, /no relation/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("kb.mjs unlink takes the rel-group with the last item in it", () => {
+  /* The shipped fixture has a bare rel-item; wrap it so the group branch is exercised
+     without changing what every other test reads. */
+  const root = built((r) => {
+    edit(r, ALPHA, "  <section>\n", `  <section>
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+`);
+    edit(r, ALPHA, "  </section>\n", `      </div>
+      </div>
+  </section>
+`);
+  });
+  try {
+    const r = run("kb.mjs", root, "unlink", "alpha", "beta");
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /with its now-empty group/);
+    const html = readFileSync(join(root, ALPHA), "utf8");
+    assert.doesNotMatch(html, /rel-group|rel-type|Combines with/, "the emptied group must go too");
+    assert.doesNotMatch(html, /\n\n\n/, "no blank-line seam left where the group was");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("kb.mjs refs reports each carrier separately", () => {
+  const root = built();
+  try {
+    const r = run("kb.mjs", root, "refs", "alpha", "--json");
+    assert.equal(r.status, 0, r.stderr);
+    const refs = JSON.parse(r.stdout);
+    assert.deepEqual(refs.relations, [{ rel: "combines-with", to: "beta" }]);
+    assert.deepEqual(refs.clicks, ["beta"], "the mermaid click is a real outbound link");
+    assert.deepEqual(refs.proseLinks, [], "a relation's own <a> is not a prose link");
+    assert.deepEqual(refs.untyped, [], "beta is declared, so nothing is untyped");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

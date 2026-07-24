@@ -11,6 +11,8 @@
  *   kb.mjs get <id> [--block B]   one page, or one block of it
  *   kb.mjs related <id>           what it combines with, replaces, is confused for
  *   kb.mjs backlinks <id>         what points here — typed inbound edges + prose mentions
+ *   kb.mjs refs [<id> | --file <path>]   what this page points AT, read live off the page:
+ *                                 relations, prose links, theme members, mermaid clicks
  *   kb.mjs ls [--band B] [--kind K]
  *   kb.mjs validate [<id> | --file <path>]   structural lint; no argument = every page
  *
@@ -19,6 +21,7 @@
  *   kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
  *   kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
  *   kb.mjs link <from> <verb> <to> [--note "…"] [--note-back "…"]   both sides at once
+ *   kb.mjs unlink <a> <b>         drop the edge from both pages, whatever verb each used
  *   kb.mjs new <id> --kind pattern|hazard|theme|principle|design --band <b> [--group <g>] --name "…" --order <n>
  *
  *   --json      structured output instead of text
@@ -33,7 +36,11 @@ import { validatePage } from "./lib/validate.mjs";
 import { pageSkeleton } from "./lib/template.mjs";
 
 const PARSE_OPTS = { comment: true };
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* KB_ROOT lets the smoke tests point the reader/writer at a fixture corpus; normal runs
+ * resolve the repo root from this file's own location. Same contract as build.mjs. */
+const ROOT = process.env.KB_ROOT
+  ? resolve(process.env.KB_ROOT)
+  : join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = join(ROOT, "site");
 const load = (f) => JSON.parse(readFileSync(join(SITE, "assets", f), "utf8"));
 
@@ -494,6 +501,87 @@ ${rows}
     if (mentionedBy.length) console.log(`\nMentioned in prose by: ${mentionedBy.join(", ")}`);
     if (out.mentions.length) console.log(`Mentions in its own prose: ${out.mentions.join(", ")}`);
   }
+} else if (cmd === "refs") {
+  /* The inverse of backlinks: everything this page points AT. Read live off the page
+   * rather than out of graph.json, because the graph is stale until `make all` runs and
+   * the question this answers — "what did the edit I just made start or stop using?" —
+   * is asked before the build.
+   *
+   * A cross-page reference rides on four different carriers and only one of them is
+   * written by a tool, so they are reported separately rather than merged. The last line
+   * is the one that matters: pages linked in prose with no typed relation to match. */
+  const graph = load("graph.json");
+  let relPath, id;
+  const fileArg = opt("file");
+  if (fileArg) {
+    const abs = resolve(fileArg);
+    relPath = relative(SITE, abs);
+    if (relPath.startsWith("..")) { console.error(`not under site/: ${fileArg}`); process.exit(1); }
+    if (!existsSync(abs)) { console.error(`no such file: ${fileArg}`); process.exit(1); }
+    id = relPath.split("/").pop().replace(/\.html$/, "");
+  } else {
+    const node = graph.nodes[positional[1]];
+    if (!node) { console.error(`unknown id: ${positional[1]}`); process.exit(1); }
+    id = node.id; relPath = node.path;
+  }
+
+  const root = parse(readFileSync(join(SITE, relPath), "utf8"), PARSE_OPTS);
+  const name = root.querySelector(".doc-title")?.text.trim() ?? id;
+  const byPath = {};
+  for (const n of Object.values(graph.nodes)) byPath[n.path] = n.id;
+  const toId = (href) => {
+    const bare = href.split("#")[0].split("?")[0];
+    if (!bare.endsWith(".html") || /^(https?:|mailto:|\/\/)/.test(bare)) return null;
+    return byPath[relative(SITE, resolve(join(SITE, dirname(relPath)), bare))] ?? null;
+  };
+
+  const relations = root.querySelectorAll("[data-kb-rel]").map((el) => ({
+    rel: el.getAttribute("data-kb-rel"), to: el.getAttribute("data-kb-to"),
+  }));
+  const members = root.querySelectorAll("[data-kb-member]").map((el) => ({
+    to: el.getAttribute("data-kb-member"), role: el.getAttribute("data-kb-role"),
+  }));
+  const fluency = root.querySelectorAll(".fluency-item")
+    .map((el) => el.getAttribute("data-kb-theme")).filter(Boolean);
+
+  /* Prose links are every internal link that is NOT already one of the typed carriers
+   * rendering itself as a link — the same exclusion build.mjs uses to derive mentions. */
+  const proseLinks = [];
+  for (const a of root.querySelectorAll("main a[href]")) {
+    if (a.closest("[data-kb-rel], [data-kb-member], .fluency-item, .crumb, .docnav")) continue;
+    const to = toId(a.getAttribute("href"));
+    if (to && to !== id && !proseLinks.includes(to)) proseLinks.push(to);
+  }
+
+  /* Real clickable links that live in diagram text rather than markup. */
+  const CLICK = /\bclick\s+[A-Za-z0-9_]+\s+"([^"]+)"/g;
+  const clicks = [];
+  for (const pre of root.querySelectorAll("pre.mermaid")) {
+    CLICK.lastIndex = 0;
+    let m;
+    while ((m = CLICK.exec(pre.text))) {
+      const to = toId(m[1]);
+      if (to && to !== id && !clicks.includes(to)) clicks.push(to);
+    }
+  }
+
+  const typed = new Set([...relations.map((r) => r.to), ...members.map((m) => m.to), ...fluency]);
+  const untyped = [...new Set([...proseLinks, ...clicks])].filter((t) => !typed.has(t));
+
+  if (AS_JSON) {
+    console.log(JSON.stringify({ id, path: relPath, relations, members, fluency, proseLinks, clicks, untyped }, null, 2));
+  } else {
+    console.log(`# ${name}  [${id}]\n`);
+    const byVerb = {};
+    for (const r of relations) (byVerb[r.rel] ||= []).push(r.to);
+    console.log(`relations (${relations.length})`);
+    for (const [verb, list] of Object.entries(byVerb)) console.log(`  ${verb}: ${list.join(", ")}`);
+    if (members.length) console.log(`\ntheme members (${members.length})\n  ${members.map((m) => `${m.to}${m.role ? ` [${m.role}]` : ""}`).join(", ")}`);
+    if (fluency.length) console.log(`\nfluency tie-ins (${fluency.length})\n  ${fluency.join(", ")}`);
+    console.log(`\nprose links (${proseLinks.length})${proseLinks.length ? `\n  ${proseLinks.join(", ")}` : ""}`);
+    console.log(`\nmermaid clicks (${clicks.length})${clicks.length ? `\n  ${clicks.join(", ")}` : ""}`);
+    console.log(`\nuntyped — linked in prose, no typed relation (${untyped.length})${untyped.length ? `\n  ${untyped.join(", ")}` : ""}`);
+  }
 } else if (cmd === "link") {
   /* Declare a relationship on BOTH pages at once — the invariant make check enforces,
    * finally matched by a writer that maintains it. */
@@ -555,6 +643,53 @@ ${rows}
   writeSide(from, to, verb, note);
   writeSide(to, from, inverse, noteBack);
   console.log(`${fromId} —[${verb}]→ ${toId} declared on both pages. Now run: make all && make check`);
+} else if (cmd === "unlink") {
+  /* The inverse of link, and the reason it exists: an edge lives on two pages, so retiring
+   * one by hand is two edits in two files plus remembering the rel-group that just went
+   * empty. Verb-agnostic — it removes whatever each side declared, which is also why it
+   * works on a hazard's mitigation block, where link cannot write. */
+  const [, aId, bId] = positional;
+  if (!aId || !bId) { console.error("usage: kb.mjs unlink <a> <b>"); process.exit(1); }
+  const graph = load("graph.json");
+  const a = graph.nodes[aId], b = graph.nodes[bId];
+  if (!a) { console.error(`unknown id: ${aId}`); process.exit(1); }
+  if (!b) { console.error(`unknown id: ${bId}`); process.exit(1); }
+  if (aId === bId) { console.error("a page cannot relate to itself"); process.exit(1); }
+
+  /* Exactly one cut per file. An element's range is an offset into the source about to be
+   * sliced, so a second cut would be measured against text that no longer exists. */
+  const cutSide = (page, other) => {
+    const file = join(SITE, page.path);
+    const src = readFileSync(file, "utf8");
+    const item = parse(src, PARSE_OPTS).querySelector(`[data-kb-rel][data-kb-to="${other.id}"]`);
+    if (!item) return null;
+    const verb = item.getAttribute("data-kb-rel");
+    /* A group is a label over a list. Losing its last item would leave the label standing
+     * over nothing, so the group goes with it. */
+    const group = item.closest(".rel-group");
+    const lone = !!group && group.querySelectorAll("[data-kb-rel]").length === 1;
+    let [start, end] = (lone ? group : item).range;
+    while (start > 0 && (src[start - 1] === " " || src[start - 1] === "\t")) start--;
+    if (src[end] === "\n") end++;
+    const head = src.slice(0, start), tail = src.slice(end);
+    /* Removing a whole group also removes one side of the blank line that separated it
+     * from its neighbour, stacking two blanks at the seam. Collapse the seam, and only
+     * the seam — a global squeeze would reformat prose that has nothing to do with this. */
+    const before = head.match(/\n+$/)?.[0].length ?? 0;
+    const after = tail.match(/^\n+/)?.[0].length ?? 0;
+    writeFileSync(file, before + after > 2
+      ? head.slice(0, head.length - before) + "\n\n" + tail.slice(after)
+      : head + tail);
+    return { verb, lone };
+  };
+
+  const cuts = [[a, b, cutSide(a, b)], [b, a, cutSide(b, a)]];
+  for (const [page, other, cut] of cuts) {
+    if (cut) console.log(`${page.id}: removed ${cut.verb} → ${other.id}${cut.lone ? " (with its now-empty group)" : ""}`);
+    else console.error(`${page.id}: no relation to ${other.id}`);
+  }
+  if (!cuts.some(([, , cut]) => cut)) process.exit(1);
+  console.log("Now run: make all && make check");
 } else if (cmd === "new") {
   /* Scaffold a structurally valid page. The author fills the TODOs, then:
    * kb.mjs set / link / production, and finally make all && make check. */

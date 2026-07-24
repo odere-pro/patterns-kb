@@ -138,6 +138,12 @@ fails on one-way, dangling or contradictory edges. The 15 verbs are closed and p
 page to a pattern or principle it puts to work — write it with `kb.mjs link <design> demonstrates
 <pattern>`, which adds the "Demonstrated by" backlink on the pattern.
 
+Retiring an edge goes through `kb.mjs unlink <a> <b>`. It removes both sides whatever verb
+each declared — including the hazard side of a `mitigated-by` edge, which `link` cannot write
+— and takes the `rel-group` with its last item. Re-typing an edge is `unlink` then `link`.
+`kb.mjs refs <id>` lists everything a page points at, read live off the page, so an edit that
+changed what the page uses can be reconciled before the build.
+
 Each side may phrase its **note** its own way — "Screen at the gate, then hand out scoped
 keys" reads correctly from `gatekeeper`, while `valet-key` may say something else. Only the
 edge and its type must agree.
