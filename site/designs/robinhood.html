@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robinhood · Patterns</title>
+  <meta name="description" content="Design a commission-free trading app — stream live prices to millions over SSE and route orders through an external exchange in under 200 ms without losing an order's true state.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#robinhood",
+  "identifier": "robinhood",
+  "name": "Robinhood",
+  "description": "Stream live prices to millions and route orders through an external exchange in under 200 ms, without ever losing an order's true state",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/messaging/pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "each symbol's price is published to a Redis channel so a tick reaches only the symbol-service servers that have a subscriber for it"
+    },
+    {
+      "@id": "../patterns/messaging/fan-out.html#fan-out",
+      "name": "Fan-Out",
+      "kb:note": "a symbol-service server that receives one tick pushes it out to every SSE client watching that symbol"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sticky-session.html#sticky-session",
+      "name": "Sticky Session",
+      "kb:note": "the load balancer pins each long-lived SSE client to the server that owns its stream"
+    },
+    {
+      "@id": "../patterns/enterprise/gateway.html#gateway",
+      "name": "Gateway",
+      "kb:note": "all exchange-bound order traffic is funnelled through one dispatch gateway with a small fixed egress"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "the order store is horizontally partitioned by userId so a user's orders and queries live on one node"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "a client-supplied order id lets the clean-up job query and re-submit stuck orders without ever double-placing"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/saga.html#saga",
+      "name": "Saga",
+      "kb:note": "placing an order is a persist-then-submit-then-confirm sequence across three systems, reconciled forward by a background clean-up"
+    },
+    {
+      "@id": "../principles/separation-of-concerns.html#separation-of-concerns",
+      "name": "Separation of Concerns",
+      "kb:note": "the order service owns user-facing order truth while the dispatcher owns exchange-facing delivery, retries and pacing"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="robinhood" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Stream live prices to millions and route orders through an external exchange in under 200 ms, without ever losing an order's true state" data-kb-order="27" data-kb-aliases='["trading app","stock brokerage"]' data-kb-tags='["system-design","consistency","latency","event-driven","partitioning"]' data-kb-solves='["thousands of clients keep polling my upstream for the exact same price and hammering an expensive third-party feed","I need to push live updates to millions of connected clients without them constantly asking whether anything changed","a confirmation comes back keyed by the vendor id, but my database is sharded by user so I cannot find the row to update","an order reached the exchange but the write that followed failed, and now my records disagree with reality","order placement has to finish in under 200 ms even when everyone trades at the opening bell"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Robinhood</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Robinhood</h1>
+      <p class="doc-essence">A commission-free trading app shows live stock prices and lets users place and cancel orders. It is a broker, not an exchange: it never matches trades itself but sits in front of an external market, so the whole design is shaped by two constraints — push prices to millions of clients fast, and keep every order's state honest across a boundary it does not own.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="robinhood">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A trading app does two visible things: it streams the live price of a stock, and it takes buy and sell orders. What makes the design distinctive is what it is <em>not</em> — it is not the exchange. Orders are matched by an external market, reached over an API the app does not control and cannot cheaply connect to. That single dependency drives everything. Prices must reach millions of screens in real time without every client hammering the exchange, and an order must be tracked reliably even though the source of truth for whether it filled lives on the other side of that boundary. The functional surface is tiny; the two non-functional constraints — sub-200&nbsp;ms latency and correct order state — are where the whole design lives.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>See the live price of a stock, updating in real time.</li>
+            <li>Place an order — a <strong>market</strong> order (buy/sell now at the going price) or a <strong>limit</strong> order (buy/sell only at a target price).</li>
+            <li>Cancel an outstanding order, and list one's own orders.</li>
+          </ol>
+          <p class="prose">Out of scope, named to keep the design narrow: after-hours trading, ETFs / options / crypto, and showing the live order book.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Consistency</strong> — order state is favoured over availability; a user must always see the true, up-to-date status of an order.</li>
+            <li><strong>Latency</strong> — price updates and order actions land in under 200&nbsp;ms.</li>
+            <li><strong>Scale</strong> — 20M daily actives, ~5 trades/user/day (~100M orders/day), thousands of symbols.</li>
+            <li><strong>Frugal upstream</strong> — minimise the number of live connections and calls to the external exchange; those feeds are the scarce, expensive resource.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Orders.</strong> 20M DAU × 5 trades ≈ 100M orders/day ≈ <strong>~1,200 orders/sec</strong> on average. Trading is bursty — the opening bell and volatility spikes push this an order of magnitude higher, so budget for <strong>tens of thousands/sec</strong> at peak. Each one is consistency-critical and must clear in under 200&nbsp;ms.</p>
+        <p><strong>Prices.</strong> At peak, on the order of <strong>tens of millions of concurrent stream connections</strong>, each watching a handful of symbols. A few dozen symbols are hot; a single tick on one of them may have to reach millions of open connections at once — the design's real fan-out problem.</p>
+        <p><strong>Upstream connections.</strong> The number that must stay small. Naïvely, 20M clients polling every 200&nbsp;ms would be ~100M requests/sec at the exchange. The whole point of the system is to collapse that to roughly <strong>one feed subscription per symbol</strong> — O(thousands), not O(clients).</p>
+        <p><strong>Storage.</strong> An order is a few hundred bytes. 100M/day × ~300&nbsp;B ≈ 30&nbsp;GB/day ≈ <strong>~11&nbsp;TB/year</strong> — enough that the order store is partitioned, not single-node.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three entities carry the design:</p>
+        <ul>
+          <li><strong>User</strong> — the trader. Identity travels in a session token / JWT header, never in the request body, so a client can't tamper with whose order it is.</li>
+          <li><strong>Symbol</strong> — a tradable stock (a ticker like <code>AAPL</code>): its current price and metadata, mirrored from the exchange's feed rather than owned here.</li>
+          <li><strong>Order</strong> — a buy/sell instruction: <code>position</code> (buy/sell), <code>symbol</code>, <code>numShares</code>, <code>priceInCents</code>, type (market/limit), a <code>state</code> that walks <code>pending → submitted → filled / cancelled / failed</code>, and the <code>externalOrderId</code> the exchange returns. Money is stored as integer <em>cents</em> — a floating-point <code>price</code> would eventually round a trade wrong.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>A small REST surface for orders, plus a streaming endpoint for prices — one connection a client keeps open instead of a request it repeats:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP + SSE — prices and orders</summary>
+<pre><code class="language-http" data-kb-lang="http">GET /symbols/AAPL
+&rarr; 200 { "ticker": "AAPL", "priceInCents": 21507, "asOf": 1721400000 }
+
+GET /subscribe?symbols=AAPL,META            # Server-Sent Events, one long-lived stream
+&rarr; event: price
+   data: { "ticker": "AAPL", "priceInCents": 21507 }
+   event: price
+   data: { "ticker": "META", "priceInCents": 52210 }
+
+POST /order
+{ "position": "buy", "symbol": "META", "priceInCents": 52210, "numShares": 10 }
+&rarr; 200 Order { "id": "ord_9f…", "state": "submitted", "externalOrderId": "X-…" }
+
+DELETE /order/ord_9f…
+&rarr; 200 { "ok": true }
+
+GET /orders?cursor=…                         # paginated, scoped to the caller
+&rarr; 200 Order[]
+
+# Identity is read from the Authorization header (JWT), never the body.</code></pre>
+      </details>
+      <div class="prose">
+        <p><code>priceInCents</code> is an integer on purpose. Prices arrive over SSE — a persistent, one-way, HTTP push — rather than by polling, because the client only ever receives price data and never sends any back; a bidirectional WebSocket would buy nothing here.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The two requirements have opposite shapes, so they get two independent paths. The <strong>price path</strong> is read-only and push-based: a single <strong>price processor</strong> holds the one expensive subscription to the exchange feed and mirrors every tick into a cache and out onto Redis. A <strong>symbol service</strong> holds the open SSE connections and pushes ticks to the users who care — and because those connections are long-lived, the load balancer uses <a href="../patterns/distributed/routing/sticky-session.html">sticky sessions</a> to pin each client to the server that owns its stream.</p>
+        <p>The <strong>order path</strong> is a write path where correctness beats availability. The <strong>order service</strong> owns the user-facing order lifecycle — auth, validation, state transitions, and the order store, which is partitioned by <code>userId</code>. It reaches the exchange through an <strong>order dispatch <a href="../patterns/enterprise/gateway.html">gateway</a></strong> that presents a small, fixed set of egress addresses to the market and concentrates all exchange-bound traffic through one controlled point. That split is deliberate <a href="../principles/separation-of-concerns.html">separation of concerns</a>: the order service owns what is <em>true</em> for the user, while the dispatcher owns <em>delivery</em> to the exchange — pacing, retries, backoff, and client-order-id dedup. A <strong>trade processor</strong> tails the exchange's trade feed and reflects fills back into the store.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client app"]
+    LB["Load balancer · sticky"]
+    Symbol["Symbol service · SSE"]
+    Cache[("Price cache")]
+    Redis[("Redis pub/sub")]
+    Processor["Price processor"]
+    Order["Order service"]
+    Gateway["Order dispatch gateway"]
+    Exchange["External exchange"]
+    OrderDB[("Order store · sharded by user")]
+    Trades["Trade processor"]
+
+    Client -->|"GET /subscribe"| LB
+    LB --> Symbol
+    Symbol -->|"initial snapshot"| Cache
+    Symbol -->|"subscribe per symbol"| Redis
+    Processor -->|"publish tick"| Redis
+    Processor -->|"refresh"| Cache
+    Redis -->|"fan out"| Symbol
+    Symbol -.->|"push updates"| Client
+    Processor -->|"one feed subscription"| Exchange
+    Client -->|"POST /order"| Order
+    Order -->|"pending row"| OrderDB
+    Order -->|"submit"| Gateway
+    Gateway --> Exchange
+    Exchange -->|"trade feed"| Trades
+    Trades -->|"reflect fills"| OrderDB
+        </pre>
+        <figcaption>The price path (processor &rarr; Redis &rarr; symbol service &rarr; client) never lets a client touch the exchange; the order path (order service &rarr; gateway &rarr; exchange, with the trade processor closing the loop) keeps state consistent.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Fanning live prices to millions without melting the exchange</h3>
+        <p>The naïve version — each client polls the exchange — fails twice: 5,000 clients watching the same symbol make 5,000 identical upstream calls, and a poll interval short enough to meet 200&nbsp;ms is unthinkable at this scale. So the exchange is <em>proxied</em>: one price processor subscribes to the feed and everyone else reads from inside the system.</p>
+        <p>The routing problem is getting a symbol's tick to exactly the symbol-service servers whose users are watching it, and no others. The answer is <a href="../patterns/messaging/pubsub.html">publish–subscribe</a> over Redis. Each symbol-service server keeps a <code>Symbol → Set&lt;userId&gt;</code> map of who is watching what; the first time it has a watcher for a symbol it subscribes to that symbol's Redis channel, and when the last watcher leaves it unsubscribes. When the processor publishes a tick, Redis delivers it only to the servers subscribed to that channel, and each of those servers <a href="../patterns/messaging/fan-out.html">fans it out</a> to its own watching clients over their SSE streams. The scheme is self-regulating — subscriptions track live demand, so a cold symbol costs nothing and load spreads evenly across the fleet. Disconnects are noticed by heartbeat, which prunes the user from every set and drops now-empty channel subscriptions.</p>
+
+        <h3>2 · Reflecting fills when the feed speaks a different key</h3>
+        <p>Orders are stored partitioned by <code>userId</code>, so any one user's orders live on a single shard and their queries hit one node. But the exchange's trade feed reports fills keyed by <code>externalOrderId</code> — and from that id alone there is no way to know which shard, or which row, to update. Scanning every shard per trade is a non-starter.</p>
+        <p>The fix is a small secondary index: a key-value store mapping <code>externalOrderId → (orderId, userId)</code>, written by the order service the instant the exchange hands back an id. The trade processor's path is then a clean two-hop lookup — <code>externalOrderId</code> → KV store → <code>userId</code> → route to the right <a href="../patterns/distributed/routing/sharding.html">shard</a> → update the order. It is the standard move when your primary partition key isn't the key your inbound events arrive on: keep a second index from the event key to the partition key.</p>
+
+        <h3>3 · Keeping orders consistent across a boundary you don't own</h3>
+        <p>Placing an order touches three systems that can't share one transaction — the order store, the exchange, and the KV index — so the workflow is ordered so that a failure at any step is recoverable, a <a href="../patterns/distributed/coordination/saga.html">saga</a> completed forward rather than an atomic commit:</p>
+        <ul>
+          <li><strong>Persist first.</strong> Write the order as <code>pending</code> before anything else, so there is a durable record even if a later step dies.</li>
+          <li><strong>Submit.</strong> Call the exchange synchronously; it returns the <code>externalOrderId</code>.</li>
+          <li><strong>Record.</strong> Write the KV index entry and move the order to <code>submitted</code>, then answer the client.</li>
+        </ul>
+        <p>Each failure has a defined resolution. A failed initial write just fails the request. A failed submission marks the order <code>failed</code>. The dangerous case is a submission that <em>succeeded</em> but whose follow-up write did not — the exchange now holds an order the store doesn't know the id of. A background clean-up job handles it: it scans stalled <code>pending</code> orders and asks the exchange about them using the client-supplied order id it sent along, an <a href="../patterns/messaging/idempotency.html">idempotency</a> key that lets it query — and safely re-submit if needed — without ever double-placing. Cancellation mirrors the shape: flip to <code>pending_cancel</code> first, then cancel upstream, then confirm, and let the same clean-up drive any stuck cancel to completion. The clean-up reconciler is what lets the system favour consistency across a boundary it can only talk to, never control.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">One feed subscription per symbol serves millions of screens — billions of would-be polls collapse to a single upstream connection.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Push over SSE and Redis pub/sub delivers ticks well under 200&nbsp;ms, with load self-balancing to actual demand.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Every order has a durable record before it ever reaches the exchange, so no fill is silently lost and stuck orders reconcile.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Sticky SSE sessions make the symbol service stateful — rebalancing or a node failure drops connections clients must re-establish.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">The order path spans three systems with no distributed transaction, so correctness leans on an eventual clean-up rather than an atomic commit.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The lone price processor and the narrow exchange egress are concentrated dependencies; either failing stalls all prices or all order submission.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end flow (subscribe → stream prices; place/cancel → exchange → store), a clean API and data model, and the key insight that the system must proxy the exchange rather than let clients reach it.</li>
+          <li><strong>Senior</strong> — argues push over polling, details the Redis pub/sub fan-out and why SSE needs sticky sessions, and designs the order workflow with the partition key and partial-failure consistency in mind.</li>
+          <li><strong>Staff+</strong> — frames the whole design around the two hard non-functionals from the first minute, and volunteers the <code>externalOrderId</code>↔<code>userId</code> key mismatch and its index, the reconciling clean-up with client-order-id idempotency, and the order-service-vs-dispatcher split as an operational reality.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="pubsub"><a href="../patterns/messaging/pubsub.html">Publish-Subscribe</a><span class="rel-note">each symbol's price is published to a Redis channel so a tick reaches only the symbol-service servers that have a subscriber for it</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="fan-out"><a href="../patterns/messaging/fan-out.html">Fan-Out</a><span class="rel-note">a symbol-service server that receives one tick pushes it out to every SSE client watching that symbol</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sticky-session"><a href="../patterns/distributed/routing/sticky-session.html">Sticky Session</a><span class="rel-note">the load balancer pins each long-lived SSE client to the server that owns its stream</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="gateway"><a href="../patterns/enterprise/gateway.html">Gateway</a><span class="rel-note">all exchange-bound order traffic is funnelled through one dispatch gateway with a small fixed egress</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">the order store is horizontally partitioned by userId so a user's orders and queries live on one node</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">a client-supplied order id lets the clean-up job query and re-submit stuck orders without ever double-placing</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="saga"><a href="../patterns/distributed/coordination/saga.html">Saga</a><span class="rel-note">placing an order is a persist-then-submit-then-confirm sequence across three systems, reconciled forward by a background clean-up</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="separation-of-concerns"><a href="../principles/separation-of-concerns.html">Separation of Concerns</a><span class="rel-note">the order service owns user-facing order truth while the dispatcher owns exchange-facing delivery, retries and pacing</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

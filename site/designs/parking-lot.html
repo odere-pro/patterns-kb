@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parking Lot · Patterns</title>
+  <meta name="description" content="Low-level design of a parking lot — where occupancy lives, where pricing belongs, and how to keep two entrances from claiming one spot.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#parking-lot",
+  "identifier": "parking-lot",
+  "name": "Parking Lot",
+  "description": "Assign a compatible spot, issue a ticket, and price the stay — an OOP design about where each piece of state belongs",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:often-confused-with": [
+    {
+      "@id": "./amazon-locker.html#amazon-locker",
+      "name": "Amazon Locker",
+      "kb:note": "Both assign a resource and free it later; they differ on whether occupancy is intrinsic to the slot or a relationship the manager tracks"
+    }
+  ],
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/ddd/value-object.html#value-object",
+      "name": "Value Object",
+      "kb:note": "The Ticket is an immutable record — set once at entry, read-only after"
+    },
+    {
+      "@id": "../patterns/gof/behavioral/strategy.html#strategy",
+      "name": "Strategy",
+      "kb:note": "Held in reserve for pricing and floor-allocation once the rules genuinely diverge"
+    },
+    {
+      "@id": "../patterns/concurrency/rw-lock.html#rw-lock",
+      "name": "Read-Write Lock",
+      "kb:note": "Fine-grained locking lets entrances search concurrently and claim a spot exclusively"
+    },
+    {
+      "@id": "../principles/single-responsibility.html#single-responsibility",
+      "name": "Single Responsibility Principle",
+      "kb:note": "Fee logic stays out of Ticket so the record isn't also a pricing calculator"
+    },
+    {
+      "@id": "../principles/separation-of-concerns.html#separation-of-concerns",
+      "name": "Separation of Concerns",
+      "kb:note": "Business rules live in the orchestrator; Spot and Ticket stay dumb data"
+    },
+    {
+      "@id": "../principles/yagni.html#yagni",
+      "name": "You Aren't Gonna Need It (YAGNI)",
+      "kb:note": "A PricingStrategy interface is deferred until pricing actually gets complex"
+    },
+    {
+      "@id": "../principles/law-of-demeter.html#law-of-demeter",
+      "name": "Law of Demeter",
+      "kb:note": "The Ticket stores a spot id string, not a spot object, so it can't reach into the model"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="parking-lot" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Assign a compatible spot, issue a ticket, and price the stay — an OOP design about where each piece of state belongs" data-kb-order="32" data-kb-aliases='["parking garage","parking system"]' data-kb-tags='["low-level-design","domain-modeling","encapsulation","concurrency","separation-of-concerns"]' data-kb-solves='["where should this piece of state live — on the entity or on the manager that owns it","my data class is quietly turning into a calculator with its own business rules","two requests both see the same resource as free and both claim it","how do I keep a record object from reaching deep into my domain model"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Parking Lot</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Parking Lot</h1>
+      <p class="doc-essence">A parking lot assigns an arriving vehicle a compatible spot, issues a ticket, and charges by the hour on exit. As a low-level design it is almost entirely about placement: which object owns occupancy, where pricing lives, and how far a record is allowed to reach.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="parking-lot">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>On entry, the system finds an available spot matching the vehicle's type and hands back a ticket; on exit, it validates the ticket, charges for the time parked, and frees the spot. There is no distributed scale here — one lot, a few hundred spots — so the whole exercise is object modelling: name the right classes, give each exactly the state and behaviour it needs, and resist the pull to over-build. The interesting decisions are all about <em>where things belong</em>.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Support three vehicle types — motorcycle, car, large — each matching a spot type.</li>
+            <li>On entry, automatically assign an available compatible spot and issue a ticket.</li>
+            <li>On exit, validate the ticket, charge an hourly fee rounded up, and free the spot.</li>
+            <li>Reject entry when no compatible spot is free; reject exit for an invalid or already-used ticket.</li>
+          </ol>
+          <p class="prose">Out of scope: payments, gate hardware, cameras, UI, and reservations — the core is spot assignment, ticket lifecycle, and fee calculation.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional (constraints)</h3>
+          <ul>
+            <li><strong>Correctness</strong> — one spot is never assigned to two vehicles at once.</li>
+            <li><strong>Encapsulation</strong> — only the lot exposes a public API; internals stay hidden.</li>
+            <li><strong>Money safety</strong> — fees are integer cents, never floating point.</li>
+            <li><strong>Evolvability</strong> — multi-floor, per-type pricing, and concurrent entrances should slot in without a rewrite.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three classes, and one deliberate omission:</p>
+        <ul>
+          <li><strong>ParkingLot</strong> — the orchestrator and the only public surface. Owns the spots, tracks which are occupied and which tickets are active, and enforces pricing.</li>
+          <li><strong>ParkingSpot</strong> — a pure data holder: an <code>id</code> and a <code>spotType</code>. It knows nothing about tickets, pricing, or (by the chosen design) even its own occupancy.</li>
+          <li><strong>Ticket</strong> — an immutable record of one session: <code>id</code>, <code>spotId</code>, <code>vehicleType</code>, <code>entryTime</code>. Read-only after creation, with no behaviour.</li>
+          <li><strong>Vehicle — not a class.</strong> It is external and never tracked, so it collapses to a <code>VehicleType</code> enum used only to match a spot. Modelling it as a class would be state with no owner.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>The lot exposes exactly two operations — deliberately no <code>getAvailableSpots()</code> or <code>getStatus()</code>, which would leak internals the core workflow never needs:</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — the public API</summary>
+<pre><code class="language-python" data-kb-lang="python">class ParkingLot:
+    enter(vehicleType) -&gt; Ticket   # assigns a spot, issues a ticket; raises if the lot is full
+    exit(ticketId)     -&gt; long     # validates, charges cents, frees the spot; raises if invalid</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>The lot holds its spots, an <code>occupiedSpotIds</code> set, and a map of active tickets keyed by id. <code>enter</code> scans for a free compatible spot, marks it occupied, mints a ticket, and returns it; <code>exit</code> looks the ticket up, computes the fee, and clears both the occupancy entry and the ticket. Spot and Ticket stay dumb; all the rules live in the lot.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+classDiagram
+    class ParkingLot {
+        -List~ParkingSpot~ spots
+        -Set~String~ occupiedSpotIds
+        -Map~String,Ticket~ activeTickets
+        -long hourlyRateCents
+        +enter(vehicleType) Ticket
+        +exit(ticketId) long
+        -findAvailableSpot(vehicleType) ParkingSpot
+        -computeFee(entry, exit) long
+    }
+    class ParkingSpot {
+        -String id
+        -SpotType spotType
+        +getId() String
+        +getSpotType() SpotType
+    }
+    class Ticket {
+        -String id
+        -String spotId
+        -VehicleType vehicleType
+        -long entryTime
+    }
+    ParkingLot "1" o-- "*" ParkingSpot : owns
+    ParkingLot "1" ..> "*" Ticket : issues
+    Ticket ..> ParkingSpot : references by id
+        </pre>
+        <figcaption>The lot orchestrates; the spot and ticket are pure data. The ticket references its spot by id string, not by object.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Who tracks occupancy — the spot or the lot?</h3>
+        <p>The tell is whether a fact is <em>intrinsic</em> to an entity or a <em>relationship</em> the system manages.</p>
+        <ul>
+          <li><strong>Flag on the spot.</strong> An <code>occupied</code> boolean on <code>ParkingSpot</code> is simple and the spot "knows" its own state — but it duplicates truth (the active tickets already imply occupancy), so the two must be kept in sync or a spot gets double-assigned. Defensible with discipline; it is exactly the choice the Amazon Locker design makes, because there occupancy really is physical.</li>
+          <li><strong>Derive it from tickets.</strong> A spot is occupied iff an active ticket references it — no stored state at all, conceptually the cleanest. But every entry rescans all tickets and, under concurrency, must lock the whole ticket map.</li>
+          <li><strong>Occupancy index (chosen).</strong> Keep the spot a pure data holder and let the lot maintain a <code>Set&lt;String&gt; occupiedSpotIds</code> — a maintained index, like a database index. It is technically redundant with ticket data, but it gives O(1) checks and, crucially, a clean concurrency boundary: you can lock just the set when claiming a spot instead of the whole ticket map.</li>
+        </ul>
+        <h3>2 · Where does fee calculation live?</h3>
+        <p>Pricing is a business policy, not a property of a receipt.</p>
+        <ul>
+          <li><strong>On the Ticket.</strong> A <code>calculateFee()</code> method forces the ticket to also store the rate and turns a record into a calculator — two reasons to change, so it breaks <a href="../principles/single-responsibility.html">single responsibility</a> and makes the ticket mutable. Rejected.</li>
+          <li><strong>On the lot (chosen).</strong> <code>computeFee()</code> lives in <code>ParkingLot</code> beside the other rules; the ticket stays a pure receipt. This is <a href="../principles/separation-of-concerns.html">separation of concerns</a> — data records stay simple, policy is centralised and independently testable. The rate lives on the lot as <code>hourlyRateCents</code> (integer cents — never floats for money).</li>
+          <li><strong>A PricingStrategy interface.</strong> A <a href="../patterns/gof/behavioral/strategy.html">strategy</a> pattern lets pricing be swapped at runtime — genuinely useful once rules diverge (surge, discounts, per-lot tariffs). For a single flat hourly rate it is <a href="../principles/yagni.html">over-abstraction</a>: hold it in reserve as the answer to "what if pricing gets complex?", don't build it up front.</li>
+        </ul>
+        <h3>3 · Concurrent entrances</h3>
+        <p>Two entrances can both see one spot as free and both claim it — a race in the window between checking availability and recording the claim. The pragmatic interview answer is a coarse lock around the whole of <code>enter()</code>: a 200-spot lot turning over every couple of hours needs ~0.03 vehicles/sec, and a synchronised method sustains ~10/sec, so there is roughly 300× headroom and correctness wins over cleverness. When contention is real, a <a href="../patterns/concurrency/rw-lock.html">read-write lock</a> lets many entrances search concurrently and takes the exclusive lock only to claim, re-checking after acquiring it and retrying if another thread got there first. Notably, the ticket stores its spot as an <code>id</code> string rather than a spot reference — keeping the record from reaching into the domain model, in the spirit of the <a href="../principles/law-of-demeter.html">Law of Demeter</a>.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Occupancy in one place (the index) — O(1) checks and a tight lock scope for claiming a spot.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Dumb data classes and a rules-owning orchestrator, so pricing and allocation change without touching Spot or Ticket.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Immutable tickets and integer-cent money remove whole classes of bug.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The occupancy index is derived state — it must be updated in lockstep with tickets or it drifts.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">"Never existed" and "already used" collapse into one "invalid ticket" error; splitting them needs a used-ticket set.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">First-match allocation ignores placement quality (proximity, floor balancing) until a strategy is added.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Junior</strong> — a working system: spots, tickets, an orchestrator; <code>enter</code> assigns and returns a ticket, <code>exit</code> charges and frees, with basic rejection of a full lot and invalid tickets. May need a hint on where pricing belongs.</li>
+          <li><strong>Mid-level</strong> — clean separation without prompting (lot orchestrates, spot holds properties, ticket is a data holder), sees that Vehicle needn't be a class, handles double-exit, and justifies the map and the pricing placement.</li>
+          <li><strong>Senior</strong> — class boundaries are obvious; volunteers the occupancy and enum trade-offs, catches edge cases unprompted, and walks the multi-floor and concurrency extensions — simple solution first, then when a Strategy pattern earns its keep.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="amazon-locker"><a href="./amazon-locker.html">Amazon Locker</a><span class="rel-note">Both assign a resource and free it later; they differ on whether occupancy is intrinsic to the slot or a relationship the manager tracks</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="value-object"><a href="../patterns/ddd/value-object.html">Value Object</a><span class="rel-note">The Ticket is an immutable record — set once at entry, read-only after</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="strategy"><a href="../patterns/gof/behavioral/strategy.html">Strategy</a><span class="rel-note">Held in reserve for pricing and floor-allocation once the rules genuinely diverge</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="rw-lock"><a href="../patterns/concurrency/rw-lock.html">Read-Write Lock</a><span class="rel-note">Fine-grained locking lets entrances search concurrently and claim a spot exclusively</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="single-responsibility"><a href="../principles/single-responsibility.html">Single Responsibility Principle</a><span class="rel-note">Fee logic stays out of Ticket so the record isn't also a pricing calculator</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="separation-of-concerns"><a href="../principles/separation-of-concerns.html">Separation of Concerns</a><span class="rel-note">Business rules live in the orchestrator; Spot and Ticket stay dumb data</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="yagni"><a href="../principles/yagni.html">You Aren't Gonna Need It (YAGNI)</a><span class="rel-note">A PricingStrategy interface is deferred until pricing actually gets complex</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="law-of-demeter"><a href="../principles/law-of-demeter.html">Law of Demeter</a><span class="rel-note">The Ticket stores a spot id string, not a spot object, so it can't reach into the model</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>N+1 Query · Patterns</title>
+  <meta name="description" content="N+1 Query — a request that issues one query per row (1 to fetch N parents, then N to fetch each child) instead of a single batched or joined query, so latency explodes with the size of the result set.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#n-plus-1-query",
+  "identifier": "n-plus-1-query",
+  "name": "N+1 Query",
+  "description": "One query per row instead of one batched query — 1 + N round-trips",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "hazard",
+  "kb:band": "hazard",
+  "kb:group": "hazard",
+  "kb:mitigated-by": [
+    {
+      "@id": "../patterns/concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:note": "Coalesce the per-item fetches into one batched, keyed query — the DataLoader move"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "Precompute the joined shape so the N follow-up queries disappear entirely"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc hazard">
+  <main class="doc-wrap" data-kb-id="n-plus-1-query" data-kb-kind="hazard" data-kb-band="hazard" data-kb-group="hazard" data-kb-essence="One query per row instead of one batched query — 1 + N round-trips" data-kb-order="13" data-kb-aliases="[&quot;N+1 problem&quot;,&quot;N+1 selects&quot;]" data-kb-tags="[&quot;performance&quot;,&quot;data-access&quot;,&quot;latency&quot;,&quot;throughput&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#hazards-h">Hazards</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">N+1 Query</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Hazard</p>
+      <h1 class="doc-title">N+1 Query</h1>
+      <p class="doc-essence">A request loads a list of N parent rows, then issues one more query for each row to fetch its related child — turning what should be a single joined or batched query into 1 + N database round-trips. It looks fine on the handful of rows in development and collapses under a production-sized result set.</p>
+      <div class="doc-metarow">
+        <span class="badge">Hazard</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="n-plus-1-query">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>An <strong>N+1 query</strong> is a request that fetches a list of N parent rows with a single query, then issues one <em>more</em> query for every parent to load its related child — so displaying N items costs 1 + N queries where one or two would do. The name is the arithmetic: 1 query for the parents, N for the children. Picture an endpoint returning 100 events, each with its venue: the code loads the 100 events in one query, then loops and looks up each event's venue individually — 100 more queries, 101 in total.</p>
+        <p>What makes it insidious is that it is rarely written on purpose. A lazy-loading ORM or a per-item resolver makes the extra queries invisible — reading <code>event.venue</code> inside a loop looks like a field access, not a network round-trip to the database. And it hides during development, where the result set is tiny: five rows means six queries, imperceptible. The same code path meets a production-sized list of ten thousand rows and quietly becomes ten thousand and one queries, and the request that was instant in testing now times out.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="causes" aria-labelledby="h-causes" data-kb-block="causes">
+      <h2 class="doc-h" id="h-causes">How it happens</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TD
+    A["1 query — fetch N parent rows<br/>SELECT * FROM events"] --> B{"for each of the N rows"}
+    B --> C["+1 query — fetch that row's child<br/>SELECT * FROM venues WHERE id = ?"]
+    C -->|"repeated once per row"| D["1 + N queries total"]
+        </pre>
+        <figcaption>One query returns the parents; each parent then triggers its own child query inside the loop, so the total is 1 + N — here 1 + 100 = 101 — instead of a single batched or joined query.</figcaption>
+      </figure>
+      <div class="prose">
+        <ul>
+          <li><strong>A lazy-loading ORM.</strong> A relation is configured to load on first access, and that access happens inside a loop over the parents — so each iteration silently fires its own query without any of it appearing in the code.</li>
+          <li><strong>A resolver that fetches per item.</strong> A GraphQL or REST resolver loads a related entity once for every element of a list — 100 events, each triggering a separate venue lookup — with no batching between the calls.</li>
+          <li><strong>Iterating a collection and touching a relation on each element,</strong> so the ORM's convenient association traversal (<code>order.customer</code>, <code>event.venue</code>) turns into one round-trip per row.</li>
+          <li><strong>Serializers or view code that walk nested objects,</strong> dereferencing an un-prefetched association for every parent as the response is rendered.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="cost" aria-labelledby="h-cost" data-kb-block="cost">
+      <h2 class="doc-h" id="h-cost">What it costs</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Latency scales with N.</strong> Each of the N child queries is a separate network round-trip to the database, and they run one after another — so response time grows linearly with the size of the result set, and the round-trip cost, not the query work, dominates.</li>
+          <li><strong>The database is hammered with tiny queries.</strong> Instead of planning and running one query once, the engine parses, plans, and executes N nearly-identical trivial lookups, and the connection pool churns through them for a single request.</li>
+          <li><strong>It degrades silently.</strong> On a handful of rows in development it is invisible; the identical code path against a production-sized result set becomes thousands of queries and a request that times out — with no error to point at, only slowness.</li>
+          <li><strong>It caps throughput.</strong> Each request holds its database connection far longer while it drains N queries, so under real load the pool saturates and unrelated requests queue behind it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
+      <h2 class="doc-h" id="h-mitigation">Getting out</h2>
+      <div class="prose">
+        <p>Collapse the N child queries into one. The direct fix is to <strong>batch</strong> the child fetch into a single query keyed by the parent ids — one <code>SELECT ... WHERE parent_id IN (…)</code> in place of one query per parent. The <em>DataLoader</em> pattern automates exactly this: it coalesces the per-item requests made during one tick into a single batched call, so a resolver can keep asking for one venue at a time while only one query is actually issued.</p>
+        <p>Alternatively, fetch parents and children together with a <strong>JOIN</strong>, or an eager-load / prefetch, so the relation arrives alongside the parents in one round-trip instead of being pulled lazily row by row. And when the joined shape is read far more often than it changes, precompute it as a <strong>materialized view</strong>, turning the read into a single lookup against an already-assembled result. The through-line under all three is the same: stop asking once per row — ask once for the whole set.</p>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Mitigated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="batching"><a href="../patterns/concurrency/batching.html">Batching</a><span class="rel-note">Coalesce the per-item fetches into one batched, keyed query — the DataLoader move</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">Precompute the joined shape so the N follow-up queries disappear entirely</span></div>
+        </div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#hazards-h">← Hazards</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#hazards-h">Hazards →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

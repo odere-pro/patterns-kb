@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Write-Through · Patterns</title>
+  <meta name="description" content="Write-Through — every write updates the cache and the backing store together, synchronously, so reads are never stale.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#write-through",
+  "identifier": "write-through",
+  "name": "Write-Through",
+  "description": "Writes hit the cache and the store together, synchronously",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "caching",
+  "kb:group": "caching",
+  "kb:combines-with": [
+    {
+      "@id": "./read-through.html#read-through",
+      "name": "Read-Through",
+      "kb:note": "Read-through paired with write-through keeps sync"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "./write-behind.html#write-behind",
+      "name": "Write-Behind",
+      "kb:note": "Write now, consistent vs. write later, faster"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/stale-cache.html#stale-cache",
+      "name": "Stale Cache",
+      "kb:note": "Write the cache and store together, so a read after a write can't be stale"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/caching.html#caching",
+      "name": "Caching",
+      "kb:role": "Keep the cache and store in lockstep"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="write-through" data-kb-kind="pattern" data-kb-band="caching" data-kb-group="caching" data-kb-essence="Writes hit the cache and the store together, synchronously" data-kb-order="102" data-kb-tags="[&quot;caching&quot;,&quot;consistency&quot;,&quot;durability&quot;]" data-kb-solves="[&quot;a user saves a change, the page reloads, and the old value comes back&quot;,&quot;I save to the database and then clear the cache as two separate steps, and they keep racing each other&quot;,&quot;the process died between the database write and the invalidation, so the stale value stuck around until the TTL&quot;,&quot;someone added a third place that writes this record and forgot to bust the cache&quot;,&quot;the first read after every save is slow because nothing warm is sitting in memory yet&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-cache-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-cache-h">Caching</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Write-Through</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Caching</p>
+      <h1 class="doc-title">Write-Through</h1>
+      <p class="doc-essence">Every write updates the cache and the backing store together, in the same synchronous call, so a read that follows a write can never see a stale value.</p>
+      <div class="doc-metarow">
+        <span class="badge">Caching</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="write-through">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>write-through</strong> cache sits directly in the write path. When the application writes a value, the cache writes it to the backing store first, waits for that write to be durably accepted, and only then updates its own entry and reports success to the caller. From the caller's point of view, a write isn't done until the cache and the store agree.</p>
+        <p>The force it resolves is <strong>divergence</strong>. In a cache-aside setup, the application writes to the store and separately pokes the cache — invalidate it, or update it — as two distinct steps. A crash or race between those steps leaves the cache holding a value the store has already moved past. Write-through collapses the two into one call, so cache and store can never disagree in the first place.</p>
+        <p>The cost is paid on every write: the caller now waits for the store's full round trip plus the cache update, and a key that's written once and never read again still occupies cache space for no benefit. That tension — consistency now vs. write latency — is exactly what its alternative, <a href="./write-behind.html">Write-Behind</a>, trades away in the other direction.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant C as Client
+    participant Ca as Cache
+    participant St as Store
+    C-&gt;&gt;Ca: write(key, value)
+    Ca-&gt;&gt;St: write(key, value)
+    St--&gt;&gt;Ca: ack, durably persisted
+    Ca--&gt;&gt;C: ack, cache entry updated
+        </pre>
+        <figcaption>The cache forwards the write to the store first. Only after the store confirms does the cache update its own entry and acknowledge the caller.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Store-then-cache vs. cache-then-store ordering</dt>
+        <dd>Persist to the store first and only then update the cache, or update the cache first and write through behind it. Store-first never lets a value that failed to persist sit in the cache.</dd>
+        <dt id="variations-item-2"><a href="./read-through.html">Paired with Read-Through</a></dt>
+        <dd>Misses on the read side fault through the same cache into the store, so both directions treat the cache as the single authoritative front door.</dd>
+        <dt id="variations-item-3">Selective write-through (write-around for cold keys)</dt>
+        <dd>Skip caching keys that are unlikely to be read again and let a later read fault them in — avoids spending the cache-write cost on data that's never reused.</dd>
+        <dt id="variations-item-4">Replicated / distributed write-through</dt>
+        <dd>In a clustered cache, the node taking the write must also propagate it (or an invalidation) to peer nodes before acking — more write latency in exchange for cluster-wide consistency.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Cache and store never diverge — a read right after a write always sees the fresh value.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Removes the cold-read penalty: data is warm in the cache the instant it's written.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Simplifies the read path — reads can trust the cache with no invalidate-then-fetch races.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">A failed persist is caught synchronously, at the write call, not discovered later.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Every write pays the store's full latency plus the cache update — never faster than the slower of the two.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Write-heavy, rarely-read keys still get cached, wasting space on data nobody reads back.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Cache and store must both succeed, or the write needs careful rollback or retry handling.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Does nothing for write throughput — for that, look at Write-Behind instead.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Reads vastly outnumber writes and stale data right after a write is unacceptable.</li>
+            <li id="usage-when-2" data-kb-polarity="when">A cache miss is expensive — a slow recompute or a cold store hit — so keeping the cache warm on write matters.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You need read-your-writes consistency without bolting on separate invalidation logic.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Writes are frequent or bursty and write latency has to stay low — see <a href="./write-behind.html">Write-Behind</a>.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Most written keys are rarely or never read back — caching them on write is wasted work.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The backing store already serves fast, consistent reads on its own — caching adds no value.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal write-through cache</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface Store&lt;K, V&gt; {
+  read(key: K): Promise&lt;V | undefined&gt;;
+  write(key: K, value: V): Promise&lt;void&gt;;
+}
+
+class WriteThroughCache&lt;K, V&gt; {
+  private cache = new Map&lt;K, V&gt;();
+
+  constructor(private readonly store: Store&lt;K, V&gt;) {}
+
+  async get(key: K): Promise&lt;V | undefined&gt; {
+    if (this.cache.has(key)) return this.cache.get(key);
+    const value = await this.store.read(key);
+    if (value !== undefined) this.cache.set(key, value);
+    return value;
+  }
+
+  async set(key: K, value: V): Promise&lt;void&gt; {
+    await this.store.write(key, value); // durable first
+    this.cache.set(key, value);         // only cache once persisted
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="hazelcast-mapstore"><strong>Hazelcast MapStore</strong><span>Configured in write-through mode (write-delay-seconds of zero), the distributed IMap persists each entry through the MapStore to the backing store synchronously before put() returns to the caller.</span></div>
+        <div class="wild-item" data-kb-example="ehcache-writer"><strong>Ehcache CacheLoaderWriter</strong><span>The same CacheLoaderWriter that loads on a miss also writes through on put and delete, persisting to the system of record before the cache entry is considered updated.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Write ordering (store-first vs. cache-first)</strong> — Persist to the store then update the cache, or the reverse; store-first ensures a value that failed to persist never sits in the cache.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Entry TTL</strong> — A backstop lifetime even for write-populated entries, so a cached value can't outlive its usefulness if an out-of-band change bypasses the write path.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Write-around threshold</strong> — A rule for which keys skip the cache on write — cold, write-once keys — letting a later read fault them in instead of spending the cache-write cost on data never read back.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Propagation before ack</strong> — In a clustered cache, whether the write (or an invalidation) reaches peer nodes before the write is acknowledged — cluster-wide consistency for more write latency.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Write latency p99</strong> — The tail of the write path; because it's the store round trip plus the cache update, it's never faster than the slower of the two, and any store slowdown shows here.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Write error rate</strong> — Writes where the store or cache update failed; write-through catches a failed persist synchronously, so this reflects real durability failures.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Post-write hit ratio</strong> — How often written keys are actually read back; a low ratio means write-through is caching data nobody reads, wasting space.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Cache-store divergence</strong> — Sampled comparisons of cache versus store values; write-through should hold this at zero, so any drift signals a write path that bypassed the cache.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Partial write splits cache and store</strong> — If the store succeeds but the cache update fails (or the reverse), the two disagree until a retry or rollback reconciles them.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Write latency dominated by a slow store</strong> — Every write waits on the store's full round trip; a slow or overloaded store makes all writes slow, with no throughput relief.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Cache pollution by write-once keys</strong> — Keys written and never read still occupy cache space, evicting hotter entries and lowering the overall hit rate.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Out-of-band store change goes unseen</strong> — A value changed directly in the store, bypassing the write-through path, leaves the cache confidently serving a stale copy until its TTL.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Write ordering is store-first so an unpersisted value never lands in the cache</li>
+            <li id="production-check-2" data-kb-polarity="check">A partial-failure path — retry or rollback — reconciles cache and store when one side fails</li>
+            <li id="production-check-3" data-kb-polarity="check">Every entry carries a TTL backstop in case an out-of-band change bypasses the write path</li>
+            <li id="production-check-4" data-kb-polarity="check">Write-once and cold keys are written around the cache rather than polluting it</li>
+            <li id="production-check-5" data-kb-polarity="check">Write latency p99 is monitored, since it tracks the backing store's own write latency</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="read-through"><a href="./read-through.html">Read-Through</a><span class="rel-note">Read-through paired with write-through keeps sync</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="write-behind"><a href="./write-behind.html">Write-Behind</a><span class="rel-note">Write now, consistent vs. write later, faster</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="stale-cache"><a href="../../hazards/stale-cache.html">Stale Cache</a><span class="rel-note">Write the cache and store together, so a read after a write can't be stale</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    WT["Write-Through"]
+    WT --- RT["Read-Through"]
+    WT --- WB["Write-Behind"]
+    click RT "./read-through.html"
+    click WB "./write-behind.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./read-through.html">← Read-Through</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./write-behind.html">Write-Behind →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

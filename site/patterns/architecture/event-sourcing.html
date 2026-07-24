@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Event Sourcing · Patterns</title>
+  <meta name="description" content="Event Sourcing — store every change as an immutable event and derive current state by replaying the log, never by overwriting it.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#event-sourcing",
+  "identifier": "event-sourcing",
+  "name": "Event Sourcing",
+  "description": "State is a replayable log of events, not a snapshot",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "architecture",
+  "kb:group": "architecture",
+  "kb:combines-with": [
+    {
+      "@id": "./eda.html#eda",
+      "name": "Event-Driven Architecture",
+      "kb:note": "Sourced events can also drive reactions"
+    },
+    {
+      "@id": "./cqrs.html#cqrs",
+      "name": "CQRS",
+      "kb:note": "Often paired: write events, project read models"
+    },
+    {
+      "@id": "../distributed/coordination/outbox.html#outbox",
+      "name": "Outbox",
+      "kb:note": "Append the event, publish reliably"
+    },
+    {
+      "@id": "../functional/immutability.html#immutability",
+      "name": "Immutability",
+      "kb:note": "Events are append-only and never mutated"
+    },
+    {
+      "@id": "../distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "Project events into read views"
+    },
+    {
+      "@id": "../ddd/domain-event.html#domain-event",
+      "name": "Domain Event",
+      "kb:note": "Persist the events the domain emits"
+    },
+    {
+      "@id": "../frontend/flux.html#flux",
+      "name": "Flux",
+      "kb:note": "Flux/Redux is event-sourcing applied to client-side UI state"
+    }
+  ],
+  "kb:composed-of": [
+    {
+      "@id": "../ddd/domain-event.html#domain-event",
+      "name": "Domain Event",
+      "kb:note": "The log is a sequence of domain events"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "./cqrs.html#cqrs",
+      "name": "CQRS",
+      "kb:note": "Separate read/write models vs. store events — distinct ideas"
+    },
+    {
+      "@id": "../distributed/coordination/write-ahead-log.html#write-ahead-log",
+      "name": "Write-Ahead Log",
+      "kb:note": "Domain events as truth vs. a durability log"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../designs/ad-click-aggregator.html#ad-click-aggregator",
+      "name": "Ad Click Aggregator",
+      "kb:note": "immutable events retained and replayed to rebuild derived aggregates"
+    },
+    {
+      "@id": "../../designs/strava.html#strava",
+      "name": "Strava",
+      "kb:note": "storing lifecycle events and deriving state from them, so moving-time vs total-time falls out for free, is event-sourcing in miniature"
+    },
+    {
+      "@id": "../../designs/google-docs.html#google-docs",
+      "name": "Google Docs",
+      "kb:note": "document state is reconstructed by applying an immutable, ordered stream of edit operations rather than storing mutable snapshots"
+    },
+    {
+      "@id": "../../designs/online-chess.html#online-chess",
+      "name": "Online Chess",
+      "kb:note": "state-as-a-fold-over-events turns crash recovery into pure replay of a few hundred bytes and makes the leaderboard trivially rebuildable"
+    },
+    {
+      "@id": "../../designs/payment-system.html#payment-system",
+      "name": "Payment System",
+      "kb:note": "payments show why an append-only event log beats mutable current-state — you can reconstruct any past state and defend a chargeback"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/streaming.html#streaming",
+      "name": "Streaming",
+      "kb:role": "A durable, replayable stream of events"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="event-sourcing" data-kb-kind="pattern" data-kb-band="architecture" data-kb-group="architecture" data-kb-essence="State is a replayable log of events, not a snapshot" data-kb-order="44" data-kb-aliases="[&quot;ES&quot;]" data-kb-tags="[&quot;observability&quot;,&quot;immutability&quot;,&quot;persistence&quot;,&quot;consistency&quot;,&quot;data-modeling&quot;]" data-kb-solves="[&quot;the balance is wrong and I have no idea which update did it&quot;,&quot;compliance wants to know what this record looked like last March and I overwrote it&quot;,&quot;my audit table drifted out of sync with the real data months ago&quot;,&quot;two users saved at once and one of the changes just vanished&quot;,&quot;I need to answer why this happened but all I stored was the final value&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#band-arch-h">Architecture</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Event Sourcing</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Architecture</p>
+      <h1 class="doc-title">Event Sourcing</h1>
+      <p class="doc-essence">Every change to an entity is captured as an immutable event appended to a log, and current state is never stored on its own — it's derived by replaying that log and folding each event into whatever came before.</p>
+      <div class="doc-metarow">
+        <span class="badge">Architecture</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="event-sourcing">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>In <strong>event sourcing</strong>, an entity's state is never written directly — every change is captured as an immutable event and appended to a log in the order it happened. Current state is derived, not stored: it's rebuilt by replaying the log from the beginning (or from the last snapshot) and folding each event into a fresh copy of the state.</p>
+        <p>The problem it resolves is loss of history. A conventional CRUD store keeps only the latest row — an <code>UPDATE</code> overwrites whatever came before, and the reason a change happened survives, if at all, in a separate audit table that's easy to forget and easy to let drift out of sync. Event sourcing makes the history itself the system of record: nothing is ever deleted or overwritten, so the full sequence of what happened is always available.</p>
+        <p>That log unlocks what a snapshot can't: reconstruct any past state by replaying up to a point in time, answer "how did we get here" without bolting on auditing after the fact, and derive more than one read model from the same events. The cost is that "what is true right now" is no longer a single row read — it means folding a stream — so most real systems pair the log with periodic snapshots or projections.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    C["Command"] --> A["Aggregate, applies business rules"]
+    A -->|append| L["Event Log, append-only"]
+    L -->|replay, fold| S["Current State, folded on read"]
+    L -->|project| V["Read Model, a separate projection"]
+        </pre>
+        <figcaption>A command produces one event appended to the log. State is never stored directly — it is the fold of every event replayed in order; a read model is a separate projection built from the same log.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Snapshotting</dt>
+        <dd>Periodically persist the folded state so replay resumes from the latest snapshot instead of scanning the full log from event zero.</dd>
+        <dt id="variations-item-2">Per-aggregate stream vs. single log</dt>
+        <dd>One ordered stream per aggregate instance (per order, per account) scales writes and reads; a single global stream simplifies cross-aggregate ordering but becomes a bottleneck.</dd>
+        <dt id="variations-item-3">Event versioning / upcasting</dt>
+        <dd>Old event shapes are transformed to the current schema when read — upcast, not rewritten — since events must stay immutable forever.</dd>
+        <dt id="variations-item-4"><a href="../distributed/coordination/materialized-view.html">Materialized View</a> projections</dt>
+        <dd>Fold the event stream into one or more read-optimized views instead of querying the log directly for every read.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Complete, tamper-evident audit trail — every change is recorded, not inferred after the fact.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">State at any past point in time can be reconstructed by replaying up to that moment.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Multiple read models can be derived from the same log without touching the write side.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Append-only writes are simple and free of update-in-place races and lost updates.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Replaying a long stream from scratch is slow without snapshotting.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Schema evolution is harder — events are immutable, so shapes must be versioned or upcast forever.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Querying "current state" isn't a single row read; it needs a projection or a fold.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Read models built from the log are eventually consistent with the write side, not immediate.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You need a reliable audit trail or a compliance record of every change, not just its result.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Business rules genuinely depend on the sequence of what happened, not just where things ended up.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You want to derive several independently evolvable read models from one write path.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The domain is simple CRUD with no real need for history, audit, or temporal queries.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The team can't yet operate the extra machinery — snapshotting, versioning, replay tooling.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Strong, immediate read-after-write consistency across the whole system is a hard requirement.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — rebuilding state by folding events</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type AccountEvent =
+  | { type: "AccountOpened"; id: string; openingBalance: number }
+  | { type: "MoneyDeposited"; id: string; amount: number }
+  | { type: "MoneyWithdrawn"; id: string; amount: number };
+
+interface AccountState { id: string; balance: number }
+
+function apply(state: AccountState, event: AccountEvent): AccountState {
+  switch (event.type) {
+    case "AccountOpened":
+      return { id: event.id, balance: event.openingBalance };
+    case "MoneyDeposited":
+      return { ...state, balance: state.balance + event.amount };
+    case "MoneyWithdrawn":
+      return { ...state, balance: state.balance - event.amount };
+  }
+}
+
+// Current state is never stored — it's a fold over the log.
+const log: AccountEvent[] = [
+  { type: "AccountOpened", id: "acc-1", openingBalance: 0 },
+  { type: "MoneyDeposited", id: "acc-1", amount: 100 },
+  { type: "MoneyWithdrawn", id: "acc-1", amount: 30 },
+];
+
+const state = log.reduce(apply, {} as AccountState);
+// { id: "acc-1", balance: 70 }</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="eventstoredb"><strong>EventStoreDB</strong><span>A database purpose-built for append-only event streams: appends take an expected revision so concurrent writers conflict instead of interleaving, and catch-up subscriptions feed projections that fold streams into current state.</span></div>
+        <div class="wild-item" data-kb-example="datomic"><strong>Datomic</strong><span>Stores immutable facts with transaction time; as-of hands you the entire database as a value at any past instant, and the history API exposes the full record of assertions and retractions for an entity.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>snapshot interval</strong> — how many events between snapshots; too sparse and a cold load replays thousands of events, too dense and the snapshot store becomes a second write path to keep correct</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>stream granularity</strong> — one stream per aggregate instance keeps replay short and writes parallel; coarser streams give you cross-entity ordering but concentrate contention and grow without bound</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>expected-version check on append</strong> — append with the version you last read; a mismatch means a concurrent writer got there first — reject and retry rather than silently interleave events</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>versioning strategy</strong> — upcasters that rewrite old shapes on read, or tolerant readers that ignore unknown fields; either way the choice is forever, because written events never change</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>projection lag</strong> — events appended minus events projected — the read model's staleness as a measured number, not an assumption</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>longest-stream replay time</strong> — the aggregate with the most events sets worst-case load latency; it grows silently until someone opens a five-year-old account</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>append conflict rate</strong> — expected-version failures per minute; a rising rate marks a hot aggregate that concurrent writers are fighting over</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>unbounded stream growth</strong> — an aggregate that lives forever — a ledger, a device — accumulates events until load time breaks; for those, snapshotting is survival, not optimization</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>projection rebuild measured in days</strong> — fixing a projection bug means replaying the whole log; at billions of events that is a multi-day outage of the read model unless rebuild speed was designed for</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>schema regret</strong> — a badly shaped event is permanent — every future reader carries its upcast chain, and one missed upcaster folds wrong state without an error</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>personal data in an immutable log</strong> — a deletion request meets a log that never deletes; crypto-shredding or storing PII outside the events must be designed in before the first event is written</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">design snapshotting before the first long-lived aggregate, not after the first slow load</li>
+            <li id="production-check-2" data-kb-polarity="check">put an explicit version field on events from day one — retrofitting versions onto an unversioned log is miserable</li>
+            <li id="production-check-3" data-kb-polarity="check">keep personal data out of events, or encrypt it with a per-subject key you can destroy</li>
+            <li id="production-check-4" data-kb-polarity="check">rehearse a full projection rebuild in staging and time it — that number is your recovery time when a projection bug ships</li>
+            <li id="production-check-5" data-kb-polarity="check">append with an expected version so concurrent writers fail loudly instead of interleaving</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="eda"><a href="./eda.html">Event-Driven Architecture</a><span class="rel-note">Sourced events can also drive reactions</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="cqrs"><a href="./cqrs.html">CQRS</a><span class="rel-note">Often paired: write events, project read models</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="outbox"><a href="../distributed/coordination/outbox.html">Outbox</a><span class="rel-note">Append the event, publish reliably</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="immutability"><a href="../functional/immutability.html">Immutability</a><span class="rel-note">Events are append-only and never mutated</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="materialized-view"><a href="../distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">Project events into read views</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="domain-event"><a href="../ddd/domain-event.html">Domain Event</a><span class="rel-note">Persist the events the domain emits</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="flux"><a href="../frontend/flux.html">Flux</a><span class="rel-note">Flux/Redux is event-sourcing applied to client-side UI state</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Composed of</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="composed-of" data-kb-to="domain-event"><a href="../ddd/domain-event.html">Domain Event</a><span class="rel-note">The log is a sequence of domain events</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="cqrs"><a href="./cqrs.html">CQRS</a><span class="rel-note">Separate read/write models vs. store events — distinct ideas</span></div>
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="write-ahead-log"><a href="../distributed/coordination/write-ahead-log.html">Write-Ahead Log</a><span class="rel-note">Domain events as truth vs. a durability log</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="ad-click-aggregator"><a href="../../designs/ad-click-aggregator.html">Ad Click Aggregator</a><span class="rel-note">immutable events retained and replayed to rebuild derived aggregates</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="strava"><a href="../../designs/strava.html">Strava</a><span class="rel-note">storing lifecycle events and deriving state from them, so moving-time vs total-time falls out for free, is event-sourcing in miniature</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="google-docs"><a href="../../designs/google-docs.html">Google Docs</a><span class="rel-note">document state is reconstructed by applying an immutable, ordered stream of edit operations rather than storing mutable snapshots</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="online-chess"><a href="../../designs/online-chess.html">Online Chess</a><span class="rel-note">state-as-a-fold-over-events turns crash recovery into pure replay of a few hundred bytes and makes the leaderboard trivially rebuildable</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="payment-system"><a href="../../designs/payment-system.html">Payment System</a><span class="rel-note">payments show why an append-only event log beats mutable current-state — you can reconstruct any past state and defend a chargeback</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    ES["Event Sourcing"]
+    ES --- EDA["Event-Driven Architecture"]
+    ES --- CQ["CQRS"]
+    ES --- WAL["Write-Ahead Log"]
+    ES --- OB["Outbox"]
+    ES --- DE["Domain Event"]
+    ES --- IM["Immutability"]
+    ES --- MV["Materialized View"]
+    click EDA "./eda.html"
+    click CQ "./cqrs.html"
+    click WAL "../distributed/coordination/write-ahead-log.html"
+    click OB "../distributed/coordination/outbox.html"
+    click DE "../ddd/domain-event.html"
+    click IM "../functional/immutability.html"
+    click MV "../distributed/coordination/materialized-view.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="streaming"><a href="../../themes/streaming.html">Streaming</a><span>A durable, replayable stream of events</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./cqrs.html">← CQRS</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./pipe-filter.html">Pipe-and-Filter →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

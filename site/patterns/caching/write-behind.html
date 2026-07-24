@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Write-Behind · Patterns</title>
+  <meta name="description" content="Write-Behind — writes land in the cache immediately and flush to the backing store asynchronously later, trading durability for lower write latency.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#write-behind",
+  "identifier": "write-behind",
+  "name": "Write-Behind",
+  "description": "Writes hit the cache now, the store catches up later",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "caching",
+  "kb:group": "caching",
+  "kb:combines-with": [
+    {
+      "@id": "../concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:note": "Queued writes are flushed as a batch to cut round-trips to the store"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "./write-through.html#write-through",
+      "name": "Write-Through",
+      "kb:note": "Write now, consistent vs. write later, faster"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../designs/strava.html#strava",
+      "name": "Strava",
+      "kb:note": "the on-device buffer is write-behind moved onto the client — acknowledge to the athlete now, reconcile with the server later"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/performance.html#performance",
+      "name": "Performance",
+      "kb:role": "Make writes feel instant"
+    },
+    {
+      "@id": "../../themes/caching.html#caching",
+      "name": "Caching",
+      "kb:role": "Make writes feel instant"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="write-behind" data-kb-kind="pattern" data-kb-band="caching" data-kb-group="caching" data-kb-essence="Writes hit the cache now, the store catches up later" data-kb-order="103" data-kb-aliases="[&quot;write-back&quot;]" data-kb-tags="[&quot;caching&quot;,&quot;throughput&quot;,&quot;batching&quot;,&quot;durability&quot;]" data-kb-solves="[&quot;every button click waits for a database commit before the UI responds&quot;,&quot;my database is drowning in millions of tiny single-row inserts&quot;,&quot;a view counter fires thousands of times a second and I am writing every single increment to disk&quot;,&quot;traffic spiked and writes backed up because the store cannot ingest that fast&quot;,&quot;I overwrite the same record fifty times a minute and only the last value actually matters&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-cache-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-cache-h">Caching</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Write-Behind</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Caching</p>
+      <h1 class="doc-title">Write-Behind</h1>
+      <p class="doc-essence">Writes hit the cache and return immediately, while the matching update to the backing store is queued and flushed asynchronously — the store catches up on its own schedule, not the caller's.</p>
+      <div class="doc-metarow">
+        <span class="badge">Caching</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="write-behind">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>write-behind cache</strong> (also called <em>write-back</em>) accepts a write, updates its own copy, and returns to the caller right away. The matching update to the backing store isn't made inline — it's queued and pushed later, on a timer, once a batch fills up, or when the entry is evicted. Until that flush happens, the cache — not the database — holds the most current copy of the data.</p>
+        <p>The force it resolves is <strong>write latency versus durability</strong>. A write-through cache is safe: every write lands in the store before it's acknowledged, so nothing is ever lost. But every write also pays the store's full latency, and under heavy write volume the store becomes the bottleneck long before the cache does. Write-behind decouples the two — the caller is freed the instant the cache is updated, and the store catches up out of band.</p>
+        <p>That deferral pays for itself when writes are bursty or repetitive: a flood of writes smooths into a steady trickle to the store, and several writes to the same key before a flush collapse into one write of the final value. The trade is a window of vulnerability — data that exists only in the cache until flushed is data a crash can erase, so write-behind only earns its keep when that loss is tolerable, or the cache itself is made durable: persisted to disk, replicated, or backed by a write-ahead log.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant C as Client
+    participant Ca as Cache
+    participant Q as Write queue
+    participant DB as Store
+    C-&gt;&gt;Ca: write(key, value)
+    Ca--&gt;&gt;C: ack, immediately
+    Ca-&gt;&gt;Q: enqueue, coalesced by key
+    Q-&gt;&gt;DB: flush, batched later
+    DB--&gt;&gt;Q: ack
+        </pre>
+        <figcaption>The write lands in the cache and is acknowledged at once. The change is queued, coalesced with any later writes to the same key, and flushed to the store on its own schedule.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Time-based flush</dt>
+        <dd>Drain the queue every N milliseconds regardless of size. Simple, and it bounds the staleness window to a known maximum.</dd>
+        <dt id="variations-item-2">Size- or count-based flush</dt>
+        <dd>Flush once the dirty set reaches a threshold, so the store sees fewer, larger, more efficient writes under sustained load.</dd>
+        <dt id="variations-item-3">Write coalescing</dt>
+        <dd>Multiple writes to the same key before a flush collapse into one — the store only ever sees the final value, never the intermediates.</dd>
+        <dt id="variations-item-4">Durable write queue</dt>
+        <dd>Back the pending-writes queue with disk or replication so a cache crash doesn't silently drop unflushed data — trades some latency back for safety.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Write latency is cache-speed — the caller never waits on the backing store.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Absorbs write bursts, smoothing spiky load into a steady trickle to the store.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Coalescing collapses repeated writes to a hot key into a single store write.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Frees the store to batch writes, which is usually far cheaper than many small ones.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A crash between ack and flush loses data, unless the queue itself is durable.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Readers that bypass the cache and hit the store directly see stale values until flush.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The flush pipeline needs its own retry, ordering, and failure handling.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">The system of record briefly disagrees with itself — harder to reason about and debug.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Write volume is high and the store's latency or throughput is the bottleneck.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Losing the very latest writes on a crash is tolerable, or the cache is itself durable.</li>
+            <li id="usage-when-3" data-kb-polarity="when">Writes to the same keys repeat often, so coalescing before flush actually pays off.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Every write must be durable the instant it's acknowledged — ledgers, audited transactions.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Readers elsewhere in the system need the store itself to be immediately consistent.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The write volume doesn't justify the risk — a plain <a href="./write-through.html">Write-Through</a> cache is safer and simpler.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal write-behind cache</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface Store&lt;K, V&gt; { save(key: K, value: V): Promise&lt;void&gt;; }
+
+class WriteBehindCache&lt;K, V&gt; {
+  private data = new Map&lt;K, V&gt;();
+  private dirty = new Set&lt;K&gt;();
+
+  constructor(private readonly store: Store&lt;K, V&gt;, flushMs = 2_000) {
+    setInterval(() =&gt; this.flush(), flushMs);
+  }
+
+  write(key: K, value: V): void {
+    this.data.set(key, value);
+    this.dirty.add(key);        // acknowledged now, not yet in the store
+  }
+
+  read(key: K): V | undefined {
+    return this.data.get(key);  // cache is the record until flush runs
+  }
+
+  private async flush(): Promise&lt;void&gt; {
+    const keys = [...this.dirty];
+    this.dirty.clear();
+    await Promise.all(keys.map((k) =&gt; this.store.save(k, this.data.get(k)!)));
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="linux-page-cache"><strong>Linux page cache</strong><span>A write() returns as soon as the page is marked dirty in memory; kernel writeback (flusher) threads drain dirty pages to disk later, tuned by vm.dirty_ratio and vm.dirty_writeback_centisecs, unless fsync forces the flush sooner.</span></div>
+        <div class="wild-item" data-kb-example="cpu-writeback-cache"><strong>CPU write-back caches</strong><span>A store marks the cache line dirty and main memory is updated only when the line is evicted or a coherence protocol like MESI demands it, collapsing repeated writes to one address into a single memory write.</span></div>
+        <div class="wild-item" data-kb-example="hazelcast-mapstore"><strong>Hazelcast MapStore (write-behind mode)</strong><span>With write-delay-seconds set above zero, the distributed IMap acks put() immediately and batches entries to the MapStore on that delay; write-coalescing merges repeated writes to a key and write-batch-size groups them.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Flush interval / write delay</strong> — How long acked writes wait in the queue before draining to the store; a longer delay coalesces more but widens the loss window (Hazelcast MapStore write-delay-seconds).</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Batch size</strong> — The dirty-set count that triggers a flush regardless of time, so the store sees fewer, larger writes under sustained load.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Queue capacity</strong> — The bound on pending unflushed writes; when full the cache must block writers or shed load, capping how far the store can fall behind.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Queue durability</strong> — Whether the pending-writes queue is memory-only or persisted and replicated (disk or a write-ahead log); durability trades write latency back for crash safety.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Flush retry and ordering</strong> — How failed store writes are retried and kept in order, so a transient store outage doesn't drop or reorder queued writes.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Queue depth</strong> — Unflushed entries waiting to drain; a steadily rising depth means the store can't keep up and the loss window is growing.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Flush throughput and latency</strong> — How many entries a drain moves and how long it takes; falling throughput against a rising queue signals the store is the bottleneck.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Flush failure rate</strong> — Store writes that error and re-queue; sustained failures mean acked data is stuck in a volatile queue and at risk.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Coalesce ratio</strong> — Writes accepted versus writes actually sent to the store; a high ratio confirms hot-key coalescing pays off, a low one means little gain over write-through.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Data loss on crash before flush</strong> — Anything acked but not yet drained lives only in the cache; a crash erases it unless the queue is durable.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Queue overflow under sustained write load</strong> — If writes arrive faster than flushes drain for long enough, the bounded queue fills and the cache must block writers or drop data.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stale reads straight from the store</strong> — A reader that bypasses the cache and hits the store directly sees pre-flush values; the record disagrees with itself until the drain.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Flush-failure backlog</strong> — A store outage stalls draining; the queue grows and the loss window widens until the store recovers or the queue overflows.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">The maximum data-loss window (flush interval times write rate) is quantified and acceptable, or the queue is made durable</li>
+            <li id="production-check-2" data-kb-polarity="check">The pending-writes queue is bounded with a defined full behavior — block writers or shed load</li>
+            <li id="production-check-3" data-kb-polarity="check">Flush failures retry with write ordering preserved and are never silently dropped</li>
+            <li id="production-check-4" data-kb-polarity="check">Queue depth and flush-failure rate are alerted on before the queue saturates</li>
+            <li id="production-check-5" data-kb-polarity="check">Readers that must see committed data go through the cache, not the store, until the flush completes</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+            <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="batching"><a href="../concurrency/batching.html">Batching</a><span class="rel-note">Queued writes are flushed as a batch to cut round-trips to the store</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="write-through"><a href="./write-through.html">Write-Through</a><span class="rel-note">Write now, consistent vs. write later, faster</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="strava"><a href="../../designs/strava.html">Strava</a><span class="rel-note">the on-device buffer is write-behind moved onto the client — acknowledge to the athlete now, reconcile with the server later</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    WB["Write-Behind"]
+    WB --- WT["Write-Through"]
+    click WT "./write-through.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="performance"><a href="../../themes/performance.html">Performance</a><span>Make writes feel instant</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./write-through.html">← Write-Through</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./refresh-ahead.html">Refresh-Ahead →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

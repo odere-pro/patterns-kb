@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Leader Election · Patterns</title>
+  <meta name="description" content="Leader Election — exactly one node coordinates, and the group agrees on who that is.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#leader-election",
+  "identifier": "leader-election",
+  "name": "Leader Election",
+  "description": "Exactly one node coordinates, and the group agrees who",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:combines-with": [
+    {
+      "@id": "./quorum-consensus.html#quorum-consensus",
+      "name": "Quorum & Consensus",
+      "kb:note": "The group agrees on a leader via consensus"
+    },
+    {
+      "@id": "./gossip-protocol.html#gossip-protocol",
+      "name": "Gossip Protocol",
+      "kb:note": "Membership spreads by gossip; a leader is chosen"
+    },
+    {
+      "@id": "../../concurrency/scheduling.html#scheduling",
+      "name": "Scheduling",
+      "kb:note": "A singleton scheduler runs only on the elected leader"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "./distributed-lock.html#distributed-lock",
+      "name": "Distributed Lock",
+      "kb:note": "Both grant a single owner — election picks a role holder, a lock guards a resource"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/cap-theorem.html#cap-theorem",
+      "name": "CAP Theorem",
+      "kb:role": "A single writer trades availability for consistency"
+    },
+    {
+      "@id": "../../../themes/consistency-and-replication.html#consistency-and-replication",
+      "name": "Consistency & Replication",
+      "kb:role": "Serialize writes through one node"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="leader-election" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Exactly one node coordinates, and the group agrees who" data-kb-order="70" data-kb-tags="[&quot;coordination&quot;,&quot;availability&quot;,&quot;resilience&quot;]" data-kb-solves="[&quot;I scaled to three replicas and now my nightly job runs three times&quot;,&quot;when the box that runs the scheduler dies nothing happens until someone restarts it by hand&quot;,&quot;two nodes both think they are in charge and are writing conflicting data&quot;,&quot;I need exactly one worker to own this queue but I do not want to hardcode which machine it is&quot;,&quot;failover currently means paging a human at 3am to promote a replica&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Leader Election</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Leader Election</h1>
+      <p class="doc-essence">Exactly one node in the cluster acts as coordinator at any moment — every peer runs the same protocol to agree on who that is, so writes, scheduling, and partition ownership never have to contend for the job.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="leader-election">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Leader election</strong> is a protocol by which a set of otherwise-equal peer nodes agrees on exactly one of themselves to act as coordinator for some period. Candidates propose themselves, the group converges through votes, priority, or a lease granted by a coordination service, and the result is a single, mutually recognized leader — until it fails or steps down and the group runs the protocol again.</p>
+        <p>The force it resolves is the need for a <strong>single point of serialization without a single point of failure</strong>. Some jobs are only correct if exactly one node does them — issuing writes to a partition, running a scheduled task once, owning a lock — but hard-coding which node that is makes the whole system fragile: if that process dies, everything downstream waits for a human to promote a replacement. Leader election lets the survivors detect the absence and agree on a replacement themselves, with no operator in the loop.</p>
+        <p>The hazard it must guard against is <strong>split brain</strong>: a network partition or a slow, GC-paused node can let two nodes each believe they're leader at once, and both start writing. Correct implementations tie leadership to a monotonically increasing term or epoch and a fencing token, so a stale leader's writes are recognizable and rejected by anything downstream, even if it hasn't noticed it lost the job.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Follower
+    Follower --> Candidate: election timeout, no heartbeat
+    Candidate --> Leader: majority votes for this term
+    Candidate --> Follower: higher term discovered
+    Leader --> Follower: higher term discovered
+    note right of Follower: waits for a heartbeat from the leader
+    note right of Candidate: requests votes for its term
+    note right of Leader: sends heartbeats, serializes writes
+        </pre>
+        <figcaption>A term-based election, as in Raft or ZAB. A follower that stops hearing from the leader becomes a candidate, requests votes, and wins the term with a majority; any node that sees a higher term steps back down.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Bully algorithm</dt>
+        <dd>The node with the highest ID declares itself leader once it notices the current one is unreachable; lower-ID nodes yield. Simple, but chatty — a recovering high-ID node can trigger repeated re-elections.</dd>
+        <dt id="variations-item-2">Ring algorithm (Chang-Roberts)</dt>
+        <dd>An election message circulates a logical ring of nodes, each forwarding the higher of its own ID and whatever it received; the message returns to its originator carrying the winner.</dd>
+        <dt id="variations-item-3"><a href="./quorum-consensus.html">Quorum &amp; Consensus</a></dt>
+        <dd>Term-based voting, as in Raft or Paxos: a candidate needs a majority quorum before it may act as leader, tying the election itself to the same safety guarantee that protects writes.</dd>
+        <dt id="variations-item-4"><a href="./gossip-protocol.html">Gossip Protocol</a></dt>
+        <dd>Liveness and leadership state propagate peer-to-peer instead of through direct heartbeats to every node — scales better across large, high-latency clusters at the cost of slower convergence.</dd>
+        <dt id="variations-item-5">Lease-based external election</dt>
+        <dd>Delegate the decision to a coordination service (ZooKeeper, etcd, Consul): a node holds leadership only while it can renew a time-bound lease, so a crashed leader's slot expires on its own.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Serializes coordination through one node, so contending replicas never need to fight over the same write.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Automatic failover — the group detects a dead leader and elects a fresh one without an operator.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Once elected, the leader acts unilaterally, keeping consensus overhead off the hot path.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Well-studied algorithms (Raft, Paxos, ZAB, Bully) come with proofs, not just folklore.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The elected leader is a bottleneck and a single target for load on everything it owns.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Split brain is a real risk under partitions — needs terms, epochs, or fencing tokens to rule out.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Flaky networks or long pauses cause election churn, repeatedly disrupting an otherwise-healthy leader.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Getting the protocol right — timeouts, quorum sizes, fencing — is genuinely hard to do from scratch.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Several replicas exist, but exactly one must issue writes, run a scheduled job, or own a partition.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You need automatic failover with no human deciding who takes over next.</li>
+            <li id="usage-when-3" data-kb-polarity="when">Serializing through a leader is cheaper than having every node coordinate with every other on each write.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">A single always-on process is acceptable — a static, manually assigned owner needs no election.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Work can be sharded so nodes never compete for the same duty in the first place.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Idempotent, at-least-once processing is good enough — sidestep exclusive ownership entirely.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a lease-based elector</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface LeaseStore {
+  acquire(nodeId: string, ttlMs: number): Promise&lt;boolean&gt;;
+  renew(nodeId: string, ttlMs: number): Promise&lt;boolean&gt;;
+}
+
+class LeaderElector {
+  private isLeader = false;
+
+  constructor(
+    private readonly store: LeaseStore,
+    private readonly nodeId: string,
+    private readonly ttlMs = 5_000,
+  ) {}
+
+  async tryBecomeLeader(): Promise&lt;boolean&gt; {
+    this.isLeader = await this.store.acquire(this.nodeId, this.ttlMs);
+    return this.isLeader;
+  }
+
+  // Call on an interval well under ttlMs.
+  async renew(): Promise&lt;void&gt; {
+    if (!this.isLeader) return;
+    const stillHeld = await this.store.renew(this.nodeId, this.ttlMs);
+    if (!stillHeld) this.isLeader = false; // lease expired, step down
+  }
+
+  get leading(): boolean { return this.isLeader; }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="zookeeper"><strong>Apache ZooKeeper</strong><span>Ephemeral sequential znodes are the classic leader-election recipe, used by Kafka, HBase, and others; the lowest sequence number wins and each contender watches only the node just below it, so a leader's crash triggers one election rather than a herd</span></div>
+        <div class="wild-item" data-kb-example="etcd"><strong>etcd</strong><span>Exposes Raft-backed leader election through lease-bound keys and an election API; a candidate campaigns on a key attached to a lease it must keep alive, and leadership lapses on its own when the lease TTL expires</span></div>
+        <div class="wild-item" data-kb-example="kubernetes"><strong>Kubernetes</strong><span>Controller managers and schedulers run active-passive by contending for a Lease object in the coordination.k8s.io API, so only one replica reconciles; the leaderelection package drives it with leaseDuration, renewDeadline and retryPeriod</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>lease TTL / session timeout</strong> — how long a leadership lease or coordination-service session lives before it expires (etcd lease TTL, ZooKeeper session timeout, Kubernetes leaseDurationSeconds); short means faster failover but more false failovers, long means the opposite</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>renewal interval</strong> — how often the leader renews its lease or heartbeats; it must sit well under the TTL so a single missed renewal does not lose leadership on ordinary jitter (the renewDeadline and retryPeriod in the Kubernetes leaderelection package)</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>election timeout</strong> — how long a follower waits without hearing from a leader before starting an election; in Raft it is randomized across a range so peers do not all campaign at once and split the vote</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>quorum size</strong> — the majority a candidate must win to lead; run an odd number of voters (three or five) so a majority is unambiguous and one failure still leaves a quorum</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>fencing token / term</strong> — the monotonically increasing epoch stamped on every action the leader takes; downstream stores reject anything carrying an older term, which is what makes a stale leader safe rather than merely unlikely</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>election rate</strong> — how many elections happen per hour or day; leadership changes should be rare, explicable events, and an unexplained climb points to a flapping network or an overloaded leader losing its lease</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>leaderless gap</strong> — the time the group spends with no recognized leader during a failover — the window in which the work that needs exactly one owner simply stalls</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>lease-renewal margin</strong> — how close each renewal runs to the TTL; renewals that keep landing near the deadline mean the leader is one pause away from losing its slot even though it is still healthy</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>quorum member health</strong> — how many voters are currently reachable; drop below a majority and no leader can be elected at all, so this is the number that predicts a total stall</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>split brain</strong> — a partition or a long GC pause lets a stale leader keep acting while the group elects a new one; without a fencing token both write, and their diverging state has to be reconciled by throwing someone's work away</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>election churn</strong> — timeouts set too short relative to real network jitter cause followers to repeatedly time out and re-elect, disrupting a leader that was perfectly healthy and stalling work each round</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>paused-leader zombie</strong> — the leader stalls long enough for its lease to expire and a successor to take over, then resumes still believing it leads; only downstream term-checking stops its now-stale writes from landing</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>quorum loss stalls writes</strong> — enough voters become unreachable that no majority can form; the system cannot elect anyone and every operation gated on a leader blocks until quorum returns</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Tie every leader action to a fencing token or term that downstream validates — never trust an I-am-leader flag on its own</li>
+            <li id="production-check-2" data-kb-polarity="check">Set the lease TTL and renewal interval with margin above the worst-case pause and network round-trip, so a hiccup does not trigger failover</li>
+            <li id="production-check-3" data-kb-polarity="check">Run an odd number of voters and monitor quorum health, since losing a majority stalls elections entirely</li>
+            <li id="production-check-4" data-kb-polarity="check">Rehearse failover and a partition deliberately, and confirm the old leader is fenced before the new one writes</li>
+            <li id="production-check-5" data-kb-polarity="check">Alert on election frequency — elections should be rare and each one explicable</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="quorum-consensus"><a href="./quorum-consensus.html">Quorum &amp; Consensus</a><span class="rel-note">The group agrees on a leader via consensus</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="gossip-protocol"><a href="./gossip-protocol.html">Gossip Protocol</a><span class="rel-note">Membership spreads by gossip; a leader is chosen</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="scheduling"><a href="../../concurrency/scheduling.html">Scheduling</a><span class="rel-note">A singleton scheduler runs only on the elected leader</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="distributed-lock"><a href="./distributed-lock.html">Distributed Lock</a><span class="rel-note">Both grant a single owner — election picks a role holder, a lock guards a resource</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    LE["Leader Election"]
+    LE --- QC["Quorum &amp; Consensus"]
+    LE --- GP["Gossip Protocol"]
+    click QC "./quorum-consensus.html"
+    click GP "./gossip-protocol.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="cap-theorem"><a href="../../../themes/cap-theorem.html">CAP Theorem</a><span>A single writer trades availability for consistency</span></div>
+        <div class="fluency-item" data-kb-theme="consistency-and-replication"><a href="../../../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Serialize writes through one node</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./materialized-view.html">← Materialized View</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./quorum-consensus.html">Quorum &amp; Consensus →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

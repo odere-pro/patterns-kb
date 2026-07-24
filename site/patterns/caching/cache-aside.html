@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cache-Aside · Patterns</title>
+  <meta name="description" content="Cache-Aside — check the cache first and fill it on a miss, so the database only sees requests the cache can't answer.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#cache-aside",
+  "identifier": "cache-aside",
+  "name": "Cache-Aside",
+  "description": "The app checks the cache first, fills it on a miss",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "caching",
+  "kb:group": "caching",
+  "kb:combines-with": [
+    {
+      "@id": "../distributed/routing/cdn.html#cdn",
+      "name": "CDN",
+      "kb:note": "The edge caches; origin fills on a miss"
+    },
+    {
+      "@id": "../distributed/coordination/bloom-filter.html#bloom-filter",
+      "name": "Bloom Filter",
+      "kb:note": "Skip a lookup the filter says will miss"
+    },
+    {
+      "@id": "./distributed-cache.html#distributed-cache",
+      "name": "Distributed Cache",
+      "kb:note": "The shared store cache-aside usually runs against"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "./read-through.html#read-through",
+      "name": "Read-Through",
+      "kb:note": "App fills the cache vs. the cache fills itself"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "../distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "Lazy cache vs. eagerly-maintained projection"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/stale-cache.html#stale-cache",
+      "name": "Stale Cache",
+      "kb:note": "Invalidate the key on write, so the next read reloads the current value"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../designs/bitly.html#bitly",
+      "name": "Bitly",
+      "kb:note": "Bitly caches short-code → long-URL lookups to serve ~600k reads/sec from memory"
+    },
+    {
+      "@id": "../../designs/top-k.html#top-k",
+      "name": "Top-K",
+      "kb:note": "a read-heavy ranking is absorbed almost entirely by an application-managed cache in front of the database"
+    },
+    {
+      "@id": "../../designs/metrics-monitoring.html#metrics-monitoring",
+      "name": "Metrics & Monitoring",
+      "kb:note": "hot, repeatedly-requested panels are served from cache with misses falling through to the store"
+    },
+    {
+      "@id": "../../designs/fb-news-feed.html#fb-news-feed",
+      "name": "Facebook News Feed",
+      "kb:note": "read-heavy, rarely-edited posts are the ideal cache-aside workload, misses falling through to the key-value store"
+    },
+    {
+      "@id": "../../designs/instagram.html#instagram",
+      "name": "Instagram",
+      "kb:note": "feed hydration reads the cache first and populates it on miss, the defining cache-aside loop"
+    },
+    {
+      "@id": "../../designs/fb-post-search.html#fb-post-search",
+      "name": "Facebook Post Search",
+      "kb:note": "identical, non-personalized queries make cache-aside the lever that keeps repeated searches off the index"
+    },
+    {
+      "@id": "../../designs/google-news.html#google-news",
+      "name": "Google News",
+      "kb:note": "reading the hot feed from memory and only touching the database on a miss is the cache-aside read path in its plain form"
+    },
+    {
+      "@id": "../../designs/gopuff.html#gopuff",
+      "name": "Gopuff",
+      "kb:note": "inventory is read from cache first, populated on miss, and invalidated on write — the canonical cache-aside loop"
+    },
+    {
+      "@id": "../../designs/youtube.html#youtube",
+      "name": "YouTube",
+      "kb:note": "populating the cache on a miss to shield a hot database read path is precisely cache-aside"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/system-design-interview.html#system-design-interview",
+      "name": "System Design Interview",
+      "kb:role": "Serve hot reads from memory"
+    },
+    {
+      "@id": "../../themes/spike-handling.html#spike-handling",
+      "name": "Handling Spikes",
+      "kb:role": "Take read pressure off the origin"
+    },
+    {
+      "@id": "../../themes/performance.html#performance",
+      "name": "Performance",
+      "kb:role": "The default read-cache strategy"
+    },
+    {
+      "@id": "../../themes/caching.html#caching",
+      "name": "Caching",
+      "kb:role": "The default read-cache strategy"
+    },
+    {
+      "@id": "../../themes/scaling-reads.html#scaling-reads",
+      "name": "Scaling Reads",
+      "kb:role": "Serve hot reads from an in-memory cache"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="cache-aside" data-kb-kind="pattern" data-kb-band="caching" data-kb-group="caching" data-kb-essence="The app checks the cache first, fills it on a miss" data-kb-order="100" data-kb-aliases="[&quot;lazy loading&quot;,&quot;look-aside cache&quot;]" data-kb-tags="[&quot;caching&quot;,&quot;read-optimization&quot;,&quot;consistency&quot;,&quot;latency&quot;]" data-kb-solves="[&quot;the same database query runs on every request for data that barely ever changes&quot;,&quot;my database is falling over from thousands of identical reads a second&quot;,&quot;I put Redis in front of Postgres but I have no idea where the loading logic should live&quot;,&quot;I updated a row and users kept seeing the old value for ten minutes&quot;,&quot;I do not want to preload everything into memory when only a handful of records ever get read&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-cache-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-cache-h">Caching</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Cache-Aside</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Caching</p>
+      <h1 class="doc-title">Cache-Aside</h1>
+      <p class="doc-essence">On every read the application checks the cache first — a hit returns straight away, and only a miss sends it to the source of truth, whose value it then writes back into the cache for next time.</p>
+      <div class="doc-metarow">
+        <span class="badge">Caching</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="cache-aside">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Cache-Aside</strong> — also called lazy loading — puts the application in charge of both reading the cache and filling it. On a read, the app asks the cache for the key. A hit returns the value immediately, never touching the source of truth. A miss sends the app to the database (or service, or file) to fetch the value, which it then writes into the cache before handing it back to the caller. On a write, the app updates the source of truth directly and either deletes the now-stale cache entry or overwrites it — the cache is never written to on its own initiative.</p>
+        <p>The force it resolves is a mismatch between what the application knows and what a generic cache knows. A key-value store like Redis or Memcached has no idea what a "user" or an "order" is, how to load one, or when its copy has gone stale — it only knows keys and values. Cache-Aside keeps that ignorance intentional: the cache stays a dumb, general-purpose store, and all the domain logic — what to cache, how to load it, when to invalidate it — lives in application code, where it's visible and can differ per call site.</p>
+        <p>That division also makes the cache optional in the failure sense. If it's down or cold, the app falls straight through to the source and keeps serving, just slower — there's no hard dependency on the cache being correct or even present. And because entries are only created on demand, the cache holds exactly the working set that's actually being requested, rather than being pre-warmed with data no one reads.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant App
+    participant Cache
+    participant DB as Data store
+    App-&gt;&gt;Cache: get(key)
+    Cache--&gt;&gt;App: miss
+    App-&gt;&gt;DB: read(key)
+    DB--&gt;&gt;App: value
+    App-&gt;&gt;Cache: set(key, value)
+    Note over Cache: a hit returns straight from here, skipping DB
+        </pre>
+        <figcaption>On a miss the app reads through to the store and fills the cache itself; on a hit the database is never touched.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1"><a href="./read-through.html">Read-Through</a></dt>
+        <dd>The cache library itself loads on a miss instead of the app doing it — same effect, opposite owner of the fetch logic.</dd>
+        <dt id="variations-item-2">Write-invalidate on update</dt>
+        <dd>A write deletes the cache key rather than updating it, so the next read repopulates from the source of truth instead of risking a bad overwrite.</dd>
+        <dt id="variations-item-3">TTL / lazy expiration</dt>
+        <dd>Entries expire after a fixed time-to-live in addition to (or instead of) explicit invalidation, bounding staleness cheaply when writes are hard to track.</dd>
+        <dt id="variations-item-4">Negative caching</dt>
+        <dd>Cache a "not found" marker too, so repeated lookups for a key that doesn't exist don't hit the database on every single request.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">The cache holds only data that's actually been requested, so it stays small and relevant.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">A generic key-value cache needs zero knowledge of the backing store or domain model.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A cache outage degrades gracefully — reads just fall through to the source, slower but correct.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">The read path is simple to reason about: check, miss, load, populate, return.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Every call site that reads must repeat the check-miss-load-populate logic, or share a helper that does.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">The first reader after an eviction pays the full latency of the source — the "cache penalty."</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">There's a stale window between a write to the source and the cache entry being invalidated.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">No built-in protection against a hot key expiring under load and a herd of misses hitting the source at once.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Reads vastly outnumber writes and the same keys get requested repeatedly.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Access is sparse or unpredictable, so pre-warming or caching everything would waste memory.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You're using a generic cache that has no knowledge of your data model or loading logic.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Data changes so often the hit rate would stay low anyway — caching adds complexity for little gain.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Every read needs a guarantee of the freshest value — the cache can be stale between a write and its invalidation.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The loading and invalidation logic belongs with the storage layer itself — reach for <a href="./read-through.html">Read-Through</a> instead.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a cache-aside read and write path</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">async function getUser(id: string): Promise&lt;User&gt; {
+  const cached = await cache.get&lt;User&gt;(`user:${id}`);
+  if (cached !== null) return cached; // hit — database untouched
+
+  const user = await db.query&lt;User&gt;(
+    "SELECT * FROM users WHERE id = $1", [id],
+  );
+  if (user === null) {
+    await cache.set(`user:${id}`, NOT_FOUND, { ttlSeconds: 30 });
+    throw new NotFoundError(id);
+  }
+
+  await cache.set(`user:${id}`, user, { ttlSeconds: 300 });
+  return user;
+}
+
+async function updateUser(id: string, patch: Partial&lt;User&gt;): Promise&lt;void&gt; {
+  await db.update("users", id, patch);
+  await cache.delete(`user:${id}`); // invalidate, next read repopulates
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="memcached"><strong>Memcached</strong><span>A deliberately dumb key-value store with no loader concept: the app checks it with get, falls through to the source on a miss, and populates by hand with set; its slab allocator and -m memory ceiling drive LRU eviction once full.</span></div>
+        <div class="wild-item" data-kb-example="redis"><strong>Redis</strong><span>The default read-cache in front of a relational database, where application code owns the GET, the fallback query, the SET (usually with an EXPIRE for its TTL), and the DEL on write; maxmemory with an LRU or LFU maxmemory-policy bounds its footprint.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Entry TTL</strong> — Time-to-live per key bounds how long a stale value can serve after the source changes; a shorter TTL trades hit rate for freshness.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Negative-cache TTL</strong> — A separate, usually shorter lifetime for cached not-found markers, so repeated lookups for an absent key don't round-trip the store every time.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Eviction policy and memory cap</strong> — The memory ceiling and reclaim policy — LRU or LFU via Redis maxmemory-policy, or the -m limit on Memcached — decide which keys are dropped once the cache fills.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Serialization format</strong> — How values are encoded before the SET; a compact encoding shrinks memory and network cost but adds CPU on every populate.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Hit ratio</strong> — Hits over total lookups; a falling ratio means the working set no longer fits or the TTL is too short to pay off.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Source read rate on miss</strong> — Queries per second reaching the backing store; a spike reveals mass evictions or a stale-key stampede.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Eviction rate</strong> — Keys evicted per second; sustained eviction means the cache is undersized for its working set.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Read latency p99</strong> — Tail latency separates cheap hits from the full source round trip a miss pays.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Stale read after write</strong> — Between a source write and the cache invalidation, readers see the old value; a crash between the two steps can leave it stale until the TTL fires.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Thundering herd on hot-key expiry</strong> — A popular key expires and every concurrent reader misses at once, all hitting the source together; cache-aside has no built-in coalescing.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Cache-penalty latency spike</strong> — The first reader after an eviction pays the full source latency; a wave of evictions surfaces as a tail-latency spike.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Unbounded growth</strong> — Without a memory cap and eviction policy, populated entries accumulate until the cache exhausts memory.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Every write path invalidates or overwrites the cache key it touches</li>
+            <li id="production-check-2" data-kb-polarity="check">A TTL backs every entry even where explicit invalidation already exists</li>
+            <li id="production-check-3" data-kb-polarity="check">An eviction policy and memory cap are set so the cache cannot grow unbounded</li>
+            <li id="production-check-4" data-kb-polarity="check">The read path degrades to a direct source read when the cache is unavailable</li>
+            <li id="production-check-5" data-kb-polarity="check">Hot keys have stampede protection — coalescing, jittered TTL, or a lock — where a miss storm is unacceptable</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="cdn"><a href="../distributed/routing/cdn.html">CDN</a><span class="rel-note">The edge caches; origin fills on a miss</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="bloom-filter"><a href="../distributed/coordination/bloom-filter.html">Bloom Filter</a><span class="rel-note">Skip a lookup the filter says will miss</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="distributed-cache"><a href="./distributed-cache.html">Distributed Cache</a><span class="rel-note">The shared store cache-aside usually runs against</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="read-through"><a href="./read-through.html">Read-Through</a><span class="rel-note">App fills the cache vs. the cache fills itself</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="materialized-view"><a href="../distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">Lazy cache vs. eagerly-maintained projection</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="stale-cache"><a href="../../hazards/stale-cache.html">Stale Cache</a><span class="rel-note">Invalidate the key on write, so the next read reloads the current value</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="bitly"><a href="../../designs/bitly.html">Bitly</a><span class="rel-note">Bitly caches short-code → long-URL lookups to serve ~600k reads/sec from memory</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="top-k"><a href="../../designs/top-k.html">Top-K</a><span class="rel-note">a read-heavy ranking is absorbed almost entirely by an application-managed cache in front of the database</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="metrics-monitoring"><a href="../../designs/metrics-monitoring.html">Metrics &amp; Monitoring</a><span class="rel-note">hot, repeatedly-requested panels are served from cache with misses falling through to the store</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="fb-news-feed"><a href="../../designs/fb-news-feed.html">Facebook News Feed</a><span class="rel-note">read-heavy, rarely-edited posts are the ideal cache-aside workload, misses falling through to the key-value store</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="instagram"><a href="../../designs/instagram.html">Instagram</a><span class="rel-note">feed hydration reads the cache first and populates it on miss, the defining cache-aside loop</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="fb-post-search"><a href="../../designs/fb-post-search.html">Facebook Post Search</a><span class="rel-note">identical, non-personalized queries make cache-aside the lever that keeps repeated searches off the index</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="google-news"><a href="../../designs/google-news.html">Google News</a><span class="rel-note">reading the hot feed from memory and only touching the database on a miss is the cache-aside read path in its plain form</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="gopuff"><a href="../../designs/gopuff.html">Gopuff</a><span class="rel-note">inventory is read from cache first, populated on miss, and invalidated on write — the canonical cache-aside loop</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="youtube"><a href="../../designs/youtube.html">YouTube</a><span class="rel-note">populating the cache on a miss to shield a hot database read path is precisely cache-aside</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    CA["Cache-Aside"]
+    CA --- CDN["CDN"]
+    CA --- MV["Materialized View"]
+    CA --- BF["Bloom Filter"]
+    CA --- RT["Read-Through"]
+    click CDN "../distributed/routing/cdn.html"
+    click MV "../distributed/coordination/materialized-view.html"
+    click BF "../distributed/coordination/bloom-filter.html"
+    click RT "./read-through.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="system-design-interview"><a href="../../themes/system-design-interview.html">System Design Interview</a><span>Serve hot reads from memory</span></div>
+        <div class="fluency-item" data-kb-theme="spike-handling"><a href="../../themes/spike-handling.html">Handling Spikes</a><span>Take read pressure off the origin</span></div>
+        <div class="fluency-item" data-kb-theme="performance"><a href="../../themes/performance.html">Performance</a><span>The default read-cache strategy</span></div>
+        <div class="fluency-item" data-kb-theme="scaling-reads"><a href="../../themes/scaling-reads.html">Scaling Reads</a><span>Serve hot reads from an in-memory cache</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#lens-cache-h">← Caching</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./read-through.html">Read-Through →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

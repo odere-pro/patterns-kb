@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MapReduce · Patterns</title>
+  <meta name="description" content="MapReduce — split a dataset, map over the pieces in parallel, shuffle by key, then reduce each key's values into an answer, with the framework handling distribution and failed-task retries.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#mapreduce",
+  "identifier": "mapreduce",
+  "name": "MapReduce",
+  "description": "Split a dataset, map over the pieces in parallel, then reduce the results into an answer",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:combines-with": [
+    {
+      "@id": "../routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "Map runs where the data lives — one task per shard"
+    },
+    {
+      "@id": "../../messaging/fan-in.html#fan-in",
+      "name": "Fan-In",
+      "kb:note": "The reduce stage is a keyed fan-in: many map outputs converge per key"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "../../messaging/scatter-gather.html#scatter-gather",
+      "name": "Scatter-Gather",
+      "kb:note": "Both split then combine, but map-reduce is data-parallel batch, not request/reply"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/ad-click-aggregator.html#ad-click-aggregator",
+      "name": "Ad Click Aggregator",
+      "kb:note": "distributed map/reduce over the full event log recomputes exact totals as the batch source of truth"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/genai-scale.html#genai-scale",
+      "name": "Gen AI at Scale",
+      "kb:role": "Process a corpus no machine can hold"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="mapreduce" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Split a dataset, map over the pieces in parallel, then reduce the results into an answer" data-kb-order="100" data-kb-aliases="[&quot;map-reduce&quot;]" data-kb-tags="[&quot;partitioning&quot;,&quot;scalability&quot;,&quot;coordination&quot;,&quot;throughput&quot;]" data-kb-solves="[&quot;counting something across billions of records takes hours on one machine&quot;,&quot;the dataset is far too big to fit or process on a single node&quot;,&quot;I need to run the same computation over a huge corpus and merge the answers&quot;,&quot;aggregating logs from thousands of files one after another never finishes&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">MapReduce</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">MapReduce</h1>
+      <p class="doc-essence">MapReduce processes data too big for one machine by running a map function in parallel over input splits, shuffling the outputs together by key, and folding each key's values into a result with a reduce function — while the framework handles distribution, parallelism, and re-running failed tasks.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="mapreduce">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>MapReduce</strong> runs a computation over a dataset in three stages. First <em>map</em>: a function is applied in parallel to each of many input splits, emitting intermediate key/value pairs. Then <em>shuffle</em>: the framework groups all the pairs by key, so every value for a given key lands together. Finally <em>reduce</em>: a function folds each key's values into a result. Word count is the canonical example — map emits <code>(word, 1)</code> for every word, shuffle gathers all the 1s per word, reduce sums them.</p>
+        <p>The force it resolves is the <strong>single-machine ceiling</strong>. A dataset can be far too big to fit on one node, and a computation over billions of records can take hours on a single core no matter how tight the loop. MapReduce spreads both the data and the work across a cluster: add machines and the map and reduce stages parallelize onto them. The programmer writes only two functions; the framework handles distribution, parallelism, data movement, and fault tolerance — a task that dies is simply re-run somewhere else, so hardware failure at scale is routine rather than fatal.</p>
+        <p>The same map-then-reduce shape shows up well beyond classic batch analytics: long-document summarization (summarize each chunk in parallel, then combine the summaries), distributed data preprocessing, and large-scale embedding generation for model training and retrieval all follow it.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    IN["Input"] --> S1["Split 1"]
+    IN --> S2["Split 2"]
+    IN --> S3["Split 3"]
+    S1 --> M1["Map"]
+    S2 --> M2["Map"]
+    S3 --> M3["Map"]
+    M1 --> SH{{"Shuffle / group by key"}}
+    M2 --> SH
+    M3 --> SH
+    SH --> R1["Reduce"]
+    SH --> R2["Reduce"]
+    R1 --> OUT["Output"]
+    R2 --> OUT
+        </pre>
+        <figcaption>Input splits fan out to parallel map tasks; their key/value output is shuffled together by key; each key's values fold through a reduce task into the final output.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Classic batch vs. in-memory DAG</dt>
+        <dd>The original model (Hadoop) writes each stage to disk. In-memory DAG engines like Spark generalize map/shuffle/reduce into a graph of transformations kept in memory — far faster for multi-pass and iterative work, at the cost of holding data in RAM.</dd>
+        <dt id="variations-item-2">Combiner</dt>
+        <dd>A map-side pre-aggregation that partially reduces each map task's output before it is shuffled. When the reduce is associative (a sum, a count), a combiner shrinks the volume moved across the network dramatically.</dd>
+        <dt id="variations-item-3">Map-only jobs</dt>
+        <dd>Embarrassingly-parallel transforms — filtering, format conversion, enrichment — that need no grouping. Drop the reduce stage entirely and each map task writes its output directly.</dd>
+        <dt id="variations-item-4">Multi-stage pipelines</dt>
+        <dd>Real work rarely fits one map/reduce pass. Chain several jobs, or express the whole computation as a DAG, so the output of one stage feeds the next without a manual hand-off.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Scales horizontally to enormous datasets — add machines and the work spreads onto them.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Parallelism and fault tolerance are automatic; a task that fails just gets re-run elsewhere.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A simple mental model — write two functions and let the framework handle the hard parts.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Moving computation to the data keeps most reads local and cuts network traffic.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">High latency — it is a batch model, not interactive; jobs run in minutes to hours.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">The shuffle is expensive: grouping by key moves data across the network and spills to disk.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Awkward for iterative algorithms — each pass re-reads and re-writes the whole dataset.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">A skewed key sends most values to one reducer, making it the bottleneck for the whole job.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">A batch computation runs over a very large, partitionable dataset.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You need aggregations, counts, or joins at a scale one machine cannot handle.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The work is a one- or few-pass transform where end-to-end latency does not matter.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">You need low-latency or interactive query response.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The algorithm is heavily iterative — reach for an in-memory DAG engine instead.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The data fits comfortably on a single machine — the overhead is not worth it.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid">You need strong per-record transactions, not bulk fold-over-everything.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — single-process word count, showing the shape</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type Pair&lt;K, V&gt; = [K, V];
+
+// MAP: turn each input into zero or more key/value pairs.
+function map(doc: string): Pair&lt;string, number&gt;[] {
+  return doc
+    .toLowerCase()
+    .match(/[a-z]+/g)
+    ?.map((word) =&gt; [word, 1] as Pair&lt;string, number&gt;) ?? [];
+}
+
+// REDUCE: fold all values for one key into a single result.
+function reduce(word: string, counts: number[]): Pair&lt;string, number&gt; {
+  return [word, counts.reduce((a, b) =&gt; a + b, 0)];
+}
+
+function mapReduce(docs: string[]): Map&lt;string, number&gt; {
+  // map over every input (a real system runs this in parallel across nodes)
+  const mapped = docs.flatMap(map);
+
+  // shuffle: group every value by its key
+  const grouped = new Map&lt;string, number[]&gt;();
+  for (const [word, count] of mapped) {
+    (grouped.get(word) ?? grouped.set(word, []).get(word)!).push(count);
+  }
+
+  // reduce each group
+  const out = new Map&lt;string, number&gt;();
+  for (const [word, counts] of grouped) {
+    const [k, v] = reduce(word, counts);
+    out.set(k, v);
+  }
+  return out;
+}
+
+mapReduce(["the cat sat", "the dog sat"]); // { the: 2, sat: 2, cat: 1, dog: 1 }</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="google-mapreduce"><strong>Google MapReduce</strong><span>The 2004 system and paper that popularized the model, used internally to build the search index across thousands of machines.</span></div>
+        <div class="wild-item" data-kb-example="hadoop"><strong>Apache Hadoop MapReduce</strong><span>The open-source implementation: map and reduce tasks over HDFS, with automatic re-execution of failed tasks.</span></div>
+        <div class="wild-item" data-kb-example="spark"><strong>Apache Spark</strong><span>Generalizes MapReduce into an in-memory DAG of transformations — much faster for multi-pass and iterative jobs while keeping the map/shuffle/reduce model.</span></div>
+        <div class="wild-item" data-kb-example="langchain-mapreduce"><strong>LangChain map-reduce summarization</strong><span>Summarizes a document longer than the context window by summarizing each chunk in parallel (map) and combining those summaries (reduce).</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>number of partitions / splits</strong> — how finely the input is divided across map tasks</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>number of reducers</strong> — parallelism of the reduce stage</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>combiner</strong> — map-side pre-aggregation, on or off, to cut shuffle volume</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>task skew</strong> — slowest reducer vs the median — a hot key shows up here</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>shuffle bytes</strong> — data moved between map and reduce; the usual bottleneck</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>failed / retried task count</strong> — how much work is being re-run</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>job wall-clock</strong> — end-to-end time, dragged by stragglers</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>data skew</strong> — one hot key sends most values to a single reducer that then dominates the job</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>shuffle saturation</strong> — the all-to-all data movement overwhelms network or disk</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>stragglers</strong> — a few slow tasks hold up the whole job</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>out-of-memory on a hot key</strong> — a reducer can't hold all values for one key</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">partition to balance keys and avoid skew</li>
+            <li id="production-check-2" data-kb-polarity="check">use a combiner to shrink the shuffle where the reduce is associative</li>
+            <li id="production-check-3" data-kb-polarity="check">size the reducer count to the data volume</li>
+            <li id="production-check-4" data-kb-polarity="check">keep tasks idempotent — the framework re-runs them</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="sharding"><a href="../routing/sharding.html">Sharding</a><span class="rel-note">Map runs where the data lives — one task per shard</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="fan-in"><a href="../../messaging/fan-in.html">Fan-In</a><span class="rel-note">The reduce stage is a keyed fan-in: many map outputs converge per key</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="scatter-gather"><a href="../../messaging/scatter-gather.html">Scatter-Gather</a><span class="rel-note">Both split then combine, but map-reduce is data-parallel batch, not request/reply</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="ad-click-aggregator"><a href="../../../designs/ad-click-aggregator.html">Ad Click Aggregator</a><span class="rel-note">distributed map/reduce over the full event log recomputes exact totals as the batch source of truth</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

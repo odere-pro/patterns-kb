@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Circuit Breaker · Patterns</title>
+  <meta name="description" content="Circuit Breaker — stop calling a service that is already failing, so it can recover and callers fail fast.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#circuit-breaker",
+  "identifier": "circuit-breaker",
+  "name": "Circuit Breaker",
+  "description": "Stops calling a service that's already failing",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-resilience",
+  "kb:combines-with": [
+    {
+      "@id": "./retry-backoff.html#retry-backoff",
+      "name": "Retry with Backoff",
+      "kb:note": "Retry transient errors; trip the breaker on sustained ones"
+    },
+    {
+      "@id": "./bulkhead.html#bulkhead",
+      "name": "Bulkhead",
+      "kb:note": "Isolate the pool, then stop calling it when it's failing."
+    },
+    {
+      "@id": "./health-endpoint.html#health-endpoint",
+      "name": "Health Endpoint Monitoring",
+      "kb:note": "Health signals inform and corroborate breaker state."
+    }
+  ],
+  "kb:prerequisite": [
+    {
+      "@id": "./timeout-deadline.html#timeout-deadline",
+      "name": "Timeout / Deadline",
+      "kb:note": "You can't trip on slowness without bounding how long a call may take."
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/persona-identification.html#persona-identification",
+      "name": "Persona Identification & Sanction Check",
+      "kb:note": "one breaker per external vendor in a persona-verification saga, isolating a slow sanction-list check from a healthy ID-verification call"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/spike-handling.html#spike-handling",
+      "name": "Handling Spikes",
+      "kb:role": "Fail fast when downstream is saturated"
+    },
+    {
+      "@id": "../../../themes/observability.html#observability",
+      "name": "Observability",
+      "kb:role": "Its state is a key health signal"
+    },
+    {
+      "@id": "../../../themes/resilience.html#resilience",
+      "name": "Resilience",
+      "kb:role": "Stop hammering a failing dependency"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="circuit-breaker" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-resilience" data-kb-essence="Stops calling a service that's already failing" data-kb-order="46" data-kb-aliases="[&quot;breaker&quot;,&quot;CB&quot;]" data-kb-tags="[&quot;resilience&quot;,&quot;isolation&quot;,&quot;latency&quot;]" data-kb-solves="[&quot;my thread pool is exhausted and every request hangs&quot;,&quot;one failing dependency took down my whole service&quot;,&quot;we keep hammering a downstream that is already down&quot;,&quot;a slow downstream is making my own latency explode&quot;,&quot;retries are making an outage worse instead of better&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">IV · Network</a>
+      <span class="sep">▸</span>
+      <span>Resilience</span>
+      <span class="sep">▸</span>
+      <span aria-current="page">Circuit Breaker</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Resilience</p>
+      <h1 class="doc-title">Circuit Breaker</h1>
+      <p class="doc-essence">Stops calling a service that's already failing — so callers fail fast instead of piling on, and the struggling dependency gets room to recover.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Resilience</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="circuit-breaker">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>circuit breaker</strong> wraps a call to a remote dependency and watches it fail. While the dependency is healthy the breaker is <em>closed</em> and calls pass straight through. Once failures cross a threshold, the breaker <em>trips open</em>: further calls return immediately with an error (or a fallback) without even attempting the network. After a cooldown it goes <em>half-open</em> and lets a trial call through — success closes it again, failure re-opens it.</p>
+        <p>The problem it resolves is <strong>cascading failure</strong>. When a downstream service slows or dies, naive callers keep calling, pile up blocked threads and connections, exhaust their own resources, and take down healthy services with them. The breaker converts a slow, resource-eating failure into a fast, cheap one, and stops hammering a dependency that needs to recover.</p>
+        <p>It borrows its name and its three-state logic from an electrical circuit breaker: better to trip and cut the current than to let the whole house burn.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Open: failures &ge; threshold
+    Open --> HalfOpen: after cooldown
+    HalfOpen --> Closed: trial succeeds
+    HalfOpen --> Open: trial fails
+    note right of Closed: calls pass through, failures counted
+    note right of Open: calls fail fast, no network attempt
+    note right of HalfOpen: one trial call probes recovery
+        </pre>
+        <figcaption>The three states. A closed breaker counts failures; an open one fails fast; a half-open one probes for recovery.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Count-based vs. time-window</dt>
+        <dd>Trip after N consecutive failures, or after a failure <em>rate</em> (e.g. &gt;50% of calls in the last 10 s). Rate-based handles bursty traffic more fairly.</dd>
+        <dt id="variations-item-2">Half-open trial policies</dt>
+        <dd>Allow a single probe, or a limited number of concurrent trials, before deciding to close. Limiting trials avoids a thundering-herd the moment the cooldown ends.</dd>
+        <dt id="variations-item-3">Fallback / graceful degradation</dt>
+        <dd>An open breaker can return a cached value, a default, or a queued request instead of a bare error — pairs naturally with the <a href="../../gof/extra/null-object.html">Null Object</a> idea.</dd>
+        <dt id="variations-item-4">Per-endpoint vs. per-dependency</dt>
+        <dd>One breaker per remote host, or a finer breaker per operation. Finer granularity isolates a single bad endpoint without cutting off a whole service.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Stops cascading failures from spreading across services.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Fails fast — frees threads, sockets, and memory that would block.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Gives the failing dependency space to recover instead of hammering it.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Its state is a high-signal health metric for dashboards and alerts.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Another stateful component to tune — bad thresholds cause flapping or false trips.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">An open breaker can mask a dependency that's only mildly degraded.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Per-instance breakers don't share state; a cluster may trip unevenly.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Needs sensible fallbacks, or "fail fast" just becomes "fail loudly."</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You call a remote service or resource that can fail or slow down.</li>
+            <li id="usage-when-2" data-kb-polarity="when">A slow dependency could exhaust your own threads or connections.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You want to shed load off a struggling downstream so it can recover.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The call is local, in-process, and can't fail in this way.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Failures are permanent, not transient — fix the call, don't trip around it.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">A simple <a href="./timeout-deadline.html">timeout</a> plus a bounded <a href="./retry-backoff.html">retry</a> already covers the risk.</li>
+          </ul>
+        </div>
+      </div>
+      <p class="smell">Prevents the smell of a whole system frozen behind one dead dependency — a step toward the <a href="../../../hazards/big-ball-of-mud.html">Big Ball of Mud</a> failure mode where nothing is isolated.</p>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal breaker</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type State = "closed" | "open" | "half-open";
+
+class CircuitBreaker {
+  private state: State = "closed";
+  private failures = 0;
+  private openedAt = 0;
+
+  constructor(
+    private readonly threshold = 5,
+    private readonly cooldownMs = 10_000,
+  ) {}
+
+  async call&lt;T&gt;(fn: () =&gt; Promise&lt;T&gt;): Promise&lt;T&gt; {
+    if (this.state === "open") {
+      if (Date.now() - this.openedAt &lt; this.cooldownMs) {
+        throw new Error("circuit open — failing fast");
+      }
+      this.state = "half-open"; // time to probe
+    }
+    try {
+      const result = await fn();
+      this.reset();              // success closes the breaker
+      return result;
+    } catch (err) {
+      this.recordFailure();
+      throw err;
+    }
+  }
+
+  private recordFailure() {
+    this.failures++;
+    if (this.state === "half-open" || this.failures &gt;= this.threshold) {
+      this.state = "open";
+      this.openedAt = Date.now();
+    }
+  }
+  private reset() { this.state = "closed"; this.failures = 0; }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="netflix-hystrix"><strong>Netflix Hystrix</strong><span>Popularized the pattern in the JVM world: trips on an error percentage over a rolling window once a minimum request volume is met (errorThresholdPercentage, requestVolumeThreshold), then waits a sleep window before probing. Now in maintenance mode, with Resilience4j the usual successor.</span></div>
+        <div class="wild-item" data-kb-example="envoy"><strong>Envoy</strong><span>Outlier detection ejects an upstream host after consecutive 5xx or gateway failures, holds it out for a base ejection time that grows with repeat ejections, then probes it back in — with max_ejection_percent capping how much of the pool can be removed at once.</span></div>
+        <div class="wild-item" data-kb-example="polly"><strong>Polly</strong><span>The .NET resilience library; its circuit-breaker strategy trips on a failure ratio measured over a sampling duration above a minimum throughput, and composes in a pipeline with retry and timeout.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Failure threshold</strong> — The count of consecutive failures or the failure-rate percentage over a window that trips the breaker open (failureRateThreshold, errorThresholdPercentage).</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Open-state duration (cooldown)</strong> — How long the breaker stays open before admitting a half-open probe (waitDurationInOpenState, sleepWindow).</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Half-open trial count</strong> — How many probe calls are permitted while half-open before deciding to close or re-open — limiting this prevents a rush on a recovering dependency.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Rolling window and minimum volume</strong> — The count or time span over which failures are measured, plus a minimum call count before the rate applies (slidingWindowSize, minimumNumberOfCalls, requestVolumeThreshold) so a single failure on a quiet endpoint does not trip it.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>What counts as a failure</strong> — Which exceptions and timeouts increment the counter, and whether slow calls above a latency threshold count as failures too (slowCallDurationThreshold).</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Breaker state</strong> — Closed / open / half-open per breaker — a first-class health signal; a stuck-open breaker names the unhealthy dependency directly.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Failure / error rate in the window</strong> — The measured failure or slow-call percentage the trip decision is based on.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Fast-failed call count</strong> — Calls rejected immediately while the breaker is open — the load shed off the downstream.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Threshold-induced flapping</strong> — Thresholds set too tight make the breaker oscillate open and closed under marginal load, adding failures instead of preventing them.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Per-instance state divergence</strong> — Breakers are usually per-process and share no state, so a cluster trips unevenly and the aggregate load on a downstream is still uncoordinated.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Thundering herd at half-open</strong> — If half-open trials are not limited, the instant the cooldown ends every caller rushes the still-fragile dependency at once.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Never-trips on low traffic</strong> — A minimum-volume window set too high means a low-traffic endpoint never accumulates enough calls to trip, and the breaker silently does nothing.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Set the failure window and minimum request volume so low-traffic endpoints do not trip on a single error.</li>
+            <li id="production-check-2" data-kb-polarity="check">Limit half-open trial calls to avoid a thundering herd when the cooldown ends.</li>
+            <li id="production-check-3" data-kb-polarity="check">Export breaker state and its transitions as metrics with alerts.</li>
+            <li id="production-check-4" data-kb-polarity="check">Define a fallback for the open state rather than returning a bare error.</li>
+            <li id="production-check-5" data-kb-polarity="check">Pair with a timeout so slow calls actually register as failures.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="retry-backoff"><a href="./retry-backoff.html">Retry with Backoff</a><span class="rel-note">Retry transient errors; trip the breaker on sustained ones</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="bulkhead"><a href="./bulkhead.html">Bulkhead</a><span class="rel-note">Isolate the pool, then stop calling it when it's failing.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="health-endpoint"><a href="./health-endpoint.html">Health Endpoint Monitoring</a><span class="rel-note">Health signals inform and corroborate breaker state.</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Requires</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prerequisite" data-kb-to="timeout-deadline"><a href="./timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">You can't trip on slowness without bounding how long a call may take.</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="persona-identification"><a href="../../../designs/persona-identification.html">Persona Identification &amp; Sanction Check</a><span class="rel-note">one breaker per external vendor in a persona-verification saga, isolating a slow sanction-list check from a healthy ID-verification call</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    CB["Circuit Breaker"]
+    CB --- RB["Retry with Backoff"]
+    CB --- BH["Bulkhead"]
+    CB --- HE["Health Endpoint"]
+    CB --- TO["Timeout / Deadline"]
+    click RB "./retry-backoff.html"
+    click BH "./bulkhead.html"
+    click HE "./health-endpoint.html"
+    click TO "./timeout-deadline.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Stop hammering a failing dependency so the system degrades gracefully.</span></div>
+        <div class="fluency-item" data-kb-theme="spike-handling"><a href="../../../themes/spike-handling.html">Handling Spikes</a><span>Fail fast when a downstream is saturated, instead of queueing forever.</span></div>
+        <div class="fluency-item" data-kb-theme="observability"><a href="../../../themes/observability.html">Observability</a><span>Breaker state (open/closed) is a first-class health signal.</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./retry-backoff.html">Retry with Backoff →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Distributed Cache · Patterns</title>
+  <meta name="description" content="Design a distributed cache — an in-memory key-value store spread across ~50 nodes that holds 1TB at 100k req/s under 10ms, sharded by a consistent-hash ring and kept alive by async replicas.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#design-distributed-cache",
+  "identifier": "design-distributed-cache",
+  "name": "Distributed Cache",
+  "description": "Spread an in-memory key-value store across many nodes so it holds 1TB at 100k req/s in under 10ms",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/caching/distributed-cache.html#distributed-cache",
+      "name": "Distributed Cache",
+      "kb:note": "the whole system is an in-memory key-value store spread across a ~50-node fleet"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "1TB and 100k req/s exceed one node, so the keyspace is partitioned across the fleet"
+    },
+    {
+      "@id": "../patterns/distributed/routing/consistent-hashing.html#consistent-hashing",
+      "name": "Consistent Hashing",
+      "kb:note": "keys sit on a hash ring so adding or removing a node remaps only one arc, not the whole cache"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/replication.html#replication",
+      "name": "Replication",
+      "kb:note": "each shard streams asynchronously to a replica so a lost node is not lost data"
+    },
+    {
+      "@id": "../patterns/concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:note": "clients coalesce many operations — and hot-key writes — into a single network call"
+    },
+    {
+      "@id": "../patterns/gof/extra/object-pool.html#object-pool",
+      "name": "Object Pool",
+      "kb:note": "long-lived TCP connections are pooled so no request pays a fresh handshake"
+    },
+    {
+      "@id": "../principles/kiss.html#kiss",
+      "name": "Keep It Simple (KISS)",
+      "kb:note": "the single-node get/set/delete is built and made correct before any distribution is layered on"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="design-distributed-cache" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Spread an in-memory key-value store across many nodes so it holds 1TB at 100k req/s in under 10ms" data-kb-order="2" data-kb-aliases='["cache cluster","distributed KV cache"]' data-kb-tags='["system-design","caching","partitioning","replication","scalability"]' data-kb-solves='["my single cache server has run out of memory and the working set no longer fits on one box","one node holds a viral item and melts under read traffic while the rest of the fleet sits idle","every time I add a cache node almost every key gets remapped and my hit rate falls off a cliff","I need sub-10ms key lookups but a single machine cannot absorb a hundred thousand requests a second","expired entries pile up in memory because nothing removes them until someone happens to read them"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Distributed Cache</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Distributed Cache</h1>
+      <p class="doc-essence">A distributed cache stores key-value pairs in memory across many machines so it can hold far more data — and serve far more traffic — than any single node could. The design starts as a one-box hash table and grows outward: partition the keyspace across a fleet, replicate each shard for survival, and shave every millisecond off the path a client takes to reach the right node. It is the reference build of the <a href="../patterns/caching/distributed-cache.html">distributed-cache</a> pattern.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="design-distributed-cache">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Callers want three primitives — read a value by key, write one, delete one — answered from memory in single-digit milliseconds. A single-node cache does that trivially with a hash table, but it is capped by one machine's RAM and one machine's network card. The whole exercise is what happens when the data no longer fits and the traffic no longer fits: the cluster has to <em>cooperatively</em> partition the keys across nodes and keep redundant copies so a lost node does not lose data. This question sits deliberately astride two interview styles — the low-level data-structure design of the single node, and the distributed-systems design of the fleet — so the answer has to earn both halves.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Set, get, and delete a value by key.</li>
+            <li>Attach an optional time-to-live (TTL) per key so entries expire on their own.</li>
+            <li>Evict on a Least-Recently-Used (LRU) policy once the cache is full.</li>
+          </ol>
+          <p class="prose">Out of scope: a user-configurable cache size, and alternative eviction policies (LFU, FIFO, custom) — worth naming to the interviewer, but LRU is the one to build.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Availability</strong> — highly available, with eventual consistency accepted; a slightly stale read beats a failed one.</li>
+            <li><strong>Latency</strong> — under 10&nbsp;ms for get and set.</li>
+            <li><strong>Scale</strong> — up to 1&nbsp;TB of data and a peak of 100k requests/second.</li>
+          </ul>
+          <p class="prose">Explicitly <em>not</em> in scope: durability across restarts, strong consistency, rich queries, and transactions — a cache, not a database.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope: how many nodes?</h2>
+      <div class="prose">
+        <p>Two independent estimates set the cluster size, and the larger one wins.</p>
+        <p><strong>By throughput.</strong> Take a working assumption of ~20,000 req/s that one node sustains before latency degrades. 100,000 &divide; 20,000 = <strong>5 nodes</strong> as a floor; pad for spikes and in-flight failures and call it <strong>~8</strong>.</p>
+        <p><strong>By storage.</strong> A 32&nbsp;GB-RAM instance leaves roughly <strong>24&nbsp;GB</strong> usable for cached data once process and OS overhead are subtracted. 1&nbsp;TB (1024&nbsp;GB) &divide; 24&nbsp;GB &asymp; 43 nodes; round up for headroom to <strong>~50</strong>.</p>
+        <p>Storage (50) dwarfs throughput (8), so provision for storage — 50 nodes comfortably covers the request rate as a side effect. <strong>Plan for a ~50-node cluster.</strong> These figures are deliberately rough: real capacity depends on instance type, value size, read/write mix, and replication overhead, so the honest answer always ends in "benchmark the actual workload."</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>The domain is as thin as it gets — <strong>keys</strong> and <strong>values</strong> — but the storage representation carries two extra facts that make the requirements work:</p>
+        <ul>
+          <li><strong>Key</strong> — the opaque string a caller hands in; also what the router hashes to find the owning node.</li>
+          <li><strong>Value</strong> — stored not bare but as a <code>(value, expiry)</code> pair, so a read can check the TTL before returning.</li>
+          <li><strong>Node</strong> — internally each entry is wrapped in a linked-list node (key, value, expiry) so LRU order can be tracked in O(1); this is an implementation detail, not part of the API contract.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Three operations, one per functional requirement. Real clusters speak a compact binary protocol over pooled TCP connections rather than HTTP, but the surface reads the same:</p>
+      </div>
+      <details class="sketch">
+        <summary>API — set, get, delete</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /{key}
+{ "value": "…", "ttl_seconds": 3600 }   # ttl optional
+&rarr; 200 OK
+
+GET /{key}
+&rarr; 200 { "value": "…" }               # 404 if absent or expired
+
+DELETE /{key}
+&rarr; 204 No Content</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Start at the node, then multiply it. A single node is two data structures working together: a <strong>hash table</strong> for O(1) lookup by key, and a <strong>doubly linked list</strong> that orders entries by recency so the least-recently-used one is always at the tail, ready to evict. Following the simplest-thing-first instinct of <a href="../principles/kiss.html">KISS</a>, the get/set/delete logic is built and made correct on one box before any of the distribution is added — the cluster is just this node, replicated and sharded.</p>
+        <p>TTL needs two mechanisms. <em>Lazy</em> expiry is free — a read checks the timestamp and drops the entry if it is stale — but lazy expiry alone lets untouched-but-expired entries squat in memory forever. So a background <strong>janitor</strong> periodically sweeps the list and reclaims them; running it on a coarse schedule (say once a minute) trades a little CPU for tighter memory, and that dial is itself a tuning knob.</p>
+        <p>Multiplied out, the cluster is ~50 such nodes. A client-side router hashes each key onto a consistent-hash ring to find its owner, opens the request over a pooled connection, and every shard streams asynchronously to a replica so a node loss does not become a data loss.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    Client["Client library"]
+    Client -->|"hash(key) picks owner"| Ring["Consistent-hash ring (client-side)"]
+    Ring --> N1["Cache node 1"]
+    Ring --> N2["Cache node 2"]
+    Ring --> N3["Cache node N (~50)"]
+    N1 --> Store[("Hash table + LRU list")]
+    N1 -->|"async replicate"| Rep[("Replica")]
+    Janitor["TTL janitor"] -->|"sweep expired"| N1
+        </pre>
+        <figcaption>The client hashes locally to route straight to the owning node; each node pairs a hash table with an LRU list, streams to a replica asynchronously, and is swept for expired keys by a janitor.</figcaption>
+      </figure>
+      <details class="sketch">
+        <summary>Pseudocode — the O(1) LRU node</summary>
+<pre><code class="language-python" data-kb-lang="python">class Node:  # key, value, expiry — one link in the LRU list
+
+get(key):
+    node = table[key]
+    if node.expiry and now() &gt; node.expiry:
+        evict(node); return MISS
+    move_to_front(node)          # O(1): mark most-recently-used
+    return node.value
+
+set(key, value, ttl):
+    node = table.get(key) or Node(key)
+    node.value  = value
+    node.expiry = now() + ttl if ttl else None
+    move_to_front(node)
+    table[key] = node
+    if size &gt; capacity:
+        evict(tail.prev)         # O(1): drop least-recently-used</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Staying available when a node dies</h3>
+        <p>High availability means keeping more than one copy of every shard, and the interesting choice is <em>when</em> the copies must agree. <a href="../patterns/distributed/coordination/replication.html">Replication</a> offers a spectrum:</p>
+        <ul>
+          <li><strong>Synchronous — bad here.</strong> The write blocks until every replica acknowledges. That buys strong consistency we explicitly said we do not need, and it puts a replica's latency on the critical path of a 10&nbsp;ms budget. Wrong trade for a cache.</li>
+          <li><strong>Asynchronous — good.</strong> The primary answers immediately and ships the write to replicas in the background. It honours the latency and availability requirements; the price is a small window where a failover can lose the last few unacknowledged writes — acceptable when the source of truth lives elsewhere. Redis defaults to this, and its <code>WAIT</code> command lets a caller opt into replica acknowledgement per write when it matters ("semi-synchronous").</li>
+          <li><strong>Peer-to-peer — good for scale.</strong> Drop the primary/replica distinction; every node owns some ranges and replicates others, gossiping updates around. It scales the furthest and removes the single-writer bottleneck, at the cost of more complex conflict handling. This is the Cassandra-style answer.</li>
+        </ul>
+        <p>The interview move is to name the trade rather than declare a winner; asynchronous replication is the pragmatic default.</p>
+
+        <h3>2 · Sharding the keyspace evenly</h3>
+        <p>One node cannot hold 1&nbsp;TB or absorb 100k req/s, so the keys must be split — <a href="../patterns/distributed/routing/sharding.html">sharded</a> — across the fleet. The naïve router, <code>hash(key) % N</code>, distributes evenly but is catastrophic under change: move from 50 to 51 nodes and the modulus shifts almost every key to a new owner, so the whole cache misses at once. <a href="../patterns/distributed/routing/consistent-hashing.html">Consistent hashing</a> fixes this by placing nodes and keys on a circular keyspace (via a hash like MurmurHash) and assigning each key to the first node clockwise; adding or removing a node only remaps the slice of keys in that node's arc, not the entire ring. It doubles as the routing table — the client computes the owner locally and skips a round trip to any central lookup service.</p>
+
+        <h3>3 · Hot keys — reads and writes</h3>
+        <p>Sharding assumes traffic spreads with the keys. A <strong>hot key</strong> breaks that assumption: a viral post, a flash-sale inventory counter, and one shard takes traffic the other 49 never see. It is usually a property of how the cache is <em>used</em>, but a strong answer raises it unprompted.</p>
+        <ul>
+          <li><strong>Hot reads.</strong> Vertically scaling the hot shard barely helps and wastes the rest. Better options fan the reads out: a dedicated cache tier for hot keys, read replicas of the shard, or — best — keeping several <em>copies</em> of a hot key on different nodes (e.g. suffixing it, <code>key#1…key#3</code>) so readers spread across them. This is the read-side story the <a href="../themes/scaling-reads.html">Scaling Reads</a> theme develops in full.</li>
+          <li><strong>Hot writes.</strong> Harder, because copies must converge. <a href="../patterns/concurrency/batching.html">Batching</a> writes at the client — coalescing many increments into one flush — cuts the write rate to the shard dramatically; alternatively, shard the hot key itself across nodes with random suffixes and reconcile on read. See <a href="../themes/scaling-writes.html">Scaling Writes</a>.</li>
+        </ul>
+
+        <h3>4 · Squeezing out the last milliseconds</h3>
+        <p>At single-node scale, "performance" is just the O(1) hash table. Across ~50 nodes it becomes a networking problem: how fast a client finds the owner, and how much chatter each request costs. Three levers, some already in place: consistent hashing removes the routing round trip; request <a href="../patterns/concurrency/batching.html">batching</a> folds many operations into one network call; and <strong>connection pooling</strong> — an <a href="../patterns/gof/extra/object-pool.html">object pool</a> of long-lived TCP connections — avoids paying a handshake per request, which is what usually pins the p95/p99 tail.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Scales horizontally to 1&nbsp;TB and 100k req/s by adding nodes, with each node doing O(1) get, set, and eviction.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Survives node loss through async replicas, and reshapes with almost no key movement thanks to the consistent-hash ring.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Holds the sub-10&nbsp;ms budget: client-side routing, batching, and pooled connections keep the network path short.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Only eventual consistency — an async failover can serve a stale value or drop the last few unreplicated writes.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">No durability: a node restart empties its shard until the working set refills from the source of truth.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Uniform sharding does not fix skew — hot keys still need copies or suffix-sharding bolted on as a special case.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">More moving parts to operate: the ring, replication lag, and the TTL janitor all become things that can misbehave under load.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — spends more time on the single-node design and reaches the right data-structure pairing (hash table + doubly linked list) for O(1) operations within the latency budget. Can problem-solve toward basic availability and scale — recognising that replication is needed and sketching a couple of ways to do it.</li>
+          <li><strong>Senior</strong> — moves through the low-level design quickly and spends the bulk of the time on scale: weighing replication modes against the requirements, handling hot reads and hot writes, and reaching for consistent hashing as second nature. Justifies decisions from the stated non-functionals rather than reciting options.</li>
+          <li><strong>Staff+</strong> — treats all of the above as assumed. The interesting signal is proactively surfacing the operational realities — replication lag and failover data loss, ring rebalancing during a node swap, janitor CPU versus memory pressure — and being explicit that this particular design is one point in a space of defensible combinations.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="distributed-cache"><a href="../patterns/caching/distributed-cache.html">Distributed Cache</a><span class="rel-note">the whole system is an in-memory key-value store spread across a ~50-node fleet</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">1TB and 100k req/s exceed one node, so the keyspace is partitioned across the fleet</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="consistent-hashing"><a href="../patterns/distributed/routing/consistent-hashing.html">Consistent Hashing</a><span class="rel-note">keys sit on a hash ring so adding or removing a node remaps only one arc, not the whole cache</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="replication"><a href="../patterns/distributed/coordination/replication.html">Replication</a><span class="rel-note">each shard streams asynchronously to a replica so a lost node is not lost data</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="batching"><a href="../patterns/concurrency/batching.html">Batching</a><span class="rel-note">clients coalesce many operations — and hot-key writes — into a single network call</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-pool"><a href="../patterns/gof/extra/object-pool.html">Object Pool</a><span class="rel-note">long-lived TCP connections are pooled so no request pays a fresh handshake</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="kiss"><a href="../principles/kiss.html">Keep It Simple (KISS)</a><span class="rel-note">the single-node get/set/delete is built and made correct before any distribution is layered on</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

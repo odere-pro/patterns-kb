@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Resource Leak · Patterns</title>
+  <meta name="description" content="A pooled resource or permit is acquired but never released, so capacity permanently shrinks until every request blocks forever — with no crash and no errors to show for it.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#resource-leak",
+  "identifier": "resource-leak",
+  "name": "Resource Leak",
+  "description": "A resource acquired but never released, shrinking capacity until everything blocks",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "hazard",
+  "kb:band": "hazard",
+  "kb:group": "hazard",
+  "kb:mitigated-by": [
+    {
+      "@id": "../patterns/gof/extra/object-pool.html#object-pool",
+      "name": "Object Pool",
+      "kb:note": "Checkout/return discipline and validation reclaim what callers forget to release"
+    },
+    {
+      "@id": "../patterns/concurrency/thread-pool.html#thread-pool",
+      "name": "Thread Pool",
+      "kb:note": "Bounded, reused, lifecycle-managed workers instead of leak-prone ad-hoc threads"
+    },
+    {
+      "@id": "../patterns/concurrency/semaphore.html#semaphore",
+      "name": "Semaphore",
+      "kb:note": "Acquire-with-timeout and a guaranteed release keep permits from draining away"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc hazard">
+  <main class="doc-wrap" data-kb-id="resource-leak" data-kb-kind="hazard" data-kb-band="hazard" data-kb-group="hazard" data-kb-essence="A resource acquired but never released, shrinking capacity until everything blocks" data-kb-order="12" data-kb-aliases="[&quot;connection leak&quot;,&quot;pool exhaustion&quot;,&quot;handle leak&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;resource-management&quot;,&quot;lifecycle&quot;,&quot;resilience&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#hazards-h">Hazards</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Resource Leak</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Hazard</p>
+      <h1 class="doc-title">Resource Leak</h1>
+      <p class="doc-essence">A pooled resource or permit — a database connection, a file handle, a semaphore permit, a lock — is acquired but never handed back, usually because an error slips past the release. Each leak permanently subtracts from a finite pool, so capacity quietly shrinks until every caller blocks forever, waiting on a resource that will never return.</p>
+      <div class="doc-metarow">
+        <span class="badge">Hazard</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="resource-leak">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>resource leak</strong> is what happens when a finite, pooled resource — a database connection, a file handle, a semaphore permit, a lock — is acquired but never released. These resources are deliberately limited and expensive: a connection pool might hold five or ten connections created once at startup and reused, because opening a new one costs sockets, memory, and setup time. Every request borrows one and is expected to give it back. A leak is a borrow with no return: the resource is checked out of the pool and simply never comes back, so the count of available resources drops by one, permanently.</p>
+        <p>The mechanism is almost always a missing release on the error path. Code acquires the resource, does some work, then an exception is thrown — or an early return is taken — before the release call runs, so control jumps straight past it and the resource is orphaned. Unlike most failures there is nothing dramatic to see: the process does not crash, no stack trace is printed, the borrowed handles just vanish from circulation one at a time. It is, for good reason, the very first bug an interviewer probes for in any pooling or concurrency design.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="causes" aria-labelledby="h-causes" data-kb-block="causes">
+      <h2 class="doc-h" id="h-causes">How it happens</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>No guaranteed release on the error path.</strong> The acquire and the release sit in separate statements, and an exception thrown between them — or an early <code>return</code> that skips the release — jumps past the hand-back entirely. Without a <code>finally</code>, a <code>with</code>/<code>using</code> block, or RAII to bind the release to the scope, the resource is orphaned the moment anything goes wrong.</li>
+          <li><strong>A slow operation holding the resource too long.</strong> No bug is even required. A query that stalls, or a downstream that hangs, keeps a connection checked out for seconds instead of milliseconds, so the pool drains under ordinary load simply because each borrow lasts far longer than the design assumed.</li>
+          <li><strong>Unbounded, on-demand acquisition.</strong> Creating resources on demand with no cap turns the leak into a different failure rather than preventing it: instead of blocking when the pool is empty, the code keeps minting new connections or handles that are never freed, exhausting the database's or OS's own limits.</li>
+          <li><strong>Confused ownership.</strong> A resource passed across threads or call boundaries, where it is unclear who is responsible for releasing it, gets released by nobody — or, just as damaging, released twice.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="cost" aria-labelledby="h-cost" data-kb-block="cost">
+      <h2 class="doc-h" id="h-cost">What it costs</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>The pool exhausts and every caller blocks forever.</strong> Once the last resource has leaked, an acquire that blocks until one is free will block indefinitely — because none ever will be. Callers pile up behind a queue that never advances, and the service stops responding entirely.</li>
+          <li><strong>No errors anywhere — the tell-tale that makes it so hard to spot.</strong> Nothing crashed, so monitoring shows zero exceptions; the database is healthy and nearly idle because almost nothing is reaching it. The dashboards say everything is fine while users see only timeouts: the database is fine, but your service is dead.</li>
+          <li><strong>Request threads are consumed too.</strong> Each blocked caller holds the worker thread it is running on, so the web tier's own thread pool fills with parked threads waiting on the drained resource pool — and the server stops accepting new work, spreading the stall outward from the leaked resource.</li>
+          <li><strong>It is cumulative and delayed.</strong> One leaked resource per error is invisible; capacity erodes slowly, request by request, until under load it reaches zero and the service falls over all at once — long after, and far from, the line of code that failed to release, which makes the cause maddening to trace.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
+      <h2 class="doc-h" id="h-mitigation">Getting out</h2>
+      <div class="prose">
+        <p>The one fix that prevents the leak outright is to <strong>bind the release to the scope</strong> so the error path frees the resource just as surely as the happy path. A <code>finally</code> block, a <code>with</code>/<code>using</code> context manager, RAII, or a <code>defer</code> keeps the acquire and its guaranteed release together, so no exception or early return can slip between them. Acquire and release are a single unit; write them as one.</p>
+        <p>Then make the wait survivable. Add an <strong>acquisition timeout</strong> so a caller that cannot get a resource fails fast — returns a clear error or a 503 — instead of blocking forever; this alone converts the worst symptom of a leak, a service that hangs silently with no errors, into a handful of loud, visible failures you can alert on. <strong>Validate or health-check</strong> pooled resources before handing them out, discarding and replacing dead ones, so a stale connection is not mistaken for a leaked one. And <strong>bound acquisition</strong> and watch pool utilization: an in-use count that only ever climbs and never falls back is the unmistakable signature of a leak, and it is visible long before the pool hits zero.</p>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Mitigated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="object-pool"><a href="../patterns/gof/extra/object-pool.html">Object Pool</a><span class="rel-note">Checkout/return discipline and validation reclaim what callers forget to release</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="thread-pool"><a href="../patterns/concurrency/thread-pool.html">Thread Pool</a><span class="rel-note">Bounded, reused, lifecycle-managed workers instead of leak-prone ad-hoc threads</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="semaphore"><a href="../patterns/concurrency/semaphore.html">Semaphore</a><span class="rel-note">Acquire-with-timeout and a guaranteed release keep permits from draining away</span></div>
+        </div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#hazards-h">← Hazards</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#hazards-h">Hazards →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

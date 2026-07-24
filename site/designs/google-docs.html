@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google Docs · Patterns</title>
+  <meta name="description" content="Design a real-time collaborative editor — concurrent edits reconciled with operational transformation, sockets scaled by a per-document hash ring, and an operation log kept small by compaction.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#google-docs",
+  "identifier": "google-docs",
+  "name": "Google Docs",
+  "description": "A hundred people edit one document at once and every screen converges on the same text within 100 ms",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/architecture/event-sourcing.html#event-sourcing",
+      "name": "Event Sourcing",
+      "kb:note": "the append-only operation log is the source of truth and the visible text is a projection replayed from it"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/optimistic-concurrency-control.html#optimistic-concurrency-control",
+      "name": "Optimistic Concurrency Control",
+      "kb:note": "a user's own keystroke is applied to their local view before any server round trip, then reconciled via transform when the authoritative order arrives"
+    },
+    {
+      "@id": "../patterns/messaging/fan-out.html#fan-out",
+      "name": "Fan-Out",
+      "kb:note": "once an edit is ordered and logged, the owning server broadcasts it to every other socket on that document"
+    },
+    {
+      "@id": "../patterns/distributed/routing/consistent-hashing.html#consistent-hashing",
+      "name": "Consistent Hashing",
+      "kb:note": "documents are assigned to owning Document Service instances via a ZooKeeper-backed hash ring so adding or removing a server reshuffles only a slice"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sticky-session.html#sticky-session",
+      "name": "Sticky Session",
+      "kb:note": "every WebSocket for one document is pinned to the single server that owns and orders that document"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "compaction collapses a document's long operation history into a precomputed snapshot under a new version marker"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="google-docs" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="A hundred people edit one document at once and every screen converges on the same text within 100 ms" data-kb-order="19" data-kb-aliases='["collaborative document editor","real-time collaborative editing"]' data-kb-tags='["system-design","consistency","concurrency","coordination","latency"]' data-kb-solves='["two people type into the same document at the same time and one persons edits silently overwrite the others","edits arrive in a different order on each screen so everyone ends up staring at a slightly different version of the text","I want a collaborators keystrokes and cursor to show up on my screen in well under a tenth of a second","one real-time server holds the sockets for every open document and tips over past a few thousand users","the edit history for a hot document grows without bound and replaying it to each new joiner takes seconds"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Google Docs</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Google Docs</h1>
+      <p class="doc-essence">A collaborative editor lets many people type into one document at the same time and see each other's keystrokes and cursors live. The whole design turns on a single question — when two edits collide, how does every screen still converge on the same text? Sockets, storage, and scale all follow from the answer.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="google-docs">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A browser-based document editor where several people edit the same text at once, watch each other's changes land in real time, and see where everyone's cursor is. Treat the content as plain text — no tables or images — so the hard part is not rendering but agreement: with edits flying in from many keyboards over an unreliable network, every participant must end up looking at the same document. That is a consistency problem wearing a text-editor costume, and it is solved by an editing algorithm (operational transformation), a bidirectional transport (WebSockets), and a way to spread both across a fleet without losing the guarantee.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Create a new document and get back an id.</li>
+            <li>Many users edit one document concurrently.</li>
+            <li>Each user sees the others' changes in real time.</li>
+            <li>Each user sees the others' cursor positions and presence.</li>
+          </ol>
+          <p class="prose">Out of scope: rich document structure (assume a plain text editor), access control and sharing levels, and version history — named explicitly so the design stays on the collaboration core.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Convergence</strong> — eventual consistency: after a burst of edits, all clients settle on identical text.</li>
+            <li><strong>Latency</strong> — a remote edit is visible in under 100&nbsp;ms.</li>
+            <li><strong>Durability &amp; availability</strong> — an acknowledged edit survives server restarts; documents stay reachable.</li>
+            <li><strong>Scale</strong> — millions of concurrent editors across billions of documents, but a hard cap of 100 concurrent editors per document (beyond it, new arrivals join read-only).</li>
+          </ul>
+          <p class="prose">That 100-editor cap is a gift: it means no single document ever needs enormous write throughput, so the scaling story is about the <em>number</em> of documents and sockets, not the heat of any one document.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Connections, not edits, set the shape.</strong> A single document is capped at 100 live editors, and even if each fires a few operations a second while actively typing, that is only a few hundred ops/sec per document — trivial for one server. The number that hurts is the <em>fleet total</em>: millions of concurrent WebSocket connections held open at once. One box terminates on the order of tens of thousands of sockets, so this is a many-thousand-server problem before any document is even busy.</p>
+        <p><strong>Storage grows with history, not size.</strong> The design stores edit operations, not document snapshots. Round a document to ~50&nbsp;KB of retained operations; billions of documents is on the order of <strong>50&nbsp;TB</strong> — a modest total. The sharp edge is a single long-lived document accumulating millions of operations: replaying all of them to every fresh joiner, and holding them in server memory, is the cost that bites, and it only grows.</p>
+        <p><strong>Latency forbids the round trip.</strong> Under-100&nbsp;ms visibility means a user cannot wait for a durable write to be acknowledged before seeing their own keystroke. Local edits must be applied optimistically and reconciled afterward — which is exactly why the same transform algorithm has to run on the client, not just the server.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Four entities, and a deliberate split between what is persisted and what is ephemeral:</p>
+        <ul>
+          <li><strong>Document</strong> — the text, plus lightweight metadata (title, and later the version marker used by compaction). Content and metadata are stored separately so permissions, tags, or history can bolt onto metadata later without touching the operation stream.</li>
+          <li><strong>Editor</strong> — a user with an open connection to a document. Identity lives elsewhere; here an editor is really just a socket and a cursor.</li>
+          <li><strong>Edit (Operation)</strong> — one change: an <code>insert</code> or <code>delete</code> at a position. Operations are the durable unit of truth; the document text is what you get by applying them in order.</li>
+          <li><strong>Cursor</strong> — an editor's position, which doubles as presence. Purely ephemeral: scoped to the live connection and never written to the document store.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Two surfaces with two very different jobs. Document management is ordinary REST; the live editing session is a WebSocket, so the contract that matters is the <em>message protocol</em> over the socket, not a list of HTTP verbs.</p>
+      </div>
+      <details class="sketch">
+        <summary>REST for management, WebSocket protocol for editing</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /docs
+{ "title": "Q3 planning" }
+&rarr; 200 { "docId": "d_9f2a" }
+
+WS  /docs/{docId}          # one long-lived bidirectional connection
+
+# client &rarr; server
+SEND { "type": "insert",       "pos": 5, "text": ", world" }
+SEND { "type": "delete",       "pos": 6, "len": 1 }
+SEND { "type": "updateCursor", "pos": 12 }
+
+# server &rarr; client
+RECV { "type": "update", "op": { … } }   # a transformed peer edit to apply
+RECV { "type": "presence", … }           # cursors joining, moving, leaving</code></pre>
+      </details>
+      <div class="prose">
+        <p>The document is created once over REST; from then on every keystroke, every cursor move, and every change from a collaborator travels as a small typed message on the open socket.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Creation is the boring half: a horizontally-scaled CRUD service behind an API gateway writes document metadata to Postgres and hands back an id. The interesting half is the <strong>Document Service</strong>. For a given document, every editor's socket lands on the <em>same</em> instance of it — that instance owns the document while it is live, holds a <code>documentId → sockets</code> map, and is the single point that decides the final order of operations. Each incoming edit is transformed against the edits already applied, appended to the operations store, and only then broadcast to the other sockets and acknowledged to its author. The operations store is Cassandra: append-only writes, partitioned by <code>documentId</code> and ordered by a server-assigned timestamp, so the log <em>is</em> the document and the text is a projection of it — the <a href="../patterns/architecture/event-sourcing.html">event-sourcing</a> shape at the heart of the design.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Editor in browser"]
+    Gateway["API Gateway"]
+    Meta["Document Metadata Service"]
+    MetaDB[("Metadata DB — Postgres")]
+    Ring["Consistent hash ring — ZooKeeper"]
+    Doc["Document Service — owns doc, runs OT"]
+    Ops[("Operations DB — Cassandra")]
+    Compact["Compaction Service"]
+    Client -->|"POST /docs"| Gateway
+    Gateway --> Meta
+    Meta --> MetaDB
+    Client -->|"WS /docs/id"| Doc
+    Doc -->|"which server owns this doc?"| Ring
+    Doc -->|"append transformed ops"| Ops
+    Doc -.->|"broadcast update"| Client
+    Compact -->|"read + collapse ops"| Ops
+    Compact -.->|"flip version marker"| Meta
+        </pre>
+        <figcaption>Creation flows through the gateway to Postgres; editing rides a WebSocket to the one Document Service that owns the document, which orders edits, logs them to Cassandra, and fans them out. Compaction trims the log in the background.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Making concurrent edits converge</h3>
+        <p>The core question: given two edits made against the same starting text but in ignorance of each other, how do all clients end up with the same result? Three answers, in ascending correctness.</p>
+        <ul>
+          <li><strong>Send snapshots — wrong.</strong> Each edit ships the whole document, last write wins. Two problems: transferring hundreds of KB per keystroke is absurd, and worse, concurrent edits clobber each other. Start with "Hello!"; A appends ", world" while B deletes "!"; whichever request lands second overwrites the other, and one person's change vanishes silently.</li>
+          <li><strong>Send edits — warmer, still wrong.</strong> Transmit only operations: <code>INSERT(5, ", world")</code>, <code>DELETE(6)</code>. Far cheaper, but positions are relative to a document state. If B's <code>DELETE(6)</code> (meant for "!") arrives after A's insert has shifted everything right, it deletes the comma instead. Each edit is implicitly tied to the context it was made in.</li>
+          <li><strong>Operational transformation — right.</strong> Reinterpret each incoming edit against the edits that already applied before it. One server establishes the canonical order; B's <code>DELETE(6)</code> is transformed to <code>DELETE(13)</code> once A's insert is in front of it, so it still removes the exclamation mark. Low memory, fast, and it is what real collaborative editors use — but it <em>requires</em> a central authority for ordering, which is precisely why a document is pinned to one server.</li>
+        </ul>
+        <p>The alternative worth naming is a <strong>CRDT</strong>: make every operation commutative so order stops mattering and no central server is needed. Text CRDTs give each character a unique, infinitely-subdividable position id and keep deleted characters as hidden tombstones, so any merge order converges. That buys peer-to-peer and offline editing (Yjs is the well-known open-source implementation; Figma runs an industrial variant), but it pays in memory — the document only ever grows, tombstones and all. With a central server already in the design and a 100-editor cap, operational transformation is the lighter, better-fitting choice; CRDTs are the answer if the requirement shifts to peer-to-peer or heavy offline use.</p>
+
+        <h3>2 · Real-time delivery and optimistic editing</h3>
+        <p>Two read paths hang off the socket. On <strong>connect</strong>, the owning server replays the document's operations so the new client starts from the shared state. On every <strong>successful edit</strong>, the server pushes the transformed operation to every other connected client — a straight <a href="../patterns/messaging/fan-out.html">fan-out</a> that is trivial precisely because all of a document's sockets live on one server. The 100&nbsp;ms budget then forces the subtle part: a user's own keystroke is applied to their local view immediately, before any server round trip — an <a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">optimistic</a> local write. When a remote edit arrives that was created against an earlier state, the same transform logic runs <em>on the client</em> to reconcile the differing local orderings (server sees <code>Ea, Eb</code>; A applied <code>Ea, Eb</code>; B applied <code>Eb, Ea</code>) so everyone still converges. Cursors ride the same socket but never touch the store: the server holds presence in memory, broadcasts moves, and on socket disconnect drops the departed editor and tells the rest.</p>
+
+        <h3>3 · Scaling to millions of sockets</h3>
+        <p>One Document Service instance is both a bottleneck and a single point of failure. The constraint that makes this tricky is that all sockets for a document must converge on one owner — they cannot be sprayed across the fleet by a plain load balancer. The answer is a <a href="../patterns/distributed/routing/consistent-hashing.html">consistent hash ring</a>: each server owns a range of the hash space, ZooKeeper holds the ring configuration and coordinates membership, and <code>hash(documentId)</code> picks the owner. A client opens a plain HTTP connection to any server; if that server does not own the document's hash range it replies with a redirect to the one that does; the client connects there directly, the connection upgrades to a WebSocket, and that owner loads the operations and starts serving — a <a href="../patterns/distributed/routing/sticky-session.html">document-pinned session</a> where every collaborator on one document deterministically shares a server. Consistent hashing keeps churn small: adding or removing a server reshuffles only a slice of documents rather than all of them. The cost is that a scaling event is not free — displaced sockets must be dropped and reconnected, and the moving document's operations must migrate to the new owner, so robust reconnect logic and hotspot monitoring are part of the deal. Terminating the sockets at the edge and exposing a plain internal API keeps the rest of the system from having to know about connections at all.</p>
+
+        <h3>4 · Keeping storage and memory bounded</h3>
+        <p>Every operation lives forever by default, and a hot document can reach millions of them — expensive to replay to each new joiner and a memory drain while loaded. The fix is <strong>compaction</strong>: periodically collapse a long run of operations into a tiny equivalent one (ideally a single insert of the current text), which is really a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of the operation log. Doing it safely is the interesting part, because Cassandra only offers row-level transactions while a document spans many rows. The trick is a <code>documentVersionId</code> on the metadata record: clients read the current version before loading operations, so they always fetch a consistent set, and only the Document Service is allowed to flip the pointer from the old version to the new one. An <em>offline</em> compaction service can read, collapse, and write a new version, then ask the Document Service to flip — but it must skip documents that are live to avoid corrupting in-flight edits, and throttle itself so it does not become its own load problem. The cleaner <em>online</em> variant lets the owning server compact its own documents, and the natural trigger is the moment the last editor disconnects: the operations are already in memory and nobody else holds the document, so it hands them to a low-priority background process, writes the new version, and flips — isolating the work so it never inflates the tail latency of live edits.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Concurrent edits always converge, and optimistic local application keeps typing feeling instant under the 100&nbsp;ms budget.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Pinning a document to one server makes ordering and broadcast local and cheap, and consistent hashing keeps rebalancing incremental.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">An append-only operation log gives durability and a natural audit trail; compaction stops it from growing without bound.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Operational transformation needs a central ordering server, which rules out true peer-to-peer or rich offline editing — the CRDT territory.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">A scaling event is disruptive: sockets are force-reconnected and a document's operations must migrate to the new owner.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Cross-store atomicity leans on a hand-managed <code>documentVersionId</code> because the operations store lacks multi-row transactions — orchestration that hides subtle races.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — likely not asked this one, but if so: a working high-level design and, with some nudging, reasoning through why sending whole snapshots fails and why concurrent edits are hard. Thinking on your feet counts more than knowing the algorithm.</li>
+          <li><strong>Senior</strong> — grasps the consistency and durability challenges quickly, may open with a naïve approach but proactively finds and fixes the bottleneck, and argues database trade-offs (why Postgres for metadata, why an append-only store for operations) even without knowing the OT-vs-CRDT distinction by name. Time for one deep dive.</li>
+          <li><strong>Staff+</strong> — commands the whole problem: at least loosely fluent in CRDTs (or derives them live), and intimately comfortable with scaling socket services, ordering and serialization, transaction limits, and the compaction/versioning story. Gets through the deep dives and adds one — read-only mode at scale, offline sync, or memory optimization.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="event-sourcing"><a href="../patterns/architecture/event-sourcing.html">Event Sourcing</a><span class="rel-note">the append-only operation log is the source of truth and the visible text is a projection replayed from it</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="optimistic-concurrency-control"><a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">Optimistic Concurrency Control</a><span class="rel-note">a user's own keystroke is applied to their local view before any server round trip, then reconciled via transform when the authoritative order arrives</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="fan-out"><a href="../patterns/messaging/fan-out.html">Fan-Out</a><span class="rel-note">once an edit is ordered and logged, the owning server broadcasts it to every other socket on that document</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="consistent-hashing"><a href="../patterns/distributed/routing/consistent-hashing.html">Consistent Hashing</a><span class="rel-note">documents are assigned to owning Document Service instances via a ZooKeeper-backed hash ring so adding or removing a server reshuffles only a slice</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sticky-session"><a href="../patterns/distributed/routing/sticky-session.html">Sticky Session</a><span class="rel-note">every WebSocket for one document is pinned to the single server that owns and orders that document</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">compaction collapses a document's long operation history into a precomputed snapshot under a new version marker</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

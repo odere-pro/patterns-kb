@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Authentication Enforcer · Patterns</title>
+  <meta name="description" content="Authentication Enforcer — centralizes verifying who is making the request behind one component, instead of a check scattered into every handler.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#authentication-enforcer",
+  "identifier": "authentication-enforcer",
+  "name": "Authentication Enforcer",
+  "description": "Centralizes verifying who is making the request",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "security",
+  "kb:group": "security",
+  "kb:combines-with": [
+    {
+      "@id": "../distributed/routing/api-gateway.html#api-gateway",
+      "name": "API Gateway",
+      "kb:note": "Authenticate once at the edge"
+    },
+    {
+      "@id": "../distributed/coordination/federated-identity.html#federated-identity",
+      "name": "Federated Identity",
+      "kb:note": "Trust an external IdP to authenticate"
+    },
+    {
+      "@id": "./authorization-enforcer.html#authorization-enforcer",
+      "name": "Authorization Enforcer (RBAC)",
+      "kb:note": "Authn establishes who; authz decides what"
+    },
+    {
+      "@id": "./secure-session-manager.html#secure-session-manager",
+      "name": "Secure Session Manager",
+      "kb:note": "Authenticate, then carry a secure session"
+    },
+    {
+      "@id": "./single-access-point.html#single-access-point",
+      "name": "Single Access Point",
+      "kb:note": "Authenticate at the one entry"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "./authorization-enforcer.html#authorization-enforcer",
+      "name": "Authorization Enforcer (RBAC)",
+      "kb:note": "Identity vs. permission — distinct steps"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../designs/payment-system.html#payment-system",
+      "name": "Payment System",
+      "kb:note": "request signing at the gate is enforcement of authenticity and integrity centralized in one place"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/auth-and-access.html#auth-and-access",
+      "name": "Auth & Access",
+      "kb:role": "Establish who is calling"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="authentication-enforcer" data-kb-kind="pattern" data-kb-band="security" data-kb-group="security" data-kb-essence="Centralizes verifying who is making the request" data-kb-order="126" data-kb-aliases="[&quot;authn&quot;]" data-kb-tags="[&quot;security&quot;,&quot;authentication&quot;,&quot;access-control&quot;,&quot;separation-of-concerns&quot;]" data-kb-solves="[&quot;we shipped a debug endpoint that nobody remembered to put a login check on&quot;,&quot;every route handler starts with the same copy-pasted token parsing code&quot;,&quot;I cannot prove that all of our endpoints actually require a logged-in user&quot;,&quot;moving from passwords to company SSO would mean editing every single handler&quot;,&quot;one service trusted another service was internal and now anyone can call it&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-sec-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-sec-h">Security</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Authentication Enforcer</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Security</p>
+      <h1 class="doc-title">Authentication Enforcer</h1>
+      <p class="doc-essence">Centralizes the work of proving who is making a request into one component, so every route and service trusts the same verified identity instead of rolling its own login check.</p>
+      <div class="doc-metarow">
+        <span class="badge">Security</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="authentication-enforcer">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>An <strong>authentication enforcer</strong> is the single component every incoming request must pass through before it reaches business logic. It inspects whatever credential the caller presents — a password, a bearer token, a signed cookie, a client certificate — confirms it's genuine and unexpired, and attaches a resolved identity to the request so everything downstream can rely on it without checking again.</p>
+        <p>The force it resolves is <strong>scattered authentication</strong>. Without one choke point, every route handler, background job, and internal script ends up rolling its own answer to "is this caller who they claim to be." It only takes one omission — a debug endpoint shipped without the check, an internal API assumed to be trusted, a route added in a hurry — to leave a hole an attacker can walk straight through. Centralizing the check turns "did every developer remember" into "does this one component work," which is something you can test and audit exhaustively instead of hoping for.</p>
+        <p>It's a <em>lens</em>, not a structural shape: the same idea shows up as framework middleware, a servlet filter, an API gateway policy, or a service-mesh sidecar doing mTLS. Whatever the mechanism, its job stops at identity — confirming <em>who</em> is calling. Deciding what that caller is then allowed to do is a separate concern, handled next in the request pipeline.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    R["Incoming request"] --> AE{"Authentication Enforcer"}
+    AE -->|credentials valid| ID["Attach identity to request context"]
+    ID --> H["Downstream handler"]
+    AE -->|missing or invalid| REJ["401 Unauthorized, stops here"]
+        </pre>
+        <figcaption>Every request meets the same gate before any handler runs. Valid credentials attach an identity to the request; anything else is rejected before business logic executes.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Middleware / filter chain</dt>
+        <dd>Runs in-process on every request before it reaches a handler — Express middleware, a Servlet <code>Filter</code>, an ASP.NET pipeline stage.</dd>
+        <dt id="variations-item-2"><a href="../distributed/routing/api-gateway.html">API Gateway</a></dt>
+        <dd>Push the check to the edge: the gateway authenticates once, then forwards a trusted, signed identity to services that never see raw credentials.</dd>
+        <dt id="variations-item-3"><a href="../distributed/coordination/federated-identity.html">Federated Identity</a></dt>
+        <dd>Delegate verification to an external identity provider via OAuth2, OIDC, or SAML — the enforcer's job shifts from checking a password to validating the IdP's signed assertion.</dd>
+        <dt id="variations-item-4">Token-based, stateless verification</dt>
+        <dd>A signed JWT or PASETO is verified locally by signature and expiry, with no round trip to a session store on every request.</dd>
+        <dt id="variations-item-5"><a href="./secure-session-manager.html">Secure Session Manager</a></dt>
+        <dd>Verify credentials once at login, then trust a signed session cookie or handle for subsequent requests instead of re-checking every time.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">One auditable choke point instead of a login check copy-pasted into every handler.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Swapping how identity is verified — password, token, mTLS, an external IdP — touches one component, not the whole codebase.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Produces a single, trusted principal object downstream code can rely on without re-checking.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Nothing reaches business logic without passing the same gate — no route can quietly skip it.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A single point of failure: misconfigure or crash it and every request behind it is exposed or locked out.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Adds latency to every request unless verification results are cached sensibly.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Any path that bypasses it — a debug route, a service call assumed "internal and trusted" — breaks the guarantee entirely.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Tempting to fold authorization logic in alongside it, blurring identity with permission.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Multiple routes or services all need to answer the same question — is this caller who they claim to be — and you don't want that logic duplicated.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You must guarantee nothing on your public surface is reachable without a verified identity, and want one auditable place to prove it.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You expect the verification mechanism to change later — password today, <a href="../distributed/coordination/federated-identity.html">Federated Identity</a> tomorrow — without rewriting every handler.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">A call never leaves a boundary you already trust and crosses no network hop where identity could be forged.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">You need to decide what an already-identified caller is allowed to do — that's <a href="./authorization-enforcer.html">Authorization Enforcer (RBAC)</a>, a distinct step from identity.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Every request already funnels through a <a href="./single-access-point.html">Single Access Point</a> doing its own inline check — a second dedicated component is redundant ceremony.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal enforcement middleware</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type Principal = { userId: string; scopes: string[] };
+
+interface AuthProvider {
+  verify(token: string): Promise&lt;Principal | null&gt;;
+}
+
+// One place every request passes through before a handler runs.
+function authenticationEnforcer(provider: AuthProvider) {
+  return async (
+    req: Request,
+    next: () =&gt; Promise&lt;Response&gt;,
+  ): Promise&lt;Response&gt; =&gt; {
+    const header = req.headers.get("authorization") ?? "";
+    const token = header.replace(/^Bearer\s+/, "");
+    if (!token) {
+      return new Response("missing credentials", { status: 401 });
+    }
+
+    const principal = await provider.verify(token);
+    if (!principal) {
+      return new Response("invalid or expired credentials", { status: 401 });
+    }
+
+    (req as any).principal = principal; // downstream trusts this, unchecked
+    return next();
+  };
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="spring-security"><strong>Spring Security</strong><span>Its FilterChainProxy dispatches each request through an ordered SecurityFilterChain; an AuthenticationManager verifies the credential and the resulting Authentication is stored in the SecurityContextHolder (a ThreadLocal by default) so controllers read the principal without re-checking.</span></div>
+        <div class="wild-item" data-kb-example="django-auth-middleware"><strong>Django AuthenticationMiddleware</strong><span>Paired with SessionMiddleware, it lazily resolves the session key into request.user on every request via the configured auth backend, so views trust request.user instead of verifying credentials themselves.</span></div>
+        <div class="wild-item" data-kb-example="envoy-ext-authz"><strong>Envoy ext_authz filter</strong><span>An HTTP filter that calls an external authorization service (gRPC or HTTP) for each proxied request and forwards only the verified identity upstream. Its failure_mode_allow flag makes the fail-open/fail-closed choice an explicit configuration decision.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Credential/token lifetime (TTL)</strong> — How long a verified identity stays valid before re-verification is forced. Shorter limits exposure of a stolen token; longer cuts re-auth traffic to the IdP or session store.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Verification-result cache TTL</strong> — Cache introspection results, JWKS keys, or session lookups so every request is not a round trip. Trades staleness (a revoked token still accepted) against latency and load on the identity backend.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Clock-skew leeway</strong> — Tolerance applied when checking token exp/nbf across machines with unsynced clocks. Too tight rejects valid tokens near expiry; too loose extends a token past its intended life.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Failure policy (fail-open vs fail-closed)</strong> — What the enforcer does when the IdP or key endpoint is unreachable. Fail-closed rejects everything (availability hit); fail-open lets traffic through unauthenticated (security hole). Almost always fail closed.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Signing-key rotation / JWKS refresh interval</strong> — How often the enforcer refetches the provider public keys used to verify signatures. Must be short enough to pick up a rotated key before old ones expire, or valid tokens start failing verification.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>401 / authentication-failure rate</strong> — A spike means an expired key, a broken IdP, or an attack. A rate near zero on a public surface can mean a bypass path is skipping the check.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Added auth latency (p99)</strong> — Per-request time the enforcer adds — signature verify plus any introspection round trip. Watch p99, where cache misses and IdP slowness surface.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Verification cache hit ratio</strong> — Fraction of requests served from the token/session/JWKS cache versus hitting the identity backend. A falling ratio predicts rising IdP load and latency.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>IdP / introspection endpoint error rate and latency</strong> — Health of the upstream the enforcer depends on. Its degradation is what drives the fail-open/fail-closed decision.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Enforcer down or misconfigured</strong> — The single choke point becomes a single point of failure: a crash or bad config locks every request out (fail-closed) or exposes them (fail-open). Blast radius is the whole surface.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Bypass path</strong> — A debug route, health endpoint, or service call assumed internal is wired outside the filter chain and reaches business logic with no verified identity. The guarantee silently breaks for that path only.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Key-fetch / JWKS failure after rotation</strong> — The provider rotates signing keys and the enforcer cannot refresh them (network, cache too long); every otherwise-valid token fails signature verification and 401s surge.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Clock skew rejects valid tokens</strong> — Enforcer host drifts from the token issuer; tokens are seen as expired or not-yet-valid and rejected en masse until NTP or leeway is corrected.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Audit the route table: prove every reachable endpoint — including debug, health, and internal-to-internal calls — passes through the enforcer.</li>
+            <li id="production-check-2" data-kb-polarity="check">Confirm the failure policy is fail-closed unless a specific route has a documented reason to fail open.</li>
+            <li id="production-check-3" data-kb-polarity="check">Test signing-key rotation end to end: rotate a key and confirm tokens keep verifying without a restart.</li>
+            <li id="production-check-4" data-kb-polarity="check">Measure the per-request latency the enforcer adds under load and confirm it fits the budget with the cache cold.</li>
+            <li id="production-check-5" data-kb-polarity="check">Keep 401 (unauthenticated) distinct from 403 (unauthorized) so identity and permission failures are diagnosable separately.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="api-gateway"><a href="../distributed/routing/api-gateway.html">API Gateway</a><span class="rel-note">Authenticate once at the edge</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="federated-identity"><a href="../distributed/coordination/federated-identity.html">Federated Identity</a><span class="rel-note">Trust an external IdP to authenticate</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="authorization-enforcer"><a href="./authorization-enforcer.html">Authorization Enforcer (RBAC)</a><span class="rel-note">Authn establishes who; authz decides what</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="secure-session-manager"><a href="./secure-session-manager.html">Secure Session Manager</a><span class="rel-note">Authenticate, then carry a secure session</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="single-access-point"><a href="./single-access-point.html">Single Access Point</a><span class="rel-note">Authenticate at the one entry</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="authorization-enforcer"><a href="./authorization-enforcer.html">Authorization Enforcer (RBAC)</a><span class="rel-note">Identity vs. permission — distinct steps</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="payment-system"><a href="../../designs/payment-system.html">Payment System</a><span class="rel-note">request signing at the gate is enforcement of authenticity and integrity centralized in one place</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    AE["Authentication Enforcer"]
+    AE --- AG["API Gateway"]
+    AE --- FI["Federated Identity"]
+    AE --- AZ["Authorization Enforcer (RBAC)"]
+    AE --- SM["Secure Session Manager"]
+    AE --- SAP["Single Access Point"]
+    click AG "../distributed/routing/api-gateway.html"
+    click FI "../distributed/coordination/federated-identity.html"
+    click AZ "./authorization-enforcer.html"
+    click SM "./secure-session-manager.html"
+    click SAP "./single-access-point.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="auth-and-access"><a href="../../themes/auth-and-access.html">Auth &amp; Access</a><span>Establish who is calling</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#lens-sec-h">← Security</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./authorization-enforcer.html">Authorization Enforcer (RBAC) →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

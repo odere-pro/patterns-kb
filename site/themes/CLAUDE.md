@@ -1,0 +1,16 @@
+# site/themes
+
+**Themes** — 25 guided tours. Not a rung and not a lens: each one answers a single
+systems question by walking through the patterns that combine to address it.
+
+Pages here: api-design, auth-and-access, bot-detection, caching, cap-theorem, consistency-and-replication, dealing-with-contention, frontend-architecture, genai-scale, harmful-content, long-running-tasks, ml-system-design, multi-step-processes, observability, performance, proximity-search, realtime-updates, resilience, scalability, scaling-reads, scaling-writes, spike-handling, streaming, system-design-interview, video-recommendations
+
+Blocks, in order: `framing` → `architecture` → `tradespace` → `tour` → `decide` → `siblings`.
+
+A theme's `tour` block is the **source of truth for theme membership**. Each
+`.tour-step` carries `data-kb-member` (which pattern) and `data-kb-role` (its terse role in
+*this* narrative — distinct from the step's own prose). The build inverts those onto each
+pattern as its "Where it shows up" list, so adding a pattern to a tour is what puts the
+theme on the pattern's page. Themes carry no `data-kb-solves`.
+
+Read with `node ../../scripts/kb.mjs get <id>`. See the root CLAUDE.md for the contract.

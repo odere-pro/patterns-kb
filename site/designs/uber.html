@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Uber · Patterns</title>
+  <meta name="description" content="Design a ride-sharing platform — real-time driver-location ingestion, geospatial proximity matching, and one-driver-at-a-time assignment that holds up under peak load.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#uber",
+  "identifier": "uber",
+  "name": "Uber",
+  "description": "Match a rider to the nearest free driver within a minute — at millions of location pings a second, and never double-booking a driver",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/distributed/routing/geohash.html#geohash",
+      "name": "Geohash",
+      "kb:note": "each driver's live lat/long is encoded into a sortable geohash score in Redis so the matcher finds the nearest available drivers by radius in milliseconds"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/distributed-lock.html#distributed-lock",
+      "name": "Distributed Lock",
+      "kb:note": "a Redis key per driverId with a 10-second TTL guarantees no two matcher instances offer the same driver a ride at once, and expiry frees the driver with no timer bookkeeping"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/workflow-orchestration.html#workflow-orchestration",
+      "name": "Workflow Orchestration",
+      "kb:note": "the offer-timeout-and-fall-through-to-the-next-driver sequence runs as a durable Temporal workflow whose persisted state survives a matcher crash mid-ride"
+    },
+    {
+      "@id": "../patterns/messaging/message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:note": "ride requests are enqueued and their offset committed only after a successful match, so a surge is buffered and a dead worker's message is re-picked by another instance"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "the request queue absorbs 100k-at-once demand spikes while the matcher drains at its own pace and autoscaling adds instances behind it"
+    },
+    {
+      "@id": "../patterns/concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:note": "location updates are coalesced over a short interval and bulk-written to cut millions of per-ping database transactions down to a manageable rate"
+    },
+    {
+      "@id": "../patterns/distributed/routing/api-gateway.html#api-gateway",
+      "name": "API Gateway",
+      "kb:note": "a single front door authenticates, rate-limits, and routes every rider and driver call to the correct internal service"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "services, queues and stores are partitioned by region so riders reach nearby infrastructure and most proximity searches stay within a single shard"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="uber" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Match a rider to the nearest free driver within a minute — at millions of location pings a second, and never double-booking a driver" data-kb-order="14" data-kb-aliases='["ride-sharing","ride-hailing","Lyft"]' data-kb-tags='["system-design","concurrency","coordination","consistency","scalability"]' data-kb-solves='["millions of devices report their location every few seconds and writing every ping straight to the database is melting it","I need the nearest available options to a point but scanning a latitude/longitude table is far too slow","the same worker keeps getting handed two jobs at once because my instances do not coordinate their locks","a request times out and I lose it entirely because the timeout lived in memory on a server that just crashed","a sudden surge of requests overwhelms my matching service and some silently get dropped"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Uber</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Uber</h1>
+      <p class="doc-essence">A ride-sharing platform quotes a fare, matches the rider to a nearby available driver, and tracks the trip to its destination. The hard parts are all real-time and geospatial: absorb a flood of driver-location updates, search them by proximity in milliseconds, and hand each ride to exactly one driver without two matchers colliding.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="uber">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>A rider opens the app, enters a pickup and a destination, sees an estimated fare, and taps to request the ride. The system finds a nearby available driver, offers them the trip, and — once accepted — guides them to the pickup and on to the destination. The REST surface is small and unremarkable; what makes this a distributed-systems problem rather than a CRUD app is the moving substrate underneath it. Ten million drivers are broadcasting their position continuously, matching must complete in seconds, and a single driver can only ever be doing one thing at a time. The interesting engineering lives in three places: ingesting the location firehose, searching it geographically, and coordinating the hand-off so a driver is never offered two rides at once.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>A rider enters a pickup and destination and gets back a fare estimate.</li>
+            <li>A rider requests a ride against that estimate, which triggers matching.</li>
+            <li>Matching pairs the request with a nearby available driver.</li>
+            <li>The chosen driver can accept or decline; on accept, they receive pickup and drop-off details to navigate.</li>
+          </ol>
+          <p class="prose">Out of scope: post-trip ratings, scheduling rides in advance, and ride categories (X, XL, Comfort) — named explicitly so the core stays narrow.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Low-latency matching</strong> — a request matches (or fails) within about a minute.</li>
+            <li><strong>Consistency in matching</strong> — a driver is never assigned two rides at the same time; each is offered exactly one request at a time.</li>
+            <li><strong>Throughput</strong> — survives peak-hour and special-event surges, up to ~100k requests from a single location at once.</li>
+            <li><strong>Out of scope</strong> — GDPR-style compliance, failover/redundancy, and observability, so the design stays on the load-bearing decisions.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Location writes.</strong> Roughly 10M drivers online, each reporting position about every 5&nbsp;seconds, is <strong>~2M location updates/second</strong>. This single number, not the rider traffic, is what dictates the architecture — it is orders of magnitude larger than the request rate.</p>
+        <p><strong>Cost sanity check.</strong> Push those 2M writes/sec of ~100-byte records straight at a managed key-value store on on-demand pricing (~$1.25 per million writes) and you are looking at <strong>north of $200k/day</strong> just to record where cars are. The naïve "write every ping to the database" design is dead on arrival on cost alone, before latency even enters the picture.</p>
+        <p><strong>Requests and peaks.</strong> Ride requests are far rarer than pings — one proximity search per request, gated by a &lt;1-minute match SLA and a 10-second-per-driver accept window. But demand is violently spiky: a concert letting out can fire <strong>~100k requests from one spot</strong> in a moment, so the request path has to buffer and drain rather than drop.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Five entities, each with a clear owner:</p>
+        <ul>
+          <li><strong>Rider</strong> — a passenger requesting rides: contact and payment details.</li>
+          <li><strong>Driver</strong> — a registered driver: personal and vehicle details, plus an availability status.</li>
+          <li><strong>Fare</strong> — a quote for a prospective trip: pickup, destination, estimated amount, and ETA. Created before the ride exists so the rider can accept or decline it.</li>
+          <li><strong>Ride</strong> — a single trip from confirmation to completion: the rider and driver, the state (<code>requested</code>, <code>accepted</code>, <code>in_progress</code>, <code>completed</code>), the route, the charged fare, and pickup/drop-off timestamps.</li>
+          <li><strong>Location</strong> — a driver's live position: latitude, longitude, and the time it was last reported. This is the high-churn entity that never belongs in the primary database.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Four endpoints cover the whole flow. Matching itself has no endpoint — it is a backend process the request triggers.</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — quote, request, locate, respond</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /fare
+{ "pickup": {lat, long}, "destination": {lat, long} }
+&rarr; 200 { "fareId", "amount", "etaSeconds" }
+
+POST /rides
+{ "fareId" }
+&rarr; 200 { "rideId", "status": "requested" }   // triggers matching
+
+POST /drivers/location            // driverId comes from the token, never the body
+{ "lat", "long" }
+&rarr; 200 OK
+
+PATCH /rides/{rideId}
+{ "action": "accept" | "decline" }
+&rarr; 200 { "rideId", "status": "accepted", "pickup": {lat, long} }</code></pre>
+      </details>
+      <div class="prose">
+        <p>One security note that separates a passing answer from a sloppy one: the driver's identity on a location update must be read from the session token, not accepted from the request body. Timestamps are stamped by the server, and the charged fare is read back from the database — a client that can post its own <code>driverId</code>, <code>timestamp</code>, or <code>fareEstimate</code> is a client that can spoof its position or its price.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Every rider and driver call enters through an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> that authenticates, rate-limits, and routes to the right service. The <strong>Ride Service</strong> owns fares and ride state — it calls a third-party <strong>Mapping API</strong> for distance and travel time, applies the pricing model, and persists fares and rides. Requesting a ride does not call the matcher synchronously; it drops the request onto a <strong>queue</strong>, and the <strong>Ride Matching Service</strong> drains it. Meanwhile the <strong>Location Service</strong> swallows the position firehose into an in-memory geospatial store, which the matcher searches by proximity. When a match is found, the <strong>Notification Service</strong> pushes the offer to the driver's phone over APNs or FCM, and the driver's accept flows back through the gateway to the Ride Service.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Rider["Rider app"]
+    Driver["Driver app"]
+    GW["API Gateway"]
+    Ride["Ride Service"]
+    Maps["Mapping API"]
+    DB[("Ride / Fare store")]
+    Q[["Request queue"]]
+    Match["Ride Matching Service"]
+    Loc["Location Service"]
+    Geo[("Redis · geo + locks")]
+    Notif["Notification Service"]
+
+    Rider -->|"POST /fare · /rides"| GW
+    Driver -->|"POST /drivers/location"| GW
+    GW -->|"fare · ride"| Ride
+    Ride -->|"distance + ETA"| Maps
+    Ride -->|"persist"| DB
+    Ride -->|"enqueue request"| Q
+    Q -->|"drain"| Match
+    GW -->|"location pings"| Loc
+    Loc -->|"GEOADD"| Geo
+    Match -->|"GEOSEARCH · lock"| Geo
+    Match -->|"offer ride"| Notif
+    Notif -->|"APNs / FCM"| Driver
+        </pre>
+        <figcaption>The request path (gateway &rarr; queue &rarr; matcher) is decoupled from the location path (pings &rarr; Location Service &rarr; geo store); the matcher joins them by searching live positions.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Absorbing the location firehose and searching it fast</h3>
+        <p>The naïve design fails twice over: 2M writes/sec buries any general-purpose database, and even if it did not, a proximity query over raw latitude/longitude is a full table scan — a B-tree on two independent columns cannot index a 2D neighbourhood, so "who is within 3&nbsp;km" degrades to reading everything.</p>
+        <ul>
+          <li><strong>Batch into a geospatial store.</strong> The first real improvement is to coalesce updates over a short window and <a href="../patterns/concurrency/batching.html">batch</a>-write them, cutting the transaction count sharply, and to store them in a spatial index — a quad-tree, or PostgreSQL with the PostGIS extension. This works, but the batch interval buys throughput at the cost of staleness: the stored position now lags the car, and the matcher can pick a driver who has already moved on.</li>
+          <li><strong>Real-time in-memory geo (chosen).</strong> Keep positions in an in-memory store with native geospatial support — Redis. A <a href="../patterns/distributed/routing/geohash.html">geohash</a> encodes each driver's lat/long into a single 52-bit score in a sorted set keyed by <code>driverId</code>; <code>GEOADD</code> upserts a position (each write simply overwrites the last, so data is always current — no batching needed), and <code>GEOSEARCH</code> returns everyone within a radius in milliseconds. Storage stays tiny because stale drivers auto-expire, and durability — the usual worry with an in-memory store — barely bites here: drivers re-report every ~5 seconds, so even a total flush of the store rebuilds current state in seconds. Back it with snapshotting and a replica for failover and the risk is bounded.</li>
+        </ul>
+        <details class="sketch">
+          <summary>Redis — upsert a position, then search it</summary>
+<pre><code class="language-text" data-kb-lang="text"># driver client pings; each GEOADD overwrites the prior position
+GEOADD drivers:geo &lt;long&gt; &lt;lat&gt; &lt;driverId&gt;
+
+# matcher asks for the closest available drivers to the pickup
+GEOSEARCH drivers:geo FROMLONLAT &lt;long&gt; &lt;lat&gt; BYRADIUS 3 km ASC COUNT 10</code></pre>
+        </details>
+        <p>A companion optimisation attacks the write volume at its source: <strong>adaptive ping intervals</strong>. Instead of a fixed 5-second beat, the driver client decides how often to report from on-device context — slow when parked, faster when moving quickly or turning often. It pushes work to the edge (the same instinct as a file-upload client chunking before it sends) and can cut update volume substantially, at the cost of a genuinely fiddly interval algorithm to tune.</p>
+
+        <h3>2 · Never offering one driver two rides at once</h3>
+        <p>The consistency requirement is really a locking problem: a driver gets a 10-second window to answer one offer before the system moves on, and no two matcher instances may offer the same driver simultaneously. It is the same shape as reserving a concert ticket for a limited window and selling it only once.</p>
+        <ul>
+          <li><strong>In-memory timers per instance.</strong> Each matcher marks a request "locked" and runs its own local countdown. With many instances there is no shared truth, so two can lock the same driver, and if an instance crashes mid-window the lock is simply lost. A cron to sweep orphaned locks papers over it but adds delay and complexity.</li>
+          <li><strong>A status column with a timeout.</strong> Move the lock into the database and lean on its transactions so only one instance wins. Better, but the release still depends on an in-memory timeout somewhere — if that process dies, the driver can stay "outstanding" forever.</li>
+          <li><strong>Distributed lock with TTL (chosen).</strong> Acquire a <a href="../patterns/distributed/coordination/distributed-lock.html">distributed lock</a> in Redis keyed by <code>driverId</code>, with the TTL set to the 10-second window. Winning the key means no other instance can offer that driver a ride; accept within the window and you release it and mark the ride <code>accepted</code>; stay silent and the key simply expires, freeing the driver with zero bookkeeping. The system now leans on the lock store's availability, but because every lock is short-lived, recovery from a hiccup is cheap.</li>
+        </ul>
+
+        <h3>3 · Not dropping requests when demand spikes</h3>
+        <p>Processing requests the instant they arrive is fine until 100k of them land at once and the matcher — or an instance of it — falls over, taking its in-flight work with it. The fix is to stop coupling arrival rate to processing rate.</p>
+        <ul>
+          <li><strong>Queue between request and match (chosen).</strong> Put a durable <a href="../patterns/messaging/message-queue.html">message queue</a> — Kafka, or a managed equivalent — in front of the matcher. Requests are enqueued and drained at the matcher's own pace, which is textbook <a href="../patterns/distributed/resilience/load-leveling.html">queue-based load leveling</a>: the buffer absorbs the spike while the consumer works steadily, and autoscaling adds matcher instances when the backlog grows. Commit each message's offset only <em>after</em> a successful match, so an instance that dies mid-request leaves the message in the queue for another to pick up — nothing is lost.</li>
+          <li><strong>Refinements.</strong> Partition the queue by geographic region so unrelated cities scale independently. And because strict FIFO lets one slow request head-of-line-block the rest, order by a priority (proximity, driver rating) so the most matchable requests go first.</li>
+        </ul>
+
+        <h3>4 · When the chosen driver just doesn't answer</h3>
+        <p>A phone dies, a driver steps away — the offer times out and the system must fall through to the next-best driver cleanly, across crashes, without ever double-assigning. Chaining delayed messages (schedule a 10-second timer alongside each offer, and on fire, advance to the next driver if still unassigned) works but is a minefield of race conditions: an accept landing just as the timer fires can reassign a ride that was already taken.</p>
+        <ul>
+          <li><strong>Durable execution (chosen).</strong> Model the whole match as a durable workflow on an <a href="../patterns/distributed/coordination/workflow-orchestration.html">orchestration</a> engine — Temporal (Uber authored its precursor, Cadence) or AWS Step Functions. The workflow is: offer to the top driver &rarr; wait up to 10 seconds &rarr; if accepted, done; if declined or timed out, advance to the next &rarr; repeat until matched or the list is exhausted. Timeouts, retries, and state are the framework's job, and the state is persisted, so a matcher that crashes mid-ride resumes exactly where it left off. The price is another moving part to run and reason about — worth it for a revenue-critical flow that must never silently drop a rider.</li>
+        </ul>
+
+        <h3>5 · Scaling out to cut latency</h3>
+        <p>Vertical scaling is barely worth the breath at this size — expensive, capped, and a single point of failure. The real lever is geography. <a href="../patterns/distributed/routing/sharding.html">Shard</a> services, queues, and stores by region so a rider in one city talks to nearby infrastructure, which both scales horizontally and shortens the physical round-trip. Consistent hashing spreads load evenly and makes rebalancing survivable, and read replicas lift read throughput. The only cross-shard cost is a scatter-gather when a proximity search straddles a shard boundary near a city edge — rare enough to handle as the exception rather than design around.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Millions of location writes a second land in memory and answer proximity queries in milliseconds, at a fraction of a database's cost.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">A TTL lock guarantees one-offer-per-driver across every matcher instance, with self-cleaning expiry and no timer bookkeeping.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The queue plus durable workflow means peaks are absorbed, not dropped, and a crashed matcher resumes without losing an in-flight ride.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The system now hangs on the availability of in-memory infrastructure — the geo store and the lock store both need robust failover.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Durable execution and partitioned queues add real operational surface: more components to run, monitor, and reason about.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Positions can still be seconds stale between pings, and cross-shard proximity searches near a boundary pay a scatter-gather tax.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a clear API and data model and a working end-to-end design that meets the functional requirements. Recognises that location search needs <em>some</em> spatial index, even without landing on a specific one, and lands at least the database-status solution for one-driver-at-a-time locking.</li>
+          <li><strong>Senior</strong> — moves briskly through the high-level design to spend real time on at least two of the hard problems (geospatial search, the locking race, the demand-spike queue), naming concrete tech and arguing the trade-offs in scalability, performance, and maintainability rather than just listing options.</li>
+          <li><strong>Staff+</strong> — drives depth on three or more areas with practical, real-world judgement: why an in-memory geo store over PostGIS here, why a TTL lock over a swept status column, why durable execution earns its complexity. Anticipates the failure and staleness modes unprompted, and leaves the interviewer with a sharper picture than they walked in with.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="geohash"><a href="../patterns/distributed/routing/geohash.html">Geohash</a><span class="rel-note">each driver's live lat/long is encoded into a sortable geohash score in Redis so the matcher finds the nearest available drivers by radius in milliseconds</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="distributed-lock"><a href="../patterns/distributed/coordination/distributed-lock.html">Distributed Lock</a><span class="rel-note">a Redis key per driverId with a 10-second TTL guarantees no two matcher instances offer the same driver a ride at once, and expiry frees the driver with no timer bookkeeping</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="workflow-orchestration"><a href="../patterns/distributed/coordination/workflow-orchestration.html">Workflow Orchestration</a><span class="rel-note">the offer-timeout-and-fall-through-to-the-next-driver sequence runs as a durable Temporal workflow whose persisted state survives a matcher crash mid-ride</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="message-queue"><a href="../patterns/messaging/message-queue.html">Message Queue</a><span class="rel-note">ride requests are enqueued and their offset committed only after a successful match, so a surge is buffered and a dead worker's message is re-picked by another instance</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="load-leveling"><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">the request queue absorbs 100k-at-once demand spikes while the matcher drains at its own pace and autoscaling adds instances behind it</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="batching"><a href="../patterns/concurrency/batching.html">Batching</a><span class="rel-note">location updates are coalesced over a short interval and bulk-written to cut millions of per-ping database transactions down to a manageable rate</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="api-gateway"><a href="../patterns/distributed/routing/api-gateway.html">API Gateway</a><span class="rel-note">a single front door authenticates, rate-limits, and routes every rider and driver call to the correct internal service</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">services, queues and stores are partitioned by region so riders reach nearby infrastructure and most proximity searches stay within a single shard</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

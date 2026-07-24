@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gopuff · Patterns</title>
+  <meta name="description" content="Design a rapid local-delivery service — aggregate one-hour-deliverable inventory across hundreds of micro-warehouses, serve reads in under 100 ms, and serialize orders so no physical unit is ever sold twice.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#gopuff",
+  "identifier": "gopuff",
+  "name": "Gopuff",
+  "description": "Aggregate deliverable inventory across hundreds of micro-warehouses — reads under 100 ms, orders serialized so no physical unit is sold twice",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/messaging/scatter-gather.html#scatter-gather",
+      "name": "Scatter-Gather",
+      "kb:note": "an availability read fans a location out to every in-range DC and unions their inventory into one list"
+    },
+    {
+      "@id": "../patterns/caching/cache-aside.html#cache-aside",
+      "name": "Cache-Aside",
+      "kb:note": "a Redis layer with a one-minute TTL absorbs the ~20k QPS of availability reads, misses falling through to Postgres and writes invalidating keys"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/optimistic-concurrency-control.html#optimistic-concurrency-control",
+      "name": "Optimistic Concurrency Control",
+      "kb:note": "ordering runs as one SERIALIZABLE Postgres transaction so a concurrent double-order hits a serialization failure at commit and is rejected"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/replication.html#replication",
+      "name": "Replication",
+      "kb:note": "availability reads are served from Postgres read replicas while orders write to the leader for strong consistency"
+    },
+    {
+      "@id": "../patterns/distributed/routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "inventory is partitioned by region (first three zip digits) so a location query touches only one or two partitions"
+    },
+    {
+      "@id": "../patterns/caching/in-process-cache.html#in-process-cache",
+      "name": "In-Process Cache",
+      "kb:note": "the Nearby Service holds the whole DC table in memory and refreshes it every five minutes to prune candidates before any drive-time call"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="gopuff" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Aggregate deliverable inventory across hundreds of micro-warehouses — reads under 100 ms, orders serialized so no physical unit is sold twice" data-kb-order="13" data-kb-aliases='["local delivery service","rapid delivery","q-commerce"]' data-kb-tags='["system-design","consistency","caching","scalability","transactions"]' data-kb-solves='["I need to show which products can reach a customer within the hour, but my stock is scattered across hundreds of tiny warehouses","two customers keep buying the same last physical unit and one of the orders can never be fulfilled","my availability page has to answer in under 100 ms even though every request fans out to dozens of warehouses","a warehouse that looks close on a map is unreachable in an hour because of a river or rush-hour traffic","people browsing generate far more traffic than people buying and my inventory database cannot keep up"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Gopuff</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Gopuff</h1>
+      <p class="doc-essence">A rapid local-delivery service stocks convenience goods in hundreds of small distribution centers placed close to customers. The interesting engineering is not the catalog — it is answering "what can reach me within the hour?" by uniting inventory across every nearby warehouse, fast, while never promising the same physical unit to two buyers.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="gopuff">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>Instead of a handful of large warehouses, the network is hundreds of micro distribution centers (DCs) sprinkled through cities so that most goods sit within an hour of most customers. That inverts the usual inventory question. Availability is not a property of one store — it is the <em>union</em> of stock across every DC that can actually reach a given location inside the delivery window. A customer browsing at a corner in Brooklyn should see everything that any in-range DC can deliver, merged into one list.</p>
+        <p>Two forces pull in opposite directions and shape the whole design. Browsing is read-heavy and latency-sensitive: the availability lookup behaves like search and must feel instant, which puts it squarely in the read-first playbook of the <a href="../themes/scaling-reads.html">Scaling Reads</a> theme. Ordering is the opposite: it touches physical goods, so it must be strongly consistent — two people must never be sold the same can of soda. Catalog and search, payments, driver routing, cancellations and returns are all deliberately out of scope; the system is only availability plus ordering.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Query, by location, the items deliverable within one hour — the effective availability being the union of inventory across all DCs in range of that location.</li>
+            <li>Place a single order containing multiple items.</li>
+          </ol>
+          <p class="prose">Out of scope, named on purpose: payments, driver routing and delivery, catalog/search APIs, and cancellations/returns. The focus is aggregating availability and preventing double-booking of physical stock.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Fast reads</strong> — availability lookups under <strong>100&nbsp;ms</strong>, because they back a search-like browsing experience.</li>
+            <li><strong>Strong consistency on orders</strong> — no two customers ever purchase the same physical unit of inventory.</li>
+            <li><strong>Scale</strong> — up to <strong>10k DCs</strong> and <strong>100k catalog items</strong>, at roughly <strong>10M orders/day</strong>.</li>
+            <li>Out of scope: privacy/security hardening and disaster recovery.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Reads are the load.</strong> Start from 10M orders/day. A shopper views on the order of 10 pages — home, category, a few searches — before buying, and only about 5% of browsing sessions convert. Working backwards: 10M orders ÷ ~100k seconds/day ≈ 100 orders/sec; multiply by 10 page views and divide by the 5% conversion rate and availability traffic lands near <strong>20k queries/second</strong>. That number, not the write path, is what the read side must survive.</p>
+        <p><strong>Writes are modest.</strong> The same 10M orders/day is only ~100 order transactions/second — two orders of magnitude below the reads. Writes can afford to be careful and slow; reads cannot.</p>
+        <p><strong>Data is small but hot.</strong> An inventory row is a (DC, item, quantity, state) tuple; even at 10k DCs × 100k items the populated set is sparse and fits comfortably in a partitioned relational store. Nothing here forces sharding for capacity — the 20k QPS of reads forces caching and replication for throughput.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Start from the concrete physical nouns and work up to the abstract ones:</p>
+        <ul>
+          <li><strong>Item</strong> — a <em>type</em> of product ("Cheetos"): what a customer browses and searches for. It carries name and description, not location.</li>
+          <li><strong>Inventory</strong> — a physical instance of an Item sitting at one specific DC. Item is to Inventory as a class is to its instances; effective availability is Inventory summed across in-range DCs.</li>
+          <li><strong>DistributionCenter</strong> — a physical location holding Inventory, with a lat/long used to decide what it can deliver where.</li>
+          <li><strong>Order</strong> — a collection of ordered Inventory plus shipping and billing details, expanded into <code>OrderItems</code> rows.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Two endpoints cover both requirements. Location is a parameter on <em>both</em> — the backend has to confirm that stock is close enough to deliver within the hour before it will show an item or accept an order for it.</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — availability and ordering</summary>
+<pre><code class="language-http" data-kb-lang="http">GET /availability?lat=40.68&amp;long=-73.97&amp;keyword=chips&amp;page=0
+&rarr; 200 { "items": [ { "itemId": "cheetos", "name": "Cheetos",
+                       "quantity": 42 }, … ], "nextPage": 1 }
+
+POST /orders
+{ "location": { "lat": 40.68, "long": -73.97 },
+  "items": [ { "itemId": "cheetos", "qty": 1 },
+             { "itemId": "cola",    "qty": 2 } ] }
+&rarr; 201 { "orderId": "o_9f2", "status": "confirmed" }
+&rarr; 409 { "error": "out_of_stock", "itemId": "cola" }   // whole order fails</code></pre>
+      </details>
+      <div class="prose">
+        <p>Availability is paginated because it backs a browsing surface. Ordering is all-or-nothing: if any single line item is unavailable the entire order is rejected with a clear error, which is preferable to shipping an incoherent partial order (a device without its battery).</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>Three services sit in front of one database. The <strong>Availability Service</strong> answers reads; the <strong>Orders Service</strong> takes writes; both call a shared <strong>Nearby Service</strong> to turn a location into the set of DCs that can reach it. An availability read then fans that set of DC ids out against the inventory data and unions the results into a single list — a scatter to many partitions, gathered into one response. Orders and inventory live together in one Postgres database, partitioned by region: the Availability Service reads from replicas (a slightly stale count is fine), while the Orders Service writes to the leader inside a strongly-consistent transaction so no unit is promised twice.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Customer app"]
+    Client -->|"availability by location"| Avail["Availability Service"]
+    Client -->|"place order"| Orders["Orders Service"]
+    Avail -->|"which DCs reach here?"| Nearby["Nearby Service"]
+    Orders -->|"which DCs reach here?"| Nearby
+    Nearby -->|"prune, then drive-time"| Travel["Travel Time Service"]
+    Avail -->|"lookup, 1-min TTL"| Cache[("Redis cache")]
+    Cache -->|"miss"| Replica[("Postgres read replicas")]
+    Orders -->|"SERIALIZABLE txn"| Leader[("Postgres leader")]
+    Leader -->|"replicate + invalidate"| Replica
+        </pre>
+        <figcaption>Reads flow through cache to a regional read replica; orders take the leader under a serializable transaction. Both resolve in-range DCs through the shared Nearby Service.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Ordering without selling the same unit twice</h3>
+        <p>An order must check stock, record the order, and decrement inventory as one indivisible step, or a race lets two customers claim the same last unit.</p>
+        <ul>
+          <li><strong>Two stores plus a distributed lock.</strong> Keep orders and inventory in separate best-fit databases; on each order, take a <a href="../patterns/distributed/coordination/distributed-lock.html">distributed lock</a> over the relevant inventory records, write the order, decrement, release. It buys store independence but the failure modes are nasty: a crash after writing the order but before the decrement leaves stock double-promised and needs a background sweep to detect and reverse, and two orders that grab items in opposite order can <a href="../hazards/deadlock.html">deadlock</a>. Workable, not clean.</li>
+          <li><strong>One Postgres transaction (chosen).</strong> Colocate orders and inventory in a single ACID store and do the whole thing as one transaction at <code>SERIALIZABLE</code> isolation. If two orders touch the same unit concurrently, one hits a serialization failure at commit and is rejected — <a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">optimistic concurrency control</a> enforced by the database itself, with no lock-management code to get wrong. The price paid is that inventory and orders now scale together and you give up picking a specialized store per concern; when atomicity is a hard requirement, that is a good trade.</li>
+        </ul>
+      </div>
+      <details class="sketch">
+        <summary>SQL — the order as one serializable transaction</summary>
+<pre><code class="language-sql" data-kb-lang="sql">BEGIN ISOLATION LEVEL SERIALIZABLE;
+
+-- reserve every requested unit atomically; row count must match
+UPDATE inventory SET state = 'ordered'
+ WHERE item_id = ANY($1) AND dc_id = ANY($2) AND state = 'available';
+-- if fewer rows updated than requested → some item is out of stock
+--   → ROLLBACK and return 409 for the whole order
+
+INSERT INTO orders (id, location, ...)      VALUES (...);
+INSERT INTO order_items (order_id, item_id) VALUES ...;
+
+COMMIT;   -- a concurrent order for the same unit fails to commit here</code></pre>
+      </details>
+      <div class="prose">
+        <h3>2 · From straight-line distance to real drive time</h3>
+        <p>"Close in miles" is not "deliverable in an hour" — a river, a highway with no exit, or rush hour can put a nearby-by-map DC out of reach. The Nearby Service has to reason about drive time, not just distance.</p>
+        <ul>
+          <li><strong>SQL distance threshold.</strong> Store DC lat/long, compute distance (Euclidean, or Haversine to respect the Earth's curvature), keep DCs under a threshold. Cheap, but blind to traffic and roads.</li>
+          <li><strong>Travel-time service against every DC.</strong> Ask an external travel-time estimator for the drive time from the customer to <em>every</em> DC. Accurate and hopeless at scale — the vast majority of DCs are nowhere near in range, so almost every call is wasted.</li>
+          <li><strong>Prune, then estimate (chosen).</strong> Keep the whole DC table in memory and refresh it every 5 minutes — DCs change rarely, so an <a href="../patterns/caching/in-process-cache.html">in-process cache</a> of the table is essentially free. First filter to a coarse candidate set with a fixed radius (~60 miles, the most anyone could plausibly drive in an hour), then call the travel-time service only on that handful for a real drive-time estimate. One cheap spatial pass turns thousands of DCs into the few worth asking about.</li>
+        </ul>
+        <h3>3 · Serving 20k availability queries per second</h3>
+        <p>The read path has to absorb ~20k QPS against inventory that changes only when an order commits. Two moves, applied together:</p>
+        <ul>
+          <li><strong>Cache in front, with a short TTL.</strong> Put Redis before the database: the Availability Service reads the cache first and, on a miss, queries the store and populates it — the <a href="../patterns/caching/cache-aside.html">cache-aside</a> loop. A ~1-minute TTL bounds how stale a count can be, and the Orders Service invalidates affected keys when it writes, so a purchased-out item disappears from availability quickly rather than lingering as a <a href="../hazards/stale-cache.html">stale cache</a> entry that sells phantom stock.</li>
+          <li><strong>Read replicas over a partitioned store.</strong> A location only ever touches a small cluster of nearby DCs, so partition inventory by region — the first three digits of the zip code — and a query hits just one or two <a href="../patterns/distributed/routing/sharding.html">partitions</a> instead of the whole table. Serve those reads from Postgres <a href="../patterns/distributed/coordination/replication.html">read replicas</a>, which tolerate slight staleness, while orders keep going to the leader for strong consistency. Replicas and partitions are then sized so no single one becomes a hot spot.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Availability under 100&nbsp;ms at ~20k QPS, served from cache and regional replicas rather than the write path.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">No double-selling: one serializable transaction makes concurrent orders for the same unit fail at commit, with no lock-management code.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Drive-time accuracy without drowning the travel-time service — a coarse radius prunes thousands of DCs to a handful.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Colocating orders and inventory in one Postgres couples their scaling and forfeits a best-fit store per concern.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Cached, replica-served counts are slightly stale, so an item can briefly show as available after its last unit is gone.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">All-or-nothing orders reject the whole basket if any one line is out of stock — correct, but blunt.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — a working end-to-end design for both routes: clear API and data model, a Nearby step that resolves in-range DCs, and inventory summed across them. Landing on a "good enough" locking story with sound discussion is acceptable even without reaching the best answer.</li>
+          <li><strong>Senior</strong> — moves quickly through the high-level design and spends the time optimizing the two critical paths unprompted: the order-atomicity problem (arguing distributed lock vs. a single serializable transaction) and the read-scaling problem (caching, replicas, region partitioning), with pros and cons articulated.</li>
+          <li><strong>Staff+</strong> — treats read volume and locality partitioning as obvious and goes deep with real-world fluency: serialization-failure handling and retries, cache-invalidation timing on writes, radius-prune before drive-time estimation, and how replicas and partitions are sized to avoid hot spots.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="scatter-gather"><a href="../patterns/messaging/scatter-gather.html">Scatter-Gather</a><span class="rel-note">an availability read fans a location out to every in-range DC and unions their inventory into one list</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="cache-aside"><a href="../patterns/caching/cache-aside.html">Cache-Aside</a><span class="rel-note">a Redis layer with a one-minute TTL absorbs the ~20k QPS of availability reads, misses falling through to Postgres and writes invalidating keys</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="optimistic-concurrency-control"><a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">Optimistic Concurrency Control</a><span class="rel-note">ordering runs as one SERIALIZABLE Postgres transaction so a concurrent double-order hits a serialization failure at commit and is rejected</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="replication"><a href="../patterns/distributed/coordination/replication.html">Replication</a><span class="rel-note">availability reads are served from Postgres read replicas while orders write to the leader for strong consistency</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">inventory is partitioned by region (first three zip digits) so a location query touches only one or two partitions</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="in-process-cache"><a href="../patterns/caching/in-process-cache.html">In-Process Cache</a><span class="rel-note">the Nearby Service holds the whole DC table in memory and refreshes it every five minutes to prune candidates before any drive-time call</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

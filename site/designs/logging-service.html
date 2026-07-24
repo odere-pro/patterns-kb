@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Logging Service · Patterns</title>
+  <meta name="description" content="Low-level design of an in-process logger — fanning one record out to many destinations, composing format and target as two independent axes, and locking per resource.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#logging-service",
+  "identifier": "logging-service",
+  "name": "Logging Service",
+  "description": "One log call fans out to every destination, each filtering and formatting on its own — an OOP design about composing two independent axes without an N×M class explosion",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../principles/composition-over-inheritance.html#composition-over-inheritance",
+      "name": "Composition over Inheritance",
+      "kb:note": "Destination composes a Formatter and a Sink instead of subclassing one class per format×target combination"
+    },
+    {
+      "@id": "../patterns/gof/behavioral/strategy.html#strategy",
+      "name": "Strategy",
+      "kb:note": "Formatter and Sink are pluggable roles chosen at construction — plain-text/JSON, console/file"
+    },
+    {
+      "@id": "../patterns/gof/behavioral/template-method.html#template-method",
+      "name": "Template Method",
+      "kb:note": "Destination.write fixes the filter→format→write skeleton so no output can skip the level check or the formatter"
+    },
+    {
+      "@id": "../principles/open-closed.html#open-closed",
+      "name": "Open/Closed Principle",
+      "kb:note": "a new output target is a new Sink, added without editing Logger or Destination"
+    },
+    {
+      "@id": "../principles/dependency-inversion.html#dependency-inversion",
+      "name": "Dependency Inversion Principle",
+      "kb:note": "Destination depends only on the Sink and Formatter abstractions, never on ConsoleSink or JsonFormatter"
+    },
+    {
+      "@id": "../patterns/ddd/value-object.html#value-object",
+      "name": "Value Object",
+      "kb:note": "LogRecord is an immutable, identity-free record of one moment in one thread, built once and read by every destination"
+    },
+    {
+      "@id": "../patterns/functional/immutability.html#immutability",
+      "name": "Immutability",
+      "kb:note": "an unchanging record plus pure formatters let formatting run outside the lock with nothing to race on"
+    },
+    {
+      "@id": "../principles/separation-of-concerns.html#separation-of-concerns",
+      "name": "Separation of Concerns",
+      "kb:note": "one axis of change per class — orchestration, classification, serialisation, output, and the per-output invariant each isolated"
+    },
+    {
+      "@id": "../patterns/concurrency/monitor-object.html#monitor-object",
+      "name": "Monitor Object",
+      "kb:note": "each Destination owns its own lock and guards only its sink write, so a slow file output can't block console output"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="logging-service" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-order="37" data-kb-essence="One log call fans out to every destination, each filtering and formatting on its own — an OOP design about composing two independent axes without an N×M class explosion" data-kb-aliases='["logger","logging library"]' data-kb-tags='["low-level-design","composition","concurrency","extensibility","separation-of-concerns"]' data-kb-solves='["supporting plain text and JSON on both console and file is exploding into a class per combination","adding a new output target means editing a giant switch inside one write method","one slow file write blocks my console output because a single lock guards everything","two threads log at the same instant and their bytes interleave into one corrupted line","a failed write to one output crashes the application that only wanted to record a message"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Logging Service</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Logging Service</h1>
+      <p class="doc-essence">A logger is the in-process library an application calls to stamp a message with a time and a severity and push it to one or more outputs — the console, a file, later maybe the network. As a low-level design it is almost entirely about shape: two things vary independently (the format and the target), several threads call it at once, and any output can fail without the caller ever wanting to know.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="logging-service">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>The thing being designed is a library, not a service: something linked into one process that a call like <code>logger.info("user signed in")</code> reaches directly — the same role Log4j, SLF4J, or Python's <code>logging</code> play. Everything downstream of the process — network shipping, aggregation, ingestion pipelines, schema registries — is explicitly out of scope. There is no distributed scale to survive; the whole exercise is object modelling. What makes it more than a one-class wrapper is that <em>two</em> axes vary at once: a record can be plain text or JSON, and it can land on the console or in a file, and any combination must work. Layer on that a handful of threads calling <code>log()</code> concurrently, per-destination severity thresholds, and a standing requirement that a remote destination slot in later without a rewrite, and the interesting decisions are all about where each responsibility belongs.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Five ordered severity levels — <code>DEBUG &lt; INFO &lt; WARN &lt; ERROR &lt; FATAL</code> — with a convenience method per level.</li>
+            <li>Each record carries a timestamp, a level, the message, and the name of the thread that emitted it.</li>
+            <li>One <code>log()</code> call fans the record out to every destination configured at startup.</li>
+            <li>Each destination owns its own minimum level and its own format; the two vary independently, and sub-threshold records are dropped before the write.</li>
+          </ol>
+          <p class="prose">Out of scope: hot-reloading config, async or buffered writes, log rotation, network destinations (in v1), and hierarchical named loggers — each named on purpose so it reads as deferred, not forgotten.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional (constraints)</h3>
+          <ul>
+            <li><strong>Thread safety</strong> — one record's bytes never interleave with another's on the same destination.</li>
+            <li><strong>Static config</strong> — destinations are set once at construction and never change after.</li>
+            <li><strong>Extensibility</strong> — a remote destination must drop in later without touching <code>Logger</code>.</li>
+            <li><strong>Ordering</strong> — a single thread's calls keep their order; no strict cross-thread ordering is promised beyond each record's timestamp.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>A noun earns a class only if it owns state, enforces a rule, or has its own lifecycle. That filter keeps the model to five pieces:</p>
+        <ul>
+          <li><strong>Logger</strong> — the orchestrator and the surface the application calls. Holds an immutable list of destinations, captures the timestamp and thread name at call time, builds one record, and hands it to each destination.</li>
+          <li><strong>Destination</strong> — one configured output. Owns its minimum-level threshold and a reference to its formatter, runs the filter → format → write workflow, and owns the lock that guards its own resource.</li>
+          <li><strong>Formatter</strong> — an interface that turns a record into a string. Two implementations today (plain text, JSON); a new format is a new implementation and nothing else moves.</li>
+          <li><strong>LogRecord</strong> — an immutable value: timestamp, level, message, thread name. Made once in <code>log()</code> and read by every destination.</li>
+          <li><strong>LogLevel</strong> — a five-valued ordered enum, no per-level behaviour. A <code>DebugLevel</code>/<code>InfoLevel</code> class hierarchy would be over-modelling a thing that is really just a rank.</li>
+        </ul>
+        <p>The application, the OS threads, and the individual fields are deliberately <em>not</em> entities — they are external, borrowed, or plain data. One abstraction is also held back on purpose: the thing that actually writes bytes (later named <code>Sink</code>) is left out of the entity list, because forcing it in here would pre-empt the inheritance-versus-composition argument the class design turns on.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>The public surface is tiny and set once: the caller hands over a fixed list of destinations at construction — no <code>addDestination</code>, no setters, no builder — and then only ever calls <code>log()</code> or one of its per-level shortcuts.</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — the public API</summary>
+<pre><code class="language-python" data-kb-lang="python">class Logger:
+    def __init__(self, destinations):   # fixed at startup, stored immutable
+        ...
+    def log(self, level, message):      # build one record, fan it to every destination
+        ...
+    def debug(self, message): ...       # one-line delegations to log(...)
+    def info(self, message): ...        # ergonomics for tens of thousands of call sites
+    def warn(self, message): ...
+    def error(self, message): ...
+    def fatal(self, message): ...</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p><code>Logger</code> keeps an immutable list of destinations. <code>log()</code> captures the moment — <code>now()</code> and the calling thread's name — once at the top, builds a single <code>LogRecord</code>, and iterates the list handing that same instance to each <code>Destination.write()</code>. A destination checks the record against its own threshold, asks its <code>Formatter</code> to serialise it, and — under a lock it owns — pushes the string through its <code>Sink</code>. Formatters and sinks are the two pluggable roles: <code>PlainTextFormatter</code>/<code>JsonFormatter</code> and <code>ConsoleSink</code>/<code>FileSink</code>. Because those two roles are separate interfaces, a destination is a concrete class that composes one of each — any format with any target is just a constructor argument.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+classDiagram
+    class Logger {
+        -List~Destination~ destinations
+        +log(level, message)
+        +info(message)
+        +error(message)
+    }
+    class Destination {
+        -Formatter formatter
+        -LogLevel minLevel
+        -Sink sink
+        -Lock lock
+        +write(record)
+    }
+    class LogRecord {
+        -Instant timestamp
+        -LogLevel level
+        -String message
+        -String threadName
+    }
+    class Formatter {
+        &lt;&lt;interface&gt;&gt;
+        +format(record) String
+    }
+    class PlainTextFormatter
+    class JsonFormatter
+    class Sink {
+        &lt;&lt;interface&gt;&gt;
+        +write(formatted)
+    }
+    class ConsoleSink
+    class FileSink {
+        -String filePath
+    }
+    Logger "1" o-- "*" Destination : owns
+    Logger ..> LogRecord : builds one per call
+    Destination --> Formatter : formats with
+    Destination --> Sink : writes through
+    Destination ..> LogRecord : reads
+    Formatter &lt;|.. PlainTextFormatter
+    Formatter &lt;|.. JsonFormatter
+    Sink &lt;|.. ConsoleSink
+    Sink &lt;|.. FileSink
+        </pre>
+        <figcaption>Logger orchestrates and fans out; Destination owns the per-output invariant and its lock; format and target are two independent interfaces a destination composes.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Two axes of variation — compose them, don't multiply them</h3>
+        <p>The whole class design hinges on one requirement: format and target vary independently. Get it wrong and you get a combinatorial mess.</p>
+        <ul>
+          <li><strong>One class that branches on a type field.</strong> A single <code>Destination</code> with a <code>type</code> field and a <code>write()</code> that switches <code>CONSOLE</code> vs <code>FILE</code>. Fine for two targets, but the third adds a branch <em>and</em> fields only it uses (<code>filePath</code>, <code>socketAddress</code>, <code>kafkaTopic</code>), so most fields sit null and <code>write()</code> becomes a switch statement wearing polymorphism as a costume. Every new target edits existing logic — the textbook <a href="../principles/open-closed.html">open/closed</a> violation. Rejected.</li>
+          <li><strong>Inheritance with a template method.</strong> Make <code>Destination</code> abstract, put the filter-and-format skeleton in <code>write()</code>, and leave subclasses only a <code>doWrite()</code> to fill in. This is the <a href="../patterns/gof/behavioral/template-method.html">template method</a> pattern: the level check and the formatter call live in exactly one place, so a subclass author can't forget them. It works — but inheritance is a heavy commitment for one axis of variation, and it composes badly. The moment you want to wrap a target (buffering, retry), "wrap" under inheritance means "subclass and override," and stacking two wrappers wants three levels of hierarchy for what should be one operation.</li>
+          <li><strong>Composition behind a Sink interface (chosen).</strong> Pull the byte-writing step into its own <code>Sink</code> interface. <code>Destination</code> stays a single concrete class that owns the threshold and the formatter and delegates the write to a sink. Both the formatter and the sink are <a href="../patterns/gof/behavioral/strategy.html">strategies</a> — pluggable roles chosen at construction — so the design leans on <a href="../principles/composition-over-inheritance.html">composition over inheritance</a>: a new output target is a new <code>Sink</code>, not a new <code>Destination</code> subclass, and any format × any target is <code>Destination(formatter, minLevel, sink)</code>. The high-level workflow depends only on the <code>Sink</code> and <code>Formatter</code> abstractions, never on <code>ConsoleSink</code> or <code>JsonFormatter</code> directly — <a href="../principles/dependency-inversion.html">dependency inversion</a> in practice — which is exactly what lets the required-but-deferred <code>RemoteSink</code> drop in with nothing else touched. It is the shape real loggers converge on: Log4j separates appenders from layouts, Python's <code>logging</code> separates handlers from formatters.</li>
+        </ul>
+        <p>Underneath all three is the same discipline — <a href="../principles/separation-of-concerns.html">separation of concerns</a>, read as one axis of change per class: orchestration in <code>Logger</code>, classification in <code>LogLevel</code>, serialisation in <code>Formatter</code>, output in <code>Sink</code>, and the per-output invariant in <code>Destination</code>. The inheritance variant is still defensible in an interview if you can name the tradeoff; the senior signal is reasoning about the choice, not landing on one fixed answer.</p>
+
+        <h3>2 · The record is an immutable value, captured once</h3>
+        <p><code>LogRecord</code> is a <a href="../patterns/ddd/value-object.html">value object</a>: four read-only fields describing one moment in one thread, with no behaviour and no identity beyond its contents — a Java record, a Kotlin data class, a frozen <code>@dataclass</code>. Two things make that pay off. First, the timestamp and thread name are captured <em>once</em>, at the top of <code>log()</code>, not per destination — so every destination sees the identical moment for one logical event, rather than five slightly different clock reads. Second, because the record never changes after creation and formatters are pure functions, the record and its formatters are safe to share across destinations and threads with no synchronisation at all. A dedicated type also means that adding a field later — a request id, a logger name, a context map — touches one class and the one method that builds it, instead of every signature on <code>Destination</code> and <code>Formatter</code>. That <a href="../patterns/functional/immutability.html">immutability</a> is not decoration; it is the property the concurrency design is built on.</p>
+
+        <h3>3 · Where the lock lives</h3>
+        <p>Thread safety means one record's bytes must never split across another's on the same output. The tempting answer is to <code>synchronize</code> the whole of <code>Logger.log()</code> — correct, but a sledgehammer: a slow file write (disk full, contended I/O) then blocks every other call, including console writes that should be instant, and one lock ends up guarding five unrelated resources. The better answer puts the lock where the resource is. Each <code>Destination</code> owns its own lock and applies it around only <code>sink.write()</code> — a <a href="../patterns/concurrency/monitor-object.html">monitor object</a> guarding exactly one output. A hung remote destination can't block the file; a slow file can't block the console. And crucially, the level check and the formatting happen <em>outside</em> the critical section — safe precisely because the record is immutable and the formatter is pure, so there is nothing to race on — which keeps the locked region the smallest correct one. Holding the lock across format-and-write instead is also defensible and simpler; the throughput cost only bites when formatting is expensive and contention is high.</p>
+
+        <h3>4 · When a destination fails — and what comes next</h3>
+        <p>A logger is infrastructure, so a broken output must never crash the code that called it. If <code>sink.write()</code> throws and you let it propagate, a full disk turns <code>logger.error("payment failed")</code> into a payment-processing crash, and a later destination in the fan-out never sees the record. Swallowing the exception inside <code>Destination.write()</code> fixes the crash but fails silently — a forensic file can sit empty for days. The production default is to swallow <em>and</em> emit a one-line diagnostic to a known-good fallback stream (stderr), mirroring Log4j's <code>StatusLogger</code> and Python's handler-error behaviour; the diagnostic itself must be rate-limited or a persistently failing sink floods stderr. As for the deferred requirements, the shape holds: making <code>log()</code> non-blocking means a bounded queue and a single worker thread per destination (Log4j's <code>AsyncAppender</code>, Python's <code>QueueHandler</code>) — which brings its own worker-lifecycle and overflow-policy questions; hierarchical named loggers add a name and a parent pointer plus a registry <code>LoggerFactory</code>, the one place where shared global state is genuinely the requirement. Neither forces a rewrite of the core, which is the point of drawing the boundaries where they are.</p>
+      </div>
+      <details class="sketch">
+        <summary>Pseudocode — Destination.write, the composed workflow</summary>
+<pre><code class="language-python" data-kb-lang="python">class Destination:                 # one concrete class, no hierarchy
+    def __init__(self, formatter, min_level, sink):
+        self._formatter = formatter
+        self._min_level = min_level
+        self._sink = sink
+        self._lock = Lock()        # this destination owns its own lock
+
+    def write(self, record):
+        if record.level &lt; self._min_level:
+            return                 # sub-threshold: silent drop, no diagnostic
+
+        formatted = self._formatter.format(record)   # pure — outside the lock
+
+        with self._lock:           # critical section is only the sink write
+            try:
+                self._sink.write(formatted)
+            except Exception as exc:
+                stderr.write(f"logger: sink write failed: {exc}")</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Format and target are composed, not multiplied — any combination is a constructor call, and a new target is a new Sink with nothing else touched.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Per-destination locks: a slow file write never blocks instant console output, and the critical section is only the sink write.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">One immutable record built per call — every destination sees the same moment, and formatting needs no synchronisation.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">A failing sink is swallowed with a stderr diagnostic, so a broken output never crashes the caller or starves the other destinations.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Composition adds one more interface and role than inheritance — mild overhead for a system with only two targets.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Swallowing exceptions can hide a chronically broken destination unless the stderr diagnostic is rate-limited.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Writes are synchronous, so the caller blocks for the I/O duration; non-blocking writes need the bounded-queue extension.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">No cross-thread ordering beyond each record's timestamp — wire order reflects who won the lock, not who called first.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Junior</strong> — a working logger: a <code>Logger</code> owning a list of destinations, an immutable <code>LogRecord</code>, a five-value <code>LogLevel</code> enum, <code>log()</code> building a record and fanning it to each destination, and each destination dropping sub-threshold records. Basic robustness (a null message or an out-of-range level shouldn't crash). Coupling format to target at first — a single <code>JsonFileDestination</code> — is acceptable until the interviewer pushes.</li>
+          <li><strong>Mid-level</strong> — reaches the format-vs-target split largely unprompted: "any format on any target" should trigger pulling <code>Formatter</code> into its own interface and seeing that one <code>Destination</code> composing a formatter and a target beats N×M subclasses. Gives <code>LogRecord</code> its own immutable type so a future field doesn't ripple through every signature, and can hold a sensible concurrency conversation with hints.</li>
+          <li><strong>Senior</strong> — class boundaries are obvious; volunteers the inheritance-vs-composition tradeoff and lands on a <code>Sink</code> interface (or defends the inheritance variant), names dependency inversion, and captures the timestamp and thread once at the top of <code>log()</code>. Reaches per-destination locks unprompted, explains why a global lock is the wrong default and why formatting sits outside the critical section, proposes swallow-plus-stderr, and can carry the async-writes and named-logger extensions.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="composition-over-inheritance"><a href="../principles/composition-over-inheritance.html">Composition over Inheritance</a><span class="rel-note">Destination composes a Formatter and a Sink instead of subclassing one class per format×target combination</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="strategy"><a href="../patterns/gof/behavioral/strategy.html">Strategy</a><span class="rel-note">Formatter and Sink are pluggable roles chosen at construction — plain-text/JSON, console/file</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="template-method"><a href="../patterns/gof/behavioral/template-method.html">Template Method</a><span class="rel-note">Destination.write fixes the filter→format→write skeleton so no output can skip the level check or the formatter</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="open-closed"><a href="../principles/open-closed.html">Open/Closed Principle</a><span class="rel-note">a new output target is a new Sink, added without editing Logger or Destination</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="dependency-inversion"><a href="../principles/dependency-inversion.html">Dependency Inversion Principle</a><span class="rel-note">Destination depends only on the Sink and Formatter abstractions, never on ConsoleSink or JsonFormatter</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="value-object"><a href="../patterns/ddd/value-object.html">Value Object</a><span class="rel-note">LogRecord is an immutable, identity-free record of one moment in one thread, built once and read by every destination</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="immutability"><a href="../patterns/functional/immutability.html">Immutability</a><span class="rel-note">an unchanging record plus pure formatters let formatting run outside the lock with nothing to race on</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="separation-of-concerns"><a href="../principles/separation-of-concerns.html">Separation of Concerns</a><span class="rel-note">one axis of change per class — orchestration, classification, serialisation, output, and the per-output invariant each isolated</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="monitor-object"><a href="../patterns/concurrency/monitor-object.html">Monitor Object</a><span class="rel-note">each Destination owns its own lock and guards only its sink write, so a slow file output can't block console output</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Race Condition · Patterns</title>
+  <meta name="description" content="A race condition: unsynchronized concurrent access to shared state whose outcome depends on timing — the check-then-act and lost-update bugs that silently corrupt data.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#race-condition",
+  "identifier": "race-condition",
+  "name": "Race Condition",
+  "description": "Unsynchronized concurrent access whose result depends on timing",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "hazard",
+  "kb:band": "hazard",
+  "kb:group": "hazard",
+  "kb:mitigated-by": [
+    {
+      "@id": "../patterns/distributed/coordination/conditional-write.html#conditional-write",
+      "name": "Conditional Write",
+      "kb:note": "Fold the check into the write so the store applies them as one indivisible step"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/optimistic-concurrency-control.html#optimistic-concurrency-control",
+      "name": "Optimistic Concurrency Control",
+      "kb:note": "Attach a version and let a stale write fail, then reload and retry"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/pessimistic-locking.html#pessimistic-locking",
+      "name": "Pessimistic Locking",
+      "kb:note": "Lock the row up front so only the holder can run the check-then-write"
+    },
+    {
+      "@id": "../patterns/concurrency/monitor-object.html#monitor-object",
+      "name": "Monitor Object",
+      "kb:note": "Hold one lock across the check and the write so nothing interleaves"
+    },
+    {
+      "@id": "../patterns/concurrency/rw-lock.html#rw-lock",
+      "name": "Read-Write Lock",
+      "kb:note": "Exclude everyone during a write; let reads run in parallel the rest of the time"
+    },
+    {
+      "@id": "../patterns/concurrency/thread-confinement.html#thread-confinement",
+      "name": "Thread Confinement",
+      "kb:note": "Give one owner the state so there's no sharing to race over at all"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc hazard">
+  <main class="doc-wrap" data-kb-id="race-condition" data-kb-kind="hazard" data-kb-band="hazard" data-kb-group="hazard" data-kb-essence="Unsynchronized concurrent access whose result depends on timing" data-kb-order="9" data-kb-aliases="[&quot;data race&quot;,&quot;TOCTOU&quot;,&quot;lost update&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;consistency&quot;,&quot;isolation&quot;,&quot;state-management&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#hazards-h">Hazards</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Race Condition</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Hazard</p>
+      <h1 class="doc-title">Race Condition</h1>
+      <p class="doc-essence">Unsynchronized concurrent access to shared state whose outcome depends on thread timing — code that passes every test yet produces impossible results once real load makes two writers overlap.</p>
+      <div class="doc-metarow">
+        <span class="badge">Hazard</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="race-condition">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A race condition is what happens when two or more actors — threads, requests, processes — touch the same shared state at the same time without coordinating, and the outcome depends on which one happens to get there first. The dangerous part is not that it crashes; it rarely does. The code passes every unit test, reads correctly in review, and then in production, under real concurrency, produces results that are simply impossible: a seat booked by two people, a counter that should read 1,000 reading 847, a bank balance missing a deposit that definitely went through.</p>
+        <p>It hides because the interleaving that breaks it is rare and timing-dependent. Most of the time the two operations don't overlap and everything looks correct; the bug surfaces only when two writers land in the same microsecond, so it is nearly impossible to reproduce on demand and easy to wave off as a fluke. The tell is a single question you can ask of any code that touches shared state: <em>could another actor change this between the moment I read it and the moment I act on it?</em> If the answer is yes, you have a race.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="causes" aria-labelledby="h-causes" data-kb-block="causes">
+      <h2 class="doc-h" id="h-causes">How it happens</h2>
+      <div class="prose">
+        <p>Almost every race collapses into one of two shapes:</p>
+        <ul>
+          <li><strong>Check-then-act — time-of-check to time-of-use (TOCTOU).</strong> You test a condition, then act on the assumption it still holds, but another writer invalidates it in the gap between. Two buyers both read "seat 7A is available" and both book it, so the second write overwrites the first; a rate limiter reads "99 requests, under the limit" on two threads at once and admits request 101; a connection pool sees one connection free and hands it to two callers. The action is only correct while the check stays true — and nothing kept it true.</li>
+          <li><strong>Read-modify-write — the lost update.</strong> Simpler, and it always writes: two threads read the same value, each computes a new one from it, each writes it back, and one update is silently clobbered. <code>count++</code> is really read-add-write, three steps; if two threads both read 5, both compute 6, both store 6, one increment vanishes. A $50 deposit and a $500 deposit that both read a $100 balance leave $600 instead of $650 — the $50 is simply gone.</li>
+        </ul>
+        <p>Both need only two ingredients: state shared between concurrent actors, and a read and a write that are not fused into one indivisible step. The wider the gap between them — a slow validation, an external API call, application logic deciding what to write — the larger the window in which another writer can slip through.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="cost" aria-labelledby="h-cost" data-kb-block="cost">
+      <h2 class="doc-h" id="h-cost">What it costs</h2>
+      <div class="prose">
+        <p>The cost of a race is not a stack trace — it is silently wrong data that everyone downstream trusts. A double-booked seat puts two people in one chair. A lost increment lets a view or metrics counter drift low, quietly, over millions of requests until the analytics are meaningfully off. An oversold inventory row means a shirt sold twice, with one buyer refunded and disappointed. A corrupted balance means money that was deposited is just not there.</p>
+        <p>Because there is no error, nothing pages you and nothing rolls back. The invariant the code was meant to protect — one owner per seat, count never above the cap, money conserved — has quietly been violated, and the system carries on as if it were fine. The damage is found later by a customer, an auditor, or a reconciliation job, long after the interleaving that caused it has evaporated and left nothing to reproduce. That combination — real harm, no signal, not reproducible — is what makes races among the most expensive bugs to track down.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
+      <h2 class="doc-h" id="h-mitigation">Getting out</h2>
+      <div class="prose">
+        <p>Every fix closes the gap between reading and writing, and there are three moves. <strong>Serialize the check and the write</strong> into one indivisible step: hold a single lock across both, so a second writer waits until the first has finished and the check stays true because nothing else can run in between. The same lock must guard every operation that maintains the invariant — locking the check but releasing before the write just recreates the bug.</p>
+        <p><strong>Make the write atomic at the store</strong> so no application-level lock is needed at all. Fold the condition into the write itself — a conditional write whose <code>WHERE</code> clause re-checks as it updates — or attach a version to the row and let optimistic concurrency control reject a stale write and retry it. The database serializes writes to a single row for you, so the loser simply matches nothing.</p>
+        <p><strong>Remove the sharing.</strong> If only one actor ever touches a piece of state — confine it to one thread, partition the data so each owner holds its own slice — no interleaving is possible and the race cannot exist. For read-heavy state where writes are rare, a reader/writer lock lets readers proceed in parallel and excludes them only for the occasional write, keeping coordination cheap. Pick the lightest mechanism the contention allows: one lock is usually enough for anything a human triggers, and you reach for the rest only as scale demands.</p>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Mitigated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="conditional-write"><a href="../patterns/distributed/coordination/conditional-write.html">Conditional Write</a><span class="rel-note">Fold the check into the write so the store applies them as one indivisible step</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="optimistic-concurrency-control"><a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">Optimistic Concurrency Control</a><span class="rel-note">Attach a version and let a stale write fail, then reload and retry</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="pessimistic-locking"><a href="../patterns/distributed/coordination/pessimistic-locking.html">Pessimistic Locking</a><span class="rel-note">Lock the row up front so only the holder can run the check-then-write</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="monitor-object"><a href="../patterns/concurrency/monitor-object.html">Monitor Object</a><span class="rel-note">Hold one lock across the check and the write so nothing interleaves</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="rw-lock"><a href="../patterns/concurrency/rw-lock.html">Read-Write Lock</a><span class="rel-note">Exclude everyone during a write; let reads run in parallel the rest of the time</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="thread-confinement"><a href="../patterns/concurrency/thread-confinement.html">Thread Confinement</a><span class="rel-note">Give one owner the state so there's no sharing to race over at all</span></div>
+        </div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#hazards-h">← Hazards</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#hazards-h">Hazards →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

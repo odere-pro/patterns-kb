@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reactor · Patterns</title>
+  <meta name="description" content="Reactor — a single event loop demultiplexes events from many sources and dispatches each to its registered handler, with no thread per connection.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#reactor",
+  "identifier": "reactor",
+  "name": "Reactor",
+  "description": "One loop dispatches events to their handlers",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "concurrency",
+  "kb:group": "concurrency",
+  "kb:combines-with": [
+    {
+      "@id": "./future-promise.html#future-promise",
+      "name": "Future / Promise",
+      "kb:note": "Non-blocking calls complete via callbacks/futures"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/streaming.html#streaming",
+      "name": "Streaming",
+      "kb:role": "Event-loop dispatch for non-blocking streams"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="reactor" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="One loop dispatches events to their handlers" data-kb-order="81" data-kb-aliases="[&quot;event loop&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;event-driven&quot;,&quot;asynchrony&quot;,&quot;scalability&quot;]" data-kb-solves="[&quot;my server falls over at a few thousand connections even though they are mostly idle&quot;,&quot;almost all my threads are parked waiting on a socket and doing nothing&quot;,&quot;every open connection costs a megabyte of stack and memory is what runs out first&quot;,&quot;the machine burns its CPU on context switches rather than on my actual work&quot;,&quot;I want to watch a pile of sockets and timers in one place without a thread for each&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Reactor</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Reactor</h1>
+      <p class="doc-essence">A single event loop watches every open socket, timer, and signal at once, and the instant one is ready it dispatches straight to the handler that registered for it — no thread parked per connection, no one blocked waiting.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="reactor">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>reactor</strong> is a single-threaded event loop that owns one job: ask the OS which of many registered event sources is ready — a socket that can be read, a timer that has fired, a signal that arrived — and dispatch each ready one to the handler that registered interest in it. The asking is done through a demultiplexer (<code>select</code>, <code>poll</code>, <code>epoll</code>, <code>kqueue</code>); the loop blocks there, wakes with a list of ready descriptors, and calls each handler in turn, synchronously, on the loop's own thread.</p>
+        <p>The force it resolves is the cost of <strong>thread-per-connection</strong> concurrency. Give every connection its own OS thread and each idle one still pins a stack and a scheduler entry — thousands of connections mean thousands of threads mostly doing nothing but costing context-switches and memory. Reactor decouples "wait for something to happen" from "do work when it happens": one thread (or a handful, one per core) can watch tens of thousands of descriptors for the price of a single blocking call, and only pays for CPU when there is real work to dispatch.</p>
+        <p>The catch is exactly what makes it cheap: there is one loop. A handler that blocks — a slow disk read, a synchronous DNS lookup, a tight CPU loop — stalls every other connection sharing that thread. The pattern trades away preemption; it demands that handlers give control back quickly.</p>
+        <p>Doug Schmidt formalized it in the ACE framework in the mid-1990s, and it now sits underneath most high-concurrency network servers: nginx's worker processes, Redis's single command-processing thread, and Node.js's event loop over libuv are all reactors.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    IO["Sockets, timers, signals"] --> DM["Demultiplexer, epoll/kqueue"]
+    DM --> LOOP["Event loop, one thread"]
+    LOOP -->|dispatch| H1["Handler, read"]
+    LOOP -->|dispatch| H2["Handler, write"]
+    LOOP -->|dispatch| H3["Handler, timeout"]
+    H1 --> LOOP
+    H2 --> LOOP
+    H3 --> LOOP
+        </pre>
+        <figcaption>The loop blocks on the demultiplexer, wakes with the ready set, and dispatches each event to its registered handler before blocking again.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Single-threaded reactor</dt>
+        <dd>One loop runs both the demultiplexing and every handler. Simplest, no locking anywhere, but a slow handler stalls all other connections.</dd>
+        <dt id="variations-item-2">Worker-pool reactor</dt>
+        <dd>The loop only demultiplexes and dispatches; the actual handler work runs on a bounded thread or task pool, so one slow handler no longer blocks ingestion of new events.</dd>
+        <dt id="variations-item-3">Multi-reactor (thread-per-core)</dt>
+        <dd>Run N independent loops, each pinned to a core and owning its own slice of connections, sharing nothing — the shape behind nginx workers and modern thread-per-core servers.</dd>
+        <dt id="variations-item-4">Reactor vs. Proactor</dt>
+        <dd>Reactor notifies "this descriptor is ready, go read it yourself"; Proactor notifies "your read already completed, here's the data" — the OS or an async layer performs the I/O, as in Windows IOCP.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">No thread-per-connection overhead — one loop scales to tens of thousands of idle sockets.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">No locking inside the loop: handlers on the same thread never race each other.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Low, predictable memory footprint per connection compared to a parked thread and stack.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Dispatch order within the loop is explicit and easy to reason about.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A single blocking or CPU-heavy handler stalls every other event on that loop.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">One loop uses one core — real parallelism needs multiple reactor instances.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Callback-driven control flow is harder to step through than straight-line, blocking code.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Every handler must be written non-blocking, which pushes async style through the whole call chain.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You're serving many concurrent, mostly-idle I/O connections — sockets, pipes, timers.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Thread-per-connection overhead (memory, context switches) is the actual bottleneck.</li>
+            <li id="usage-when-3" data-kb-polarity="when">Work is I/O-bound and can be expressed as short, non-blocking handlers.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The workload is CPU-bound — a reactor's single loop just serializes the crunching.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Your runtime already gives you cheap, preemptible concurrency (lightweight threads, coroutines) — reintroducing an explicit loop adds complexity for no gain.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">You depend on libraries that only offer blocking calls and can't be made async or offloaded to a pool.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a minimal single-threaded reactor</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type Handler = (fd: number) =&gt; void;
+
+class Reactor {
+  private handlers = new Map&lt;number, Handler&gt;();
+
+  register(fd: number, handler: Handler): void {
+    this.handlers.set(fd, handler);
+  }
+
+  unregister(fd: number): void {
+    this.handlers.delete(fd);
+  }
+
+  // The loop: block until the OS says something is ready,
+  // then dispatch each ready fd to its handler. A handler
+  // must never block — that stalls every other connection.
+  run(): void {
+    while (true) {
+      const ready = demultiplex([...this.handlers.keys()]); // epoll/kqueue
+      for (const fd of ready) {
+        this.handlers.get(fd)?.(fd);
+      }
+    }
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="nginx"><strong>nginx</strong><span>Each worker process runs its own epoll (Linux) or kqueue (BSD) event loop over thousands of connections, which is why it serves idle keep-alives so cheaply. worker_processes (often auto) sets one loop per core and worker_connections caps sockets per worker.</span></div>
+        <div class="wild-item" data-kb-example="nodejs-libuv"><strong>Node.js / libuv</strong><span>A single-threaded event loop over libuv demultiplexes socket, timer, and completion events and dispatches each to its JavaScript callback. Blocking or CPU-heavy work must go to worker_threads or the libuv thread pool (UV_THREADPOOL_SIZE, default 4).</span></div>
+        <div class="wild-item" data-kb-example="redis"><strong>Redis</strong><span>A single-threaded loop processes every command in turn, which is why commands are atomic and why one slow command (such as KEYS on a large keyspace) stalls the server. Redis 6 added io-threads that parallelize socket read/write while command execution stays single-threaded.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Loop / worker count</strong> — Event loops per process, usually one per core (nginx worker_processes auto). A single loop uses only one core no matter how many connections it holds.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Max connections per loop</strong> — nginx worker_connections and the OS file-descriptor limit cap how many sockets one loop can multiplex.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Offload thread-pool size</strong> — Blocking or CPU-heavy work must move off the loop to a pool, such as libuv UV_THREADPOOL_SIZE (default 4); the pool size caps concurrent offloaded work.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Demultiplexer wait timeout</strong> — The epoll or kqueue wait timeout bounds how long the loop sleeps before it wakes to service timers.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Event-loop lag</strong> — How late scheduled callbacks fire, measurable with Node perf_hooks monitorEventLoopDelay. Rising lag means the loop is saturated or blocked.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Connections per worker</strong> — Active sockets each loop is multiplexing.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Handler execution time</strong> — Time spent inside a single callback. Any long one delays every other event on that loop.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Blocked event loop</strong> — One synchronous, blocking, or CPU-heavy callback freezes every connection on that loop until it returns.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Single-core ceiling</strong> — A lone loop cannot use more than one core, so throughput caps there unless work is sharded across loops or processes.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Event backlog</strong> — If handlers cannot keep pace with arrivals, the ready-event queue and socket buffers grow, adding latency to everything.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Never block the loop; offload blocking I/O and CPU-heavy work to a thread pool or separate process.</li>
+            <li id="production-check-2" data-kb-polarity="check">Run one loop per core to use all cores.</li>
+            <li id="production-check-3" data-kb-polarity="check">Bound accepted connections per loop within the file-descriptor limit.</li>
+            <li id="production-check-4" data-kb-polarity="check">Monitor event-loop lag as the primary saturation signal.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="future-promise"><a href="./future-promise.html">Future / Promise</a><span class="rel-note">Non-blocking calls complete via callbacks/futures</span></div>
+        </div>
+      </div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    RE["Reactor"]
+    RE --- FP["Future / Promise"]
+    click FP "./future-promise.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="streaming"><a href="../../themes/streaming.html">Streaming</a><span>Event-loop dispatch for non-blocking streams</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./actor-model.html">← Actor Model</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./monitor-object.html">Monitor Object →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

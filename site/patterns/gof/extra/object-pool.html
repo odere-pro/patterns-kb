@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Object Pool · Patterns</title>
+  <meta name="description" content="Object Pool — reuse a fixed set of expensive-to-build objects instead of allocating and discarding them on every use.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#object-pool",
+  "identifier": "object-pool",
+  "name": "Object Pool",
+  "description": "Reuses a fixed set of expensive objects",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "gof",
+  "kb:group": "gof-extra",
+  "kb:has-variant": [
+    {
+      "@id": "../../concurrency/thread-pool.html#thread-pool",
+      "name": "Thread Pool",
+      "kb:note": "A thread pool is an object pool of workers"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "../structural/flyweight.html#flyweight",
+      "name": "Flyweight",
+      "kb:note": "Share immutable state vs. reuse whole objects"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../../hazards/resource-leak.html#resource-leak",
+      "name": "Resource Leak",
+      "kb:note": "A pool with checkout/return discipline and validation reclaims what callers forget"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/design-distributed-cache.html#design-distributed-cache",
+      "name": "Distributed Cache",
+      "kb:note": "shows connection pooling removing handshake cost from the p95/p99 latency tail"
+    },
+    {
+      "@id": "../../../designs/distributed-rate-limiter.html#distributed-rate-limiter",
+      "name": "Distributed Rate Limiter",
+      "kb:note": "a pool of live connections amortises setup cost across a million checks a second inside the latency budget"
+    },
+    {
+      "@id": "../../../designs/leetcode.html#leetcode",
+      "name": "LeetCode",
+      "kb:note": "a pool of pre-warmed runtimes amortizes expensive container startup over many gradings"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/performance.html#performance",
+      "name": "Performance",
+      "kb:role": "Reuse expensive objects to cut allocation cost"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="object-pool" data-kb-kind="pattern" data-kb-band="gof" data-kb-group="gof-extra" data-kb-essence="Reuses a fixed set of expensive objects" data-kb-order="25" data-kb-aliases="[&quot;resource pool&quot;]" data-kb-tags="[&quot;performance&quot;,&quot;resource-management&quot;,&quot;concurrency&quot;,&quot;latency&quot;]" data-kb-solves="[&quot;opening a fresh database connection on every request is dominating my response time&quot;,&quot;the database is rejecting me because my service opened too many connections at once&quot;,&quot;the TCP handshake and auth cost more than the query I actually wanted to run&quot;,&quot;garbage collection pauses keep spiking because I allocate a huge buffer per request&quot;,&quot;I have no ceiling on how much of a scarce external resource my service grabs&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-gof-h">Objects &amp; Classes</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-gof-h">Also Essential</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Object Pool</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Objects &amp; Classes · Also Essential</p>
+      <h1 class="doc-title">Object Pool</h1>
+      <p class="doc-essence">Keeps a fixed set of expensive-to-build objects alive and hands them out on loan — so callers borrow and return rather than allocate and discard.</p>
+      <div class="doc-metarow">
+        <span class="badge">GoF</span>
+        <span class="badge muted">Also Essential</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="object-pool">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>An <strong>object pool</strong> keeps a set of already-constructed objects ready for reuse. A client <em>acquires</em> an object from the pool, uses it, and <em>releases</em> it back — instead of building a fresh one each time and throwing it away. The objects live across many uses; only their <em>lease</em> is short-lived.</p>
+        <p>The force it resolves is <strong>construction cost</strong>. Some objects are expensive to create: a database connection needs a TCP handshake and authentication, a thread needs a stack and a kernel-visible entry, a decompression buffer needs a large contiguous allocation. When those objects are needed frequently but held only briefly, building and tearing one down per request dominates the actual work.</p>
+        <p>A pool also acts as a <strong>ceiling</strong>. Because the number of live objects is bounded, it doubles as a limit on a scarce external resource — you cannot open more connections than the pool allows, which protects the database as much as the caller.</p>
+        <p>The cost is that pooled objects are reused, so any per-use state must be scrubbed on release, and any object that escapes without coming back is a leak that slowly starves everyone else.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> InUse: acquire
+    InUse --> Idle: release, reset
+    Idle --> Destroyed: expiry, eviction
+    Destroyed --> [*]
+    note right of Idle: sits in the free list, ready to lend
+    note right of InUse: checked out by one client
+        </pre>
+        <figcaption>The lifecycle of a pooled object. It shuttles between idle and in-use, is scrubbed on the way back, and is only destroyed when it expires or the pool shrinks.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Fixed vs. elastic</dt>
+        <dd>A fixed pool holds a constant number of objects; an elastic one grows toward a maximum under load and shrinks when idle. Fixed gives predictable resource use; elastic trades that for adaptability.</dd>
+        <dt id="variations-item-2">Blocking vs. fail-fast acquire</dt>
+        <dd>When the pool is empty, acquire can block until an object is returned (usually with a timeout) or fail immediately so the caller can back off. Blocking smooths bursts; fail-fast surfaces exhaustion sooner.</dd>
+        <dt id="variations-item-3">Validation on borrow / return</dt>
+        <dd>Test the object before handing it out — pinging a connection, checking a socket — so a client never gets a dead one. Costs a round trip but avoids surfacing stale state as a mystery failure.</dd>
+        <dt id="variations-item-4"><a href="../../concurrency/thread-pool.html">Thread Pool</a></dt>
+        <dd>The most common specialization: a pool whose objects are worker threads, fed a queue of tasks. Reuses the expensive thread rather than the result of its work.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Spreads the cost of expensive construction across many uses instead of paying it every time.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Caps how many of a scarce resource are in use at once, at a fixed ceiling.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Cuts constant allocate-and-discard churn and the garbage-collection pressure it creates.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Delivers steady, predictable latency once the pool has warmed up.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Reused objects keep their old state — forget to reset one and it leaks data between clients.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">An object borrowed and never returned is lost, and enough such leaks starve the whole pool.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Adds real machinery to build and maintain: sizing, validation, eviction, thread safety.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">For cheap objects, a modern allocator or garbage collector often beats a pool outright.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Building the object is genuinely expensive — connections, threads, sockets, large buffers.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Each object is used briefly but acquired again and again at high frequency.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You need a hard cap on how many of a scarce resource are alive at once.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The objects are cheap to create — pooling adds overhead and buys nothing.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Their state is large or awkward to wipe clean before the object is reused.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Objects live long or for unpredictable spans, so there's little churn to spread out.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a bounded generic pool with a borrow-and-return helper</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface PoolOptions&lt;T&gt; {
+  readonly create: () =&gt; T;   // build a fresh object (the expensive step)
+  readonly reset: (obj: T) =&gt; void;  // wipe per-use state before reuse
+  readonly max: number;       // hard ceiling on live objects
+}
+
+class ObjectPool&lt;T&gt; {
+  private readonly idle: T[] = [];
+  private live = 0;
+
+  constructor(private readonly opts: PoolOptions&lt;T&gt;) {}
+
+  acquire(): T {
+    const reused = this.idle.pop();
+    if (reused !== undefined) return reused;
+    if (this.live &gt;= this.opts.max) throw new Error("pool exhausted");
+    this.live++;
+    return this.opts.create();
+  }
+
+  release(obj: T): void {
+    this.opts.reset(obj);
+    this.idle.push(obj);
+  }
+
+  // Borrow, run, and always return — even if the work throws.
+  use&lt;R&gt;(work: (obj: T) =&gt; R): R {
+    const obj = this.acquire();
+    try {
+      return work(obj);
+    } finally {
+      this.release(obj);
+    }
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="hikaricp"><strong>HikariCP</strong><span>The default JDBC connection pool in Spring Boot. Key knobs are maximumPoolSize (the ceiling), minimumIdle (warm floor), connectionTimeout (acquire wait), idleTimeout and maxLifetime (eviction). It exposes ActiveConnections, IdleConnections, and PendingConnections as metrics and can log leak warnings via leakDetectionThreshold.</span></div>
+        <div class="wild-item" data-kb-example="pgbouncer"><strong>PgBouncer</strong><span>A lightweight connection pooler in front of PostgreSQL that multiplexes many client sessions onto a small set of real backend connections. Its pool_mode (session, transaction, or statement) controls how aggressively backends are shared; transaction mode returns a backend to the pool at each commit, letting far more clients share few server connections.</span></div>
+        <div class="wild-item" data-kb-example="commons-pool"><strong>Apache Commons Pool</strong><span>A general-purpose object-pooling library (the engine behind DBCP) with borrow/return semantics via a PooledObjectFactory. It offers testOnBorrow/testOnReturn/testWhileIdle validation, maxTotal and maxIdle sizing, maxWait on borrow, and a background evictor governed by minEvictableIdleTime.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Maximum pool size</strong> — The hard ceiling on live objects (HikariCP maximumPoolSize, generic max). Doubles as the cap on the scarce downstream resource; the sum across all app instances must stay under the resource limit (e.g. the database max_connections).</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Acquire timeout</strong> — How long acquire() blocks on an empty pool before failing (HikariCP connectionTimeout, Commons Pool maxWait). Bounds exhaustion into a fast error instead of an indefinite hang.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Validation on borrow / return</strong> — Test an object before lending it (Commons Pool testOnBorrow / testOnReturn, HikariCP connection validation / keepaliveTime) so a dead connection or socket is discarded rather than handed to a client.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Idle eviction and max lifetime</strong> — When to retire objects (HikariCP idleTimeout and maxLifetime, Commons Pool minEvictableIdleTime). Recycling long-lived objects avoids servers dropping connections the pool still believes are good.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Minimum idle / warm size</strong> — A floor of pre-created objects kept ready (HikariCP minimumIdle) so a burst after idle does not pay full construction cost on the first requests.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Pool utilization</strong> — Active versus idle versus total objects (HikariCP exposes ActiveConnections, IdleConnections, TotalConnections). Sustained near-100% active means the pool is the bottleneck.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Threads awaiting acquire</strong> — Callers blocked waiting for a free object — the pool queue depth (HikariCP PendingConnections). A rising value precedes acquire timeouts.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Acquire wait time</strong> — Time from acquire() to receiving an object. Near zero when warm; climbing wait time is the early sign of contention before outright exhaustion.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Acquire timeout / failure rate</strong> — Count of acquires that hit the timeout without getting an object — the direct symptom of exhaustion or a leak.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Pool exhaustion</strong> — Every object is leased; new callers block until the acquire timeout and then fail. Often a downstream slowdown holding objects longer, not more traffic.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Object / connection leak</strong> — A borrowed object is never returned (missing release in an error path). The available count decays toward zero and the pool eventually serves no one.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stale object handed out</strong> — With validation off, an object the far end has already closed (idle-killed connection, half-open socket) is lent out and fails on first use as a mystery error.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>State bleed between clients</strong> — Per-use state is not scrubbed on release — an uncommitted transaction, a set session variable, or leftover buffer contents — so the next borrower inherits it.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Maximum pool size is sized against the downstream limit, counting every app instance that shares it</li>
+            <li id="production-check-2" data-kb-polarity="check">Acquire has a bounded timeout so exhaustion fails fast instead of hanging</li>
+            <li id="production-check-3" data-kb-polarity="check">Objects are validated on borrow or bounded by a max lifetime so dead ones never reach callers</li>
+            <li id="production-check-4" data-kb-polarity="check">Per-use state is scrubbed on release and borrow/return is balanced, with leak detection enabled</li>
+            <li id="production-check-5" data-kb-polarity="check">Idle and max-lifetime eviction are configured to match how long the far end keeps objects alive</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Has variant</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="has-variant" data-kb-to="thread-pool"><a href="../../concurrency/thread-pool.html">Thread Pool</a><span class="rel-note">A thread pool is an object pool of workers</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="flyweight"><a href="../structural/flyweight.html">Flyweight</a><span class="rel-note">Share immutable state vs. reuse whole objects</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="resource-leak"><a href="../../../hazards/resource-leak.html">Resource Leak</a><span class="rel-note">A pool with checkout/return discipline and validation reclaims what callers forget</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="design-distributed-cache"><a href="../../../designs/design-distributed-cache.html">Distributed Cache</a><span class="rel-note">shows connection pooling removing handshake cost from the p95/p99 latency tail</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="distributed-rate-limiter"><a href="../../../designs/distributed-rate-limiter.html">Distributed Rate Limiter</a><span class="rel-note">a pool of live connections amortises setup cost across a million checks a second inside the latency budget</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="leetcode"><a href="../../../designs/leetcode.html">LeetCode</a><span class="rel-note">a pool of pre-warmed runtimes amortizes expensive container startup over many gradings</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    OP["Object Pool"]
+    OP --- FW["Flyweight"]
+    OP --- TP["Thread Pool"]
+    click FW "../structural/flyweight.html"
+    click TP "../../concurrency/thread-pool.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="performance"><a href="../../../themes/performance.html">Performance</a><span>Reuse expensive objects to cut allocation cost.</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./null-object.html">← Null Object</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./service-locator.html">Service Locator →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rate Limiter · Patterns</title>
+  <meta name="description" content="Low-level design of an in-memory API rate limiter — resolve each endpoint's policy, delegate to a swappable algorithm behind one interface, and answer allow-or-deny with a retry hint.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#design-rate-limiter",
+  "identifier": "design-rate-limiter",
+  "name": "Rate Limiter",
+  "description": "Resolve an endpoint's policy, delegate to a swappable limiting algorithm behind one interface, and answer each request allow-or-deny with a retry hint",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/gof/behavioral/strategy.html#strategy",
+      "name": "Strategy",
+      "kb:note": "interchangeable limiting algorithms sit behind one Limiter interface the orchestrator holds without knowing which is running"
+    },
+    {
+      "@id": "../patterns/gof/creational/factory-method.html#factory-method",
+      "name": "Factory Method",
+      "kb:note": "LimiterFactory reads the algorithm discriminator from heterogeneous config and constructs the matching Limiter subtype"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/token-bucket.html#token-bucket",
+      "name": "Token Bucket",
+      "kb:note": "the flagship algorithm — a per-client bucket that refills at a steady rate and permits bursts up to capacity"
+    },
+    {
+      "@id": "../principles/open-closed.html#open-closed",
+      "name": "Open/Closed Principle",
+      "kb:note": "adding an algorithm is a new class plus one factory case; the orchestrator and existing limiters stay untouched"
+    },
+    {
+      "@id": "../principles/interface-segregation.html#interface-segregation",
+      "name": "Interface Segregation Principle",
+      "kb:note": "Limiter is a single allow(key) method, so no algorithm carries state or behaviour it does not use"
+    },
+    {
+      "@id": "../patterns/ddd/value-object.html#value-object",
+      "name": "Value Object",
+      "kb:note": "RateLimitResult is an immutable record of allowed/remaining/retryAfterMs, set once and read-only"
+    },
+    {
+      "@id": "../principles/yagni.html#yagni",
+      "name": "You Aren't Gonna Need It (YAGNI)",
+      "kb:note": "no getConfig/updateConfig methods until a live-reload requirement actually appears"
+    },
+    {
+      "@id": "../patterns/concurrency/monitor-object.html#monitor-object",
+      "name": "Monitor Object",
+      "kb:note": "thread safety comes from synchronizing each client's check-and-update on the bucket object's own lock"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="design-rate-limiter" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Resolve an endpoint's policy, delegate to a swappable limiting algorithm behind one interface, and answer each request allow-or-deny with a retry hint" data-kb-order="40" data-kb-aliases='["throttler"]' data-kb-tags='["low-level-design","extensibility","polymorphism","state-management","concurrency"]' data-kb-solves='["one client is hammering my API and starving everyone else, so I need to cap how many requests each caller makes per second","different endpoints need different throttling rules and I do not want a giant if/else deciding which one runs","adding a new throttling algorithm means editing my orchestrator and every call site instead of dropping in one class","my in-memory quota tracker keeps growing because I never drop clients that stopped calling","two concurrent requests both read the same remaining quota and both slip past the limit"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Rate Limiter</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">Rate Limiter</h1>
+      <p class="doc-essence">A rate limiter caps how many requests a client may make to an endpoint inside a time window: it checks the caller's quota, lets the request through if there is room, and turns it away with a retry hint if not. As a low-level design the distributed plumbing is out of scope — the whole exercise is object modelling: one interface for interchangeable algorithms, a factory that builds them from heterogeneous config, and per-client state kept isolated behind each limiter.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="design-rate-limiter">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>An API gateway wants to protect itself from abuse and share capacity fairly across callers. Every request arrives with a <code>clientId</code> and an <code>endpoint</code>; the limiter decides whether that client has quota left on that endpoint, and returns a structured answer — allowed or not, how much quota remains, and, when denied, how long to wait before retrying. Policy is not hard-coded: an external service supplies per-endpoint configuration at startup, and each endpoint may run a <em>different</em> algorithm with its own parameter shape. There is no cluster here — the limiter is single-process and in-memory, so the distributed coordination is deliberately parked and the whole exercise becomes object modelling: name the right classes, isolate each client's state, and keep new algorithms cheap to add.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Load per-endpoint configuration once at startup; each entry names an algorithm and carries that algorithm's own parameter shape.</li>
+            <li>On each request <code>(clientId, endpoint)</code>, check the client against that endpoint's policy and enforce the limit.</li>
+            <li>Return a structured result: <code>allowed</code> (bool), <code>remaining</code> (int, quota left after this request), <code>retryAfterMs</code> (long, or null when allowed).</li>
+            <li>An endpoint with no configuration falls back to a default policy — never reject a request merely because config is missing.</li>
+            <li>Support several algorithms (Token Bucket, Sliding Window Log, and more) chosen per endpoint.</li>
+          </ol>
+          <p class="prose">Out of scope: distributed limiting across servers (Redis, coordination), dynamic config reload at first, metrics and monitoring, and validation beyond basic checks.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional (constraints)</h3>
+          <ul>
+            <li><strong>Extensibility</strong> — a new algorithm should drop in without touching the orchestrator or existing limiters.</li>
+            <li><strong>Isolation</strong> — each client's state is independent; one caller can never spend another's quota.</li>
+            <li><strong>Honest retry</strong> — a denied caller learns exactly how many milliseconds to wait, never too early.</li>
+            <li><strong>Evolvability</strong> — thread safety, live config changes, and bounded memory should slot in later without a rewrite.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Four classes, and three nouns that deliberately stay <em>out</em> of the model:</p>
+        <ul>
+          <li><strong>RateLimiter</strong> — the orchestrator and the only public surface. Holds a map of endpoint&nbsp;→&nbsp;limiter plus a shared <code>defaultLimiter</code>, resolves the right limiter for a request, and delegates to it.</li>
+          <li><strong>Limiter</strong> — the interface every algorithm implements, a single method <code>allow(key)&nbsp;→&nbsp;RateLimitResult</code>. It is an interface, not an abstract base class, because the algorithms share no per-key state to hoist (see the deep dives).</li>
+          <li><strong>RateLimitResult</strong> — an immutable <a href="../patterns/ddd/value-object.html">value object</a> carrying <code>allowed</code>, <code>remaining</code>, and <code>retryAfterMs</code>. Set once, read-only after — <a href="../patterns/functional/immutability.html">immutability</a> keeps the answer from being mutated in flight.</li>
+          <li><strong>LimiterFactory</strong> — turns one raw config entry into the correct <code>Limiter</code> subtype, reading the <code>algorithm</code> field as a discriminator and pulling out that algorithm's parameters.</li>
+          <li><strong>Request, Client, Endpoint — not classes.</strong> A request is just the two method arguments; a client is a lookup key for per-client state; an endpoint is a string used as a map key. None owns a lifecycle the system must manage, so modelling any of them as a class would be state with no owner.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>Config flows in as raw, heterogeneous data; a single public method flows out an answer. There is deliberately no <code>getConfig()</code> or <code>updateConfig()</code> up front — nothing in the requirements queries or mutates config, so adding those methods would be speculative surface, exactly the <a href="../principles/yagni.html">YAGNI</a> trap. They earn their place only when a live-reload requirement appears.</p>
+      </div>
+      <details class="sketch">
+        <summary>The config it loads (one entry per endpoint)</summary>
+<pre><code class="language-json" data-kb-lang="json">{
+  "endpoint": "/search",
+  "algorithm": "TokenBucket",
+  "algoConfig": { "capacity": 1000, "refillRatePerSecond": 10 }
+}
+// algoConfig is always present, but its inner fields vary by algorithm:
+// SlidingWindowLog carries { "maxRequests": 100, "windowMs": 60000 }</code></pre>
+      </details>
+      <details class="sketch">
+        <summary>The public API</summary>
+<pre><code class="language-python" data-kb-lang="python">class RateLimiter:
+    def allow(self, client_id: str, endpoint: str) -> RateLimitResult:
+        limiter = self._limiters.get(endpoint, self._default_limiter)
+        return limiter.allow(client_id)   # clientId is the per-client key</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>At startup the <code>RateLimiter</code> walks the config list, asks the factory to build one limiter per endpoint, and stores them in a map keyed by endpoint — plus one limiter built from the default config. Every limiter is created eagerly; there are only dozens to hundreds of endpoints, so lazy, first-request construction would add locking for no measurable gain. On each call, <code>allow</code> looks up the endpoint's limiter, falls back to the default on a miss, and delegates with <code>clientId</code> as the key. The important structural fact is that each limiter owns its own per-key state map — Token Bucket keeps a bucket per client, Sliding Window Log keeps a timestamp queue per client — so the orchestrator never touches algorithm state.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+classDiagram
+    class RateLimiter {
+        -Map~String,Limiter~ limiters
+        -Limiter defaultLimiter
+        +allow(clientId, endpoint) RateLimitResult
+    }
+    class Limiter {
+        &lt;&lt;interface&gt;&gt;
+        +allow(key) RateLimitResult
+    }
+    class LimiterFactory {
+        +create(config) Limiter
+    }
+    class RateLimitResult {
+        -bool allowed
+        -int remaining
+        -long retryAfterMs
+    }
+    class TokenBucketLimiter {
+        -int capacity
+        -int refillRatePerSecond
+        -Map~String,TokenBucket~ buckets
+        +allow(key) RateLimitResult
+    }
+    class SlidingWindowLogLimiter {
+        -int maxRequests
+        -long windowMs
+        -Map~String,RequestLog~ logs
+        +allow(key) RateLimitResult
+    }
+    class TokenBucket {
+        -double tokens
+        -long lastRefillTime
+    }
+    class RequestLog {
+        -Queue~long~ timestamps
+    }
+    RateLimiter o-- "*" Limiter : owns per endpoint
+    RateLimiter ..> LimiterFactory : builds via
+    LimiterFactory ..> Limiter : creates
+    Limiter &lt;|.. TokenBucketLimiter : implements
+    Limiter &lt;|.. SlidingWindowLogLimiter : implements
+    TokenBucketLimiter o-- "*" TokenBucket : per-client state
+    SlidingWindowLogLimiter o-- "*" RequestLog : per-client state
+        </pre>
+        <figcaption>The orchestrator resolves an endpoint to a limiter; the factory hides construction; each algorithm keeps its own per-client state behind the shared <code>Limiter</code> interface.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Why Limiter is an interface, not an abstract base class</h3>
+        <p>An abstract base class only pays off when subclasses share fields or behaviour worth hoisting. Here they share nothing: Token Bucket's per-key state is <code>(tokens, lastRefillTime)</code>, Sliding Window Log's is a <code>Queue</code> of timestamps, Fixed Window Counter's is <code>(count, windowStart)</code>. A common base would carry zero shared members — "an interface with extra steps." A single-method interface is the honest contract, and keeping it to exactly one method is <a href="../principles/interface-segregation.html">interface segregation</a> in the small: no implementation is forced to carry a method it does not use. Because the algorithms are interchangeable behind that contract, the design <em>is</em> the <a href="../patterns/gof/behavioral/strategy.html">Strategy</a> pattern — the orchestrator holds a <code>Limiter</code> and never learns which algorithm answered.</p>
+
+        <h3>2 · Building the right limiter from heterogeneous config</h3>
+        <p>Config entries all share a shape but differ in their <code>algoConfig</code> payload, and the runtime <code>algorithm</code> string decides which class to instantiate — the textbook trigger for a factory. <code>LimiterFactory.create</code> switches on the discriminator, extracts that algorithm's parameters, and constructs the matching limiter; an unknown algorithm fails fast with an exception rather than silently defaulting. This is a <a href="../patterns/gof/creational/factory-method.html">factory</a> concentrating all creation knowledge in one place, and it is what makes the system <a href="../principles/open-closed.html">open for extension, closed for modification</a>: adding Fixed Window Counter means writing one new <code>Limiter</code> class and adding one <code>case</code> — the orchestrator and every existing limiter stay untouched. If algorithms ever need to be registered at runtime rather than compiled in, the switch graduates to a registry (a map of name&nbsp;→&nbsp;constructor); for two algorithms in scope, the switch is clearer.</p>
+
+        <h3>3 · Lazy refill and the retry-time math (Token Bucket)</h3>
+        <p><a href="../patterns/distributed/resilience/token-bucket.html">Token Bucket</a> is the workhorse: each client holds a bucket that refills at a steady rate and drains one token per request, permitting bursts up to <code>capacity</code> while bounding the average rate. The subtlety is <em>when</em> refill happens. Rather than a background thread topping up every bucket on a timer — which would scan even idle clients — refill is computed on demand from elapsed time at request time. A first-time client's bucket starts full, so it gets an immediate burst. On denial the limiter reports exactly how long to wait: the tokens still needed, divided by the refill rate, rounded up so the client never retries a hair too early. This is the <a href="../patterns/gof/extra/lazy-initialization.html">lazy</a> instinct applied to state, not objects — do the work only when a request forces it.</p>
+      </div>
+      <details class="sketch">
+        <summary>TokenBucketLimiter.allow — refill, then decide</summary>
+<pre><code class="language-python" data-kb-lang="python">def allow(self, key: str) -> RateLimitResult:
+    bucket = self._get_or_create_bucket(key)        # new buckets start full
+    now = now_ms()
+    elapsed = now - bucket.last_refill_time
+    bucket.tokens = min(self._capacity,
+                        bucket.tokens + elapsed * self._rate / 1000)
+    bucket.last_refill_time = now
+
+    if bucket.tokens >= 1:
+        bucket.tokens -= 1
+        return RateLimitResult(True, floor(bucket.tokens), None)
+
+    needed = 1 - bucket.tokens                       # e.g. 0.7 tokens short
+    return RateLimitResult(False, 0, ceil(needed * 1000 / self._rate))</code></pre>
+      </details>
+      <div class="prose">
+        <h3>4 · Concurrency: the check-then-act race</h3>
+        <p>The base design is not thread-safe, and the gap is a classic <a href="../hazards/race-condition.html">race condition</a>: two threads for the same client both read <code>tokens = 1</code>, both pass the check, both decrement — two requests allowed against a capacity of one. The fix is per-key locking, not a global lock. Store buckets in a concurrent map, get-or-create the bucket atomically, and then synchronise on the bucket object itself for the read-modify-write. The bucket doubles as its own lock, so different clients never block each other — only same-client requests serialise. Guarding a shared object's whole check-and-update behind the object's own lock is the <a href="../patterns/concurrency/monitor-object.html">Monitor Object</a> pattern; the result object is constructed after the lock is released.</p>
+      </div>
+      <details class="sketch">
+        <summary>Making allow thread-safe with a per-bucket lock</summary>
+<pre><code class="language-python" data-kb-lang="python">def allow(self, key: str) -> RateLimitResult:
+    bucket = self._buckets.compute_if_absent(     # atomic get-or-create
+        key, lambda: TokenBucket(self._capacity, now_ms()))
+
+    with bucket.lock:                             # only same-client calls block
+        # ... refill, check, decrement, compute result values ...
+        allowed, remaining, retry = self._evaluate(bucket)
+
+    return RateLimitResult(allowed, remaining, retry)   # built outside the lock</code></pre>
+      </details>
+      <div class="prose">
+        <h3>5 · Bounded memory and live config changes</h3>
+        <p>Every unique <code>clientId</code> that ever calls leaves a bucket or log behind, and the maps grow forever — a latent <a href="../hazards/resource-leak.html">resource leak</a> that becomes an out-of-memory risk at millions of clients. Eviction closes it: track last-access per key and let a background sweep drop entries idle past a threshold, cap the map with an LRU, or (in a distributed variant) let Redis key TTLs do it. An evicted client's next request simply looks like a first-timer — acceptable, since it had gone quiet. The other evolution is live config: the blunt option rebuilds every limiter and atomically swaps the map, which is simple but resets all per-key state — fine when raising limits, dangerous when lowering them to stop an abuser who then gets a clean slate. The careful option adds <code>updateConfig</code> to the interface so each limiter mutates its own parameters in place and clamps existing state to the new capacity, preserving continuity; switching an endpoint's algorithm outright still requires a full replacement, since the two states are incompatible.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">A new algorithm is one class plus one factory case; the orchestrator and existing limiters never change.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Each limiter owns its own per-key state, so clients are fully isolated and the algorithms share no accidental coupling.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">On-demand, elapsed-time refill needs no sweeper thread and does no work for idle clients.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">An immutable result carries allow/deny plus an exact retry hint, so every caller gets a self-describing answer.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The factory switch grows one arm per algorithm — creation is centralised, but it is still a single edit point that expands.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Per-key state maps grow unbounded until an eviction policy is bolted on.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The base design is not thread-safe; correctness under load requires explicit per-key locking.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Config loads once — changing limits without a restart means reload-and-swap or in-place updates, each with its own state cost.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Junior</strong> — with the algorithm explained, a working system: an orchestrator, a <code>Limiter</code> interface, a value result, and a factory that reads config and builds the right limiter. Tracks per-client state, decides allow/deny by the algorithm's rules, and rejects an unknown algorithm. May need hints on where each responsibility sits.</li>
+          <li><strong>Mid-level</strong> — draws the boundaries unprompted: orchestrator delegates, factory creates, each limiter owns its state, the result is a plain value object. Sees config as raw heterogeneous data flowing through the factory rather than typed config classes, handles unknown endpoints and over-limit clients with correct retry math, and can discuss at least one extension.</li>
+          <li><strong>Senior</strong> — class boundaries are obvious without deliberation; volunteers the trade-offs (the switch grows with algorithms, lazy refill versus a scheduler, per-key locking versus its bookkeeping) and catches edge cases like a client idle for days blowing up the refill math or timestamp overflow. Sequences extensions simple-first, names when a registry or a state-preserving update earns its keep, and may reach distributed limiting or memory-at-scale unprompted.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="strategy"><a href="../patterns/gof/behavioral/strategy.html">Strategy</a><span class="rel-note">interchangeable limiting algorithms sit behind one Limiter interface the orchestrator holds without knowing which is running</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="factory-method"><a href="../patterns/gof/creational/factory-method.html">Factory Method</a><span class="rel-note">LimiterFactory reads the algorithm discriminator from heterogeneous config and constructs the matching Limiter subtype</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="token-bucket"><a href="../patterns/distributed/resilience/token-bucket.html">Token Bucket</a><span class="rel-note">the flagship algorithm — a per-client bucket that refills at a steady rate and permits bursts up to capacity</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="open-closed"><a href="../principles/open-closed.html">Open/Closed Principle</a><span class="rel-note">adding an algorithm is a new class plus one factory case; the orchestrator and existing limiters stay untouched</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="interface-segregation"><a href="../principles/interface-segregation.html">Interface Segregation Principle</a><span class="rel-note">Limiter is a single allow(key) method, so no algorithm carries state or behaviour it does not use</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="value-object"><a href="../patterns/ddd/value-object.html">Value Object</a><span class="rel-note">RateLimitResult is an immutable record of allowed/remaining/retryAfterMs, set once and read-only</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="yagni"><a href="../principles/yagni.html">You Aren't Gonna Need It (YAGNI)</a><span class="rel-note">no getConfig/updateConfig methods until a live-reload requirement actually appears</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="monitor-object"><a href="../patterns/concurrency/monitor-object.html">Monitor Object</a><span class="rel-note">thread safety comes from synchronizing each client's check-and-update on the bucket object's own lock</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

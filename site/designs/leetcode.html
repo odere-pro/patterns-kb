@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LeetCode · Patterns</title>
+  <meta name="description" content="Design an online judge — run untrusted user code safely in seconds inside sandboxed containers, and keep a 100k-user contest leaderboard live.">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#leetcode",
+  "identifier": "leetcode",
+  "name": "LeetCode",
+  "description": "Run untrusted user code safely in under 5 seconds, and keep a 100k-user contest leaderboard live",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "design",
+  "kb:band": "design",
+  "kb:group": "design",
+  "kb:demonstrates": [
+    {
+      "@id": "../patterns/gof/extra/object-pool.html#object-pool",
+      "name": "Object Pool",
+      "kb:note": "warm language containers are kept ready and reused across submissions instead of cold-starting one per job"
+    },
+    {
+      "@id": "../patterns/messaging/competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:note": "a worker fleet pulls submissions off the queue, each grabbing the next job as its capacity frees up"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "the submission queue absorbs a contest's spike and drains it at the fleet's sustainable rate"
+    },
+    {
+      "@id": "../patterns/distributed/routing/autoscaling.html#autoscaling",
+      "name": "Autoscaling",
+      "kb:note": "each language-specific container pool grows and shrinks on CPU utilization to track contest load"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
+      "name": "Materialized View",
+      "kb:note": "the live leaderboard is a Redis sorted set updated on each accepted submission, not recomputed per poll"
+    },
+    {
+      "@id": "../patterns/security/least-privilege.html#least-privilege",
+      "name": "Least Privilege",
+      "kb:note": "the sandbox is stripped to a read-only filesystem, no network, capped CPU/memory, and a seccomp syscall whitelist"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/timeout-deadline.html#timeout-deadline",
+      "name": "Timeout / Deadline",
+      "kb:note": "a hard execution timeout kills a runaway or infinite-loop submission and enforces the 5-second result SLA"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/bulkhead.html#bulkhead",
+      "name": "Bulkhead",
+      "kb:note": "each submission runs in its own disposable container so a crash or hang can't take the API server or other jobs down"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc design">
+  <main class="doc-wrap" data-kb-id="leetcode" data-kb-kind="design" data-kb-band="design" data-kb-group="design" data-kb-essence="Run untrusted user code safely in under 5 seconds, and keep a 100k-user contest leaderboard live" data-kb-order="21" data-kb-aliases='["online judge","coding judge","code execution platform"]' data-kb-tags='["system-design","isolation","security","scalability","asynchrony"]' data-kb-solves='["I have to run code that strangers submit without it deleting my data or mining crypto on my servers","one submission with an infinite loop pins the CPU and takes every other in-flight request down with it","recomputing a live leaderboard by scanning and sorting the whole submissions table on every poll is crushing my database","a burst of submissions during a contest overwhelms my workers and requests start timing out","spinning up a fresh sandbox for every job is too slow to hit my latency budget"]'>
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#design-cases-h">Case studies</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">LeetCode</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Case study</p>
+      <h1 class="doc-title">LeetCode</h1>
+      <p class="doc-essence">An online judge lets an engineer read a coding problem, write a solution in the browser, and submit it for instant pass/fail feedback — with a live leaderboard during timed contests. It is a small system by the numbers, but it turns on one genuinely hard thing: executing arbitrary, untrusted code from strangers safely, fast, and at contest scale.</p>
+      <div class="doc-metarow">
+        <span class="badge">Design</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="leetcode">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+      <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
+      <div class="prose">
+        <p>The product is a coding-interview trainer: browse a catalogue of problems, open one and code a solution in any of several languages, submit it and get graded against hidden test cases within a few seconds, and — during a contest — watch a leaderboard update in near real time. The scale is modest by system-design standards (a few hundred thousand users, roughly four thousand problems), so browsing and storage are non-events. Almost every interesting decision collapses onto a single question: how do you take a stranger's program and <em>run it</em> without handing them your servers?</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
+      <h2 class="doc-h" id="h-req">Requirements</h2>
+      <div class="requirements">
+        <div class="functional">
+          <h3>Functional</h3>
+          <ol>
+            <li>Browse a paginated list of problems and open one to see its full statement and a starter code stub.</li>
+            <li>Write a solution in one of several languages and submit it for grading against the problem's test cases.</li>
+            <li>Receive pass/fail feedback on a submission within a few seconds.</li>
+            <li>View a live leaderboard for a timed competition.</li>
+          </ol>
+          <p class="prose">Out of scope: auth, profiles, payments, analytics, and social features. Users are assumed already authenticated, with a userId in the session — so identity never travels in a request body.</p>
+        </div>
+        <div class="nonfunctional">
+          <h3>Non-functional</h3>
+          <ul>
+            <li><strong>Isolation &amp; security</strong> — submitted code runs fully sandboxed; it cannot touch the host, the network, or other submissions.</li>
+            <li><strong>Latency</strong> — grading results returned within ~5&nbsp;seconds.</li>
+            <li><strong>Availability</strong> — favoured over strict consistency; a briefly stale leaderboard is fine, a dropped page is not.</li>
+            <li><strong>Scale</strong> — a contest must absorb up to 100,000 participants submitting in the same 90-minute window.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="estimation" aria-labelledby="h-est" data-kb-block="estimation">
+      <h2 class="doc-h" id="h-est">Back-of-envelope</h2>
+      <div class="prose">
+        <p><strong>Storage is a rounding error.</strong> ~4,000 problems, each a statement plus test cases and per-language stubs — kilobytes apiece. The whole corpus is a few tens of megabytes; it caches entirely in memory and the read path for browsing needs nothing clever.</p>
+        <p><strong>The real load is CPU, and it only appears during contests.</strong> Take a contest of 100k users and a peak of ~10,000 simultaneous submissions. Each solution is graded against ~100 test cases at roughly 100&nbsp;ms of compute each — up to ~10&nbsp;s of CPU per submission in the worst case. That is 10,000 × 100 = <strong>1,000,000 test-case runs ≈ 100,000 CPU-seconds</strong> of work arriving in a burst. To clear it inside a minute you need on the order of <strong>~1,667 cores</strong> — far past any single machine.</p>
+        <p>So the architecture's entire scaling story is the execution fleet, not the database. Everything else is small; the code runner is what has to be elastic.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
+      <h2 class="doc-h" id="h-entities">Core entities</h2>
+      <div class="prose">
+        <p>Three entities carry the whole design:</p>
+        <ul>
+          <li><strong>Problem</strong> — the statement, its <code>level</code> and <code>tags</code>, per-language <code>codeStubs</code>, and the <code>testCases</code> (input/expected-output pairs) nested as a subdocument.</li>
+          <li><strong>Submission</strong> — one attempt: the user's <code>code</code> and <code>language</code>, the problem it targets, and the grading <code>result</code> once it runs.</li>
+          <li><strong>Leaderboard</strong> — the standings for one competition: each participant's score and tie-break time.</li>
+          <li><strong>User — implied, not modelled.</strong> Identity comes from the authenticated session, so there is no need to name a User entity here; a submission just carries the server-derived userId.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
+      <h2 class="doc-h" id="h-interface">The interface</h2>
+      <div class="prose">
+        <p>A small REST surface. The list endpoint returns a trimmed projection (title, level, tags) rather than full statements, and grading is asynchronous — submit returns an id you poll:</p>
+      </div>
+      <details class="sketch">
+        <summary>HTTP — browse, submit, poll, leaderboard</summary>
+<pre><code class="language-http" data-kb-lang="http">GET  /problems?page=1&amp;limit=100          &rarr; Partial&lt;Problem&gt;[]   (title, id, level, tags)
+GET  /problems/:id?language=python        &rarr; Problem            (full statement + code stub)
+
+POST /problems/:id/submit                 &rarr; { submissionId }
+     body { "code": "...", "language": "python" }
+
+GET  /check/:submissionId                 &rarr; Submission | { "status": "processing" }
+GET  /competitions/:id/leaderboard?top=100 &rarr; Leaderboard</code></pre>
+      </details>
+      <div class="prose">
+        <p>Note what is <em>absent</em>: no <code>userId</code> and no timestamps in any body or query string. Trusting a client-supplied identity or clock is the classic red flag — the userId is read from the session/JWT and every timestamp is generated server-side.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
+      <h2 class="doc-h" id="h-arch">How the system is built</h2>
+      <div class="prose">
+        <p>At this scale the reflex to reach for microservices is wrong; a plain stateless API server in front of a store is the right amount of machinery. The one exotic piece is the <strong>execution path</strong>. A stateless API server handles browsing and stores submissions in a NoSQL store (DynamoDB — no joins, and test cases nest naturally under a problem). Grading, though, never runs in the API process. A submission is enqueued; a fleet of <strong>workers</strong> pulls jobs and runs each one inside a <strong>sandboxed, language-specific container</strong> with the code, its test harness, and tight resource limits. The worker reads the container's output, writes the result back to the store, and — for contest problems — updates a <strong>Redis sorted set</strong> that serves the leaderboard. The client learns the outcome by polling.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client · Monaco editor"]
+    API["API server (stateless)"]
+    DB[("DynamoDB · problems + submissions")]
+    Redis[("Redis sorted set · live leaderboard")]
+    Queue["Submission queue"]
+    Worker["Worker fleet (autoscaled)"]
+    Sandbox["Language container · sandboxed, resource-capped"]
+
+    Client -->|"browse / open problem"| API
+    Client -->|"POST submit"| API
+    Client -->|"poll /check and /leaderboard"| API
+    API -->|"read problems, store submissions"| DB
+    API -->|"enqueue submission"| Queue
+    Queue -->|"pull job"| Worker
+    Worker -->|"exec, read stdout"| Sandbox
+    Worker -->|"write result"| DB
+    Worker -->|"ZADD score"| Redis
+    API -->|"ZRANGE top N"| Redis
+        </pre>
+        <figcaption>Browsing is trivial; grading is the whole design — enqueue, pull, run sandboxed, write back, then the client polls for the result and the standings.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
+      <h2 class="doc-h" id="h-deep">Deep dives</h2>
+      <div class="prose">
+        <h3>1 · Running a stranger's code without getting owned</h3>
+        <p>This is the crux of the whole problem, and there is a wide gap between the naïve answer and a safe one.</p>
+        <ul>
+          <li><strong>In the API process (never).</strong> Writing the code to a file and executing it in-process is a disaster on three axes at once. <em>Security:</em> the code can delete or exfiltrate data, mine crypto, or launch attacks from your infrastructure. <em>Performance:</em> a tight loop or memory leak pins the box. <em>Isolation:</em> a crash takes the whole server down and blocks every other request — there is no failure containment at all, which is exactly what a <a href="../patterns/distributed/resilience/bulkhead.html">bulkhead</a> exists to provide.</li>
+          <li><strong>Virtual machine.</strong> Run each submission in a VM: a hypervisor gives each a full OS and strong isolation, and you can reset it if something goes wrong. Safe, but VMs are heavy and slow to start — expensive lifecycle management for a job that lasts seconds.</li>
+          <li><strong>Container (chosen).</strong> Containers share the host kernel and isolate at the process level, so they start fast and cost little — one image per runtime (Python, JavaScript, Java…), each carrying its dependencies. Because cold-starting a container per submission is still wasteful, keep a set of warm containers and reuse them across jobs, an <a href="../patterns/gof/extra/object-pool.html">object pool</a> of ready runtimes. Sharing the kernel means the sandbox has to be hardened deliberately: a read-only filesystem, CPU and memory caps that kill an over-budget container, an execution <a href="../patterns/distributed/resilience/timeout-deadline.html">timeout</a> that kills a runaway loop (and conveniently enforces the 5-second SLA), no network access, and a seccomp profile whitelisting syscalls. Together that is the <a href="../patterns/security/least-privilege.html">least privilege</a> principle made concrete — strip the process down to only what grading needs.</li>
+          <li><strong>Serverless functions.</strong> One function per runtime, auto-scaled by the platform. Tempting, but cold-start latency on the first invocation eats into a tight time budget and per-invocation resource caps constrain heavier submissions. With steady, predictable submission volume, containers win.</li>
+        </ul>
+
+        <h3>2 · Grading asynchronously, and scaling the fleet</h3>
+        <p>Grading against ~100 test cases takes seconds, so the API cannot hold the connection open and hand back a result inline — that is what times out and fails to scale. Instead, submit returns a <code>submissionId</code> immediately and the client polls <code>GET /check/:id</code> until the status flips from <em>processing</em> to a result. (This is exactly what the real product does — the poll is visible in the network tab after you hit submit.)</p>
+        <p>Between the API and the workers sits a queue. It does two distinct jobs. It <a href="../patterns/distributed/resilience/load-leveling.html">levels the load</a>: a contest's submission spike lands in the queue and drains at whatever rate the fleet can sustain, rather than overwhelming it. And it turns the workers into <a href="../patterns/messaging/competing-consumers.html">competing consumers</a> — each pulls the next job when it has capacity, which is exactly the elastic pull model a bursty CPU workload wants, with free retries if a container dies mid-run. The trade is added asynchrony and a little over-engineering for a system this size; if contests require registration you could pre-scale instead, but the queue buys spike tolerance and retry-on-failure cheaply.</p>
+        <p>For the fleet itself, vertical scaling is a dead end — the back-of-envelope wants ~1,667 cores and the largest instances top out in the low hundreds of vCPUs, leaving a giant idle machine most of the time. So each language pool scales horizontally, and an <a href="../patterns/distributed/routing/autoscaling.html">autoscaler</a> grows and shrinks it on CPU utilisation. Over-provisioning is the only real risk, and it is cheap and reversible.</p>
+
+        <h3>3 · A leaderboard that stays live without melting the database</h3>
+        <p>A contest is 90 minutes, 10 problems, up to 100k users; the ranking is problems-solved, ties broken by finish time. Clients poll roughly every 5 seconds.</p>
+        <ul>
+          <li><strong>Query on every poll.</strong> Each poll runs a <code>GROUP BY userId … ORDER BY solved DESC, time ASC</code> over the submissions table. Across 100k users that is a scan-group-sort over up to a million rows every few seconds — it flattens the database precisely when the contest is hottest. Rejected.</li>
+          <li><strong>Periodically refreshed cache.</strong> Recompute the standings into Redis every ~30 s and let polls hit the cache. A big improvement, but the results are coarse and can lag reality by half a minute.</li>
+          <li><strong>Redis sorted set (chosen).</strong> Maintain the leaderboard as a live, precomputed projection — a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> kept in a sorted set keyed <code>competition:leaderboard:{competitionId}</code>. On each accepted submission the worker does one <code>ZADD</code> with the user's score; a poll reads the top N with <code>ZRANGE … REV WITHSCORES</code> in O(log&nbsp;n + N), never touching the durable store. The database stays the source of truth for submissions; the sorted set is the fast read model. WebSockets were considered and rejected — with a 5-second freshness target and this user count, they are complexity the problem does not earn. Polling frequency is even tunable: tighten it near the finish, relax it otherwise.</li>
+        </ul>
+
+        <h3>4 · One test suite, every language</h3>
+        <p>You do not want to hand-write test cases per problem <em>and</em> per language. Author one canonical set of input/expected-output pairs per problem in a language-neutral serialization format, then give each runtime a thin harness that deserializes the input, calls the user's function, and compares its output against the expected value. A binary-tree input, for instance, serializes as a level-order (BFS) array like <code>[3, 9, 20, null, null, 15, 7]</code>; every language ships a matching <code>TreeNode</code>-style type alongside the user's code so the harness can rebuild the tree before invoking their solution. Define a serialization strategy once per data-structure type and every supported language reuses the same canonical cases.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>What it buys</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Untrusted code runs fully contained — a crash, an infinite loop, or a hostile payload is caged in one disposable sandbox, not the API server.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">A queue plus autoscaled worker pools absorb a contest's submission burst and grade it elastically, with retries for free.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The leaderboard is near-real-time and cheap — O(log n) sorted-set writes and reads keep it off the database entirely.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>What it gives up</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Asynchronous grading means the client must poll <code>/check</code> — more round-trips and moving parts than an inline response.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">The queue is arguably over-engineering for this scale; predictable, pre-scaled fleets could serve registered contests with less machinery.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">The sorted-set leaderboard is derived state that must be updated in lockstep with submissions, and its 5-second polling is a deliberate not-quite-live compromise.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
+      <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>Mid-level</strong> — clear API endpoints and a data model, a working end-to-end flow that meets the functional requirements, and recognising that user code must be isolated — proposing at least one of container, VM, or serverless to run it.</li>
+          <li><strong>Senior</strong> — moves fast through the high-level design to spend real time on secure, isolated execution: compares container vs. VM vs. serverless and justifies a choice, names the hardening measures, and breaks out of box-drawing to explain how test cases actually run against a submission.</li>
+          <li><strong>Staff+</strong> — drives the whole conversation, keeps the design deliberately simple with a clear scaling path, volunteers the execution-fleet math and the queue/autoscaling trade-offs, and can defend why WebSockets and microservices are <em>not</em> worth it here.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
+      <div class="rel-group">
+        <p class="rel-type">Demonstrates</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-pool"><a href="../patterns/gof/extra/object-pool.html">Object Pool</a><span class="rel-note">warm language containers are kept ready and reused across submissions instead of cold-starting one per job</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="competing-consumers"><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a><span class="rel-note">a worker fleet pulls submissions off the queue, each grabbing the next job as its capacity frees up</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="load-leveling"><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">the submission queue absorbs a contest's spike and drains it at the fleet's sustainable rate</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="autoscaling"><a href="../patterns/distributed/routing/autoscaling.html">Autoscaling</a><span class="rel-note">each language-specific container pool grows and shrinks on CPU utilization to track contest load</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">the live leaderboard is a Redis sorted set updated on each accepted submission, not recomputed per poll</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="least-privilege"><a href="../patterns/security/least-privilege.html">Least Privilege</a><span class="rel-note">the sandbox is stripped to a read-only filesystem, no network, capped CPU/memory, and a seccomp syscall whitelist</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="timeout-deadline"><a href="../patterns/distributed/resilience/timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">a hard execution timeout kills a runaway or infinite-loop submission and enforces the 5-second result SLA</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="bulkhead"><a href="../patterns/distributed/resilience/bulkhead.html">Bulkhead</a><span class="rel-note">each submission runs in its own disposable container so a crash or hang can't take the API server or other jobs down</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Case study navigation">
+      <a class="prev" href="../index.html#design-cases-h">← Case studies</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#design-cases-h">Case studies →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/vendor/highlight.min.js"></script>
+  <script src="../assets/sketch.js"></script>
+</body>
+</html>

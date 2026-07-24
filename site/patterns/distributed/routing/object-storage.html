@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Object Storage · Patterns</title>
+  <meta name="description" content="Object Storage — keep large unstructured blobs in a purpose-built store addressed by key, and only a reference in the database.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#object-storage",
+  "identifier": "object-storage",
+  "name": "Object Storage",
+  "description": "Store large unstructured blobs in a purpose-built store, keep only a reference in the database",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-routing",
+  "kb:combines-with": [
+    {
+      "@id": "./cdn.html#cdn",
+      "name": "CDN",
+      "kb:note": "A CDN caches and serves the store's public objects from the edge, near the user."
+    },
+    {
+      "@id": "./valet-key.html#valet-key",
+      "name": "Valet Key",
+      "kb:note": "A pre-signed URL is a valet key: scoped, expiring, direct access to one object."
+    },
+    {
+      "@id": "../../messaging/claim-check.html#claim-check",
+      "name": "Claim Check",
+      "kb:note": "Store the large payload here; the message carries only its key."
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/web-crawler.html#web-crawler",
+      "name": "Web Crawler",
+      "kb:note": "large immutable blobs are kept in cheap durable object storage rather than a database or queue"
+    },
+    {
+      "@id": "../../../designs/instagram.html#instagram",
+      "name": "Instagram",
+      "kb:note": "the design leans on an object store for 750PB of media with cold-tier aging to cheaper storage"
+    },
+    {
+      "@id": "../../../designs/fb-post-search.html#fb-post-search",
+      "name": "Facebook Post Search",
+      "kb:note": "cold-tiering the long tail into object storage is how the design affords 3.6 PB of index"
+    },
+    {
+      "@id": "../../../designs/google-news.html#google-news",
+      "name": "Google News",
+      "kb:note": "article images live as objects referenced by URL from the metadata row, the canonical blobs-belong-in-object-storage split"
+    },
+    {
+      "@id": "../../../designs/strava.html#strava",
+      "name": "Strava",
+      "kb:note": "cold GPS archives on object storage is the archival tier of a hot/warm/cold layout"
+    },
+    {
+      "@id": "../../../designs/whatsapp.html#whatsapp",
+      "name": "WhatsApp",
+      "kb:note": "serving large immutable binaries by reference is precisely what object storage exists for"
+    },
+    {
+      "@id": "../../../designs/dropbox.html#dropbox",
+      "name": "Dropbox",
+      "kb:note": "Dropbox offloads virtually unlimited, durable file storage to a blob store and keeps only metadata in its own database"
+    },
+    {
+      "@id": "../../../designs/youtube.html#youtube",
+      "name": "YouTube",
+      "kb:note": "petabyte-scale immutable media addressed by URL is the canonical object-storage workload"
+    },
+    {
+      "@id": "../../../designs/persona-identification.html#persona-identification",
+      "name": "Persona Identification & Sanction Check",
+      "kb:note": "storing a submitted ID photo as a KMS-encrypted blob, referenced by key from the persona record rather than embedded in it"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/system-design-interview.html#system-design-interview",
+      "name": "System Design Interview",
+      "kb:role": "Keep large blobs out of the database"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="object-storage" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-routing" data-kb-essence="Store large unstructured blobs in a purpose-built store, keep only a reference in the database" data-kb-order="65" data-kb-aliases="[&quot;blob storage&quot;,&quot;object store&quot;,&quot;S3&quot;]" data-kb-tags="[&quot;persistence&quot;,&quot;durability&quot;,&quot;scalability&quot;,&quot;data-access&quot;]" data-kb-solves="[&quot;my database backups take forever and the disk is full of user-uploaded images&quot;,&quot;storing PDFs and videos as blobs in Postgres has made every query slow&quot;,&quot;I need somewhere cheap to keep terabytes of files I only look up by id&quot;,&quot;users upload large videos and my app servers choke proxying the bytes&quot;,&quot;where do I put profile pictures and attachments so a CDN can serve them&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Object Storage</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Routing &amp; Scale</p>
+      <h1 class="doc-title">Object Storage</h1>
+      <p class="doc-essence">A store built for large, unstructured binary objects — images, video, backups — each addressed by a key over HTTP. The database keeps a small reference; the bytes live here, cheap, durable, and ready for a CDN to serve.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="object-storage">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p><strong>Object storage</strong> keeps data as opaque <em>objects</em> — a blob of bytes, a bundle of metadata, and a unique key — in a flat namespace, retrieved by key over an HTTP API rather than by a filesystem path or a database row. Each object is written and read whole: you don't append to one or edit part of it, you replace it. It is purpose-built to hold large, unstructured binary data — images, video, backups, logs, static assets, ML datasets — cheaply and at effectively unbounded scale.</p>
+        <p>The force it resolves is a mismatch of jobs. A relational or document database is built for many small, structured, frequently updated records with rich queries and transactions. Push large binary blobs into it and everything suffers: rows bloat, backups balloon, the buffer cache thrashes, and every query slows for data it never touches. Object storage takes the blobs out of that hot path — the database keeps only a small reference (a key or URL), and the bytes live in a store designed for exactly this: durable, cheap per gigabyte, horizontally scalable, and directly addressable over HTTP.</p>
+        <p>Objects live in <em>buckets</em> (containers), each object named by a key, with per-object authorization on an HTTP interface. Because an object is reachable by URL, it pairs naturally with a <a href="./cdn.html">CDN</a> in front to cache it at the edge, and with a <a href="./valet-key.html">Valet Key</a> — a short-lived pre-signed URL — so a client can upload or download the bytes directly without routing them through your servers. The price of that simplicity is a narrow interface: no in-place edits, no filesystem semantics, and consistency that is read-after-write for new objects but weaker for overwrites and listings.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    App["App server"] -->|"1 · write blob → key"| OS["Object store (bucket)"]
+    App -->|"2 · store key / URL"| DB[("Database")]
+    OS --> CDN["CDN — edge cache"] --> Client["Client"]
+    Client -.->|"pre-signed URL: transfer bytes directly"| OS
+        </pre>
+        <figcaption>The database holds a small reference; the bytes live in the object store, served to clients through a CDN or transferred directly with a pre-signed URL.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Storage classes &amp; tiers</dt>
+        <dd>Hot, infrequent-access, and archive (cold) tiers trade retrieval latency and cost. Lifecycle rules move rarely-read objects to cheaper cold storage automatically, and expire them when they age out.</dd>
+        <dt id="variations-item-2">Pre-signed URLs (direct transfer)</dt>
+        <dd>Hand the client a short-lived signed URL so it uploads or downloads straight from the store, keeping large payloads off your app servers. This is the <a href="./valet-key.html">Valet Key</a> pattern applied to blobs.</dd>
+        <dt id="variations-item-3">Multipart / resumable upload</dt>
+        <dd>Split a large object into parts uploaded in parallel and reassembled server-side, so a dropped connection retries one part instead of the whole file.</dd>
+        <dt id="variations-item-4">Versioning &amp; immutability</dt>
+        <dd>Keep every version of a key, or lock objects write-once-read-many (WORM) for compliance and ransomware resistance, instead of overwriting in place.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Cheap per gigabyte and effectively unbounded — scales to petabytes with no capacity to provision.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Very high durability, through internal replication or erasure coding across devices and often data centres.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Keeps large-object traffic off the database and app servers, so their hot paths stay fast.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Objects are HTTP-addressable, so a CDN in front and direct client transfer drop in naturally.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">No filesystem or transactional semantics — you replace whole objects, can't edit in place, and can't query their contents.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Higher per-request latency than local disk or a database, especially first-byte from a cold tier.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Consistency is limited — strong read-after-write for new keys, but overwrites and listings can lag.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">A public bucket or a leaked pre-signed URL is a data-exposure risk; access control is easy to misconfigure.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You're storing large or unstructured binary data — user uploads, images, video, backups, logs, datasets.</li>
+            <li id="usage-when-2" data-kb-polarity="when">The data is written once (or seldom) and read whole, and you only ever look it up by a key.</li>
+            <li id="usage-when-3" data-kb-polarity="when">You want to serve that data through a CDN, or let clients upload and download it directly.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The data is small, highly structured, frequently updated, or queried by its contents — that's a database's job.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">You need transactions, partial updates, or low-latency random access into the data.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">You need real filesystem semantics — rename, append, directory locks — in which case reach for a file store.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="prose">
+        <p>The rule of thumb: keep the structured reference in your database and the bytes in object storage. Blurring that line is how databases bloat and buckets leak.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — store the bytes in the bucket, keep only a reference in the database</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// The object store speaks keys and bytes; the database never sees the blob.
+interface ObjectStore {
+  put(key: string, body: Uint8Array, contentType: string): Promise&lt;void&gt;;
+  presignedGet(key: string, ttlSeconds: number): Promise&lt;string&gt;; // short-lived URL
+}
+
+async function saveAvatar(userId: string, image: Uint8Array, store: ObjectStore, db: Db) {
+  const key = `avatars/${userId}/${crypto.randomUUID()}.jpg`;
+
+  // 1. The bytes go to the object store, addressed by key.
+  await store.put(key, image, "image/jpeg");
+
+  // 2. The database keeps only the small reference — not the blob.
+  await db.users.update(userId, { avatarKey: key });
+}
+
+async function avatarUrl(userId: string, store: ObjectStore, db: Db): Promise&lt;string | null&gt; {
+  const user = await db.users.find(userId);
+  if (!user?.avatarKey) return null;
+  // Hand the client a pre-signed URL; the bytes never pass through this server.
+  return store.presignedGet(user.avatarKey, 300);
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="amazon-s3"><strong>Amazon S3</strong><span>The original object store; buckets, keys, storage classes, and pre-signed URLs are its vocabulary.</span></div>
+        <div class="wild-item" data-kb-example="gcs"><strong>Google Cloud Storage</strong><span>GCPs object store, same bucket/object model with lifecycle tiers.</span></div>
+        <div class="wild-item" data-kb-example="azure-blob"><strong>Azure Blob Storage</strong><span>Microsofts object store, with hot, cool, and archive access tiers.</span></div>
+        <div class="wild-item" data-kb-example="minio"><strong>MinIO</strong><span>Self-hosted, S3-API-compatible object storage you run on your own hardware.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Storage class / tier</strong> — Per-object hot, infrequent-access, or archive tier, set directly or by lifecycle rule.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Lifecycle rules</strong> — Transition objects to colder tiers or expire them past an age threshold.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Multipart threshold &amp; part size</strong> — Above what size uploads split, and how large each part is.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Versioning</strong> — Keep prior versions of a key, or lock objects write-once (WORM).</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Bucket policy &amp; encryption</strong> — Public-access block, IAM/bucket policy, and server-side encryption at rest.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Request rate &amp; error mix</strong> — 4xx/5xx trend, especially 403 denials that signal a policy or key problem.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>First-byte latency by tier</strong> — Cold-tier reads are far slower than hot.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Egress bandwidth &amp; cost</strong> — The line item that surprises teams serving without a CDN.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Objects &amp; bytes stored</strong> — Count and total size, per bucket and per prefix.</li>
+            <li id="production-signal-5" data-kb-polarity="signal"><strong>Replication lag</strong> — Time for a write to reach another region, where replication is enabled.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Hot-prefix throttling</strong> — Requests concentrated on one key prefix get rate-limited.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Egress cost blowout</strong> — Serving large objects straight to users instead of through a CDN.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Public-bucket exposure</strong> — A misconfigured policy leaks private data.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Stale read after overwrite</strong> — A read or listing right after a write returns the old object because consistency lags.</li>
+            <li id="production-failure-5" data-kb-polarity="failure"><strong>Cold-tier retrieval spike</strong> — Objects aged into archive must be restored before they can be read.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Block public access by default; grant reads via a CDN or pre-signed URL</li>
+            <li id="production-check-2" data-kb-polarity="check">Enable encryption at rest and enforce TLS in transit</li>
+            <li id="production-check-3" data-kb-polarity="check">Put a CDN in front of read-heavy public assets to cap egress and latency</li>
+            <li id="production-check-4" data-kb-polarity="check">Use pre-signed URLs for client upload/download so bytes skip your servers</li>
+            <li id="production-check-5" data-kb-polarity="check">Set lifecycle rules to tier or expire cold data</li>
+            <li id="production-check-6" data-kb-polarity="check">Scope bucket IAM to least privilege and audit for public grants</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="cdn"><a href="./cdn.html">CDN</a><span class="rel-note">A CDN caches and serves the store's public objects from the edge, near the user.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="valet-key"><a href="./valet-key.html">Valet Key</a><span class="rel-note">A pre-signed URL is a valet key: scoped, expiring, direct access to one object.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="claim-check"><a href="../../messaging/claim-check.html">Claim Check</a><span class="rel-note">Store the large payload here; the message carries only its key.</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="web-crawler"><a href="../../../designs/web-crawler.html">Web Crawler</a><span class="rel-note">large immutable blobs are kept in cheap durable object storage rather than a database or queue</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="instagram"><a href="../../../designs/instagram.html">Instagram</a><span class="rel-note">the design leans on an object store for 750PB of media with cold-tier aging to cheaper storage</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="fb-post-search"><a href="../../../designs/fb-post-search.html">Facebook Post Search</a><span class="rel-note">cold-tiering the long tail into object storage is how the design affords 3.6 PB of index</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="google-news"><a href="../../../designs/google-news.html">Google News</a><span class="rel-note">article images live as objects referenced by URL from the metadata row, the canonical blobs-belong-in-object-storage split</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="strava"><a href="../../../designs/strava.html">Strava</a><span class="rel-note">cold GPS archives on object storage is the archival tier of a hot/warm/cold layout</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="whatsapp"><a href="../../../designs/whatsapp.html">WhatsApp</a><span class="rel-note">serving large immutable binaries by reference is precisely what object storage exists for</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="dropbox"><a href="../../../designs/dropbox.html">Dropbox</a><span class="rel-note">Dropbox offloads virtually unlimited, durable file storage to a blob store and keeps only metadata in its own database</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="youtube"><a href="../../../designs/youtube.html">YouTube</a><span class="rel-note">petabyte-scale immutable media addressed by URL is the canonical object-storage workload</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="persona-identification"><a href="../../../designs/persona-identification.html">Persona Identification &amp; Sanction Check</a><span class="rel-note">storing a submitted ID photo as a KMS-encrypted blob, referenced by key from the persona record rather than embedded in it</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="system-design-interview"><a href="../../../themes/system-design-interview.html">System Design Interview</a><span>Keep large blobs out of the database</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

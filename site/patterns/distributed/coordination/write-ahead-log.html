@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Write-Ahead Log · Patterns</title>
+  <meta name="description" content="Write-Ahead Log — records the intent durably before applying the change, so a crash can always replay its way back to a consistent state.">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#write-ahead-log",
+  "identifier": "write-ahead-log",
+  "name": "Write-Ahead Log",
+  "description": "Records the intent durably before applying the change",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:combines-with": [
+    {
+      "@id": "./quorum-consensus.html#quorum-consensus",
+      "name": "Quorum & Consensus",
+      "kb:note": "Replicate the log, commit on a quorum"
+    }
+  ],
+  "kb:enables": [
+    {
+      "@id": "./replication.html#replication",
+      "name": "Replication",
+      "kb:note": "Ship the log to bring replicas up to date"
+    }
+  ],
+  "kb:part-of": [
+    {
+      "@id": "./lsm-tree.html#lsm-tree",
+      "name": "LSM Tree",
+      "kb:note": "The commit log an LSM engine writes before its memtable is a write-ahead log"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "../../architecture/event-sourcing.html#event-sourcing",
+      "name": "Event Sourcing",
+      "kb:note": "Durability journal vs. domain source of truth"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../../designs/online-chess.html#online-chess",
+      "name": "Online Chess",
+      "kb:note": "persist-before-broadcast is the write-ahead invariant — the log is the truth and the in-memory board is only its fast projection"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/cap-theorem.html#cap-theorem",
+      "name": "CAP Theorem",
+      "kb:role": "Durable ordering behind replicated state"
+    },
+    {
+      "@id": "../../../themes/consistency-and-replication.html#consistency-and-replication",
+      "name": "Consistency & Replication",
+      "kb:role": "Order and ship changes durably"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="write-ahead-log" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Records the intent durably before applying the change" data-kb-order="73" data-kb-aliases="[&quot;WAL&quot;,&quot;redo log&quot;,&quot;journal&quot;]" data-kb-tags="[&quot;durability&quot;,&quot;resilience&quot;,&quot;persistence&quot;,&quot;replication&quot;,&quot;consistency&quot;]" data-kb-solves="[&quot;the process was killed halfway through a write and now the data file is corrupt&quot;,&quot;we lost the last few minutes of writes when the machine lost power&quot;,&quot;flushing every changed page to disk on each commit makes writes crawl&quot;,&quot;after a crash I have no reliable way to tell which changes actually made it to disk&quot;,&quot;I need followers to catch up continuously but copying full snapshots is far too heavy&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Coordination &amp; Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Write-Ahead Log</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Write-Ahead Log</h1>
+      <p class="doc-essence">Appends every change to a durable, sequential log before it ever touches the real data structure — so a crash can always replay its way back to exactly the state it promised.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Coordination &amp; Data</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="write-ahead-log">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>write-ahead log</strong> (WAL) is an append-only, durable record of every change, written and fsynced <em>before</em> the change is applied to the actual data structure — a B-tree page, an in-memory table, a key-value store. Once the log record has survived on disk, the system is free to apply the change lazily, batch it, or even lose it from memory, because the log can always reconstruct it.</p>
+        <p>The force it resolves is durability without paying for a random write on every mutation. Applying updates directly to a data structure means writing scattered pages in place — slow, and if the process dies mid-write, a torn or partial page can corrupt the structure permanently. Appending a record to a log is a single sequential write, cheap on disks and SSDs alike, and it either lands whole or not at all once it's checksummed.</p>
+        <p>Recovery follows directly from that guarantee: after a crash, replay the log from the last known-consistent point, reapplying every committed record until the data structure catches up to where the log says it should be. Everything the system knows it did lives in the log; the data structure itself is just a cache of it that can always be rebuilt.</p>
+        <p>WAL is the mechanism behind the ACID "durability" of most relational databases (PostgreSQL's WAL, InnoDB's redo log), sits inside LSM-tree stores, and underlies consensus logs in distributed systems — anywhere "did this actually happen" has to survive a crash.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    C["Caller writes"] --> L["Append record to log"]
+    L --> F["fsync, durable"]
+    F --> K["Ack caller"]
+    F --> S["Apply to data structure"]
+    R["Crash, restart"] --> P["Replay log from checkpoint"]
+    P --> S
+        </pre>
+        <figcaption>A write is durable the moment its log record is fsynced — only then is it acknowledged or applied. Recovery replays the log to rebuild state after a crash.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Physical vs. logical logging</dt>
+        <dd>Physical records capture the exact bytes changed on a page, redone by copying; logical records capture the operation performed. Physical is simple and deterministic to replay; logical is more compact but replay must be idempotent.</dd>
+        <dt id="variations-item-2">Redo-only vs. redo/undo</dt>
+        <dd>A redo-only log lets recovery replay forward to the last durable state. A redo/undo log also records the before-image, so an in-flight transaction can be rolled back as cleanly as a committed one is replayed.</dd>
+        <dt id="variations-item-3">Checkpointing</dt>
+        <dd>Periodically flush the state the log implies into the data structure itself, then truncate everything before that point — bounding how far recovery ever has to replay.</dd>
+        <dt id="variations-item-4">Group commit</dt>
+        <dd>Batch several concurrent appends into one fsync instead of one per writer, trading a little added latency per write for far higher durable throughput.</dd>
+        <dt id="variations-item-5"><a href="./replication.html">Log shipping</a></dt>
+        <dd>Ship the WAL itself to follower nodes and have them replay it, rather than transferring snapshots — continuous replication built directly on the durability log.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Turns random, in-place writes into a single sequential append — close to a disk or SSD's best case.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Durability is bounded to one fsync per commit, not one per touched page.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Recovery is deterministic: replay the log and the data structure converges to a known state.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">The log doubles as a natural feed for replication, auditing, and point-in-time recovery.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The log itself must be crash-safe — a torn write there defeats the whole scheme, so entries need checksums and length prefixes.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Unbounded logs slow recovery and burn disk; checkpointing and truncation are mandatory, not optional.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Every commit still pays for at least one fsync — a latency floor no batching fully removes.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Doubles the conceptual write path, log now, apply later, adding a second place logic can drift out of sync.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You need durability across a crash, but writing directly to the primary structure would be slow or unsafe.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You want recovery to be a deterministic replay rather than bespoke per-structure recovery code.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The log itself is useful downstream — for replication, replay, or audit — not just for recovery.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The data is disposable or fully rebuildable from another durable source, so write-time durability isn't worth the overhead.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Writes are already inherently atomic and durable — a single fsync'd file write needs no second log on top.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Sub-microsecond latency matters more than survivability and losing recent writes is acceptable.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — append, fsync, replay</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface LogEntry { seq: number; key: string; value: string; }
+
+class WriteAheadLog {
+  private seq = 0;
+  private readonly fd: number;
+
+  constructor(private readonly path: string) {
+    this.fd = fs.openSync(path, "a");
+  }
+
+  // Durable before the caller is told the write succeeded.
+  append(key: string, value: string): number {
+    const entry: LogEntry = { seq: ++this.seq, key, value };
+    fs.writeSync(this.fd, JSON.stringify(entry) + "\n");
+    fs.fsyncSync(this.fd);
+    return entry.seq;
+  }
+
+  *replay(): Generator&lt;LogEntry&gt; {
+    const text = fs.readFileSync(this.path, "utf8");
+    for (const line of text.split("\n")) {
+      if (line) yield JSON.parse(line) as LogEntry;
+    }
+  }
+}
+
+const wal = new WriteAheadLog("./wal.log");
+wal.append("balance:42", "100");
+store.set("balance:42", "100"); // safe: the log is already durable
+
+// On restart, the store is rebuilt purely from the log.
+for (const entry of wal.replay()) store.set(entry.key, entry.value);</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="postgresql-wal"><strong>PostgreSQL WAL</strong><span>Every change is written to the WAL and fsynced before the heap page is touched; the same log (default 16 MB segments) drives streaming replication and point-in-time recovery. synchronous_commit tunes the durability/latency tradeoff, and checkpoint_timeout with max_wal_size governs how far recovery ever replays.</span></div>
+        <div class="wild-item" data-kb-example="sqlite-wal"><strong>SQLite WAL mode</strong><span>journal_mode=WAL sends changes to a separate -wal file with a shared-memory index (-shm), so readers keep reading a consistent snapshot of the main database while a writer appends. A checkpoint (auto-triggered around 1000 pages by default, or PRAGMA wal_checkpoint) folds the log back into the db file.</span></div>
+        <div class="wild-item" data-kb-example="innodb-redo-log"><strong>MySQL InnoDB redo log</strong><span>Commits land in the redo log first; dirty buffer-pool pages are flushed lazily and replayed from the log after a crash. innodb_flush_log_at_trx_commit picks whether every commit fsyncs (1, fully durable) or batches flushes for throughput (0 or 2).</span></div>
+        <div class="wild-item" data-kb-example="rocksdb"><strong>RocksDB</strong><span>Writes hit the WAL before the in-memory memtable, so an unflushed memtable is rebuildable after a restart. Once a memtable is flushed to an SST file its WAL segment can be discarded, and WriteOptions.sync chooses per-write whether the append is fsynced.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Commit durability / fsync policy</strong> — Whether each commit fsyncs the log before acking (durable) or defers the flush for throughput (e.g. PostgreSQL synchronous_commit, InnoDB innodb_flush_log_at_trx_commit). Relaxing it trades a window of possibly-lost recent commits for lower commit latency.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Group commit delay</strong> — How long a committer waits to batch its fsync with others (e.g. PostgreSQL commit_delay). A small delay lets many writers share one fsync, lifting durable throughput at the cost of a bit of latency per commit.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Checkpoint interval</strong> — How often the state the log implies is flushed into the data structure so the log before it can be truncated (checkpoint_timeout, max_wal_size). Longer intervals cut steady write amplification but lengthen crash recovery.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>WAL retention / segment sizing</strong> — How much log is kept before recycling, for replication and point-in-time recovery (wal_keep_size, log segment size). Too little breaks a lagging replica; too much risks filling the disk.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Un-checkpointed WAL size</strong> — Bytes of log accumulated since the last checkpoint — the amount recovery would have to replay, and a direct read on how long a restart takes.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Commit latency p99</strong> — Tail latency of the fsync on the commit path — the durability floor that no batching fully removes, and the first thing to rise when the log device is stressed.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Checkpoint duration and frequency</strong> — How long a checkpoint takes and how often it runs. Frequent or slow checkpoints signal the WAL is filling faster than the data structure absorbs it.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Replication lag (log shipping)</strong> — How many bytes or seconds a follower trails the primary's log position. Growing lag means followers replay slower than the primary appends.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>WAL fills the disk</strong> — Log is generated faster than checkpointing recycles it or archiving drains it; the volume fills and the database halts writes rather than lose durability. Free space on the log device is the thing to watch.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Checkpoint I/O storm</strong> — A checkpoint flushes a large backlog of dirty pages at once, spiking disk I/O and stalling foreground commits — the classic sawtooth when checkpoints are too infrequent.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>fsync latency spike</strong> — The log device slows and, because every commit waits on its fsync, commit latency across the whole system rises together — the durability floor moving up under load.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Slow recovery after crash</strong> — A large un-checkpointed log means a long replay before the system accepts traffic again; recovery time is bounded by the checkpoint interval, not by how the crash happened.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Log entries are checksummed and length-prefixed so a torn write is detected, not replayed as truth</li>
+            <li id="production-check-2" data-kb-polarity="check">Checkpointing and truncation are configured — an unbounded log is mandatory to prevent, not optional</li>
+            <li id="production-check-3" data-kb-polarity="check">The log lives on storage whose fsync is honored, not a write-back cache that lies about durability</li>
+            <li id="production-check-4" data-kb-polarity="check">Recovery time is bounded by the checkpoint interval and has been tested with a real crash-and-replay</li>
+            <li id="production-check-5" data-kb-polarity="check">WAL disk free space and replication lag are monitored with alerts before the volume fills</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="quorum-consensus"><a href="./quorum-consensus.html">Quorum &amp; Consensus</a><span class="rel-note">Replicate the log, commit on a quorum</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Enables</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="enables" data-kb-to="replication"><a href="./replication.html">Replication</a><span class="rel-note">Ship the log to bring replicas up to date</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Part of</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="part-of" data-kb-to="lsm-tree"><a href="./lsm-tree.html">LSM Tree</a><span class="rel-note">The commit log an LSM engine writes before its memtable is a write-ahead log</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="event-sourcing"><a href="../../architecture/event-sourcing.html">Event Sourcing</a><span class="rel-note">Durability journal vs. domain source of truth</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="online-chess"><a href="../../../designs/online-chess.html">Online Chess</a><span class="rel-note">persist-before-broadcast is the write-ahead invariant — the log is the truth and the in-memory board is only its fast projection</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    WAL["Write-Ahead Log"]
+    WAL --- ES["Event Sourcing"]
+    WAL --- QC["Quorum &amp; Consensus"]
+    WAL --- RE["Replication"]
+    click ES "../../architecture/event-sourcing.html"
+    click QC "./quorum-consensus.html"
+    click RE "./replication.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="cap-theorem"><a href="../../../themes/cap-theorem.html">CAP Theorem</a><span>Durable ordering behind replicated state</span></div>
+        <div class="fluency-item" data-kb-theme="consistency-and-replication"><a href="../../../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Order and ship changes durably</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./gossip-protocol.html">← Gossip Protocol</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./bloom-filter.html">Bloom Filter →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

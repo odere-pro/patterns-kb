@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Read-Through · Patterns</title>
+  <meta name="description" content="Read-Through — the cache loads on a miss itself, so the application never sees the gap underneath.">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#read-through",
+  "identifier": "read-through",
+  "name": "Read-Through",
+  "description": "The cache loads on a miss, the app never sees the gap",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "caching",
+  "kb:group": "caching",
+  "kb:combines-with": [
+    {
+      "@id": "../distributed/coordination/replication.html#replication",
+      "name": "Replication",
+      "kb:note": "Read replicas serve cached-style reads"
+    },
+    {
+      "@id": "./write-through.html#write-through",
+      "name": "Write-Through",
+      "kb:note": "Read-through paired with write-through keeps sync"
+    },
+    {
+      "@id": "./refresh-ahead.html#refresh-ahead",
+      "name": "Refresh-Ahead",
+      "kb:note": "Refresh hot keys before they expire"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "./cache-aside.html#cache-aside",
+      "name": "Cache-Aside",
+      "kb:note": "App fills the cache vs. the cache fills itself"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/cache-stampede.html#cache-stampede",
+      "name": "Cache Stampede",
+      "kb:note": "One load path per key lets the cache coalesce concurrent misses into a single fetch"
+    }
+  ],
+  "kb:demonstrated-by": [
+    {
+      "@id": "../../designs/ticketmaster.html#ticketmaster",
+      "name": "Ticketmaster",
+      "kb:note": "the hot event page is the archetypal read-through workload — high-read, low-change data fronted by a cache keyed by id"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/performance.html#performance",
+      "name": "Performance",
+      "kb:role": "Cache reads transparently"
+    },
+    {
+      "@id": "../../themes/caching.html#caching",
+      "name": "Caching",
+      "kb:role": "Let the cache own the miss path"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="read-through" data-kb-kind="pattern" data-kb-band="caching" data-kb-group="caching" data-kb-essence="The cache loads on a miss, the app never sees the gap" data-kb-order="101" data-kb-tags="[&quot;caching&quot;,&quot;read-optimization&quot;,&quot;encapsulation&quot;,&quot;latency&quot;]" data-kb-solves="[&quot;six different services each wrote their own check-then-load-then-store dance and they have all drifted apart&quot;,&quot;half the codebase expires this data after five minutes and the other half after an hour&quot;,&quot;someone fetched a record and forgot to put it back in memory, so it was slow forever and nobody noticed&quot;,&quot;when a hot key expires a hundred requests all pile onto the database at the same instant&quot;,&quot;I want callers to just ask for the value without knowing whether it came from memory or the database&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-cache-h">Lenses</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-cache-h">Caching</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Read-Through</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Caching</p>
+      <h1 class="doc-title">Read-Through</h1>
+      <p class="doc-essence">On a cache miss, the cache reaches into the backing store itself, loads the value, populates the entry, and hands it back — the application only ever calls <code>get()</code> and never sees the gap underneath.</p>
+      <div class="doc-metarow">
+        <span class="badge">Caching</span>
+        <span class="badge muted">Lens</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="read-through">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p>A <strong>read-through</strong> cache sits directly in front of a backing store and takes on the job of loading data, not just holding it. The application calls a single <code>get(key)</code>; if the entry is present the cache returns it immediately, and if it's absent the cache itself invokes a loader bound to the backing store, populates the entry, and returns the result. The caller never branches on hit or miss — from where it stands, the cache simply always has the value.</p>
+        <p>The force it resolves is duplicated, drifting miss-handling logic. Against a plain cache, every caller that wants a value runs its own dance: check the cache, fall through to the database on a miss, write the result back, then return it — repeated at every call site, and prone to drifting apart across them (different TTLs, someone forgets to populate, two callers race and load twice). Read-through centralizes that logic once, inside the cache itself, so every caller gets identical, correct miss handling for free.</p>
+        <p>Because the cache owns the load path, it can also protect the backing store: concurrent misses for the same key can collapse into a single in-flight load instead of stampeding the database, and a key known to be absent can be cached negatively so repeated lookups stop hitting the store. The trade is coupling — the cache has to know how to load, wired to a loader function or a co-located data source, which is a tighter arrangement than a cache that's merely a dumb key-value store.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    participant App
+    participant Cache
+    participant Store
+    App->>Cache: get(key)
+    Cache->>Store: load(key), only on a miss
+    Store-->>Cache: value from source
+    Cache-->>App: value, entry now populated
+    Note over Cache: a hit skips the store call entirely
+        </pre>
+        <figcaption>The application only ever talks to the cache. A miss triggers a load from the store behind the scenes; a hit never reaches the store at all.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Synchronous load</dt>
+        <dd>The cache blocks the caller until the loader returns. Simplest to reason about, but every concurrent caller on a miss waits for the same round trip.</dd>
+        <dt id="variations-item-2">Request coalescing / single-flight</dt>
+        <dd>Concurrent misses for the same key share one in-flight load instead of each triggering its own call — the first caller loads, the rest await that same promise.</dd>
+        <dt id="variations-item-3">Negative caching</dt>
+        <dd>Cache a short-lived "not found" marker for missing keys, so a flood of lookups for absent data doesn't repeatedly round-trip the store.</dd>
+        <dt id="variations-item-4"><a href="./refresh-ahead.html">Refresh-Ahead</a></dt>
+        <dd>Instead of waiting for a miss, proactively reload a hot key shortly before its entry expires, so the read-through load path stays cold for busy keys.</dd>
+        <dt id="variations-item-5">Multi-level read-through</dt>
+        <dd>A local in-process cache is itself read-through to a shared remote cache, which is read-through to the store — each tier only loads from the one behind it.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Application code just calls <code>get()</code> — no miss-handling branch scattered across callers.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Loading and population logic lives in one place, so TTLs, serialization, and coalescing stay consistent for everyone.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Can collapse concurrent misses into a single backing call, shielding the store from thundering herds.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Callers never talk to the store directly, so the store's shape can change behind the loader.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Needs a cache that supports a bound loader function — harder to bolt onto an existing dumb cache.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">A cold cache or an evicted hot key still pays a synchronous load penalty on the next read.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Ties the cache to one backing store's shape, which is awkward when different callers want different fallback logic.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Solves reads only — writes still need a paired strategy or the cache goes stale silently.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Multiple services or call sites currently duplicate their own check-cache-else-load-else-populate logic.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Callers should be shielded entirely from cache misses and the loading mechanics behind them.</li>
+            <li id="usage-when-3" data-kb-polarity="when">The backing store benefits from load coalescing under bursts of concurrent reads for the same key.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Different callers need genuinely different loading or fallback logic for the same key — <a href="./cache-aside.html">Cache-Aside</a> keeps that control in application code.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">Writes are frequent and must be reflected immediately — pair with <a href="./write-through.html">Write-Through</a> rather than leaving reads stale.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">You don't control the cache client closely enough to wire in a loader function.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch">
+        <summary>TypeScript — a coalescing read-through cache</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">class ReadThroughCache&lt;K, V&gt; {
+  private entries = new Map&lt;K, V&gt;();
+  private inFlight = new Map&lt;K, Promise&lt;V&gt;&gt;();
+
+  constructor(
+    private readonly loader: (key: K) =&gt; Promise&lt;V&gt;,
+    private readonly ttlMs = 30_000,
+  ) {}
+
+  async get(key: K): Promise&lt;V&gt; {
+    const hit = this.entries.get(key);
+    if (hit !== undefined) return hit;          // no store call
+
+    const pending = this.inFlight.get(key);
+    if (pending) return pending;                 // coalesce concurrent misses
+
+    const load = this.loader(key).then((value) =&gt; {
+      this.entries.set(key, value);
+      this.inFlight.delete(key);
+      setTimeout(() =&gt; this.entries.delete(key), this.ttlMs);
+      return value;
+    });
+    this.inFlight.set(key, load);
+    return load;
+  }
+}
+
+// Caller never branches on hit vs. miss
+const users = new ReadThroughCache((id: string) =&gt; db.findUser(id));
+const u = await users.get("42");</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="caffeine"><strong>Caffeine (LoadingCache)</strong><span>Built from a CacheLoader, its LoadingCache computes absent entries inside get(), collapses concurrent misses for the same key into a single load, and exposes hit, miss, and load-failure counts once recordStats() is enabled.</span></div>
+        <div class="wild-item" data-kb-example="guava-cache"><strong>Guava CacheLoader</strong><span>A CacheBuilder plus a CacheLoader yields a LoadingCache whose get() loads and populates missing entries transparently; getAll can batch-load, and expireAfterWrite and maximumSize bound each entry.</span></div>
+        <div class="wild-item" data-kb-example="ehcache"><strong>Ehcache CacheLoaderWriter</strong><span>Registering a CacheLoaderWriter makes the cache read from the system of record on a miss (and write through on put), so application code only ever calls get() and put().</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Entry TTL (expire-after-write)</strong> — How long a loaded value stays valid before the next read reloads it; Caffeine's expireAfterWrite and Guava's expireAfterWrite set this directly.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Maximum size or weight</strong> — The entry or memory ceiling that bounds the cache; Caffeine's maximumSize or maximumWeight decides when least-used entries are evicted.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Loader timeout</strong> — A bound on how long the caller blocks waiting for the loader; without it a slow source stalls every coalesced waiter on that key.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Coalescing / single-flight</strong> — Whether concurrent misses for one key share a single in-flight load; that collapse is what shields the store from a stampede.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Negative-cache TTL</strong> — A short lifetime for cached not-found results, so a flood of lookups for an absent key doesn't repeatedly hit the store.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Hit ratio</strong> — Loads over total gets; Caffeine and Guava expose hitRate and missRate directly once recordStats is enabled.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Load latency</strong> — Time the loader takes; its p99 is the latency a miss adds to a read, and a rising trend means the store is struggling.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Load failure rate</strong> — Loader calls that throw; a spike means the backing store is failing and misses are turning into errors for callers.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>In-flight load count</strong> — Concurrent loads outstanding; if coalescing works this stays near the number of distinct hot keys, not the request rate.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Synchronous load penalty on cold or evicted key</strong> — A miss blocks the caller for the full loader round trip; a cold start or a wave of evictions makes many reads pay it at once.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Loader failure surfaces to callers</strong> — Because the cache owns the load, a failing backing store turns into exceptions on get(); without negative caching those failures repeat every request.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stale reads with no write path</strong> — Read-through solves reads only; if writes don't invalidate or write through, entries serve old values silently until the TTL.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Coalesced waiters stall on one slow load</strong> — When concurrent misses collapse into a single load and that load hangs, every waiter on the key hangs with it.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">The loader has a timeout so a slow source can't stall every waiter on a key</li>
+            <li id="production-check-2" data-kb-polarity="check">Concurrent misses coalesce (single-flight) where the store can't absorb a stampede</li>
+            <li id="production-check-3" data-kb-polarity="check">A write strategy — write-through or invalidation — is paired so reads don't serve stale data forever</li>
+            <li id="production-check-4" data-kb-polarity="check">Loader exceptions are surfaced, retried, or negatively cached, never silently swallowed</li>
+            <li id="production-check-5" data-kb-polarity="check">Cache stats (hit rate, load penalty, load-failure rate) are exported to monitoring</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+
+      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="replication"><a href="../distributed/coordination/replication.html">Replication</a><span class="rel-note">Read replicas serve cached-style reads</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="write-through"><a href="./write-through.html">Write-Through</a><span class="rel-note">Read-through paired with write-through keeps sync</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="refresh-ahead"><a href="./refresh-ahead.html">Refresh-Ahead</a><span class="rel-note">Refresh hot keys before they expire</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="cache-aside"><a href="./cache-aside.html">Cache-Aside</a><span class="rel-note">App fills the cache vs. the cache fills itself</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="cache-stampede"><a href="../../hazards/cache-stampede.html">Cache Stampede</a><span class="rel-note">One load path per key lets the cache coalesce concurrent misses into a single fetch</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Demonstrated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="ticketmaster"><a href="../../designs/ticketmaster.html">Ticketmaster</a><span class="rel-note">the hot event page is the archetypal read-through workload — high-read, low-change data fronted by a cache keyed by id</span></div>
+        </div>
+      </div>
+
+<figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    RT["Read-Through"]
+    RT --- RE["Replication"]
+    RT --- CA["Cache-Aside"]
+    RT --- WT["Write-Through"]
+    RT --- RA["Refresh-Ahead"]
+    click RE "../distributed/coordination/replication.html"
+    click CA "./cache-aside.html"
+    click WT "./write-through.html"
+    click RA "./refresh-ahead.html"
+        </pre>
+        <figcaption>Immediate neighbours. Click a node to open its page.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="performance"><a href="../../themes/performance.html">Performance</a><span>Cache reads transparently</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./cache-aside.html">← Cache-Aside</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="./write-through.html">Write-Through →</a>
+    </nav>
+
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>
