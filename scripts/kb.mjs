@@ -122,9 +122,21 @@ function render(el, out = []) {
     }
     if (/\brel-type\b/.test(cls)) { out.push(`\n${inline(c)}:\n`); continue; }
     if (tag === "h3") { out.push(`\n${inline(c).toUpperCase()}\n`); continue; }
+    if (tag === "h4") { out.push(`\n${inline(c)}\n`); continue; }
     if (tag === "p") { out.push(`\n${inline(c)}\n`); continue; }
     if (tag === "li") {
       const id = c.getAttribute("id");
+      // An item may carry a nested list (e.g. an NFR label with its points); without
+      // this, inline() welds the sublist into one unreadable line.
+      const sub = c.childNodes.find((n) => n.nodeType === 1 && /^(ul|ol)$/i.test(n.tagName ?? ""));
+      if (sub) {
+        const label = c.childNodes.filter((n) => n !== sub).map((n) => n.text).join("").replace(/\s+/g, " ").trim();
+        out.push(`- ${id ? `[${id}] ` : ""}${label}\n`);
+        for (const s of sub.childNodes) {
+          if (s.nodeType === 1 && s.tagName?.toLowerCase() === "li") out.push(`  - ${inline(s)}\n`);
+        }
+        continue;
+      }
       out.push(`- ${id ? `[${id}] ` : ""}${inline(c)}\n`);
       continue;
     }

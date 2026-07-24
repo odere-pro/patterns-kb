@@ -109,7 +109,7 @@ const THEME_BLOCKS = () => [
 ].join("\n\n");
 
 /* A design is a worked case study. The scaffold carries every block for the kind,
- * including the optional ones (estimation / interface / levels) so the author has the
+ * including the optional ones (sizing / interface / levels) so the author has the
  * full frame to fill and can delete any that don't apply. The `architecture` block
  * holds the primary mermaid diagram; `tradeoffs` reuses the pattern two-column shape so
  * build-pages stamps citable ids; `relationships` starts empty and is filled by
@@ -133,7 +133,7 @@ const DESIGN_BLOCKS = () => [
         </div>
       </div>
     </section>`,
-  PROSE_SECTION("estimation", "h-est", "Back-of-envelope", "estimation"),
+  PROSE_SECTION("sizing", "h-sizing", "Right-sizing", "sizing"),
   PROSE_SECTION("entities", "h-entities", "Core entities", "entities"),
   PROSE_SECTION("interface", "h-interface", "The interface", "interface"),
   `    <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">

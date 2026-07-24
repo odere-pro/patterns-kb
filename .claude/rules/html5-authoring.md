@@ -91,10 +91,11 @@ Fixed vocabulary, fixed order, per kind — see `BLOCKS` in `scripts/lib/model.m
 | hazard | `description` `causes` `cost` `mitigation` |
 | theme | `framing` `architecture`* `tradespace` `tour` `decide` `siblings` |
 | principle | `statement` `rationale` `applying` `overreach` `relationships` |
-| design | `problem` `requirements` `estimation`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
+| design | `problem` `requirements` `sizing`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
 
 `*` optional. A **design** is a worked case study (a system-design or low-level-design kata):
-`problem` frames it, `requirements` states FR + NFR, `architecture` carries the primary mermaid
+`problem` frames it, `requirements` states FR + NFR, `sizing` ("Right-sizing") argues from those
+requirements to the cheapest set of technology capabilities the numbers allow, `architecture` carries the primary mermaid
 diagram, `deepdives` argues the hard sub-problems, and the typed `relationships` block joins it to the
 patterns it uses via `demonstrates` (see Relationships). Designs carry `data-kb-solves` like a pattern,
 tag distributed katas `system-design` and OOP ones `low-level-design`, and live flat in `site/designs/`. Same question, same place, on every page — that is what makes block-level

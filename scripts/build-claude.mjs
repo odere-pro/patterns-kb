@@ -103,7 +103,7 @@ system down the way a strong interview answer would, and \`demonstrates\` the pa
 Pages here: ${list.map((n) => n.id).sort().join(", ")}
 
 Blocks, in order: ${BLOCKS.design.map((b) => `\`${b}\``).join(" → ")}.
-Optional: \`estimation\`, \`interface\`, \`levels\` — a low-level-design kata may skip the first two.
+Optional: \`sizing\`, \`interface\`, \`levels\` — a low-level-design kata may skip the first two.
 
 The \`architecture\` block carries the primary mermaid diagram (a \`flowchart\` for a distributed
 design, a \`classDiagram\` for a low-level one). A design links to the patterns it uses through the

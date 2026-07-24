@@ -25,15 +25,16 @@ export const BLOCKS = {
    * interview answer would: requirements, a diagram of how it is built, the hard
    * sub-problems argued out, and the patterns it puts to work (via the typed
    * `relationships` block, so `kb.mjs link … demonstrates …` wires both sides). */
-  design:    ["problem", "requirements", "estimation", "entities", "interface", "architecture", "deepdives", "tradeoffs", "levels", "relationships"],
+  design:    ["problem", "requirements", "sizing", "entities", "interface", "architecture", "deepdives", "tradeoffs", "levels", "relationships"],
 };
 /* Blocks that may legitimately be absent. `fluency` is only on patterns that a theme
  * tours; `wild` and `production` only where honest content exists; `architecture` is
  * only on themes that walk a concrete system (the ML case studies) and carry a diagram
- * of how it is built. On a design, `estimation` (back-of-envelope math) and `interface`
- * (the API surface) lean system-design and a low-level-design page may skip them, and
- * `levels` (the Mid/Senior/Staff rubric) is optional everywhere; the rest are mandatory. */
-export const OPTIONAL_BLOCKS = new Set(["fluency", "wild", "production", "architecture", "estimation", "interface", "levels"]);
+ * of how it is built. On a design, `sizing` (right-sizing: capabilities → numbers →
+ * cheapest shape) and `interface` (the API surface) lean system-design and a
+ * low-level-design page may skip them, and `levels` (the Mid/Senior/Staff rubric) is
+ * optional everywhere; the rest are mandatory. */
+export const OPTIONAL_BLOCKS = new Set(["fluency", "wild", "production", "architecture", "sizing", "interface", "levels"]);
 
 /* Tags are a CLOSED vocabulary, like the relation verbs. They exist to group and
  * filter — a tag used on one page groups nothing. The first sweep of this KB was
