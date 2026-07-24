@@ -4,15 +4,23 @@
  * if any points at a file that doesn't exist. External (http/mailto), in-page (#anchor),
  * and data: links are ignored. Exit 1 on any dangling link.
  *
- * Covers two carriers. href/src attributes, and mermaid `click <node> "<target>"`
- * directives — those are real clickable links living in diagram text rather than markup,
- * so an attribute-only scan reported "all links resolve" while 451 of them went entirely
- * unchecked. */
+ * Covers two carriers. href/src attributes — read from the parsed DOM (the same vendored
+ * parser every builder uses), so an attribute split across lines is still seen and markup
+ * quoted inside <code> sketches is skipped structurally rather than by regex. And mermaid
+ * `click <node> "<target>"` directives — real clickable links living in diagram text
+ * rather than markup, scanned inside <pre class="mermaid"> blocks only. */
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { parse } from "./vendor/node-html-parser.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Keep comments as nodes so the parse matches the builders'; comment content holds no
+ * elements, so commented-out markup is never link-checked. */
+const PARSE_OPTS = { comment: true };
+
+const ROOT = process.env.KB_ROOT
+  ? resolve(process.env.KB_ROOT)
+  : join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = join(ROOT, "site");
 
 function walk(dir) {
@@ -26,35 +34,45 @@ function walk(dir) {
 }
 
 const files = walk(SITE);
-const CARRIERS = [
-  { what: "attr", re: /(?:href|src)\s*=\s*"([^"]+)"/gi },
-  { what: "mermaid click", re: /\bclick\s+[A-Za-z0-9_]+\s+"([^"]+)"/g },
-];
+const MERMAID_CLICK = /\bclick\s+[A-Za-z0-9_]+\s+"([^"]+)"/g;
 let dangling = 0;
 const counts = { attr: 0, "mermaid click": 0 };
 const problems = [];
 
+const isExternal = (t) =>
+  t.startsWith("#") || t.startsWith("http:") || t.startsWith("https:")
+  || t.startsWith("mailto:") || t.startsWith("data:") || t.startsWith("//");
+
 for (const file of files) {
-  // Strip <code>...</code> bodies first — code sketches legitimately contain example
-  // markup text like src="${x}" that is not a real link and must not be checked.
-  const html = readFileSync(file, "utf8").replace(/<code(?:\s[^>]*)?>[\s\S]*?<\/code>/g, "<code></code>");
+  const root = parse(readFileSync(file, "utf8"), PARSE_OPTS);
   const base = dirname(file);
-  for (const { what, re } of CARRIERS) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(html))) {
-      let target = m[1].trim();
-      if (!target || target.startsWith("#") || target.startsWith("http:") || target.startsWith("https:")
-        || target.startsWith("mailto:") || target.startsWith("data:") || target.startsWith("//")) continue;
-      target = target.split("#")[0].split("?")[0];
-      if (!target) continue;
-      counts[what]++;
-      const abs = resolve(base, target);
-      if (!existsSync(abs) || !statSync(abs).isFile()) {
-        dangling++;
-        problems.push(`${file.replace(SITE + "/", "site/")}  ->  ${m[1]}  (${what})`);
-      }
+
+  const check = (raw, what) => {
+    let target = raw.trim();
+    if (!target || isExternal(target)) return;
+    target = target.split("#")[0].split("?")[0];
+    if (!target) return;
+    counts[what]++;
+    const abs = resolve(base, target);
+    if (!existsSync(abs) || !statSync(abs).isFile()) {
+      dangling++;
+      problems.push(`${file.replace(SITE + "/", "site/")}  ->  ${raw}  (${what})`);
     }
+  };
+
+  for (const el of root.querySelectorAll("[href], [src]")) {
+    // Code sketches legitimately contain example markup like src="${x}" — not real links.
+    if (el.closest("code")) continue;
+    for (const attr of ["href", "src"]) {
+      const v = el.getAttribute(attr);
+      if (v != null) check(v, "attr");
+    }
+  }
+
+  for (const pre of root.querySelectorAll("pre.mermaid")) {
+    MERMAID_CLICK.lastIndex = 0;
+    let m;
+    while ((m = MERMAID_CLICK.exec(pre.text))) check(m[1], "mermaid click");
   }
 }
 

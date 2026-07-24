@@ -1,7 +1,7 @@
 # patterns-kb
 
-A knowledge base of 163 software design patterns, hazards, themes and principles. **It is
-data that happens to render**, not a site that happens to hold data.
+A knowledge base of <!-- kb:counts -->169 software design patterns, 40 design case studies, 25 themes, 14 hazards and 11 principles — 259 pages in all<!-- /kb:counts -->.
+**It is data that happens to render**, not a site that happens to hold data.
 
 ## The one thing to understand
 
@@ -29,7 +29,7 @@ node scripts/kb.mjs ls --band caching
 ```
 
 Add `--json` for structured output. A grounded answer costs ~600 tokens this way, against
-~3,600 for one raw page. `find` searches the full prose of all 163 pages — that costs disk,
+~3,600 for one raw page. `find` searches the full prose of all <!-- kb:page-count -->259<!-- /kb:page-count --> pages — that costs disk,
 not context — and prints the line that matched.
 
 Cite precisely: every claim has a stable id (`…/circuit-breaker.html#tradeoffs-con-2`).

@@ -71,12 +71,12 @@ apply to 3+ pages. (The first sweep of this KB, written by 18 agents with no sha
 produced 280 tags of which 154 were used exactly once. Hence the closed list.)
 
 **`aliases`** — only genuinely used alternate names ("CB", "pub/sub", "Policy", "The Blob").
-`[]` is a perfectly good answer; 43 of 131 patterns have none. Do not invent nicknames.
+`[]` is a perfectly good answer; many patterns have none. Do not invent nicknames.
 
 **"In the wild"** (optional block) — real, well-known implementations only. This is the one
 place you can do real damage: a fabricated library name is a lie that ships to a public site.
 Include an entry only if you are confident it exists *and* genuinely exemplifies the pattern.
-**If in doubt, leave it out** — 12 patterns have no such block and that is fine. Avoid vague
+**If in doubt, leave it out** — plenty of patterns have no such block and that is fine. Avoid vague
 claims ("most web frameworks"), and never attribute a feature to a product unless you are
 sure that product has it. Feature-specific claims are the ones that turn out wrong.
 

@@ -1,7 +1,7 @@
 # patterns — a static, build-less knowledge base. These targets are dev conveniences.
 .DEFAULT_GOAL := help
 
-.PHONY: help serve check all graph pages vocab hub graph-page claude relations kb
+.PHONY: help serve check test all graph pages vocab hub graph-page claude relations kb
 
 all: ## Regenerate every derived artifact from the pages
 	@node scripts/build.mjs
@@ -29,6 +29,9 @@ check: ## Verify every generated artifact is in sync, no dangling links, relatio
 	@node scripts/build-claude.mjs --check
 	@node scripts/check-links.mjs
 	@node scripts/audit-relations.mjs
+
+test: ## Smoke-test the builders/checkers against the fixture corpus (scripts/test/)
+	@node --test scripts/test/*.test.mjs
 
 relations: ## Cross-check every page's rendered relationships against graph.json
 	@node scripts/audit-relations.mjs

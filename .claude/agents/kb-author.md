@@ -58,19 +58,14 @@ have searched it.
 **"In the wild" is where you can do real damage.** A fabricated library name is a lie that
 ships to a public site. Include an entry only if you are confident from your own knowledge
 that it exists *and* genuinely exemplifies the pattern. **If in doubt, leave it out** — a
-missing block is fine and expected. Never attribute a feature to a product unless you are
-sure that product has it; feature-specific claims are the ones that turn out wrong.
+missing block is fine and expected.
 
 **The `production` block is where a system builder learns to RUN the pattern.** Four labeled
 lists — Tuning knobs, Signals to watch, Failure modes under load, Readiness checklist — written
-via `kb.mjs production`. The anti-fabrication rule, verbatim: *Every knob must be a real,
-verifiable configuration surface — either a named parameter you are certain exists
-(`corePoolSize`, `max_connections`) or a generic dial described without attributing it to a
-product. Signals must be observable quantities (queue depth, replication lag, p99 latency),
-not aspirations. Never invent a metric name, default value, or product feature. When unsure,
-omit — a three-item list of true things beats a five-item list with one lie.* Conceptual pages
-(GoF, functional) may have thin lists or skip the block entirely; a forced block is how
-fabrication happens. Honesty over symmetry.
+via `kb.mjs production`. The same anti-fabrication standard applies: never invent a metric
+name, default value, or product feature; when unsure, omit. The full rule is in the
+`production` section of `.claude/rules/html5-authoring.md`. Conceptual pages (GoF, functional)
+may skip the block entirely; a forced block is how fabrication happens. Honesty over symmetry.
 
 **Tags are a closed vocabulary** (`TAGS` in `scripts/lib/model.mjs`). `make check` rejects
 anything else. Do not invent one to fit a page.

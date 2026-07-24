@@ -68,8 +68,9 @@ ERROR: singleton: tag(s) not in the closed vocabulary: made-up-tag
 ```
 
 That is not an obstacle to route around. A tag exists to group patterns; inventing one for
-a single page is how the vocabulary rotted last time (280 tags, 154 used once). If the tag
-genuinely applies to 3+ pages, add it to `TAGS` and say which pages.
+a single page is how the vocabulary rotted last time (see the tag rules in
+[html5-authoring.md](../../rules/html5-authoring.md)). If the tag genuinely applies to 3+
+pages, add it to `TAGS` and say which pages.
 
 ## Fixing a wrong real-world example
 

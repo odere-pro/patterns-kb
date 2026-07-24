@@ -1,6 +1,6 @@
 # patterns-kb — an HTML5 knowledge base
 
-A cross-linked reference of **146 software design patterns, hazards and themes** — and an
+A cross-linked reference of **<!-- kb:counts -->169 software design patterns, 40 design case studies, 25 themes, 14 hazards and 11 principles — 259 pages in all<!-- /kb:counts -->** — and an
 experiment in a particular idea: **HTML5 as the storage format for a knowledge base**, not
 just its presentation.
 
@@ -43,7 +43,7 @@ loading the whole ~490k-token corpus.
 
 Each page's `<head>` carries a **JSON-LD** block projected from those attributes — generated,
 never hand-written, so it cannot disagree with the page. It uses schema.org's `DefinedTerm`
-plus the KB's own 13-verb relation vocabulary, published at [`site/vocab.html`](site/vocab.html)
+plus the KB's own closed relation vocabulary, published at [`site/vocab.html`](site/vocab.html)
 (schema.org's `isRelatedTo` is far too vague for a real ontology).
 
 ### Everything else is derived
@@ -109,7 +109,7 @@ node scripts/kb.mjs related circuit-breaker                        # typed neigh
 node scripts/kb.mjs ls --band caching
 ```
 
-`find` searches the full prose of all 146 pages — that costs disk, not context, so only the
+`find` searches the full prose of all <!-- kb:page-count -->259<!-- /kb:page-count --> pages — that costs disk, not context, so only the
 matches are charged — and prints the line that matched. It weights differently depending on
 whether you are naming a pattern ("circuit breaker") or describing a symptom, because in the
 second case a name match is usually incidental. Add `--json` for structured output.
@@ -159,7 +159,7 @@ but `make all` runs them all in order.
 
 - relations are **bidirectional** — declared on both pages they join, no one-way or
   contradictory edges;
-- the relation vocabulary (13 verbs) and the **tag vocabulary (60 tags)** are **closed** —
+- the relation vocabulary and the **tag vocabulary** are **closed** —
   both defined in `scripts/lib/model.mjs`; adding a tag is a deliberate edit there;
 - a page's path matches its band/group;
 - no dangling internal links (href/src **and** mermaid `click` directives);
@@ -190,7 +190,7 @@ as part of the repo (only `settings.local.json` stays personal/ignored):
 | `site/**/CLAUDE.md` | per-folder briefings, **generated**, loaded on demand when work touches that folder |
 | `.claude/rules/html5-authoring.md` | the full data contract and field rules (loaded on demand) |
 | `.claude/skills/kb-find` | find the right pattern for a problem, answer with citations |
-| `.claude/skills/kb-add` | add a new page (or promote a stub) end-to-end |
+| `.claude/skills/kb-add` | add a new page end-to-end |
 | `.claude/skills/kb-edit` | change prose, relationships, tags, or examples safely |
 | `.claude/agents/kb-author` | batch authoring across many pages in parallel |
 | `.claude/hooks/check-kb.sh` | a PostToolUse hook that runs `make check` (~0.8s) after any edit under `site/` and surfaces failures |
@@ -204,5 +204,4 @@ machine.
 
 ## Deferred work
 
-See [TODO.md](TODO.md) for known follow-ups (mermaid weight, stub promotion, richer relation
-notes, and search ranking).
+See [TODO.md](TODO.md) for known follow-ups (mermaid weight and semantic search).

@@ -30,6 +30,7 @@ remind() {
 }
 
 case "$file" in
+  */scripts/test/*) exit 0 ;;  # test fixture corpus — exercised by 'make test', not the live graph
   */site/assets/*) exit 0 ;;   # presentation layer — validity is unaffected
   */site/*.html)
     out=$(node scripts/kb.mjs validate --file "$file" 2>&1)

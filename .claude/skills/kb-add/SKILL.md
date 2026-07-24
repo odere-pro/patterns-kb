@@ -1,6 +1,6 @@
 ---
 name: kb-add
-description: Add a new pattern, hazard, theme or principle page to patterns-kb. Use when someone wants to document a pattern, hazard, theme, or design principle (SOLID, DRY, KISS, YAGNI, …) the KB does not cover yet, promote one of the stub neighbours (monostate, reverse-proxy, service-mesh, token-bucket, sticky-session, stateless-service) into a real page, or asks how to add to this knowledge base.
+description: Add a new pattern, hazard, theme or principle page to patterns-kb. Use when someone wants to document a pattern, hazard, theme, or design principle (SOLID, DRY, KISS, YAGNI, …) the KB does not cover yet, promote a referenced-but-missing stub neighbour into a real page, or asks how to add to this knowledge base.
 ---
 
 # Adding a page
@@ -18,10 +18,11 @@ contract; this is the procedure.
 node scripts/kb.mjs find "<the concept>"
 ```
 
-Also check the stub neighbours — six ids are referenced by other pages but have no page of
+Also check `graph.json.stubNeighbors` — ids referenced by other pages that have no page of
 their own (`node -e "console.log(require('./site/assets/graph.json').stubNeighbors)"`).
 Promoting one is the easiest kind of addition: the links pointing at it already exist and
-will light up the moment the page does.
+will light up the moment the page does. The list is currently empty, so this path only
+applies when a new reference has outrun its page.
 
 ## 2. Decide where it goes
 

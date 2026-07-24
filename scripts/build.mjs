@@ -21,7 +21,11 @@ import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, FACETS, chip
  * the kb:generated markers (and any comment an author writes). */
 const PARSE_OPTS = { comment: true };
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* KB_ROOT lets the smoke tests point the builder at a fixture corpus; normal runs
+ * resolve the repo root from this file's own location. */
+const ROOT = process.env.KB_ROOT
+  ? resolve(process.env.KB_ROOT)
+  : join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = join(ROOT, "site");
 const OUT = join(SITE, "assets", "graph.json");
 const CATALOG = join(SITE, "assets", "catalog.json");

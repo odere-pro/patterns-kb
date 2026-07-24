@@ -7,7 +7,9 @@
  * the pattern list, the band/group a page must declare — is derived. A hand-written
  * list of 14 messaging patterns would be stale the first time one was added.
  *
- * The root CLAUDE.md is hand-written and is NOT touched by this.
+ * The root CLAUDE.md and README.md are hand-written, but their headline counts are corpus
+ * facts that would rot; this also rewrites the inline <!-- kb:counts --> and
+ * <!-- kb:page-count --> marker regions in both, and nothing else in them.
  *
  * Run:  node scripts/build-claude.mjs   (add --check to fail if any is stale)
  */
@@ -170,6 +172,41 @@ fails if the two disagree. See the root CLAUDE.md for the data contract.
   if (cur === body) continue;
   if (CHECK) stale.push(`site/${dir}/CLAUDE.md`);
   else { writeFileSync(file, body); written++; }
+}
+
+/* ---------------- root count regions ----------------
+ * Two inline marker regions keep the hand-written root docs' numbers derived:
+ *   <!-- kb:counts -->…<!-- /kb:counts -->          the full breakdown by kind
+ *   <!-- kb:page-count -->N<!-- /kb:page-count -->  the bare page total
+ * Everything outside the markers is untouched. */
+const kindCount = (k) => nodes.filter((n) => n.kind === k).length;
+const countsText =
+  `${kindCount("pattern")} software design patterns, ${kindCount("design")} design case studies, ` +
+  `${kindCount("theme")} themes, ${kindCount("hazard")} hazards and ${kindCount("principle")} principles ` +
+  `— ${nodes.length} pages in all`;
+const REGIONS = [
+  { tag: "kb:counts", text: countsText },
+  { tag: "kb:page-count", text: String(nodes.length) },
+];
+
+for (const name of ["CLAUDE.md", "README.md"]) {
+  const file = join(ROOT, name);
+  const cur = readFileSync(file, "utf8");
+  let next = cur;
+  for (const { tag, text } of REGIONS) {
+    const open = `<!-- ${tag} -->`;
+    if (!next.includes(open)) {
+      console.error(`${name}: missing ${open} region`);
+      process.exit(1);
+    }
+    next = next.replace(
+      new RegExp(`<!-- ${tag} -->[\\s\\S]*?<!-- /${tag} -->`, "g"),
+      `${open}${text}<!-- /${tag} -->`,
+    );
+  }
+  if (next === cur) continue;
+  if (CHECK) stale.push(name);
+  else { writeFileSync(file, next); written++; }
 }
 
 if (CHECK) {
