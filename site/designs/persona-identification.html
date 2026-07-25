@@ -347,7 +347,17 @@
     <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
       <h2 class="doc-h" id="h-entities">Core entities &amp; data design</h2>
       <div class="prose">
-        <p>Two seams, both enforced by the schema, not by convention: business truth (<code>flow</code> and its append-only <code>flow_transition</code> history) never mixes with operational bookkeeping (<code>task</code> attempts, locks, backoff), and PII lives in a separate vault the operational store references only by opaque id. Current state is materialised on the flow row; history is appended, never rewritten — the audit view is a projection over transitions, not a second write path. Three constraints do most of the work: the partial unique index <code>one_open_flow</code> <em>is</em> the duplicate-invite rule, the inbox's three-column uniqueness <em>is</em> the callback dedup (deep dive 2), and <code>idempotency_key</code>'s composite primary key <em>is</em> the client-retry guard. Constraints that encode rules beat code that remembers them.</p>
+        <p>Two things are kept apart, and the schema does the keeping — not a convention someone has to remember:</p>
+        <ul>
+          <li>Business truth vs operational bookkeeping — <code>flow</code> and its append-only <code>flow_transition</code> history never mix with <code>task</code> attempts, locks and backoff.</li>
+          <li>PII vs everything else — personal data lives in a separate vault the operational store references only by opaque id.</li>
+        </ul>
+        <p>A flow's current business state — which of the five states it is in — is materialised on its own row, so reading it is a primary-key lookup; every transition into that state is appended to <code>flow_transition</code> and never rewritten, so the audit view is a projection over those rows, not a second write path. Three constraints do most of the work:</p>
+        <ul>
+          <li>The partial unique index <code>one_open_flow</code> <em>is</em> the duplicate-invite rule.</li>
+          <li>The inbox's three-column uniqueness <em>is</em> the callback dedup (deep dive 2).</li>
+          <li><code>idempotency_key</code>'s composite primary key <em>is</em> the client-retry guard.</li>
+        </ul>
       </div>
       <div class="entity-group">
         <h3>Tenancy &amp; identity — operational Postgres + PII vault</h3>
@@ -600,13 +610,13 @@ CREATE UNIQUE INDEX one_open_flow ON flow (client_id, email_hash)
     <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
       <h2 class="doc-h" id="h-interface">The interface — API design</h2>
       <div class="prose">
-        <p>Every client-facing state-changing call returns <strong>202</strong> — work is recorded durably and done asynchronously; the one exception is the onboardee's submission, a <strong>201</strong> carrying the presigned upload URL it just created. No status poll and no cancel — recovery is webhook replay plus the dashboard, and a poll endpoint would duplicate the webhook's source of truth: <strong>push with replay beats push with poll</strong>. Idempotency lives at every boundary, each keyed by the side that can actually see the duplicate: a <em>stored</em> <code>Idempotency-Key</code> guards the client's retry, <code>one_open_flow</code> the duplicate invite, the inbox's uniqueness the vendor's callback, <code>eventId</code> the delivery — and a call already repeatable by construction, like replay, is given no key at all. The magic-link token is the onboardee's entire identity — no account; it authorises one flow's submission surface and nothing client-scoped.</p>
+        <p>Every client-facing state-changing call returns 202 — work is recorded durably and done asynchronously. The one exception is the onboardee's submission, a 201 carrying the presigned upload URL it just created. There is no single idempotency mechanism: each boundary carries its own guard, held by the side that can actually see the duplicate, so every endpoint below names the one it relies on.</p>
       </div>
       <div class="endpoint-group">
         <h3>Client API — authenticated tenant calls</h3>
         <div class="endpoint">
           <h4><code>POST /flows</code></h4>
-          <p>Start a flow from an email. Two guards against two different duplicates — a network retry and a genuinely repeated invite.</p>
+          <p>Start a flow from an email. Two guards against two different duplicates: the <em>stored</em> <code>Idempotency-Key</code> absorbs the client's network retry, and <code>one_open_flow</code> absorbs a genuinely repeated invite.</p>
           <details class="sketch" open>
             <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST /flows
@@ -646,7 +656,7 @@ Idempotency-Key: b41f-90ac-…                     without it, a retry invites t
         </div>
         <div class="endpoint">
           <h4><code>POST /flows/{id}/webhook/replay</code></h4>
-          <p>Re-emit a missed result from the outbox, same <code>eventId</code> — the recovery path that replaces polling.</p>
+          <p>Re-emit a missed result from the outbox, same <code>eventId</code> — the recovery path that replaces polling. It takes no <code>Idempotency-Key</code>: the <code>eventId</code> already guards the delivery, so a replay is repeatable by construction.</p>
           <details class="sketch" open>
             <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST /flows/flow_9c31/webhook/replay
@@ -665,7 +675,7 @@ Idempotency-Key: b41f-90ac-…                     without it, a retry invites t
         <h3>Onboardee surface — the magic-link token is the identity</h3>
         <div class="endpoint">
           <h4><code>POST /submissions</code></h4>
-          <p>Submit personal info against the magic-link session; returns a presigned upload URL for the ID photo. On <code>410</code> the onboardee sees the resend page, not a support address.</p>
+          <p>Submit personal info against the magic-link session — that token is the onboardee's entire identity, there being no account, and it authorises this one flow's submission and nothing client-scoped. Returns a presigned upload URL for the ID photo; on <code>410</code> the onboardee sees the resend page, not a support address.</p>
           <details class="sketch" open>
             <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST /submissions
@@ -690,7 +700,7 @@ Authorization: Bearer &lt;magic-link token&gt;         hash looked up, expiry + 
         <h3>Vendor callbacks — deduped at the boundary</h3>
         <div class="endpoint">
           <h4><code>POST /callbacks/{provider}</code></h4>
-          <p>One inbound surface for IDV and sanctions-list callbacks, deduped on the vendor's own request id — redelivery is always safe.</p>
+          <p>One inbound surface for IDV and sanctions-list callbacks, deduped on the vendor's own request id — the inbox's three-column uniqueness is the guard, so redelivery is always safe.</p>
           <details class="sketch" open>
             <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST /callbacks/idv-provider
