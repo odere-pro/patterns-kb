@@ -104,7 +104,7 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p>The <strong>inbox</strong> pattern adds a table to a service's own database that holds messages received from a broker, waiting to be processed. When the service receives a message, it writes both the message row and the business row that applies the message's effects — inside the same local ACID transaction. Only after commit does it acknowledge the message back to the broker. A separate process then polls the inbox for unacknowledged messages and retries them, ensuring no message is lost.</p>
+        <p>The <strong>inbox</strong> pattern adds a table to a service's own database that holds messages received from a broker, waiting to be processed. When the service receives a message, it writes both the message row and the business row that applies the message's effects — inside the same local ACID transaction. Only after commit does it acknowledge the message back to the broker, on the same delivery it is holding — nothing acknowledges later on its behalf. If the service crashes before commit, it never acknowledges, and the broker simply redelivers: that redelivery, met by the inbox's record of already-handled ids, is what ensures no message is lost or applied twice. The only background job the pattern itself needs is one that ages out old inbox rows once their deduplication window has passed.</p>
         <p>It resolves the <strong>dual-write problem from the receiving side</strong>. A service's database and its message broker are two different systems with no shared transaction between them. Receive and process the message, then acknowledge, and a crash between the two leaves the broker believing the message was lost — it redelivers, but the service has no record that it already processed it, leading to duplication. Acknowledge and then process, and a crash or a processing failure leaves the service with orphaned messages that no one knows about. There's no way to make "read from the broker" and "write to the database" atomic across two resource managers without something like distributed two-phase commit, which most message brokers don't support and most teams don't want to run.</p>
         <p>Inbox sidesteps the problem instead of solving it head-on: it turns the receipt into a second local write, which the database transaction already makes atomic with the first. The handler must be idempotent — because the broker's "at-least-once" guarantee means the same message can arrive multiple times — but idempotency is a small, local concern, not a distributed coordination nightmare. The genuinely hard part — not losing or duplicating messages — is pushed onto the pattern and the handler's idempotency contract.</p>
       </div>
@@ -119,7 +119,6 @@ sequenceDiagram
     participant MB as Broker
     participant Svc as Service
     participant DB as Local database
-    participant Ack as Ack process
     MB-&gt;&gt;Svc: deliver message (at-least-once)
     alt message id not seen before
         Svc-&gt;&gt;DB: insert inbox row + business row, one transaction
@@ -128,12 +127,12 @@ sequenceDiagram
     else duplicate message id
         Svc-&gt;&gt;MB: ack, skip re-processing
     end
-    Note over Svc,MB: crash before ack? row stays unacknowledged
-    Ack-&gt;&gt;DB: poll unacknowledged inbox rows
-    Ack-&gt;&gt;MB: re-ack message (idempotent)
-    Ack-&gt;&gt;DB: mark row acknowledged
+    Note over Svc,MB: crash before ack? message stays unacknowledged at the broker
+    MB-&gt;&gt;Svc: redeliver after visibility window
+    Svc-&gt;&gt;DB: message id already recorded
+    Svc-&gt;&gt;MB: ack, effects already applied
         </pre>
-        <figcaption>The service receives a message and its effects commit together, in the same local transaction. Only after commit does the service acknowledge back to the broker. An ack process, running independently, retries any unacknowledged rows so a crash doesn't lose the message.</figcaption>
+        <figcaption>The service receives a message and its effects commit together, in the same local transaction. Only after commit does the service acknowledge, on the delivery it is holding. A crash before the ack leaves the message unacknowledged at the broker — the broker redelivers it, the inbox row identifies the duplicate, and the service acknowledges without re-applying anything.</figcaption>
       </figure>
     </section>
 
@@ -147,7 +146,7 @@ sequenceDiagram
         <dt id="variations-item-3">Per-aggregate inbox</dt>
         <dd>Each aggregate (domain object) gets its own inbox table instead of a shared one. Ordering guarantees stay scoped to one aggregate's queue, and hot tables don't block each other.</dd>
         <dt id="variations-item-4">CDC (Change Data Capture)</dt>
-        <dd>A tool like Debezium tails the database's write-ahead log and turns each inbox insert into a message to a processing topic or trigger, eliminating polling and visibility window timeouts.</dd>
+        <dd>A tool like Debezium tails the database's write-ahead log and turns each inbox insert into a message to a processing topic or trigger, eliminating the processing poll.</dd>
       </dl>
     </section>
 
@@ -159,16 +158,16 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Solves the dual-write problem from the receiving side with a single local ACID transaction — no distributed transaction coordinator needed.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Guarantees at-least-once reception: a message is never lost because the service crashed between receipt and acknowledgement.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Handler can be offline during broker visibility window; ack process retries indefinitely, so window pressure is eliminated.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A redelivered message is recognised by its recorded id and skipped, so its effects land once even while the broker keeps retrying.</li>
             <li id="tradeoffs-pro-4" data-kb-polarity="pro">Works with any relational database and any broker; it's a pattern, not a product.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Adds a table, an ack process, and one more moving part to deploy and monitor.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Adds a table, a cleanup job, and one more moving part to deploy and monitor.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Delivers at-least-once, not exactly-once — handlers MUST be idempotent, not optional.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Polling ack processes add latency and load; CDC infrastructure (if used) adds operational complexity.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Deferred-processing pollers add latency and load; CDC infrastructure (if used) adds operational complexity.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">The inbox table grows unbounded without its own archiving or cleanup job.</li>
           </ul>
         </div>
@@ -191,7 +190,7 @@ sequenceDiagram
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Your handler's effects are already idempotent (e.g., reads, cache invalidations, queries with deduplication built in) and losing a message is acceptable.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">Broker connectivity is always reliable and an occasional missed message is acceptable.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The extra table and ack process complexity outweigh the reliability benefit for your domain and scale.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">The extra table and cleanup/poller complexity outweigh the reliability benefit for your domain and scale.</li>
           </ul>
         </div>
       </div>
@@ -214,9 +213,11 @@ async function handleMessage(tx: Transaction, message: Message) {
     return;
   }
 
+  // processed = true: effects apply below, in this same transaction.
+  // (Deferred processing would insert false for a background job to pick up.)
   await tx.query(
-    `insert into inbox (id, idempotency_key, message, processed)
-     values ($1, $2, $3, false)`,
+    `insert into inbox (id, idempotency_key, message, processed, received_at)
+     values ($1, $2, $3, true, now())`,
     [randomUUID(), idempotencyKey, JSON.stringify(message)],
   );
 
@@ -228,24 +229,21 @@ async function handleMessage(tx: Transaction, message: Message) {
   // Both rows commit together, or neither does.
 }
 
-// Ack process: polls inbox and safely acknowledges
-async function ackOnce(db: Db, broker: Broker) {
-  const rows = await db.query(
-    "select * from inbox where processed = false order by id limit 100",
+// Consume loop: commit first, then ack the delivery we are holding.
+// Acks are bound to the delivery — nothing can ack "later" by message id.
+async function onDelivery(db: Db, delivery: Delivery) {
+  await db.transaction((tx) => handleMessage(tx, delivery.message));
+  // Crash before this line? The broker redelivers, handleMessage() sees
+  // the recorded idempotency key, and the effects are not applied twice.
+  await delivery.ack();
+}
+
+// Cleanup job: age out inbox rows once the deduplication window has passed
+async function cleanupInbox(db: Db, retentionDays: number) {
+  await db.query(
+    "delete from inbox where received_at < now() - make_interval(days => $1)",
+    [retentionDays],
   );
-  for (const row of rows) {
-    try {
-      // Re-ack is idempotent on the broker's side
-      await broker.ack(row.idempotency_key);
-      await db.query(
-        "update inbox set processed = true where id = $1",
-        [row.id],
-      );
-    } catch (e) {
-      // Broker rejected; leave unprocessed and retry later
-      console.error(`Failed to ack ${row.id}:`, e);
-    }
-  }
 }</code></pre>
       </details>
     </section>
@@ -253,8 +251,8 @@ async function ackOnce(db: Db, broker: Broker) {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="masstransit"><strong>MassTransit Inbox Consumer</strong><span>The .NET messaging library ships a transactional inbox: AddEntityFrameworkInbox persists received messages in an InboxState table inside the same EF Core SaveChanges as the handler result, and a delivery service sweeps and completes them, with automatic deduplication by message ID.</span></div>
-        <div class="wild-item" data-kb-example="temporal"><strong>Temporal Activity Completion</strong><span>The workflow orchestration engine guarantees that an activity result is written and acknowledged in the same transaction. If a worker crashes mid-activity, the server retransmits; the activity SDK ensures idempotency via activity_id deduplication.</span></div>
+        <div class="wild-item" data-kb-example="masstransit"><strong>MassTransit</strong><span>The .NET messaging library ships the inbox as part of its transactional outbox: one AddEntityFrameworkOutbox call installs both sides, and received MessageIds land in an InboxState table so a message the broker redelivers inside the duplicate-detection window is recognised as already handled instead of being run again.</span></div>
+        <div class="wild-item" data-kb-example="temporal"><strong>Temporal</strong><span>The workflow engine records an activity result exactly once in the workflow event history and retries the activity when a worker fails — but execution itself is at-least-once, and Temporal advises writing activities to be idempotent rather than promising any deduplication of runs.</span></div>
       </div>
     </section>
 
@@ -266,35 +264,35 @@ async function ackOnce(db: Db, broker: Broker) {
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Handler timeout</strong> — For synchronous processing, how long the broker waits before timing out and redelivering. Longer reduces redelivery pressure but risks losing the connection; shorter is safer but may cause false timeouts on slow processing. Deferred processing sidesteps this entirely.</li>
             <li id="production-knob-2" data-kb-polarity="knob"><strong>Broker visibility window</strong> — How long the broker hides a received message before auto-redelivering if not acknowledged. Must be longer than handler latency + ack latency. Shorter windows create thrashing; longer windows tolerate brief outages.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Ack process poll interval</strong> — For a polling ack process, how often it scans for unacknowledged rows. Shorter cuts ack latency but raises steady read load; CDC sidesteps polling entirely.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Cleanup / retention cadence</strong> — How aggressively a job deletes or archives acknowledged rows. Without it the table grows unbounded and the poll query slows as it scans dead rows.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Processor poll interval</strong> — For deferred processing, how often the background job scans for unprocessed rows. Shorter cuts end-to-end latency but raises steady read load; CDC sidesteps polling entirely.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Cleanup / retention cadence</strong> — How aggressively a job deletes or archives processed rows. Without it the table grows unbounded and the poll query slows as it scans dead rows.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
-            <li id="production-signal-1" data-kb-polarity="signal"><strong>Inbox backlog depth</strong> — Count of rows with processed = false. Steady growth means the ack process is not keeping up or handlers are failing.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Processing latency</strong> — Time between message arrival and processed = true. The end-to-end latency; dominated by handler latency and ack process poll interval.</li>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Inbox backlog depth</strong> — Count of rows with processed = false. Steady growth means the processor is not keeping up or handlers are failing.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Processing latency</strong> — Time between message arrival and processed = true. The end-to-end latency; dominated by handler latency and the processor poll interval.</li>
             <li id="production-signal-3" data-kb-polarity="signal"><strong>Handler error rate</strong> — Failed processing attempts per interval. Rising errors stall the inbox and leave messages unacknowledged.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Broker redelivery rate</strong> — Messages the broker redelivered due to unacknowledged or visibility window timeout. High redelivery creates duplicate processing pressure on idempotent handlers.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Broker redelivery rate</strong> — Messages the broker redelivered due to unacknowledged or visibility window timeout. High redelivery creates duplicate-detection pressure on the inbox and its handlers.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Handler timeout cascade</strong> — Slow processing → visibility window expires → broker redelivers → duplicate processing pressure → handler slower → more timeouts. Deferred processing breaks this cycle.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Inbox backlog starvation</strong> — Handler failures or a rejecting downstream service stall the ack process; unacknowledged messages pile up and eventually cause broker memory pressure.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Inbox backlog starvation</strong> — Handler failures or a rejecting downstream service stall processing: in synchronous mode messages stay unacknowledged and broker redelivery pressure mounts; in deferred mode unprocessed rows pile up in the table.</li>
             <li id="production-failure-3" data-kb-polarity="failure"><strong>Idempotency key collision</strong> — Two different messages with the same id (broker bug, clock skew, key generation flaw) → second message silently dropped. Verify key uniqueness at generation time.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Table bloat stalls polling</strong> — Cleanup lags and the poll query scans millions of acknowledged rows, driving its own latency up and worsening the backlog it was meant to drain.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Table bloat stalls polling</strong> — Cleanup lags and the poll query scans millions of processed rows, driving its own latency up and worsening the backlog it was meant to drain.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Handlers are demonstrably idempotent — same message id produces same result, no matter how many times delivered</li>
-            <li id="production-check-2" data-kb-polarity="check">A partial index on processed = false keeps the ack poll query fast as the table grows</li>
-            <li id="production-check-3" data-kb-polarity="check">A cleanup or archiving job removes acknowledged rows on a schedule</li>
-            <li id="production-check-4" data-kb-polarity="check">Visibility window is longer than handler latency + ack poll interval + network jitter</li>
+            <li id="production-check-2" data-kb-polarity="check">A partial index on processed = false keeps the processor's poll query fast as the table grows</li>
+            <li id="production-check-3" data-kb-polarity="check">A cleanup or archiving job removes processed rows on a schedule</li>
+            <li id="production-check-4" data-kb-polarity="check">Visibility window is longer than the receive transaction (including any synchronous handling) plus network jitter</li>
             <li id="production-check-5" data-kb-polarity="check">Inbox backlog depth and processing latency are monitored with alerts on sustained growth or degradation</li>
           </ul>
         </div>
