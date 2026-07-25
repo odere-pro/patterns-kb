@@ -16,6 +16,8 @@ flowchart TB
 
 - Raw mermaid inside `<pre class="mermaid">` — no code fence, no fenced language tag.
 - Always include the `<figcaption>`; it is where the diagram's one question lives.
+- The figure sits as a **sibling of the `.prose` div**, a direct child of the section —
+  never nested inside prose.
 
 ## Constraints
 
@@ -34,7 +36,9 @@ Per [site/designs/CLAUDE.md](../../../../site/designs/CLAUDE.md):
 
 - The `architecture` block carries the primary diagram — a `flowchart` for a distributed
   design, a `classDiagram` for a low-level kata. This is the L1 board.
-- L2 zooms and L3 sequence/state diagrams belong in `deepdives`, one per deep dive.
+- L2 zooms and L3 sequence/state diagrams belong in `deepdives`, one per deep dive — or
+  an iterated evolution of the L1 board when an NFR forces a system-wide change (the
+  zoom-or-iterate rule lives in [kb-design-architecture](../../kb-design-architecture/SKILL.md)).
 
 ## After editing
 

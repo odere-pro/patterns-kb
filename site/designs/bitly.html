@@ -53,6 +53,11 @@
       "@id": "../patterns/distributed/coordination/conditional-write.html#conditional-write",
       "name": "Conditional Write",
       "kb:note": "A UNIQUE constraint on short_code is the final backstop against a duplicate code"
+    },
+    {
+      "@id": "../patterns/concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:note": "Write instances claim counter values in blocks of 1000, cutting Redis round-trips 1000x"
     }
   ]
 }
@@ -160,52 +165,87 @@ GET /{short_code}
     <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
       <h2 class="doc-h" id="h-arch">How the system is built</h2>
       <div class="prose">
-        <p>Because reads and writes have wildly different shapes, split the server in two and scale them independently. The <strong>Write Service</strong> mints a code and stores the mapping; the <strong>Read Service</strong> does nothing but resolve codes to URLs, fronted by a cache and, for the hottest links, the edge. The store is a single relational instance with a read replica for failover — the 500&nbsp;GB dataset does not need sharding.</p>
+        <p>Requests enter at two points — <code>POST /urls</code> hits the Write Service directly, <code>GET /{short_code}</code> hits the edge first. The one structural decision is the read/write split: reads outnumber writes 1000:1, so the two paths are separate services scaled independently. The write path mints a code from a counter block and inserts one row; the read path resolves code &rarr; URL from the edge, then the cache, and only on a miss from the store.</p>
       </div>
       <figure class="diagram">
         <pre class="mermaid">
 flowchart TB
     Client["Client / browser"]
-    Client -->|"POST /urls"| Write["Write Service"]
-    Client -->|"GET /{code}"| Read["Read Service"]
-    Write -->|"INCR batch of 1000"| Counter[("Redis counter")]
-    Write -->|"insert mapping"| DB[("URL store")]
-    Read -->|"lookup"| Cache[("Cache")]
+    Client -->|"POST /urls"| Write["Write Service · stateless-service"]
+    Client -->|"GET /{short_code}"| Edge["CDN / edge · cdn"]:::ext
+    Edge -->|"edge miss"| Read["Read Service · stateless-service"]
+    Write -->|"INCRBY 1000 — claim id block"| Counter[("Redis counter · batching")]
+    Write -->|"INSERT mapping, UNIQUE short_code"| DB[("URL store")]
+    Read -->|"lookup short_code"| Cache[("Cache · cache-aside")]
     Cache -->|"miss"| DB
-    Read -.->|"hot codes served near the user"| Edge["CDN / edge"]
-    DB -->|"replicate"| Replica[("Read replica")]
+    DB -->|"async replicate"| Replica[("Read replica · replication")]
+    classDef ext stroke-dasharray:4 4;
         </pre>
-        <figcaption>The write path (mint code &rarr; store) is tiny; the read path (cache &rarr; edge &rarr; replica) carries ~600k req/s.</figcaption>
+        <figcaption>The write path (mint code &rarr; store) is tiny; the read path (edge &rarr; cache &rarr; store) carries ~600k req/s.</figcaption>
       </figure>
+      <div class="prose">
+        <h3>Components &amp; communication</h3>
+        <ul>
+          <li><strong>Write Service</strong> — the write entry point, serving <code>POST /urls</code>; mints codes from locally claimed counter blocks and inserts the ShortLink row. Stateless, so instances multiply freely.</li>
+          <li><strong>Read Service</strong> — serves <code>GET /{short_code}</code> on an edge miss; resolves the code and answers a 302 (410 once <code>expires_at</code> has passed). Also stateless.</li>
+          <li><strong>CDN / edge</strong> — rented, not built: the read path's first hop, serving globally hot codes without touching the origin.</li>
+          <li><strong>Redis counter</strong> — one atomic sequence; hands out blocks of 1000 rather than single values, so it is touched roughly once per thousand writes.</li>
+          <li><strong>Cache</strong> — hot ShortLink mappings in memory, TTL at or below <code>expires_at</code> so stale entries evict themselves.</li>
+          <li><strong>URL store</strong> — the system of record for ShortLink (500&nbsp;GB at 1B rows, per Right-sizing); the UNIQUE constraint on <code>short_code</code> lives here.</li>
+          <li><strong>Read replica</strong> — an asynchronous copy for failover, not a query offload.</li>
+        </ul>
+        <h3>Where each requirement lands</h3>
+        <ul>
+          <li>Submit a long URL and receive a short one — <code>POST /urls</code> &rarr; Write Service &rarr; Redis counter (block claim) &rarr; URL store; the short URL returns in the response. <em>→ FR: shorten.</em></li>
+          <li>Choose a custom alias, set an expiry — the same write path: the alias takes the <code>short_code</code> slot and the UNIQUE constraint rejects a taken one; <code>expires_at</code> is stored on ShortLink and enforced at redirect time (410) and by the cache TTL. <em>→ FR: alias &amp; expiry.</em></li>
+          <li>Visit a short URL and be redirected — <code>GET /{short_code}</code> enters at the edge; a miss falls through Read Service &rarr; Cache &rarr; URL store, and the answer is a 302. <em>→ FR: redirect.</em></li>
+        </ul>
+      </div>
     </section>
 
     <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
       <h2 class="doc-h" id="h-deep">Deep dives</h2>
       <div class="prose">
-        <h3>1 · Generating short codes that never collide</h3>
-        <p>Codes must be unique, short, and cheap to make.</p>
+        <h3>1 · Minting codes that never collide <em>→ NFR: uniqueness</em></h3>
+        <p><strong>An atomic counter makes uniqueness structural — no two writers can ever be handed the same number.</strong> Codes must be unique, short, and cheap to make.</p>
         <ul>
           <li><strong>Naïve — prefix of the URL.</strong> Take the first few characters of the long URL. It collides instantly: two <code>linkedin.com/in/…</code> links share a prefix and become indistinguishable on redirect. Rejected.</li>
           <li><strong>Hashing.</strong> Hash the canonicalized URL (SHA-256), base62-encode it, keep the first 8 characters — 62⁸ ≈ 218 trillion codes. Base62 (a–z, A–Z, 0–9) avoids <code>+</code> and <code>/</code>, which mean other things in URLs. Deterministic hashing gives free deduplication but is guessable without an HMAC salt, and collisions still need a UNIQUE constraint plus bounded retries.</li>
           <li><strong>Counter + base62 (chosen).</strong> Keep a global counter, base62-encode its value. Redis's single-threaded atomic <code>INCR</code> hands every caller a distinct number, so there is <em>no</em> collision to check for — cheaper and simpler than hashing. 1B in base62 is only 6 characters. The catch is that sequential codes are enumerable; mitigate with a reversible XOR-with-secret before encoding, or accept it since short links are meant to be shared.</li>
         </ul>
-        <h3>2 · Making redirects fast</h3>
-        <p>An un-indexed lookup is a table scan — fatal at a billion rows. A B-tree primary-key index on <code>short_code</code> gives O(log n) lookups, but a disk-backed instance tops out near ~100k IOPS while we need ~600k reads/sec. So put the working set in memory: a <a href="../patterns/caching/cache-aside.html">cache-aside</a> layer (Redis) in front of the store serves hits in ~100&nbsp;ns — roughly 1000× faster than SSD — and only misses touch the database. For globally popular codes, push the mapping to a <a href="../patterns/distributed/routing/cdn.html">CDN</a> and run the redirect at the edge, so those requests never reach the origin at all. The cache TTL is set at or below the link's expiry so stale entries evict themselves.</p>
-        <h3>3 · Scaling to 1B URLs and 100M DAU</h3>
-        <p>Storage is the easy part (500&nbsp;GB on one instance, with <a href="../patterns/distributed/coordination/replication.html">replication</a> for availability). The real coordination problem is the counter: many <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> Write Service instances must agree on one sequence. A single Redis counter with atomic <code>INCR</code> solves it, and <strong>batching</strong> makes it nearly free — each instance claims 1000 values at once and hands them out locally, cutting Redis traffic by 1000×. Across regions, hand each region a disjoint counter range (region A: 0–1B, region B: 1B–2B) so writes never coordinate across the WAN. If Redis loses a few unreplicated values on failover, that is fine — we need uniqueness, not an unbroken sequence, and the database's UNIQUE constraint via a <a href="../patterns/distributed/coordination/conditional-write.html">conditional write</a> is the final backstop.</p>
+        <p>Whatever mints the code, the store has the last word: the UNIQUE constraint on <code>short_code</code>, hit via a <a href="../patterns/distributed/coordination/conditional-write.html">conditional write</a>, is the final backstop against a duplicate — it should never fire, and if it does the write retries with the next id.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    subgraph Write["Write Service"]
+        Disp["Local id dispenser"]
+        Alloc["Range allocator"]
+        Enc["Base62 encoder"]
+    end
+    Disp -->|"block exhausted"| Alloc
+    Alloc -->|"INCRBY 1000 — claim next block"| Counter[("Redis counter · batching")]
+    Disp -->|"next id"| Enc
+    Enc -->|"INSERT mapping, UNIQUE short_code"| DB[("URL store · conditional-write")]
+        </pre>
+        <figcaption>Inside the Write Service: ids are handed out locally from a claimed block — Redis is touched once per 1000 URLs, and the UNIQUE constraint is only a backstop.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3>2 · Redirects under 100 ms <em>→ NFR: latency</em></h3>
+        <p><strong>The latency budget is met by never touching a disk on the hot path.</strong> An un-indexed lookup is a table scan — fatal at a billion rows. A B-tree primary-key index on <code>short_code</code> gives O(log n) lookups, but a disk-backed instance tops out near ~100k IOPS while we need ~600k reads/sec. So put the working set in memory: a <a href="../patterns/caching/cache-aside.html">cache-aside</a> layer (Redis) in front of the store serves hits in ~100&nbsp;ns — roughly 1000× faster than SSD — and only misses touch the database. For globally popular codes, push the mapping to a <a href="../patterns/distributed/routing/cdn.html">CDN</a> and run the redirect at the edge, so those requests never reach the origin at all. The cache TTL is set at or below the link's expiry so stale entries evict themselves.</p>
       </div>
       <figure class="diagram">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
     participant C as Client
-    participant E as CDN edge
+    participant E as CDN edge · cdn
     participant R as Read Service
-    participant K as Cache
+    participant K as Cache · cache-aside
     participant D as URL store
-    C->>E: GET /{code}
+    C->>E: GET /{short_code}
     alt hot code at edge
-        E-->>C: 301 redirect
+        E-->>C: 302 redirect
     else edge miss
         E->>R: forward request
         R->>K: lookup code
@@ -217,10 +257,46 @@ sequenceDiagram
             D-->>R: long URL
             R->>K: backfill, TTL &le; expiry
         end
-        R-->>C: 301 redirect
+        R-->>C: 302 redirect
     end
         </pre>
         <figcaption>What does one redirect touch? Edge serves hot codes; otherwise a cache-aside lookup, and only a miss reaches the store — which then backfills the cache.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3>3 · Staying up through failures <em>→ NFR: availability</em></h3>
+        <p><strong>99.99% comes from keeping one warm copy of everything and accepting staleness while it takes over.</strong> Sharding the store is rejected — 500&nbsp;GB fits one node, and shards would buy operational cost without a forcing number. Synchronous replication is rejected too: it pays write latency for a consistency guarantee the requirements explicitly traded away. What remains is a single primary with an asynchronous <a href="../patterns/distributed/coordination/replication.html">read replica</a>, promoted when the primary fails; the residual risk is the replication lag — a just-created link can be briefly missing after failover, which the requirements accept. The other stateful pieces degrade even more gracefully: if Redis loses a few unreplicated counter values on failover, that is fine — uniqueness needs no unbroken sequence — and a lost cache node is a miss storm for the store, not an outage.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Write["Write Service"] -->|"INSERT mapping"| DB[("URL store")]
+    Read["Read Service"] -->|"SELECT on cache miss"| DB
+    DB -->|"async replication stream"| Replica[("Read replica · replication")]
+    Replica -.->|"promoted to primary on failure"| DB
+        </pre>
+        <figcaption>Availability is one warm copy: the replica trails the primary by moments and takes over when it dies — the seconds of lag are the accepted consistency cost.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3>4 · Scaling to 1B URLs and 100M DAU <em>→ NFR: scale</em></h3>
+        <p><strong>Every serving tier multiplies freely because the only coordination point — the counter — is touched a thousandth as often as it is used.</strong> Read scale is already solved by dive 2: the cache and the edge absorb ~600k reads/sec, and storage is the easy part (500&nbsp;GB on one instance). The real coordination problem is the write path: many <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> Write Service instances must agree on one sequence. A single Redis counter with atomic <code>INCR</code> solves it, and <a href="../patterns/concurrency/batching.html">batching</a> makes it nearly free — each instance claims 1000 values at once and hands them out locally, cutting Redis traffic by 1000×. Across regions, hand each region a disjoint counter range (region A: 0–1B, region B: 1B–2B) so writes never coordinate across the WAN.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    subgraph RA["Region A — counter range 0–1B"]
+        WA["Write Service ×N · stateless-service"]
+        CA[("Redis counter A · batching")]
+    end
+    subgraph RB["Region B — counter range 1B–2B"]
+        WB["Write Service ×N · stateless-service"]
+        CB[("Redis counter B · batching")]
+    end
+    WA -->|"INCRBY 1000"| CA
+    WB -->|"INCRBY 1000"| CB
+    WA -->|"INSERT mapping"| DB[("URL store")]
+    WB -->|"INSERT mapping"| DB
+        </pre>
+        <figcaption>Scale-out without WAN coordination: each region owns a disjoint counter range, so write instances multiply and never contend across regions; the store stays single.</figcaption>
       </figure>
     </section>
 
@@ -267,6 +343,7 @@ sequenceDiagram
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="replication"><a href="../patterns/distributed/coordination/replication.html">Replication</a><span class="rel-note">A read replica gives the single URL store failover without sharding</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">Write and read services scale horizontally because instances hold no per-request state</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="conditional-write"><a href="../patterns/distributed/coordination/conditional-write.html">Conditional Write</a><span class="rel-note">A UNIQUE constraint on short_code is the final backstop against a duplicate code</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="batching"><a href="../patterns/concurrency/batching.html">Batching</a><span class="rel-note">Write instances claim counter values in blocks of 1000, cutting Redis round-trips 1000x</span></div>
         </div>
       </div>
 
