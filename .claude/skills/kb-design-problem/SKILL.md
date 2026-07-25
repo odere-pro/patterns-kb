@@ -39,9 +39,9 @@ that each answer lands in a requirement below. Then one `<p>` per question:
 
 ```html
 <p><strong>Q1 — How many flows a week?</strong><br>
-<em>Assumed, not given:</em> ~100 a week, with headroom designed to 10k.
+Assumed, not given: ~100 a week, with headroom designed to 10k.
 Confirm this first: every capacity decision below is priced against it.
-<em>→ NFR: scale.</em></p>
+→ NFR: scale.</p>
 ```
 
 - **Question stem** in `<strong>`, numbered `Qn — …?`, followed by `<br>`.
@@ -49,15 +49,16 @@ Confirm this first: every capacity decision below is priced against it.
   When the answer is genuinely a list (what data is held, what is deliberately not
   built), a short `<ul>` may follow the question `<p>`, with the routing tag in its own
   closing `<p>`.
-- **Mark invented numbers** with `<em>Assumed, not given:</em>` — an assumption stated
+- **Mark invented numbers** with `Assumed, not given:` — an assumption stated
   as fact is a lie the reader can't audit.
-- **End with exactly one routing tag**: `<em>→ FR: label.</em>`,
-  `<em>→ NFR: label.</em>`, or `<em>→ Out of scope.</em>` (combinations join with `;`).
+- **End with exactly one routing tag**: `→ FR: label.`, `→ NFR: label.`, or
+  `→ Out of scope.` (combinations join with `;`).
   The label is informal but must match a requirement the reader can find.
-- **Mark unresolved questions** with `<em>(open)</em>` in the stem and say who owes the
+- **Mark unresolved questions** with `(open)` in the stem and say who owes the
   answer. An honest open question beats a fabricated answer.
-- This block is prose, so `<strong>`/`<em>` are fine *here* — the no-formatting rule
-  binds the requirements block, not this one.
+- **No italics.** The arrow and the colon carry the routing tag; `<em>` on top of them is
+  noise. `<strong>` on the question stem is fine — the no-formatting rule binds the
+  requirements block, not this one.
 
 Good interview questions probe: volume and growth, one-shot vs ongoing obligation, what
 data is held and under which rules, store vs pass through, push vs pull for results,
@@ -79,7 +80,8 @@ together when writing a page.
 
 1. Does the framing paragraph say what the task omits and promise where answers land?
 2. Is every answer 1–2 sentences (or a short list) with exactly one routing tag?
-3. Is every invented number marked "Assumed, not given", every unresolved question "(open)"?
+3. Is every invented number marked "Assumed, not given", every unresolved question
+   "(open)" — and is all of it plain text, with no `<em>` anywhere in the block?
 4. Walk the trace both ways — every tag resolves to a requirement, every requirement has
    a source. This is the check that does the work.
 5. `make all && make check`, then `node scripts/kb.mjs get <id> --block problem` — the

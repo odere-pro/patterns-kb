@@ -54,7 +54,7 @@ below are the proof.
 ### 2. Required capabilities
 
 `<p><strong>Required capabilities:</strong></p>` then a `<ul>`, one line per capability:
-`capability — forcing requirement (tier). <em>→ NFR: label.</em>`. Draw from: durable
+`capability — forcing requirement (tier). → NFR: label.`. Draw from: durable
 transactional store, work queue, object store, coordination cache, read cache, search
 index, stream processor, scheduler, encrypted PII store with key custody, rate limiting,
 private network. **No product or vendor names, ever.** A capability that traces to no
@@ -70,8 +70,8 @@ broker: the queue is the capability, the broker is one implementation of it.
 
 ### 3. The numbers
 
-A `<ul>`, one line per axis: `Label: arithmetic ≈ <strong>result</strong>. <em>→ NFR:
-label.</em>`. Standard axes: writes, reads, storage — plus whichever of working set,
+A `<ul>`, one line per axis: `Label: arithmetic ≈ <strong>result</strong>. → NFR:
+label.`. Standard axes: writes, reads, storage — plus whichever of working set,
 fan-out, cardinality, connections, or latency budget actually decides this design.
 
 - **Show where each input came from.** A factor like "25–30 rows per flow" must name
@@ -147,13 +147,14 @@ or two:
 
 A bare threshold is not an invalidation — "breaks at ~2M" reads as arbitrary until the
 sentence says *what* breaks and *why*. End with the routing tag of the constraint the
-exits serve (usually `<em>→ NFR: scale.</em>`).
+exits serve (usually `→ NFR: scale.`).
 
 ## The routing tags
 
-Every list item ends with exactly one routing tag — `<em>→ FR: label.</em>`,
-`<em>→ NFR: label.</em>`, or both joined with `;` — the same idiom the problem block
-uses (see [kb-design-problem](../kb-design-problem/SKILL.md)). The label is informal
+Every list item ends with exactly one routing tag — `→ FR: label.`, `→ NFR: label.`, or
+both joined with `;`. Plain text, never wrapped in `<em>`: the arrow and the colon already
+mark it. The same idiom the problem block uses
+(see [kb-design-problem](../kb-design-problem/SKILL.md)). The label is informal
 but must match an item the reader can find in the requirements block. Capabilities and
 verdicts route to what forces them; numbers route to the constraint they price. No
 orphan bullets: an item that routes nowhere is either speculation or a missing
