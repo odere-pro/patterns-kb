@@ -59,7 +59,7 @@
   </script>
 </head>
 <body class="doc lens">
-  <main class="doc-wrap" data-kb-id="thread-confinement" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="Remove races by giving each thread sole ownership of its data" data-kb-order="86" data-kb-aliases="[&quot;shared-nothing&quot;,&quot;thread ownership&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;isolation&quot;,&quot;partitioning&quot;,&quot;state-management&quot;]" data-kb-solves="[&quot;locks everywhere are killing throughput and I still get races&quot;,&quot;I want correctness without reasoning about every possible interleaving&quot;,&quot;two threads keep corrupting the same shared structure&quot;]">
+  <main class="doc-wrap" data-kb-id="thread-confinement" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="Remove races by giving each thread sole ownership of its data" data-kb-order="86" data-kb-aliases="[&quot;shared-nothing&quot;,&quot;thread ownership&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;isolation&quot;,&quot;partitioning&quot;,&quot;state-management&quot;]" data-kb-solves="[&quot;locks everywhere are killing throughput and I still get races&quot;,&quot;I want correctness without reasoning about every possible interleaving&quot;,&quot;two threads keep corrupting the same shared structure&quot;,&quot;we get intermittently wrong values under load that never reproduce in tests&quot;,&quot;the crash disappears as soon as I add logging or attach a debugger&quot;]">
 
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../index.html">Map</a>
@@ -88,6 +88,24 @@
         <p>Every race condition needs two ingredients: mutable state, and more than one thread touching it at once. Locks, monitors, and atomic variables all attack the second — they discipline the concurrent access. Thread confinement attacks the first. Give each piece of mutable state a single owning thread and forbid any other thread from touching it, and there is nothing left to share: no lock to take, no interleaving to reason about. The race is not guarded against, it is impossible by construction. This is the general "shared-nothing" technique.</p>
         <p>The move is to partition the state by owner. Instead of one seat map that every booking thread contends for behind a lock, thread&nbsp;1 owns sections A&ndash;M and thread&nbsp;2 owns N&ndash;Z, each with its own private map; a request is routed to the thread that owns its data and runs there, alone. What this buys you is the removal of synchronization itself — not just the correctness bugs (races, and the deadlocks that come from acquiring fine-grained locks in inconsistent orders) but the throughput tax of every thread queuing on a shared lock and the CPU burned parking, waking, and context-switching around it. Take the sharing out of the hot path and that whole tax goes with it.</p>
         <p>Confinement appears at every scale. A thread-local holds one private instance of a variable per thread. A single-threaded command loop confines an entire store's state to one thread, serializing every mutation without a single lock — its concurrency comes from non-blocking I/O around the loop, not from more threads on the data. Sharded engines partition a keyspace so each shard is owned by exactly one thread or core, keeping the hot path lock-free. The actor model is the message-passing realization: state lives inside one actor and is mutated only by its own loop. The catch is that confinement demands a clean partition of the state by owner, and any work that spans partitions — booking two seats in different sections — can no longer just take two locks; it needs message passing or a coordinator, architectural complexity traded for the synchronization complexity you removed. And the guarantee holds only while it is strictly enforced: one thread reaching into another's slice quietly reintroduces every race you eliminated.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>Two workers can only trip over the same data if they both touch it. So give every piece of data one owner and let nobody else near it: whoever needs something done to that data sends a request to its owner, who does the work alone. Nothing is shared, so nothing can be corrupted — like each chef having their own board rather than everyone crowding one.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>State is partitioned by owner and each partition is mutated only by its owning thread, so the hot path carries no lock, no contention and no lock-ordering deadlock. It shows up as thread-locals, as a single-threaded command loop whose concurrency comes from non-blocking I/O around it rather than more threads on the data, and as thread-per-core sharded engines. Requests are routed to the owner of their data; anything spanning two owners needs message passing or a coordinator instead of two locks.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it when the state partitions cleanly, most operations stay inside one partition, and lock contention is the measured bottleneck — a forced partition on data that does not divide just relocates the races into the seams. The gain is a hot path with no synchronization at all, and owners you can reason about as ordinary sequential programs. What you pay: cross-partition work needs a coordinator and its own consistency story, a hot partition pins one owner at full load while its peers idle and nobody may help, and the guarantee holds only while it is enforced — one thread reaching into another's slice silently restores every race you removed.</p>
+        </div>
       </div>
     </section>
 
@@ -146,8 +164,8 @@ flowchart TB
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Needs a clean partition of state by owner — if the data does not divide naturally, confinement does not apply.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Cross-partition work is expensive — an operation spanning two owners cannot just take two locks; it needs message passing or a coordinator, and its own consistency story.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Load can skew — a hot partition pins one thread at full while its peers idle, and the busy owner becomes the bottleneck because no other thread may help with its data.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Cross-partition work is expensive — an operation spanning two owners cannot just take two locks; it needs message passing or a coordinator, and its own consistency story.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Load can skew — a hot partition pins one thread at full while its peers idle, and the busy owner becomes the bottleneck because no other thread may help with its data.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">The guarantee is only as good as its enforcement — one thread reaching into another's slice silently brings back every race you removed, and nothing stops it by default.</li>
             <li id="tradeoffs-con-5" data-kb-polarity="con">Trades synchronization complexity for architectural complexity — the hard part moves from locks to partitioning and routing rather than disappearing.</li>
           </ul>
