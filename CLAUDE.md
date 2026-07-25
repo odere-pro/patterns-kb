@@ -51,7 +51,8 @@ node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>   # aut
 ```
 
 Section-level `data-kb-level` is **stamped** from `BLOCK_LEVELS` in `scripts/lib/model.mjs`
-— change the policy, never the page.
+— change the policy, never the page. Register rules and the per-lens audit procedure for
+the ladder live in the **kb-explain** skill.
 
 Then `make all` to regenerate, and `make check` to verify. A hook runs `make check` after any
 edit under `site/` — it takes ~0.8s.

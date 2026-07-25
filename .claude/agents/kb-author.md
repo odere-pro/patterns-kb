@@ -75,7 +75,9 @@ paragraph per level, written via `kb.mjs explain`:
 Each rung must stand alone — the basic lens shows only the basic rung. `data-kb-level` on
 finer elements is authored via `kb.mjs level`, sparingly: tag a line only when it genuinely
 serves one audience. Untagged (visible everywhere) is the right default. Section-level
-levels are stamped from `BLOCK_LEVELS` policy — never set them per page.
+levels are stamped from `BLOCK_LEVELS` policy — never set them per page. The full register
+spec, per-lens audit procedure and tagging heuristics live in the **kb-explain** skill
+(`.claude/skills/kb-explain/SKILL.md`) — read it before writing or auditing a ladder.
 
 **The `production` block is where a system builder learns to RUN the pattern.** Four labeled
 lists — Tuning knobs, Signals to watch, Failure modes under load, Readiness checklist — written
