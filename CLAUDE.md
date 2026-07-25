@@ -40,6 +40,7 @@ Go through the validated writer, not hand-edited attribute strings:
 
 ```
 node scripts/kb.mjs set <id> --aliases '["breaker","CB"]' --tags '[…]' --solves '[…]'
+node scripts/kb.mjs set <id> --favourite true            # editorial pick: ★ chip + hub filter
 node scripts/kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
 ```
 

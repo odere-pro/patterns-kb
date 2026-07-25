@@ -1,5 +1,6 @@
 /* Favourites filter — shows only pages whose metadata declares
- * data-kb-favourite="true" (rendered by build-hub as .chip[data-fav]).
+ * data-kb-favourite="true" (rendered by build-hub as [data-fav] on a
+ * pattern .chip or a theme/principle/design .theme-card).
  *
  * This is a pure view filter over authored data. It is NOT the Practiced
  * tracker: it never reads or writes localStorage and shares no state with
@@ -12,7 +13,7 @@
 
   // Nothing marked favourite yet → hide the control rather than offer an
   // empty filter.
-  if (!document.querySelector('.chip[data-fav]')) {
+  if (!document.querySelector('.chip[data-fav], .theme-card[data-fav]')) {
     btn.hidden = true;
     return;
   }

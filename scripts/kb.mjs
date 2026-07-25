@@ -17,7 +17,7 @@
  *   kb.mjs validate [<id> | --file <path>]   structural lint; no argument = every page
  *
  * Writing (authoring goes through here, so the data stays well-formed):
- *   kb.mjs set <id> --aliases '["breaker","CB"]' --tags '[…]' --solves '[…]'
+ *   kb.mjs set <id> --aliases '["breaker","CB"]' --tags '[…]' --solves '[…]' [--favourite true|false]
  *   kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
  *   kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
  *   kb.mjs link <from> <verb> <to> [--note "…"] [--note-back "…"]   both sides at once
@@ -358,7 +358,15 @@ if (cmd === "get") {
       else doc.removeAttribute(`data-kb-${key}`);
       touched.push(`${key}=${v.length}`);
     }
-    if (!touched.length) { console.error("nothing to set — pass --aliases / --tags / --solves"); process.exit(1); }
+    /* Editorial pick, not a list: drives the hub's ★ chip and its Favourites filter. */
+    const fav = opt("favourite");
+    if (fav != null) {
+      if (fav !== "true" && fav !== "false") { console.error("--favourite: must be true or false"); process.exit(1); }
+      if (fav === "true") doc.setAttribute("data-kb-favourite", "true");
+      else doc.removeAttribute("data-kb-favourite");
+      touched.push(`favourite=${fav}`);
+    }
+    if (!touched.length) { console.error("nothing to set — pass --aliases / --tags / --solves / --favourite"); process.exit(1); }
     const out = root.toString();
     if (out !== src) writeFileSync(file, out);
     console.log(`${node.id}: ${touched.join(" ")}${out === src ? " (unchanged)" : ""}`);

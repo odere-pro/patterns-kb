@@ -73,6 +73,13 @@ produced 280 tags of which 154 were used exactly once. Hence the closed list.)
 **`aliases`** — only genuinely used alternate names ("CB", "pub/sub", "Policy", "The Blob").
 `[]` is a perfectly good answer; many patterns have none. Do not invent nicknames.
 
+**`favourite`** (optional) — `data-kb-favourite="true"` marks a page as an editorial pick. It is the
+only boolean field: present-and-true or absent, written with `kb.mjs set <id> --favourite true|false`.
+The build projects it into `graph.json`, and the hub renders a `★` chip plus a **★ Favourites**
+filter that collapses the map to the picks. It is fixed page metadata — the same for every visitor —
+and is **not** the per-visitor "Practiced" tracker, which lives in `localStorage` and shares nothing
+with it. Favourite a page because it is worth reading first, not because it is good.
+
 **"In the wild"** (optional block) — real, well-known implementations only. This is the one
 place you can do real damage: a fabricated library name is a lie that ships to a public site.
 Include an entry only if you are confident it exists *and* genuinely exemplifies the pattern.

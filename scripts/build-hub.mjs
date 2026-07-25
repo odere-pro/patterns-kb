@@ -20,10 +20,16 @@ const patternsIn = (group) =>
 const bandTotal = (band) =>
   Object.values(N).filter((n) => n.kind === "pattern" && n.band === band).length;
 
+/* The favourite marker is one thing rendered in two shapes — a pattern chip and a
+ * theme/principle/design card — so both read it from here rather than drifting apart. */
+const favAttrOf = (n) => (n.favourite ? ' data-fav="1"' : "");
+const favStarOf = (n) =>
+  n.favourite ? '<span class="chip-fav" title="Favourite" aria-label="Favourite">★</span>' : "";
+
 function chip(n) {
   // n.path is site-relative and the hub sits at site/, so it needs no adjustment.
-  const favAttr = n.favourite ? ' data-fav="1"' : "";
-  const favStar = n.favourite ? '<span class="chip-fav" title="Favourite" aria-label="Favourite">★</span>' : "";
+  const favAttr = favAttrOf(n);
+  const favStar = favStarOf(n);
   return `            <div class="chip"${favAttr}><input class="chip-box" type="checkbox" data-id="${n.id}" data-band="${n.band}" data-group="${n.group}" aria-label="Mark ${esc(n.name)} practiced"><a class="chip-name" href="${n.path}">${esc(n.name)}</a><span class="chip-note">${esc(n.essence)}</span>${favStar}</div>`;
 }
 function chips(group) {
@@ -78,7 +84,7 @@ ${chips(band)}
 /* ---- themes ---- */
 function themeCard(id) {
   const t = N[id];
-  return `        <a class="theme-card" href="${t.path}"><span class="theme-name">${esc(t.name)}</span><span class="theme-note">${esc(t.essence)}</span></a>`;
+  return `        <a class="theme-card"${favAttrOf(t)} href="${t.path}"><span class="theme-name">${esc(t.name)}</span><span class="theme-note">${esc(t.essence)}</span>${favStarOf(t)}</a>`;
 }
 
 /* ---- principles ---- */
@@ -86,7 +92,7 @@ function themeCard(id) {
  * hub still builds while the section is being populated one page at a time. */
 function principleCard(id) {
   const p = N[id];
-  return `        <a class="theme-card" href="${p.path}"><span class="theme-name">${esc(p.name)}</span><span class="theme-note">${esc(p.essence)}</span></a>`;
+  return `        <a class="theme-card"${favAttrOf(p)} href="${p.path}"><span class="theme-name">${esc(p.name)}</span><span class="theme-note">${esc(p.essence)}</span>${favStarOf(p)}</a>`;
 }
 const PRINCIPLES = PRINCIPLE_ORDER.filter((id) => N[id]);
 
