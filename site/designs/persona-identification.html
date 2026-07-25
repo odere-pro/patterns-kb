@@ -50,6 +50,11 @@
       "kb:note": "every vendor callback lands as an inbox row unique on flow, step and the provider's own request id, in the same transaction as its effect — so a duplicate that arrives before the outbox write still collides"
     },
     {
+      "@id": "../patterns/distributed/coordination/replication.html#replication",
+      "name": "Replication",
+      "kb:note": "a synchronous in-region standby gives the single writer failover without giving up its consistency stance"
+    },
+    {
       "@id": "../patterns/distributed/resilience/circuit-breaker.html#circuit-breaker",
       "name": "Circuit Breaker",
       "kb:note": "one breaker per vendor with its state in the shared cache, so every worker replica sees the same open circuit and one probe decides recovery"
@@ -263,6 +268,7 @@
                 <li>The ID-verification vendor is down ~6 hours a week: queue and wait, never fail the flow for a vendor outage.</li>
                 <li>Stuck flows are detected, retried, and escalated to an operator and to the client inside a stated SLA.</li>
                 <li>Every error path is explicit: a failed step retries, escalates, or ends the flow with a recorded reason — nothing is silently dropped.</li>
+                <li>A database failover loses no acknowledged fact: a committed transition and its outbox event survive the switch.</li>
               </ul>
             </li>
             <li><strong>Observability</strong>
@@ -303,7 +309,7 @@
     <section class="doc-section" id="sizing" aria-labelledby="h-sizing" data-kb-block="sizing">
       <h2 class="doc-h" id="h-sizing">Right-sizing</h2>
       <div class="prose">
-        <p><strong>The problem:</strong> a flow that waits days on people and vendors — ~75 person-flows a day today (assumed: ~100 merchant onboardings a week, ×5 person checks), design target 10k/day. <strong>The shape:</strong> event-driven, and the volumes do not decide it — the waits do. A request thread cannot be held for a day, a verdict must reach the client exactly once across crashes, and the regulator asks for the history itself, so every wait becomes a durable row and every state change an appended event. Current state is materialised on the flow row rather than folded from the log on each read: the audit obligation wants the append-only history, nothing in the requirements wants replay-on-read. <strong>The stores:</strong> four per region — operational Postgres (flows, history, queue, outbox/inbox), a separate encrypted vault for personal data, object storage for documents, and a small shared cache holding circuit-breaker state.</p>
+        <p><strong>The problem:</strong> a flow that waits days on people and vendors — ~75 person-flows a day today (assumed: ~100 merchant onboardings a week, ×5 person checks), design target 10k/day. <strong>The shape:</strong> event-driven, and the volumes do not decide it — the waits do. A request thread cannot be held for a day, a verdict must reach the client exactly once across crashes, and the regulator asks for the history itself, so every wait becomes a durable row and every state change an appended event. Current state is materialised on the flow row rather than folded from the log on each read: the audit obligation wants the append-only history, nothing in the requirements wants replay-on-read. <strong>The stores:</strong> four per region — operational Postgres (flows, history, queue, outbox/inbox), a separate encrypted vault for personal data, object storage for documents, and a small shared cache holding circuit-breaker state. <strong>The deployment unit:</strong> residency means one full stack per region — every number below is per-region, the largest region dominates, and adding a region multiplies stacks, not load.</p>
         <p><strong>Required capabilities:</strong></p>
         <ul>
           <li>Durable transactional store — the state machine and its append-only history; a transition and its consequences commit together or not at all (mandatory). → NFR: consistency.</li>
@@ -322,6 +328,7 @@
           <li>Storage: ~1 KB metadata × 5 years ≈ <strong>18 GB</strong>; ID photos 2 MB × 10k/day × 1-year retention ≈ <strong>7 TB</strong> in object storage, expired by lifecycle rule. → NFR: scale; compliance.</li>
           <li>Waiting (Little's law): ~24 h mean submission wait parks <strong>~10k open flows</strong> — inert rows the claim query never scans, resolved by the 48-hour link expiry and a scheduled <a href="../patterns/distributed/coordination/sweeper.html">sweeper</a> that re-invites or escalates a failure event. → NFR: consistency.</li>
           <li>Re-screening load (additional tier): ~3.6M concluded persons after a year × quarterly cadence ≈ 40k re-checks/day ≈ <strong>0.5 outbound vendor calls/s</strong> and ~2 extra row-writes each — a rounding error on a store that is bored below 100 writes/s. → NFR: scale.</li>
+          <li>Sanctions fan-out: ~4 lists × 10k flows/day ≈ 40k screening legs/day ≈ <strong>0.5 vendor calls/s</strong> from live intake, roughly matched by the re-screening book at steady state — the binding limit on screening concurrency is vendor quota, not compute. → NFR: scale.</li>
         </ul>
         <p><strong>Verdict per candidate:</strong></p>
         <ul>
@@ -333,6 +340,7 @@
           <li>Separate encrypted vault + key manager — <strong>adopted</strong>: erasure must be provable, so it is key destruction, not a delete; separate credentials keep a compromised API tier from reading personal data. → NFR: compliance; security &amp; tenancy.</li>
           <li>Object store — <strong>adopted</strong>: evidence and residency force it; at 7 TB of immutable blobs it is also the cheapest place they could live. → NFR: compliance.</li>
           <li>Coordination cache — <strong>adopted</strong>: correctness, not speed. Per-process breakers make N replicas absorb N× the vendor's failures, then send N probes at a recovering vendor. → NFR: availability &amp; resilience.</li>
+          <li>Synchronous in-region standby — <strong>adopted</strong>: the single writer's failover, not a read path — the standby acknowledges every commit before the client does, so promotion loses no acknowledged fact. An async replica is rejected for exactly that gap: it can drop the outbox row the client was already promised. The read replica below stays a separate, deferred concern. → NFR: availability &amp; resilience.</li>
           <li>Read cache — <strong>rejected</strong>: 18 GB of metadata, dashboard reads by primary key, no hot set worth a second copy to invalidate. → FR: flow view.</li>
           <li>Search index — <strong>rejected</strong>: the dashboard answers "show me this flow", never "find flows matching text". → FR: flow view.</li>
           <li>Cache with a TTL as the invite-link store — <strong>rejected</strong>: the 48-hour expiry has to trigger a re-invite, tell an expired link from an unknown one, and be spent in the submission's own transaction, so it is a predicate on a durable row rather than an eviction — and ~20k live rows buy nothing by moving. → FR: invite resend; NFR: consistency.</li>
@@ -842,8 +850,8 @@ flowchart TB
       <h2 class="doc-h" id="h-deep">Deep dives</h2>
       <div class="prose">
         <h3>1 · The queue lives in the database <em>→ NFR: scale</em></h3>
-        <p><strong>At 5–6 writes/s peak, the queue's entire value is that a task insert shares a transaction with the state change that spawned it — so scale-out is more replicas, not more infrastructure.</strong> Worker replicas compete for tasks with <code>FOR UPDATE SKIP LOCKED</code> (<a href="../patterns/messaging/competing-consumers.html">competing consumers</a> on a Postgres queue — <a href="../patterns/distributed/resilience/load-leveling.html">load-leveling</a> without a broker): the claim locks a pending row and skips anything already locked, so two workers cannot claim the same task and none ever blocks; adding capacity is adding a replica, because no worker holds state. A broker is rejected today: it breaks that atomicity and adds an operational surface, to solve a throughput problem this system does not have. The recurring re-screening load — which grows with the book, not with intake — rides the same queue through <code>run_after</code>, so it can be scheduled off the live flows' peak instead of competing with them.</p>
-        <p><strong>Nothing changes until ~2M requests; the first real bottleneck is the task table, not the flow table.</strong> Task rows are updated repeatedly (claims, retries, completions), which at high volume means dead tuples, vacuum pressure and index churn — classic queue-in-DB costs. The exits, in the order they earn their keep: partial indexes on <code>status = 'pending'</code> so claims scan only live work; partition or truncate completed tasks aggressively; a read replica for dashboard and reporting reads; then <strong>move the queue to a broker</strong> while keeping the outbox, once churn is measured rather than feared; and only at sustained multi-million volume, <strong>shard by <code>client_id</code></strong> — the natural key, since no query spans tenants — and split worker fleets into services when team ownership demands it. Each step is additive; none is a rewrite, because the outbox boundary was in place from day one.</p>
+        <p><strong>At 5–6 writes/s peak, the queue's entire value is that a task insert shares a transaction with the state change that spawned it — so scale-out is more replicas, not more infrastructure.</strong> Worker replicas compete for tasks with <code>FOR UPDATE SKIP LOCKED</code> (<a href="../patterns/messaging/competing-consumers.html">competing consumers</a> on a Postgres queue — <a href="../patterns/distributed/resilience/load-leveling.html">load-leveling</a> without a broker): the claim locks a pending row and skips anything already locked, so two workers cannot claim the same task and none ever blocks; adding capacity is adding a replica, because no worker holds state. A broker is rejected today: it breaks that atomicity and adds an operational surface, to solve a throughput problem this system does not have. Screening concurrency comes free from the same mechanism: sanctions legs are ordinary task rows, so parallelism across flows and across lists is just more claims — the ceiling is the per-vendor rate counter in the shared cache, never worker count. And the recurring re-screening load — which grows with the book, not with intake — rides the same queue through <code>run_after</code>, scheduled off the live flows' peak so the batch never starves live work.</p>
+        <p><strong>Nothing changes until ~2M requests; the first real bottleneck is the task table, not the flow table.</strong> Task rows are updated repeatedly (claims, retries, completions), which at high volume means dead tuples, vacuum pressure and index churn — classic queue-in-DB costs. The exits, in the order they earn their keep: partial indexes on <code>status = 'pending'</code> so claims scan only live work; partition or truncate completed tasks aggressively; a read replica for dashboard and reporting reads; then <strong>move the queue to a broker</strong> while keeping the outbox, once churn is measured rather than feared; and only at sustained multi-million volume, <strong>shard by <code>client_id</code></strong> — the natural key, since no query spans tenants — and split worker fleets into services when team ownership demands it. Each step is additive; none is a rewrite, because the outbox boundary was in place from day one. All of it is per-region — residency multiplies stacks, not load — and the sharding exit composes with residency for free, because <code>client_id</code> is also the key that pins a client's rows to its region.</p>
         <details class="sketch">
           <summary>The claim query</summary>
 <pre><code class="language-sql" data-kb-lang="sql">UPDATE task
@@ -935,7 +943,7 @@ SELECT $flow, 'check_list:' || l FROM unnest($sanction_lists) AS l;
 
 COMMIT;   -- all five facts, or none of them</code></pre>
         </details>
-        <p><strong>The only fan-out in the flow concludes exactly once.</strong> Sanctions is gated on a verified identity — screening unverified data is vendor spend that produces noise. Once the flow reaches Awaiting Sanctions Check, one task per list fans out (<a href="../patterns/messaging/scatter-gather.html">scatter-gather</a>); each leg writes its result row; a collector transitions the flow exactly once, when every leg has reported — <code>Clear</code> only if all lists are clean, <code>Sanctioned</code> on any hit. The collector's transition uses the same guarded update as everything else, so two legs finishing simultaneously cannot both conclude the flow. Each leg carries its own deadline; a leg that dies is the sweeper's to retry or escalate, so the collector can hang only as long as the SLA allows (con 3).</p>
+        <p><strong>The only fan-out in the flow concludes exactly once — and its legs genuinely run in parallel.</strong> Sanctions is gated on a verified identity: screening unverified data is vendor spend that produces noise, so running it concurrently with ID verification is deliberately rejected, not overlooked (dive 8, Q3). The concurrency lives inside the step instead. The concluding transaction inserts one <code>check_list</code> task per list (<a href="../patterns/messaging/scatter-gather.html">scatter-gather</a>); sanctions-pool replicas claim the legs independently via <code>SKIP LOCKED</code>, so the lists screen concurrently — bounded by the per-vendor rate limit, not by list count — and each leg owns its deadline, retry budget and result row, so a slow list never delays a fast one. The join needs no lock beyond the row's own: every completing leg counts result rows against the list count, two legs finishing simultaneously both attempt the transition, and the guarded update lets exactly one conclude — <code>Clear</code> only if all lists are clean, <code>Sanctioned</code> on any hit. A leg that dies is the sweeper's to retry or escalate, so the collector can hang only as long as the SLA allows (con 3). A re-screen fans out the same way, keyed to its <code>sanctions_recheck</code> transition, so an in-flight recheck's legs can never be mistaken for a first screen's.</p>
       </div>
       <figure class="diagram">
         <pre class="mermaid">
@@ -963,6 +971,7 @@ flowchart LR
           <li><strong>Email is a vendor too.</strong> Sends carry an idempotency key (dive 3); bounces come back as inbox events and mark the invitation dead, which the sweeper escalates like any other stuck flow — an invite that never arrived must not look identical to an onboardee who never clicked.</li>
         </ul>
         <p><strong>Every flow state has an SLA, and the sweeper is what enforces it.</strong> One scheduled job sweeps for three conditions: expired locks (a worker died mid-task — reset to pending for a competitor to claim), exhausted tasks (attempts over budget — mark <code>dead</code>, a <a href="../patterns/messaging/dead-letter-channel.html">dead-letter channel</a> as a table), and overdue flows (sitting in one state past its SLA — escalate). Escalation is deliberately three-directional: an alert for the operator, a dashboard surface for support, and <strong>a failure event through the same outbox path for the client</strong> — silence toward the paying client is the one failure mode this design refuses. A dead task is parked, inspectable, and re-runnable after the cause is fixed; it is never silently dropped.</p>
+        <p><strong>The database gets the same treatment as the vendors: its failure is planned, not hoped away.</strong> Doing nothing leaves every stall of the single writer as pure downtime — survivable, since a stall loses no work, but gratuitous. An asynchronous replica looks cheaper and is rejected for one precise reason: it can acknowledge a commit the standby never received, and the fact lost would be exactly the outbox row this design exists to never lose. The choice is a synchronous in-region standby (<a href="../patterns/distributed/coordination/replication.html">replication</a>, single-leader and synchronous): the standby holds every acknowledged fact, failover is a promotion rather than a restore, and the queue-in-DB property makes the switch lossless — work drains on return exactly as after vendor downtime. The residual cost is honest: every commit pays the standby's round-trip and the database bill doubles — trivial at 5–6 writes/s — while the <em>read</em> replica stays a separate, deferred concern (Right-sizing).</p>
       </div>
       <figure class="diagram">
         <pre class="mermaid">
@@ -999,7 +1008,7 @@ flowchart LR
       <div class="prose">
         <h3>6 · Evidence, erasure, retention <em>→ NFR: compliance</em></h3>
         <p><strong>Erasure is key destruction, evidence outlives the person, and retention is a lifecycle rule — each a mechanism, not a policy memo.</strong> Business tables carry <code>person_ref</code>; the vault holds the encrypted payload, one envelope key per person. Erasure (<code>DELETE /persons/{id}</code>) destroys the key and purges the photo — <strong>crypto-shredding</strong>: every copy, including backups, becomes unreadable at once. What survives is deliberate: the flow's decision and its transition history, because "a lawful check ran and concluded" is a compliance record that outlives the personal data it was computed from.</p>
-        <p>ID photos go straight to <a href="../patterns/distributed/routing/object-storage.html">object storage</a> by presigned upload; workers pass the storage key, never bytes (<a href="../patterns/messaging/claim-check.html">claim check</a>). Documents are stored as evidence, not proxied — and retention is a per-jurisdiction obligation the object store's lifecycle rule implements, rather than a cron job someone maintains.</p>
+        <p>ID photos go straight to <a href="../patterns/distributed/routing/object-storage.html">object storage</a> by <a href="../patterns/distributed/routing/valet-key.html">presigned upload</a> — a short-lived valet key issued at submit, so bytes never transit the API; workers pass the storage key, never bytes (<a href="../patterns/messaging/claim-check.html">claim check</a>). Documents are stored as evidence, not proxied — and retention is a per-jurisdiction obligation the object store's lifecycle rule implements, rather than a cron job someone maintains.</p>
         <p><strong>The access papertrail.</strong> Every vault read appends who, what, when to the audit table. The flow history answers "what happened to this person"; the papertrail answers "who looked" — auditors ask both.</p>
       </div>
       <figure class="diagram">
@@ -1043,62 +1052,89 @@ flowchart TB
         <figcaption>What can be reached from where: the API is the only public surface, RLS refuses the un-scoped query no matter which code path issued it, and everything stateful sits off the public internet.</figcaption>
       </figure>
       <div class="prose">
-        <p><strong>The whole board, numbered.</strong> Every mechanism the dives argued, assembled once: an API gateway in front of the public tier terminates TLS, authenticates tenants and enforces the per-flow limits (the <a href="../patterns/distributed/resilience/rate-limiter.html">rate limiter</a> that keeps the resend endpoint from becoming a spam cannon); the worker pools, dispatcher and schedulers live on the private network; every store sits in one data layer; and the numbers walk one flow from create to delivered verdict. Read it top to bottom once, then follow the numbers.</p>
+        <p><strong>Regions are islands.</strong> Residency is not a filter on one big database — it is one full stack per region: gateway, API, workers, Postgres and its standby, vault, object store, cache. A client is pinned to a region at onboarding; DNS routes them to it, and every identifier below the gateway is region-local. Nothing crosses: no cross-region replication of personal data or documents — that is the requirement itself, not a limitation — and cross-region failover is deliberately out of scope (problem, Q7), so a regional outage is downtime for that region's clients alone. The price is N copies of everything; it is blunted by stamping every region from the same infrastructure-as-code, so only configuration — jurisdictions, cadences, vendor endpoints — varies (con 8).</p>
       </div>
       <figure class="diagram">
         <pre class="mermaid">
-flowchart TB
+flowchart LR
+    CEU["EU client + onboardees"] -->|"DNS — region recorded at onboarding"| REU
+    CUS["US client + onboardees"] -->|"DNS"| RUS
+    subgraph REU["Region EU — full stack"]
+        SEU["Gateway · API · workers · Postgres + standby · vault · object store"]
+    end
+    subgraph RUS["Region US — full stack"]
+        SUS["Gateway · API · workers · Postgres + standby · vault · object store"]
+    end
+    REU -.-|"nothing crosses — no data path"| RUS
+        </pre>
+        <figcaption>Where does a client's data live? In its region's stack and nowhere else — the same code stamped per region, and no replication or failover across the boundary, by requirement rather than by omission.</figcaption>
+      </figure>
+      <div class="prose">
+        <p><strong>The whole board, numbered.</strong> Every mechanism the dives argued, assembled once — and deliberately merged so it reads as one spine: the three vendor pools are a single box (one bulkhead per vendor — dive 4 zooms in), the callable externals are a single dashed box, and Postgres is one cylinder whose edges name the rows they touch — the four-table transaction detail lives in dive 3's SQL sketch. An API gateway fronts the public tier, terminating TLS, authenticating tenants and enforcing the per-flow limits (the <a href="../patterns/distributed/resilience/rate-limiter.html">rate limiter</a> that keeps the resend endpoint from becoming a spam cannon). Follow the numbers 1&ndash;13 left to right; the 5&ndash;10 loop repeats as the flow advances.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+%%{init: {"flowchart": {"nodeSpacing": 60, "rankSpacing": 110}}}%%
+flowchart LR
     C["Client"]
     U["Onboardee"]
-    C -->|"1 · create flow · replay · erase · dashboard"| GW
-    U -->|"6 · magic link · submit"| GW
     subgraph PUB["Public edge"]
-        GW["API gateway · rate-limiter"] -->|"2 · authenticated, rate-limited"| API["Identification API — stateless, RLS session per tenant"]
+        GW["API gateway · rate-limiter"]
+        API["Identification API — stateless, RLS session per tenant"]
     end
-    subgraph PRIV["Private network"]
-        subgraph DATA["Data layer"]
-            subgraph PG["Postgres — one ACID transaction spans every row it touches"]
-                FT[("flow + transition — state machine, append-only history")]
-                TQ[("task — the queue, run_after backoff")]
-                OB[("outbox — events owed to the client")]
-                IB[("inbox — sender-keyed callback dedup")]
-            end
-            VLT[("PII vault + access papertrail")]
-            CACHE[("Shared cache — breaker state, fallback weights · circuit-breaker")]
-            BL[("Object store — ID photos · claim-check")]
-            MET[("Metrics store — per-vendor error rate, latency")]
-        end
-        subgraph WK["Worker fleet"]
-            EMLP["Email pool · bulkhead"]
-            IDVP["IDV pool · bulkhead"]
-            SANP["Sanctions pool · bulkhead"]
-            DISP["Webhook dispatcher"]
-        end
+    C -->|"1 · create · replay · erase"| GW
+    U -->|"2 · magic link · submit"| GW
+    GW -->|"3 · auth + rate limit"| API
+    subgraph PRIV["Private network — one flow = one orchestrated saga · saga · workflow-orchestration"]
+        PG[("Postgres — the state machine: flow + transition · task queue · outbox · inbox · PII vault")]
+        BL[("Object store — ID photos · claim-check")]
+        POOLS["Worker pools — email · IDV · sanctions · bulkhead each"]
+        DISP["Webhook dispatcher — the outbox relay"]
         SCH["Schedulers — sweeper + recheck clocks"]
+        MET[("Metrics store — per-vendor health")]
+        CACHE[("Shared cache — breaker + weights · circuit-breaker")]
     end
-    API ==>|"3 · 8 — ONE txn: transition + outbox event + next task"| FT
-    API ==>|"13 · ONE txn: inbox dedup + transition + fan-out tasks"| IB
-    API -->|"PII in, person_ref out"| VLT
-    U -->|"7 · presigned PUT — ID photo"| BL
-    TQ -->|"4 · invite task → email pool"| EMLP
-    EMLP -->|"5 · send magic link"| EML["Email vendor"]:::ext
-    TQ -->|"9 · IDV task → IDV pool"| IDVP
-    IDVP -.->|"10 · consult breaker + weights"| CACHE
-    IDVP -->|"11 · call primary"| IDV1["IDV provider A"]:::ext
-    IDVP -.->|"11 · or weighted fallback"| IDV2["IDV provider B — weighted fallback"]:::ext
-    IDV1 -.->|"12 · callback"| API
-    IDVP -.->|"health metrics"| MET
+    U -->|"4 · presigned PUT — short-lived URL issued at submit · valet-key"| BL
+    API ==>|"5 · 10 — ONE txn: transition + outbox + tasks (callback: inbox row first)"| PG
+    PG -->|"6 · tasks claimed per pool"| POOLS
+    POOLS -.->|"7 · breaker + weights"| CACHE
+    POOLS -->|"8 · calls: invite · IDV · sanction legs"| VEND["IDV primary + weighted fallback · Sanction lists · Email vendor"]:::ext
+    VEND -.->|"9 · callbacks"| API
+    POOLS -->|"11 · collector: one guarded transition"| PG
+    PG -->|"12 · outbox — relay polls, retries"| DISP
+    DISP -->|"13 · HMAC-signed event, stable eventId"| CB["Client webhook endpoint"]:::ext
+    SCH -->|"sweep · re-queue · dead-letter · recheck"| PG
+    POOLS -.->|"health metrics"| MET
     MET -.->|"drive breaker + weights"| CACHE
-    TQ -->|"14 · fan-out tasks → sanctions pool"| SANP
-    SANP -->|"15 · one leg per list"| SAN["Sanction lists"]:::ext
-    SANP -->|"16 · collector: ONE guarded transition + result event"| FT
-    OB -->|"17 · drained by the dispatcher"| DISP
-    DISP -->|"18 · HMAC-signed event, stable eventId"| CB["Client webhook endpoint"]:::ext
-    SCH -->|"re-queue · dead-letter · escalate · recheck clocks"| TQ
     classDef ext stroke-dasharray:4 4;
         </pre>
-        <figcaption>The assembled system, one flow numbered end to end — 1–5 create and invite, 6–8 submission, 9–12 verification through the breaker and fallback, 13–16 sanctions fan-out and collection, 17–18 delivery. Arrows into the pools follow the work: a task written by the API's transaction is claimed by the pool it names. The schedulers sweep and re-enter flows on their clocks throughout.</figcaption>
+        <figcaption>One spine, read left to right: enter (1&ndash;4), commit (5), work (6&ndash;8), return (9&ndash;11), deliver (12&ndash;13). The 5&ndash;10 loop repeats for every step of the flow — invite, submission, verification, each sanction list — until the outbox owes the client a result: the flow row is the saga's state, the state machine (dive 2) decides each next step, and the workers execute it. The schedulers sweep and re-enter flows on their clocks throughout.</figcaption>
       </figure>
+      <div class="prose">
+        <p><strong>How one flow moves.</strong> A client's create (1) passes the gateway's auth and limits (3) and becomes one transaction (5): a flow row, its outbox event, and an invite task. The email pool claims that task (6) and sends the magic link (8); the onboardee follows it (2), submits, and PUTs the photo straight to the object store with the short-lived URL issued at submit (4). From there every step commits the same way — transition + outbox event + next task — so the 5&ndash;10 loop runs once per step: the IDV pool calls whichever provider the weights pick (7&ndash;8), the callback lands as a sender-keyed inbox row with its effect in the same transaction (9&ndash;10), then the sanctions pool fans one leg per list and its collector concludes the flow exactly once (11). Whatever the outcome, the outbox owes the client an event; the relay drains it (12) and delivers it HMAC-signed with a stable <code>eventId</code> (13). Nothing in that story holds a connection across a wait — a parked flow is a row — which is why vendor downtime and human slowness cost latency, never correctness.</p>
+        <p><strong>What runs all the time.</strong> The sweeper re-queues expired locks, dead-letters exhausted tasks and escalates overdue flows — the failure event to the client travels the same outbox path as a result. The recheck clocks re-enter concluded flows on each jurisdiction's cadence, and the re-entered flow walks the same numbered loop. And the per-vendor health series feed both the alerts and the breaker weights, so observability and resilience read the same numbers.</p>
+        <p><strong>On AWS.</strong> One concrete mapping, for orientation — the design above is portable, and every row below is replaceable by its capability:</p>
+      </div>
+      <div class="table-scroll">
+        <table class="decision">
+          <thead>
+            <tr><th>Board component</th><th>AWS service</th><th>Why it fits</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>API gateway · rate limiter</td><td><strong>Amazon API Gateway</strong> (+ AWS WAF)</td><td>TLS termination, tenant API keys, per-client throttling and usage plans; WAF in front of the only public surface.</td></tr>
+            <tr><td>Identification API · worker pools · dispatcher</td><td><strong>ECS on Fargate</strong> — one service per pool</td><td>Stateless replicas with no hosts to patch; a separate service per vendor pool is the bulkhead, scaled independently.</td></tr>
+            <tr><td>Postgres — state machine, queue, outbox, inbox</td><td><strong>Amazon RDS for PostgreSQL</strong> or Aurora PostgreSQL, Multi-AZ</td><td>Single-writer ACID transactions; <code>SKIP LOCKED</code> works as-is; a synchronous standby gives the failover the CAP stance assumes.</td></tr>
+            <tr><td>PII vault — per-person envelope keys</td><td><strong>AWS KMS</strong> + Secrets Manager</td><td>Envelope encryption with per-person data keys under a customer-managed key; erasure destroys the stored data key. Vendor credentials live in Secrets Manager, not in code.</td></tr>
+            <tr><td>Object store — ID photos</td><td><strong>Amazon S3</strong></td><td>Presigned PUT for the valet-key upload, SSE-KMS at rest, lifecycle rules as the retention mechanism.</td></tr>
+            <tr><td>Shared cache — breaker + weights</td><td><strong>Amazon ElastiCache</strong> (Redis-compatible)</td><td>One breaker record and one weight set shared by every replica; coordination, not a read cache.</td></tr>
+            <tr><td>Schedulers — sweeper + recheck clocks</td><td><strong>Amazon EventBridge Scheduler</strong></td><td>Cron without a host: fires the sweeper and both recheck clocks as Fargate tasks or Lambda invocations.</td></tr>
+            <tr><td>Observability</td><td><strong>Amazon CloudWatch</strong> (+ OpenTelemetry)</td><td>Per-vendor metrics and the alarm set from dive 5 — queue depth, stuck flows, dead tasks, delivery failures; logs carry ids only.</td></tr>
+            <tr><td>Private network</td><td><strong>Amazon VPC</strong> — private subnets, security groups, VPC endpoints, NAT</td><td>Only the gateway tier is public; stores are reachable through VPC endpoints, vendor calls leave through NAT. The stack is stamped once per region, and Route&nbsp;53 sends each client to the region recorded at onboarding.</td></tr>
+            <tr><td>Email</td><td>The given vendor, or <strong>Amazon SES</strong></td><td>Sends stay idempotent because the key derives from the task row, whichever sender is behind it.</td></tr>
+            <tr><td>Deferred exits</td><td><strong>Amazon SQS</strong> · <strong>AWS Step Functions</strong></td><td>The broker at the task-churn trigger and the workflow engine when flow variants multiply — the same triggers Right-sizing named.</td></tr>
+          </tbody>
+        </table>
+      </div>
       <div class="prose">
         <h3>8 · Follow-up questions this design must answer</h3>
         <p>Eight questions that probe exactly where designs like this usually break. Verdict first; the expansion unfolds.</p>
@@ -1151,7 +1187,7 @@ flowchart TB
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
       <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
       <div class="prose">
-        <p><strong>The biggest flaw, named first: one Postgres is a single point of failure — and that is a choice, not an oversight.</strong> This design buys its consistency guarantees with a single writer; when that writer is down, the system stalls. Everything in the cons column below is downstream of taking that trade deliberately.</p>
+        <p><strong>The biggest flaw, named first: one Postgres per region is a single writer, and a single point of failure — and that is a choice, not an oversight.</strong> This design buys its consistency guarantees with a single writer; when that writer is down, the system stalls. Everything in the cons column below is downstream of taking that trade deliberately.</p>
       </div>
       <div class="tradeoffs">
         <div class="col pros">
@@ -1167,13 +1203,14 @@ flowchart TB
         <div class="col cons">
           <h3>What it risks — and how each is blunted</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con"><strong>Postgres is the SPOF.</strong> Chosen consistency over availability: an outage stalls everything. Blunt it: an HA replica with fast failover, point-in-time recovery, and the queue-in-DB property that a stall loses nothing — work drains on return exactly as it does after vendor downtime.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con"><strong>Throughput is capped by vendor contracts and their ~6h/week downtime</strong> — a procurement lever, not an engineering one. Blunt it: queue-and-wait as the designed response, fallback providers with governed weights, per-client rate limits so one tenant cannot burn the shared quota.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con"><strong>Postgres is the SPOF.</strong> Chosen consistency over availability: an outage stalls everything. Blunt it: a synchronous in-region standby with fast failover (dive 4), point-in-time recovery, and the queue-in-DB property that a stall loses nothing — work drains on return exactly as it does after vendor downtime.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con"><strong>Throughput is capped by vendor contracts and their ~6h/week downtime</strong> — a procurement lever, not an engineering one. Blunt it: queue-and-wait as the designed response, fallback providers with governed weights, per-client rate limits so one tenant cannot burn the shared quota — and the re-screening book rides <code>run_after</code> off the live peak, so batch and live screening never compete for the same quota window.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con"><strong>The sanctions collector is a join that can hang</strong> if a leg dies silently. Blunt it: per-leg deadlines, sweeper escalation on overdue legs, and a collector that transitions only on the full set — a hang is bounded by the SLA, then surfaced, never indefinite.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con"><strong>The client's webhook endpoint can be down</strong> while results pile up owed. Blunt it: backoff, a dead delivery state with an alert, the replay endpoint, and the dashboard — at-least-once with a stable <code>eventId</code> makes aggressive redelivery safe.</li>
             <li id="tradeoffs-con-5" data-kb-polarity="con"><strong>Queue-in-DB churns the task table</strong> — dead tuples, vacuum pressure, index bloat as volume grows. Blunt it: partial indexes on pending work, aggressive cleanup of completed tasks, and the measured (not feared) broker exit named in Right-sizing.</li>
             <li id="tradeoffs-con-6" data-kb-polarity="con"><strong>PII concentrates blast radius</strong> in one vault and one database. Blunt it: tokenized references, per-person envelope keys, RLS, a private network segment, and an access papertrail — the public tier holds references, never payloads.</li>
-            <li id="tradeoffs-con-7" data-kb-polarity="con"><strong>Single region, single copy of truth.</strong> A regional outage is downtime, accepted within scope. Blunt it: a documented restore runbook (PITR plus infrastructure-as-code redeploy) with a stated RTO/RPO — and revisit only if a residency or availability requirement actually arrives.</li>
+            <li id="tradeoffs-con-7" data-kb-polarity="con"><strong>Each region is an island — by requirement.</strong> Residency pins a client's data to its region; a regional outage is downtime for that region's clients, and cross-region failover is deliberately out of scope. Blunt it: the in-region synchronous standby for machine failure, and for region-scale loss a documented restore runbook (PITR plus infrastructure-as-code redeploy) with a stated RTO/RPO — the boundary revisited only if an availability requirement ever outranks residency.</li>
+            <li id="tradeoffs-con-8" data-kb-polarity="con"><strong>N regions multiply everything</strong> — cost, operational surface, config drift, and a dashboard view that ends at its region's border. Blunt it: identical infrastructure-as-code stamped per region (configuration varies, code never), the smallest region count the client's jurisdictions allow, and any global rollup as an explicit, PII-free export rather than a quiet cross-region read path.</li>
           </ul>
         </div>
       </div>
@@ -1219,6 +1256,7 @@ flowchart TB
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="workflow-orchestration"><a href="../patterns/distributed/coordination/workflow-orchestration.html">Workflow Orchestration</a><span class="rel-note">the flow row plus its task queue is a hand-rolled durable orchestrator — every transition is persisted, so a crash or deploy resumes mid-flow instead of restarting it</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="outbox"><a href="../patterns/distributed/coordination/outbox.html">Outbox</a><span class="rel-note">every state transition commits with its outbox event in one Postgres transaction, closing the write-then-crash-before-publish gap</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="inbox"><a href="../patterns/distributed/coordination/inbox.html">Inbox</a><span class="rel-note">every vendor callback lands as an inbox row unique on flow, step and the provider's own request id, in the same transaction as its effect — so a duplicate that arrives before the outbox write still collides</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="replication"><a href="../patterns/distributed/coordination/replication.html">Replication</a><span class="rel-note">a synchronous in-region standby gives the single writer failover without giving up its consistency stance</span></div>
         </div>
       </div>
 
@@ -1263,6 +1301,7 @@ flowchart TB
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="kiss"><a href="../principles/kiss.html">Keep It Simple (KISS)</a><span class="rel-note">one Postgres and stateless workers carry a confirmed hundred onboardings a week; every rejected broker and engine is priced against that number, with named exits instead of early adoption</span></div>
         </div>
       </div>
+
 
 
 </section>
