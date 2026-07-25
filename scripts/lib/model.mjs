@@ -17,15 +17,15 @@ export const KB_NAME = "Patterns KB";
 /* Blocks each kind of page is expected to carry, in order. The section id doubles as
  * the anchor and the semantic key, so this is both a vocabulary and a lint rule. */
 export const BLOCKS = {
-  pattern:   ["description", "structure", "variations", "tradeoffs", "usage", "sketch", "wild", "production", "relationships", "fluency"],
-  hazard:    ["description", "causes", "cost", "mitigation"],
-  theme:     ["framing", "architecture", "tradespace", "tour", "decide", "siblings"],
-  principle: ["statement", "rationale", "applying", "overreach", "relationships"],
+  pattern:   ["description", "explain", "structure", "variations", "tradeoffs", "usage", "sketch", "wild", "production", "relationships", "fluency"],
+  hazard:    ["description", "explain", "causes", "cost", "mitigation"],
+  theme:     ["framing", "explain", "architecture", "tradespace", "tour", "decide", "siblings"],
+  principle: ["statement", "explain", "rationale", "applying", "overreach", "relationships"],
   /* A design is a worked case study — a whole system broken down the way a strong
    * interview answer would: requirements, a diagram of how it is built, the hard
    * sub-problems argued out, and the patterns it puts to work (via the typed
    * `relationships` block, so `kb.mjs link … demonstrates …` wires both sides). */
-  design:    ["problem", "requirements", "sizing", "entities", "interface", "architecture", "deepdives", "tradeoffs", "levels", "relationships"],
+  design:    ["problem", "explain", "requirements", "sizing", "entities", "interface", "architecture", "deepdives", "tradeoffs", "levels", "relationships"],
 };
 /* Blocks that may legitimately be absent. `fluency` is only on patterns that a theme
  * tours; `wild` and `production` only where honest content exists; `architecture` is
@@ -33,8 +33,33 @@ export const BLOCKS = {
  * of how it is built. On a design, `sizing` (right-sizing: capabilities → numbers →
  * cheapest shape) and `interface` (the API surface) lean system-design and a
  * low-level-design page may skip them, and `levels` (the Mid/Senior/Staff rubric) is
- * optional everywhere; the rest are mandatory. */
-export const OPTIONAL_BLOCKS = new Set(["fluency", "wild", "production", "architecture", "sizing", "interface", "levels"]);
+ * optional everywhere; `explain` (the three-level ladder) is optional while the corpus
+ * is being swept; the rest are mandatory. */
+export const OPTIONAL_BLOCKS = new Set(["fluency", "wild", "production", "architecture", "sizing", "interface", "levels", "explain"]);
+
+/* ---- reading levels ----
+ * Every page can be read at three depths. `data-kb-level` on an element means
+ * "visible from this level up" (min-level progressive disclosure): the expert lens
+ * shows everything, the basic lens only what is untagged or tagged basic. An element
+ * with NO level is universal — tagging is additive, so an unswept page renders fully
+ * at every lens. The vocabulary is CLOSED, like TAGS and the relation verbs. */
+export const LEVELS = ["basic", "advanced", "expert"];   // ordered, ascending depth
+export const LEVEL_LABELS = { basic: "Basic", advanced: "Advanced", expert: "Expert" };
+/** Rank of a level for comparisons; unknown levels rank as -1. */
+export const levelRank = (l) => LEVELS.indexOf(l);
+
+/* Per-kind block visibility policy: the minimum level at which a block is shown.
+ * Unlisted blocks are always visible. build-pages.mjs STAMPS these onto the block
+ * sections as data-kb-level (generated, like data-kb-polarity) — the policy lives
+ * here, once, and never per page. Finer, per-element levels are AUTHORED with
+ * `kb.mjs level` and are never touched by the stamp. */
+export const BLOCK_LEVELS = {
+  pattern:   { variations: "advanced", production: "expert", fluency: "advanced" },
+  hazard:    {},                                           // hazards stay fully visible
+  theme:     { tradespace: "advanced", siblings: "advanced" },
+  principle: { overreach: "advanced" },
+  design:    { sizing: "advanced", deepdives: "advanced", levels: "expert" },
+};
 
 /* Tags are a CLOSED vocabulary, like the relation verbs. They exist to group and
  * filter — a tag used on one page groups nothing. The first sweep of this KB was

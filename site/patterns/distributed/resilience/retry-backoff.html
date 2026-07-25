@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
   <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -141,7 +142,7 @@ flowchart TB
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Fixed delay</dt>
@@ -206,34 +207,48 @@ flowchart TB
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — exponential backoff with full jitter</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">type RetryOptions = {
-  maxAttempts?: number;
-  baseMs?: number;
-  maxMs?: number;
-};
+        <summary>TypeScript — backoff with full jitter, written to a queue column</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">const MAX_ATTEMPTS = 5, BASE_MS = 200, MAX_MS = 15 * 60_000;
 
-async function withRetry&lt;T&gt;(
-  fn: () =&gt; Promise&lt;T&gt;,
-  { maxAttempts = 5, baseMs = 200, maxMs = 8_000 }: RetryOptions = {},
-): Promise&lt;T&gt; {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (attempt &gt;= maxAttempts || !isTransient(err)) throw err;
-      const backoff = Math.min(maxMs, baseMs * 2 ** attempt);
-      const jitteredMs = Math.random() * backoff; // full jitter
-      await sleep(jitteredMs);
+// The delay is a column, not a sleep. The worker hands the row back and moves
+// on; whichever replica claims it after run_after is the one that retries.
+function nextRunAfter(attempts: number): Date {
+  const backoff = Math.min(MAX_MS, BASE_MS * 2 ** attempts);
+  return new Date(Date.now() + Math.random() * backoff); // full jitter
+}
+
+async function runTask(db: Db, task: Task): Promise&lt;void&gt; {
+  try {
+    await execute(task);          // call idVendor, or deliver the client webhook
+    await db.query(`UPDATE task SET status = 'done' WHERE id = $1`, [task.id]);
+  } catch (err) {
+    const attempts = task.attempts + 1;
+    if (!isTransient(err)) {
+      await db.query(
+        `UPDATE task SET status = 'dead', attempts = $2 WHERE id = $1`,
+        [task.id, attempts]);
+      return;
     }
+    // Transient: back to pending with a later run_after. Once attempts are
+    // exhausted it simply stops being claimed, and the sweeper escalates it.
+    await db.query(
+      `UPDATE task SET status = 'pending', locked_at = NULL,
+              attempts = $2, run_after = $3
+        WHERE id = $1`,
+      [task.id, attempts, nextRunAfter(attempts)]);
   }
 }
 
-const sleep = (ms: number) =&gt;
-  new Promise&lt;void&gt;((resolve) =&gt; setTimeout(resolve, ms));
+// Claiming honours the schedule — a backed-off task is not yet visible at all.
+const claim = `SELECT * FROM task
+                WHERE status = 'pending' AND run_after &lt;= now()
+                  AND attempts &lt; ${MAX_ATTEMPTS}
+                ORDER BY run_after
+                FOR UPDATE SKIP LOCKED LIMIT 1`;
 
 function isTransient(err: unknown): boolean {
-  return err instanceof NetworkError || err instanceof RateLimitError;
+  return err instanceof NetworkError || err instanceof RateLimitError
+      || err instanceof VendorUnavailable;   // breaker open — ask again later
 }</code></pre>
       </details>
     </section>
@@ -247,7 +262,7 @@ function isTransient(err: unknown): boolean {
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -338,7 +353,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Ride out transient failures</span></div>

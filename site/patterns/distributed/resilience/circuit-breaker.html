@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
   <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -115,6 +116,24 @@
       </div>
     </section>
 
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>When another service keeps failing, stop calling it for a while. Like a fuse in a house: after too many faults it trips, your calls fail instantly instead of hanging, and every so often it lets one call through to check whether things have recovered.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>A stateful proxy around a remote dependency counts recent failures. Past a threshold it opens: calls fail fast without touching the network, protecting threads, sockets and latency budgets. After a cooldown it half-opens, lets a probe request through, and closes again on success. It is usually combined with timeouts, retries with backoff, and a fallback.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it when a dependency's failure mode is slow-or-flapping rather than cleanly down — its real value is converting resource exhaustion into fast, bounded failure while giving the dependency room to recover. The cost is tuning: thresholds, windows and probe policy are workload-specific, a mis-tuned breaker flaps or masks recovery, and every open breaker needs a designed fallback path and an alert, or the product degrades silently.</p>
+        </div>
+      </div>
+    </section>
+
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram">
@@ -133,7 +152,7 @@ stateDiagram-v2
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Count-based vs. time-window</dt>
@@ -163,8 +182,8 @@ stateDiagram-v2
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Another stateful component to tune — bad thresholds cause flapping or false trips.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">An open breaker can mask a dependency that's only mildly degraded.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Per-instance breakers don't share state; a cluster may trip unevenly.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">An open breaker can mask a dependency that's only mildly degraded.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Per-instance breakers don't share state; a cluster may trip unevenly.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Needs sensible fallbacks, or "fail fast" just becomes "fail loudly."</li>
           </ul>
         </div>
@@ -197,45 +216,58 @@ stateDiagram-v2
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — a minimal breaker</summary>
+        <summary>TypeScript — one breaker per vendor, state in a shared cache</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">type State = "closed" | "open" | "half-open";
 
-class CircuitBreaker {
-  private state: State = "closed";
-  private failures = 0;
-  private openedAt = 0;
-
+class SharedBreaker {
   constructor(
+    private readonly kv: Kv,          // TTL-capable key-value store, shared by all workers
+    private readonly vendor: string,  // "idVendor" | "sanctionsVendor"
     private readonly threshold = 5,
-    private readonly cooldownMs = 10_000,
+    private readonly cooldownMs = 30_000,
   ) {}
 
-  async call&lt;T&gt;(fn: () =&gt; Promise&lt;T&gt;): Promise&lt;T&gt; {
-    if (this.state === "open") {
-      if (Date.now() - this.openedAt &lt; this.cooldownMs) {
-        throw new Error("circuit open — failing fast");
-      }
-      this.state = "half-open"; // time to probe
+  private key(suffix: string) { return `cb:${this.vendor}:${suffix}`; }
+
+  async call&lt;T&gt;(flowId: string, fn: () =&gt; Promise&lt;T&gt;): Promise&lt;T&gt; {
+    if (await this.state(flowId) === "open") {
+      throw new VendorUnavailable(this.vendor); // fail fast; the task reschedules
     }
     try {
       const result = await fn();
-      this.reset();              // success closes the breaker
+      await this.reset();               // success closes the breaker for everyone
       return result;
     } catch (err) {
-      this.recordFailure();
+      await this.recordFailure();
       throw err;
     }
   }
 
-  private recordFailure() {
-    this.failures++;
-    if (this.state === "half-open" || this.failures &gt;= this.threshold) {
-      this.state = "open";
-      this.openedAt = Date.now();
+  private async state(flowId: string): Promise&lt;State&gt; {
+    if (!(await this.kv.get(this.key("open")))) return "closed";
+    // Exactly one replica wins the probe lease and goes half-open. The rest stay
+    // open, so a recovering vendor sees one request instead of the whole fleet.
+    const won = await this.kv.setIfAbsent(this.key("probe"), flowId, this.cooldownMs);
+    return won ? "half-open" : "open";
+  }
+
+  private async recordFailure() {
+    const failures = await this.kv.incr(this.key("failures"), this.cooldownMs);
+    if (failures &gt;= this.threshold) {
+      await this.kv.set(this.key("open"), "1", this.cooldownMs);
     }
   }
-  private reset() { this.state = "closed"; this.failures = 0; }
-}</code></pre>
+  private async reset() {
+    await Promise.all([this.key("open"), this.key("failures"), this.key("probe")]
+      .map(k =&gt; this.kv.del(k)));
+  }
+}
+
+// One compartment per vendor: a jammed sanctions list never trips ID verification.
+const idBreaker = new SharedBreaker(kv, "idVendor");
+const sanctionsBreaker = new SharedBreaker(kv, "sanctionsVendor");
+
+await idBreaker.call(flowId, () =&gt; verifyDocument(personaId, deadline));</code></pre>
       </details>
     </section>
 
@@ -248,7 +280,7 @@ class CircuitBreaker {
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -334,7 +366,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Stop hammering a failing dependency so the system degrades gracefully.</span></div>

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../assets/tokens.css">
   <link rel="stylesheet" href="../../assets/pattern.css">
   <script src="../../assets/theme.js"></script>
+  <script src="../../assets/lens.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -133,7 +134,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1"><a href="../distributed/resilience/retry-backoff.html">Retry with Backoff</a>, then dead-letter</dt>
@@ -196,30 +197,32 @@ flowchart LR
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — divert after exhausted attempts</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">interface Message&lt;T&gt; {
+        <summary>TypeScript — parking a KYC task that ran out of attempts</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface Task {
   id: string;
-  body: T;
+  flowId: string;
+  type: "verify_id" | "check_list" | "deliver_webhook";
   attempts: number;
 }
 
 const MAX_ATTEMPTS = 5;
 
-async function process(msg: Message&lt;unknown&gt;): Promise&lt;void&gt; {
+async function runTask(task: Task): Promise&lt;void&gt; {
   try {
-    await handle(msg.body);
-    await mainQueue.ack(msg.id);           // done, remove from channel
+    await handle(task);                          // e.g. call idVendor
+    await tasks.complete(task.id);
   } catch (err) {
-    msg.attempts++;
-    if (msg.attempts &gt;= MAX_ATTEMPTS) {
-      await deadLetterQueue.publish({
-        ...msg,
-        failedAt: new Date().toISOString(),
-        reason: String(err),
-      });
-      await mainQueue.ack(msg.id);         // stop retrying, it's quarantined
+    if (task.attempts &gt;= MAX_ATTEMPTS) {
+      // 'dead' is a parking state, not a delete: the row keeps its flow_id,
+      // attempts and last error, so it is re-runnable once the cause is fixed.
+      await tasks.park(task.id, { reason: String(err), at: new Date() });
+      await flows.transition(task.flowId, "dead");
+      await alerts.operator(`task ${task.id} dead on flow ${task.flowId}`);
+      if (task.type !== "deliver_webhook") {     // don't dead-letter a dead letter
+        await outbox.append(task.flowId, { type: "verification.failed" });
+      }
     } else {
-      await mainQueue.nack(msg.id);        // redeliver for another attempt
+      await tasks.retryLater(task.id);           // back to pending with backoff
     }
   }
 }</code></pre>
@@ -235,7 +238,7 @@ async function process(msg: Message&lt;unknown&gt;): Promise&lt;void&gt; {
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -314,7 +317,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="resilience"><a href="../../themes/resilience.html">Resilience</a><span>Quarantine what can't be processed</span></div>

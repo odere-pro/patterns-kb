@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 /* build-pages.mjs — refreshes the generated regions inside each page.
  *
- * Two regions, both derived from what the page already says, so neither can disagree
+ * Three regions, all derived from what the page already says, so none can disagree
  * with it:
  *   - element-level ids + data-kb-polarity on trade-off / usage / variation items,
  *     which give every claim a stable citation target (…#tradeoffs-con-2) and let a
  *     reader pull one item instead of a whole page.
+ *   - section-level data-kb-level, stamped from the BLOCK_LEVELS policy in
+ *     lib/model.mjs (and removed where the policy no longer applies). Authored
+ *     data-kb-level lives on finer elements only and is never touched here.
  *   - a JSON-LD block in <head>, projected from the data-kb-* attributes. It is never
  *     hand-written; that is what keeps it honest.
  *
@@ -13,16 +16,20 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { VOCAB_NS, KB_NAME } from "./lib/model.mjs";
+import { VOCAB_NS, KB_NAME, BLOCK_LEVELS } from "./lib/model.mjs";
 import { blockProblems } from "./lib/validate.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
  * the kb:generated markers (and any comment an author writes). */
 const PARSE_OPTS = { comment: true };
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* KB_ROOT lets the smoke tests point the builder at a fixture corpus; normal runs
+ * resolve the repo root from this file's own location. Same contract as build.mjs. */
+const ROOT = process.env.KB_ROOT
+  ? resolve(process.env.KB_ROOT)
+  : join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = join(ROOT, "site");
 const CHECK = process.argv.includes("--check");
 const graph = JSON.parse(readFileSync(join(SITE, "assets", "graph.json"), "utf8"));
@@ -90,7 +97,7 @@ function jsonLdFor(node) {
   return ld;
 }
 
-let changed = 0, stale = [], idsStamped = 0;
+let changed = 0, stale = [], idsStamped = 0, levelsStamped = 0;
 const problems = [];
 
 for (const node of Object.values(graph.nodes)) {
@@ -110,6 +117,27 @@ for (const node of Object.values(graph.nodes)) {
       el.setAttribute("id", `${block}-${polarity ?? "item"}-${i + 1}`);
       if (polarity) el.setAttribute("data-kb-polarity", polarity);
       idsStamped++;
+    });
+  }
+
+  /* ---- reading-level stamps ----
+   * Section-level data-kb-level is GENERATED from the BLOCK_LEVELS policy — block
+   * visibility is decided once, in lib/model.mjs, never per page. Sections outside
+   * the policy get the attribute removed, so a policy change is self-cleaning. */
+  const policy = BLOCK_LEVELS[node.kind] ?? {};
+  for (const sec of root.querySelectorAll("[data-kb-block]")) {
+    const b = sec.getAttribute("data-kb-block");
+    if (b === "explain") continue; // its items carry the levels, not the section
+    if (policy[b]) { sec.setAttribute("data-kb-level", policy[b]); levelsStamped++; }
+    else if (sec.getAttribute("data-kb-level") != null) sec.removeAttribute("data-kb-level");
+  }
+
+  /* ---- explain-item ids: the ladder's citation anchors (…#explain-basic) ---- */
+  const explainSec = root.querySelector('[data-kb-block="explain"]');
+  if (explainSec) {
+    explainSec.querySelectorAll(".explain-item").forEach((el) => {
+      const lv = el.getAttribute("data-kb-level");
+      if (lv) { el.setAttribute("id", `explain-${lv}`); idsStamped++; }
     });
   }
 
@@ -140,5 +168,5 @@ if (CHECK) {
   }
   console.log("pages are up to date.");
 } else {
-  console.log(`pages refreshed: ${changed} written, ${idsStamped} element ids stamped.`);
+  console.log(`pages refreshed: ${changed} written, ${idsStamped} element ids + ${levelsStamped} level stamps.`);
 }

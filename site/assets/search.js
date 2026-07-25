@@ -8,6 +8,10 @@
  * a match stays in its band and group — you keep seeing WHERE a pattern sits, which is
  * the whole point of an elevation map.
  *
+ * Parity note: kb.mjs `find` is this scorer's CLI twin. Its --level flag scopes the
+ * *prose* index, which this catalog-only search never reads, so the reading-level lens
+ * needs no counterpart here — keep the scoring itself in sync though.
+ *
  * Scoring mirrors scripts/kb.mjs: `solves` phrases are written as symptoms, so a whole
  * complaint ("one slow dependency blocks my threads") searches better than keywords, and
  * naming a pattern is weighted differently from describing one.

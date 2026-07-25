@@ -94,11 +94,11 @@ Fixed vocabulary, fixed order, per kind — see `BLOCKS` in `scripts/lib/model.m
 
 | kind | blocks |
 |---|---|
-| pattern | `description` `structure` `variations` `tradeoffs` `usage` `sketch` `wild`* `production`* `relationships` `fluency`* |
-| hazard | `description` `causes` `cost` `mitigation` |
-| theme | `framing` `architecture`* `tradespace` `tour` `decide` `siblings` |
-| principle | `statement` `rationale` `applying` `overreach` `relationships` |
-| design | `problem` `requirements` `sizing`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
+| pattern | `description` `explain`* `structure` `variations` `tradeoffs` `usage` `sketch` `wild`* `production`* `relationships` `fluency`* |
+| hazard | `description` `explain`* `causes` `cost` `mitigation` |
+| theme | `framing` `explain`* `architecture`* `tradespace` `tour` `decide` `siblings` |
+| principle | `statement` `explain`* `rationale` `applying` `overreach` `relationships` |
+| design | `problem` `explain`* `requirements` `sizing`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
 
 `*` optional. A **design** is a worked case study (a system-design or low-level-design kata):
 `problem` frames it, `requirements` states FR + NFR, `sizing` ("Right-sizing") argues from those
@@ -136,6 +136,46 @@ attributing it to a product. Signals must be observable quantities, not aspirati
 invent a metric name, default value, or product feature. When unsure, omit — a three-item
 list of true things beats a five-item list with one lie. Conceptual pages (GoF, functional)
 may skip the block entirely; a forced block is how fabrication happens.
+
+## Reading levels
+
+Every page can be read at three depths — the closed `LEVELS` vocabulary in
+`scripts/lib/model.mjs`: **`basic`** (a junior's plain-language entry point), **`advanced`**
+(a senior's register: professional, to the point, tech and architectural detail),
+**`expert`** (a staff register: impact, why and when to choose, tradeoffs).
+`data-kb-level` on an element means **"visible from this level up"** (min-level progressive
+disclosure); an element with no level is universal and shows at every lens. The site's lens
+toggle (lens.js) and the reader's `--level` flag both honour it:
+
+```
+node scripts/kb.mjs get circuit-breaker --level basic     # the junior's page
+node scripts/kb.mjs find "cache is stale" --level basic   # search only basic-visible prose
+```
+
+One attribute, two provenances — never confuse them:
+
+- **Sections** (`<section data-kb-block=…>`) are **stamped** from the per-kind
+  `BLOCK_LEVELS` policy in `scripts/lib/model.mjs` (generated, like `data-kb-polarity`).
+  To change which blocks a level sees, edit the policy and run `make all` — never the page.
+- **Finer elements** (a `li`, a `p`) are **authored**, through the writer:
+  `node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>`.
+  Tag sparingly and only where a line genuinely serves one audience — an expert-only
+  operational nuance, an advanced-only mechanism detail. Untagged is the right default.
+
+**`explain`** (optional, all kinds) — the three-level ladder block, one short paragraph per
+level, written through the validated writer (which replaces the whole block — re-supply all
+three on edit; three empty strings removes it):
+
+```
+node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"
+```
+
+Register rules: `basic` uses plain words and everyday comparison, no jargon, no pattern
+names; `advanced` names the mechanism precisely in one breath; `expert` argues impact,
+selection criteria and the tradeoff bill. `make check` fails an explain block that does not
+hold exactly one `.explain-item` per level in basic → advanced → expert order. The
+`explain` ladder is a different thing from a design's `levels` block (the Mid/Senior/Staff
+interviewer rubric); both may exist on a design page.
 
 ## Relationships
 

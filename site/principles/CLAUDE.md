@@ -5,7 +5,7 @@ rule of thumb for writing good code at any elevation (SOLID, DRY, KISS, YAGNI, a
 
 Pages here: composition-over-inheritance, dependency-inversion, dry, interface-segregation, kiss, law-of-demeter, liskov-substitution, open-closed, separation-of-concerns, single-responsibility, yagni
 
-Blocks, in order: `statement` → `rationale` → `applying` → `overreach` → `relationships`.
+Blocks, in order: `statement` → `explain` → `rationale` → `applying` → `overreach` → `relationships`.
 
 A principle carries `data-kb-solves` (symptomatic search phrases) like a pattern, and links
 into the typed relationship graph — most often it `combines-with` a pattern that embodies it,

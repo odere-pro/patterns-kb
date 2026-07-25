@@ -53,6 +53,11 @@ its location.
 Read a page with \`node ${up(dir)}scripts/kb.mjs get <id>\` — never open the .html to read it
 (that costs ~3.6k tokens of markup for ~1.2k of prose).
 
+Reading levels: the optional \`explain\` block ladders a page as basic → advanced → expert,
+and \`data-kb-level\` marks the level an element appears from. Section-level values are
+stamped from \`BLOCK_LEVELS\` in \`scripts/lib/model.mjs\` (generated — change the policy, not
+the page); element-level values are authored via \`kb.mjs level\`.
+
 See the root CLAUDE.md for the data contract before editing anything here.
 `;
 }
@@ -103,7 +108,10 @@ system down the way a strong interview answer would, and \`demonstrates\` the pa
 Pages here: ${list.map((n) => n.id).sort().join(", ")}
 
 Blocks, in order: ${BLOCKS.design.map((b) => `\`${b}\``).join(" → ")}.
-Optional: \`sizing\`, \`interface\`, \`levels\` — a low-level-design kata may skip the first two.
+Optional: \`sizing\`, \`interface\`, \`levels\`, \`explain\` — a low-level-design kata may skip
+the first two. \`levels\` is the interviewer rubric (Mid/Senior/Staff expectations);
+\`explain\` is the three-level reading ladder (basic/advanced/expert) — they are different
+blocks and both may exist.
 
 The \`architecture\` block carries the primary mermaid diagram (a \`flowchart\` for a distributed
 design, a \`classDiagram\` for a low-level one). A design links to the patterns it uses through the

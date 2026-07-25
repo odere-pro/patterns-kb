@@ -69,6 +69,9 @@
   render();
 
   document.addEventListener("kb-theme-change", rerender);
+  // A diagram revealed by the reading-level lens may have rendered at zero width
+  // while hidden — re-render so it lays out at real size.
+  document.addEventListener("kb-lens-change", rerender);
   if (window.matchMedia) {
     var mq = window.matchMedia("(prefers-color-scheme: dark)");
     if (mq.addEventListener) mq.addEventListener("change", rerender);

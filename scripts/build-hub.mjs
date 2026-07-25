@@ -132,6 +132,7 @@ const html = `<!doctype html>
   <link rel="stylesheet" href="assets/tokens.css">
   <link rel="stylesheet" href="assets/hub.css">
   <script src="assets/theme.js"></script>
+  <script src="assets/lens.js"></script>
 </head>
 <body>
 <div class="page">

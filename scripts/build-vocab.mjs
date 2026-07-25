@@ -26,6 +26,7 @@ const PROPS = [
   ["in-theme", "A theme whose tour visits this pattern. The inverse of <code>kb:tours</code>."],
   ["tours", "A pattern this theme's tour visits. The inverse of <code>kb:in-theme</code>."],
   ["polarity", "Which side of a two-sided block an item sits on — <code>pro</code>/<code>con</code>, <code>when</code>/<code>avoid</code>."],
+  ["level", "The minimum reading level an element is shown from — <code>basic</code>, <code>advanced</code>, or <code>expert</code>. Absent means visible at every level. Section-level values are stamped from the per-kind policy in <code>lib/model.mjs</code>; element-level values are authored."],
 ];
 
 const relRows = Object.entries(RELATION_TYPES).map(([type, d]) => {
@@ -53,6 +54,7 @@ const html = `<!doctype html>
   <link rel="stylesheet" href="assets/tokens.css">
   <link rel="stylesheet" href="assets/pattern.css">
   <script src="assets/theme.js"></script>
+  <script src="assets/lens.js"></script>
 </head>
 <body class="doc">
   <main class="doc-wrap">
@@ -76,7 +78,7 @@ const html = `<!doctype html>
       <h2 class="doc-h" id="h-how">How a page describes itself</h2>
       <div class="prose">
         <p>Data lives in <code>data-kb-*</code> attributes; <code>class</code> is presentation and carries no meaning. The two never touch, so restyling cannot damage knowledge and re-authoring prose cannot damage structure.</p>
-        <p>A page carries metadata at three levels: the document root declares identity (<code>data-kb-id</code>, <code>kind</code>, <code>band</code>, <code>group</code>, <code>essence</code>); each <code>&lt;section&gt;</code> declares its block (<code>data-kb-block</code>, whose <code>id</code> is both anchor and semantic key); and individual items declare their own facts — a relationship (<code>data-kb-rel</code> / <code>data-kb-to</code>) or which side of a trade-off they argue (<code>data-kb-polarity</code>).</p>
+        <p>A page carries metadata at three levels: the document root declares identity (<code>data-kb-id</code>, <code>kind</code>, <code>band</code>, <code>group</code>, <code>essence</code>); each <code>&lt;section&gt;</code> declares its block (<code>data-kb-block</code>, whose <code>id</code> is both anchor and semantic key); and individual items declare their own facts — a relationship (<code>data-kb-rel</code> / <code>data-kb-to</code>), which side of a trade-off they argue (<code>data-kb-polarity</code>), or the reading level they appear from (<code>data-kb-level</code>).</p>
         <p>The <code>&lt;script type="application/ld+json"&gt;</code> block in every page's <code>&lt;head&gt;</code> is projected from those attributes. It is generated, never hand-written — which is what keeps it honest.</p>
       </div>
     </section>

@@ -32,6 +32,8 @@ node scripts/kb.mjs set <id> --aliases '[…]' --tags '[…]' --solves '[…]'
 node scripts/kb.mjs wild <id> --items '[{"id":…,"name":…,"note":…}]'
 node scripts/kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
 node scripts/kb.mjs link <from> <verb> <to> --note "…" --note-back "…"
+node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"
+node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>
 ```
 
 It validates the JSON before it lands and never guesses placement. Prose inside a block you
@@ -59,6 +61,21 @@ have searched it.
 ships to a public site. Include an entry only if you are confident from your own knowledge
 that it exists *and* genuinely exemplifies the pattern. **If in doubt, leave it out** — a
 missing block is fine and expected.
+
+**The `explain` block speaks three registers, and mixing them wastes it.** One short
+paragraph per level, written via `kb.mjs explain`:
+
+- `basic` — a junior's entry point: plain words, an everyday comparison if it helps, no
+  jargon, no pattern names. A smart newcomer should get it on one read.
+- `advanced` — a senior's register: name the mechanism precisely and get to the point;
+  tech and architectural detail belong here.
+- `expert` — a staff register: impact, why and when to choose it, and the tradeoff bill.
+  What does adopting this cost, and what failure mode does the choice buy?
+
+Each rung must stand alone — the basic lens shows only the basic rung. `data-kb-level` on
+finer elements is authored via `kb.mjs level`, sparingly: tag a line only when it genuinely
+serves one audience. Untagged (visible everywhere) is the right default. Section-level
+levels are stamped from `BLOCK_LEVELS` policy — never set them per page.
 
 **The `production` block is where a system builder learns to RUN the pattern.** Four labeled
 lists — Tuning knobs, Signals to watch, Failure modes under load, Readiness checklist — written

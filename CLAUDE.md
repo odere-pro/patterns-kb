@@ -34,6 +34,10 @@ not context — and prints the line that matched.
 
 Cite precisely: every claim has a stable id (`…/circuit-breaker.html#tradeoffs-con-2`).
 
+Scope any read to a **reading level** with `--level basic|advanced|expert` on `get` and
+`find` — `basic` is the junior entry point, `expert` reads everything. `data-kb-level` on an
+element means "visible from this level up"; untagged means always.
+
 ## Writing it
 
 Go through the validated writer, not hand-edited attribute strings:
@@ -42,7 +46,12 @@ Go through the validated writer, not hand-edited attribute strings:
 node scripts/kb.mjs set <id> --aliases '["breaker","CB"]' --tags '[…]' --solves '[…]'
 node scripts/kb.mjs set <id> --favourite true            # editorial pick: ★ chip + hub filter
 node scripts/kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
+node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   # the 3-level ladder
+node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>   # authored element level
 ```
+
+Section-level `data-kb-level` is **stamped** from `BLOCK_LEVELS` in `scripts/lib/model.mjs`
+— change the policy, never the page.
 
 Then `make all` to regenerate, and `make check` to verify. A hook runs `make check` after any
 edit under `site/` — it takes ~0.8s.
@@ -56,9 +65,10 @@ Each folder under `site/` has its own CLAUDE.md with local rules.
 ## Invariants `make check` enforces
 
 - Relations are **bidirectional** — every relationship is declared on both pages it joins.
-- The relation vocabulary (15 verbs) and the **tag vocabulary** are **closed**.
-  Adding a tag means adding it to `TAGS` in `scripts/lib/model.mjs` first, and only if it
-  will honestly apply to 3+ pages.
+- The relation vocabulary (15 verbs), the **tag vocabulary** and the **level vocabulary**
+  (`basic`/`advanced`/`expert`) are **closed**. Adding a tag means adding it to `TAGS` in
+  `scripts/lib/model.mjs` first, and only if it will honestly apply to 3+ pages.
+- An `explain` block, when present, holds exactly one item per level, in order.
 - A page's **path must match** its `data-kb-band` / `data-kb-group`.
 - No dangling, one-way or contradictory links; every generated artifact in sync.
 

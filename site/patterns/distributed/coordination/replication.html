@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
   <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -197,7 +198,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Single-leader (primary-replica)</dt>
@@ -260,41 +261,46 @@ flowchart LR
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — a primary shipping a log to replicas</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">interface LogEntry {
+        <summary>TypeScript — a single writer shipping its flow log to a synchronous standby</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// A flow's state transition is one log entry. The writer acknowledges
+// it only after the in-region standby has it, so promoting the standby
+// never loses a transition the caller was already told had committed.
+interface LogEntry {
   seq: number;
-  key: string;
-  value: string;
+  flowId: string;
+  state: string;
 }
 
 class Primary {
   private log: LogEntry[] = [];
-  private replicas: Replica[] = [];
+  private standby?: Replica;        // synchronous, in-region
+  private readers: Replica[] = [];  // asynchronous, may lag
 
-  write(key: string, value: string): void {
-    const entry: LogEntry = { seq: this.log.length, key, value };
+  async write(flowId: string, state: string): Promise&lt;void&gt; {
+    const entry: LogEntry = { seq: this.log.length, flowId, state };
     this.log.push(entry);
-    for (const r of this.replicas) r.apply(entry); // ship in commit order
+    await this.standby?.apply(entry);                  // the ack waits here
+    for (const r of this.readers) void r.apply(entry); // ship in commit order
   }
 
-  attach(replica: Replica): void {
-    for (const entry of this.log) replica.apply(entry); // catch up first
-    this.replicas.push(replica);
+  attach(reader: Replica): void {
+    for (const entry of this.log) void reader.apply(entry); // catch up first
+    this.readers.push(reader);
   }
 }
 
 class Replica {
-  private store = new Map&lt;string, string&gt;();
+  private flows = new Map&lt;string, string&gt;();
   private lastSeq = -1;
 
-  apply(entry: LogEntry): void {
+  async apply(entry: LogEntry): Promise&lt;void&gt; {
     if (entry.seq !== this.lastSeq + 1) throw new Error("gap in log");
-    this.store.set(entry.key, entry.value);
+    this.flows.set(entry.flowId, entry.state);
     this.lastSeq = entry.seq;
   }
 
-  read(key: string): string | undefined {
-    return this.store.get(key); // may lag the primary slightly
+  read(flowId: string): string | undefined {
+    return this.flows.get(flowId); // an async reader may lag the primary
   }
 }</code></pre>
       </details>
@@ -309,7 +315,7 @@ class Replica {
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -426,7 +432,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="system-design-interview"><a href="../../../themes/system-design-interview.html">System Design Interview</a><span>Redundancy behind fault tolerance and read scaling</span></div>

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../assets/tokens.css">
   <link rel="stylesheet" href="../../assets/pattern.css">
   <script src="../../assets/theme.js"></script>
+  <script src="../../assets/lens.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -108,7 +109,7 @@ stateDiagram-v2
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Opaque token, server-side store</dt>
@@ -173,40 +174,43 @@ stateDiagram-v2
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — a minimal server-side session store</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">import { randomBytes } from "node:crypto";
+        <summary>TypeScript — a magic link whose session state lives on the server</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">import { createHash, randomBytes } from "node:crypto";
 
-interface Session { userId: string; expiresAt: number }
+interface Session { flowId: string; personaId: string; expiresAt: number; usedAt: number | null }
 
+const sha256 = (s: string) =&gt; createHash("sha256").update(s).digest("hex");
+
+// The onboardee has no account: the link IS the session. Storing only its hash
+// is what lets the server expire, spend and revoke it — a self-validating token could not.
 class SessionStore {
-  private sessions = new Map&lt;string, Session&gt;();
-  constructor(private readonly ttlMs = 30 * 60_000) {}
+  private byHash = new Map&lt;string, Session&gt;();
+  constructor(private readonly ttlMs = 48 * 60 * 60_000) {}
 
-  create(userId: string): string {
-    const id = randomBytes(32).toString("hex"); // opaque, unguessable
-    this.sessions.set(id, { userId, expiresAt: Date.now() + this.ttlMs });
-    return id;
+  create(flowId: string, personaId: string): string {
+    const token = randomBytes(32).toString("base64url"); // only the onboardee ever holds this
+    const expiresAt = Date.now() + this.ttlMs;
+    this.byHash.set(sha256(token), { flowId, personaId, expiresAt, usedAt: null });
+    return token;
   }
 
-  validate(id: string): string | null {
-    const s = this.sessions.get(id);
-    if (!s || s.expiresAt &lt; Date.now()) {
-      this.sessions.delete(id);
-      return null;                        // expired or unknown
+  validate(token: string): Session | null {
+    const s = this.byHash.get(sha256(token));
+    if (!s || s.usedAt || s.expiresAt &lt; Date.now()) return null; // spent, expired or unknown
+    s.usedAt = Date.now();                                        // single use
+    return s;
+  }
+
+  // Resend: the new link supersedes the old one the instant it is minted.
+  rotate(flowId: string, personaId: string): string {
+    for (const [hash, s] of this.byHash) {
+      if (s.flowId === flowId) this.byHash.delete(hash);
     }
-    s.expiresAt = Date.now() + this.ttlMs; // sliding renewal
-    return s.userId;
+    return this.create(flowId, personaId);
   }
 
-  rotate(oldId: string): string | null {
-    const s = this.sessions.get(oldId);
-    if (!s) return null;
-    this.sessions.delete(oldId);           // old id is now dead
-    return this.create(s.userId);          // defeats fixation
-  }
-
-  destroy(id: string): void {
-    this.sessions.delete(id);
+  destroy(token: string): void {
+    this.byHash.delete(sha256(token));
   }
 }</code></pre>
       </details>
@@ -221,7 +225,7 @@ class SessionStore {
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -294,7 +298,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="auth-and-access"><a href="../../themes/auth-and-access.html">Auth &amp; Access</a><span>Carry identity safely across requests</span></div>

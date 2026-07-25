@@ -4,7 +4,7 @@
  * the PostToolUse hook) and `build-pages.mjs` (corpus-wide inside `make check`).
  * Needs no graph.json, so a single page validates in ~50ms.
  */
-import { BLOCKS, OPTIONAL_BLOCKS, TAGS, RELATION_TYPES, folderFor } from "./model.mjs";
+import { BLOCKS, OPTIONAL_BLOCKS, TAGS, RELATION_TYPES, LEVELS, folderFor } from "./model.mjs";
 
 /** Block-vocabulary problems for one page: missing, unknown, out of order. */
 export function blockProblems(present, kind) {
@@ -77,6 +77,19 @@ export function validatePage(root, relPath) {
     const verb = el.getAttribute("data-kb-rel");
     if (!RELATION_TYPES[verb]) p(`unknown relation verb "${verb}"`);
     if (!el.getAttribute("data-kb-to")) p(`relation "${verb}" is missing data-kb-to`);
+  }
+
+  /* Reading levels: a closed vocabulary, and the explain ladder — when present —
+   * is complete and in ascending order. */
+  for (const el of root.querySelectorAll("[data-kb-level]")) {
+    const lv = el.getAttribute("data-kb-level");
+    if (!LEVELS.includes(lv)) p(`data-kb-level "${lv}" is not in the closed vocabulary (${LEVELS.join("/")})`);
+  }
+  const explain = root.querySelector('[data-kb-block="explain"]');
+  if (explain) {
+    const got = explain.querySelectorAll(".explain-item").map((e) => e.getAttribute("data-kb-level"));
+    if (JSON.stringify(got) !== JSON.stringify(LEVELS))
+      p(`explain block needs one .explain-item per level, in ${LEVELS.join(" → ")} order`);
   }
 
   /* The sketch's code declares its language (pre is a raw-text element, so the

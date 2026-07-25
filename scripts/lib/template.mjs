@@ -218,6 +218,7 @@ export function pageSkeleton({ id, name, kind, band, group, order }) {
   <link rel="stylesheet" href="${p}assets/tokens.css">
   <link rel="stylesheet" href="${p}assets/pattern.css">
   <script src="${p}assets/theme.js"></script>
+  <script src="${p}assets/lens.js"></script>
 </head>
 <body class="${bodyClass}">
   <main class="doc-wrap" data-kb-id="${id}" data-kb-kind="${kind}" data-kb-band="${band}" data-kb-group="${group}" data-kb-essence="TODO — the terse one-liner" data-kb-order="${order}">

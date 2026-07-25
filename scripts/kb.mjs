@@ -6,9 +6,10 @@
  * diagrams and navigation chrome and returns the metadata and the prose, so a question
  * costs a couple of thousand tokens instead of hundreds of thousands.
  *
- *   kb.mjs find <query…> [--tag T] [--band B] [--kind K]
+ *   kb.mjs find <query…> [--tag T] [--band B] [--kind K] [--level L]
  *                                 search names, essences, aliases, tags and symptoms
- *   kb.mjs get <id> [--block B]   one page, or one block of it
+ *   kb.mjs get <id> [--block B] [--level L]   one page, or one block of it;
+ *                                 --level basic|advanced|expert scopes to a reading level
  *   kb.mjs related <id>           what it combines with, replaces, is confused for
  *   kb.mjs backlinks <id>         what points here — typed inbound edges + prose mentions
  *   kb.mjs refs [<id> | --file <path>]   what this page points AT, read live off the page:
@@ -20,6 +21,10 @@
  *   kb.mjs set <id> --aliases '["breaker","CB"]' --tags '[…]' --solves '[…]' [--favourite true|false]
  *   kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
  *   kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
+ *   kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   the three-level ladder
+ *                                 (all three empty strings removes the block)
+ *   kb.mjs level <id> <element-id> <basic|advanced|expert|none>   authored element level
+ *                                 (sections get theirs from BLOCK_LEVELS in lib/model.mjs)
  *   kb.mjs link <from> <verb> <to> [--note "…"] [--note-back "…"]   both sides at once
  *   kb.mjs unlink <a> <b>         drop the edge from both pages, whatever verb each used
  *   kb.mjs new <id> --kind pattern|hazard|theme|principle|design --band <b> [--group <g>] --name "…" --order <n>
@@ -31,7 +36,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, REL_ORDER, SYNONYMS, esc, folderFor, band as bandOf } from "./lib/model.mjs";
+import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, esc, folderFor, band as bandOf } from "./lib/model.mjs";
 import { validatePage } from "./lib/validate.mjs";
 import { pageSkeleton } from "./lib/template.mjs";
 
@@ -56,6 +61,16 @@ const positional = argv.filter((a, i) =>
 const AS_JSON = flag("json");
 const WITH_DIAGRAMS = flag("diagrams");
 
+/* --level scopes get/find to a reading level. data-kb-level means "visible from this
+ * level up"; no attribute means visible everywhere, so no --level (or expert) reads
+ * the whole page. */
+const LEVEL = opt("level");
+if (LEVEL && !LEVELS.includes(LEVEL)) {
+  console.error(`--level "${LEVEL}" is not a level — use ${LEVELS.join("/")}`);
+  process.exit(1);
+}
+const visibleAt = (elLevel, lens) => !elLevel || LEVELS.indexOf(elLevel) <= LEVELS.indexOf(lens);
+
 /* ---------------- html -> text ---------------- */
 const NOISE = "script, style, link, .crumb, .docnav, .doc-metarow, .practice";
 const inline = (el) => el.text.replace(/\s+/g, " ").trim();
@@ -66,14 +81,22 @@ const STOP = new Set(["the", "and", "for", "are", "but", "not", "you", "all", "a
 
 /* Sentence-level index of a page's visible prose, built on demand. */
 const proseCache = new Map();
-function prose(path) {
-  if (proseCache.has(path)) return proseCache.get(path);
+function prose(path, level = null) {
+  /* The cache key carries the level — the same path scoped to two different levels
+   * holds two different texts, and a path-only key would serve the wrong one. */
+  const key = level ? `${path}@${level}` : path;
+  if (proseCache.has(key)) return proseCache.get(key);
   const full = parse(readFileSync(join(SITE, path), "utf8"), PARSE_OPTS);
   // Only the visible document — <head> would otherwise contribute the title and the
   // JSON-LD, matching every query against machine metadata rather than prose.
   const root = full.querySelector("main") ?? full;
   for (const n of root.querySelectorAll(NOISE)) n.remove();
   for (const n of root.querySelectorAll("figure.diagram")) n.remove();
+  if (level) {
+    for (const n of root.querySelectorAll("[data-kb-level]")) {
+      if (!visibleAt(n.getAttribute("data-kb-level"), level)) n.remove();
+    }
+  }
   const text = root.text.replace(/[ \t]+/g, " ");
   const lines = text.split(/\n|(?<=[.!?])\s+/).map((l) => l.trim()).filter((l) => l.length > 25);
   const hits = new Map();
@@ -86,7 +109,7 @@ function prose(path) {
     }
   }
   const v = { hits };
-  proseCache.set(path, v);
+  proseCache.set(key, v);
   return v;
 }
 
@@ -169,6 +192,14 @@ function blockText(sec) {
   const clone = parse(sec.toString(), PARSE_OPTS);
   for (const n of clone.querySelectorAll(NOISE)) n.remove();
   for (const h of clone.querySelectorAll("h2")) h.remove();   // the block name is the heading
+  if (LEVEL) {
+    /* Prune elements above the requested level. The section's own (stamped) level is
+     * whole-block visibility — readPage decides that; here only inner elements go. */
+    for (const n of clone.querySelectorAll("[data-kb-level]")) {
+      if (n.getAttribute("data-kb-block")) continue;
+      if (!visibleAt(n.getAttribute("data-kb-level"), LEVEL)) n.remove();
+    }
+  }
   return render(clone).join("").replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -193,6 +224,8 @@ function readPage(id) {
   const root = parse(readFileSync(join(SITE, node.path), "utf8"), PARSE_OPTS);
   const blocks = {};
   for (const sec of root.querySelectorAll("[data-kb-block]")) {
+    /* A section whose stamped level sits above the requested one is out of scope. */
+    if (LEVEL && !visibleAt(sec.getAttribute("data-kb-level"), LEVEL)) continue;
     blocks[sec.getAttribute("data-kb-block")] = blockText(sec);
   }
   return { node, root, blocks };
@@ -213,7 +246,10 @@ if (cmd === "get") {
   if (AS_JSON) {
     console.log(JSON.stringify({
       id: node.id, name: node.name, kind: node.kind, band: node.band, group: node.group,
-      essence: node.essence, path: node.path, blocks: picked,
+      essence: node.essence, path: node.path,
+      ...(LEVEL ? { level: LEVEL } : {}),
+      ...(node.levels ? { levels: node.levels } : {}),
+      blocks: picked,
       relations: relationsOf(root), themes: node.themes,
     }, null, 2));
   } else {
@@ -253,7 +289,7 @@ if (cmd === "get") {
 
   if (!q) {
     /* A filter with no query is a listing, not a search. */
-    if (!fTag && !fBand && !fKind) { console.error("usage: kb.mjs find <query…> [--tag T] [--band B] [--kind K]"); process.exit(1); }
+    if (!fTag && !fBand && !fKind) { console.error("usage: kb.mjs find <query…> [--tag T] [--band B] [--kind K] [--level L]"); process.exit(1); }
     if (AS_JSON) console.log(JSON.stringify(candidates, null, 2));
     else {
       for (const n of candidates) console.log(`${n.id.padEnd(28)} ${n.essence}`);
@@ -285,7 +321,7 @@ if (cmd === "get") {
     let score = 0;
     if (n.id === q || n.name.toLowerCase() === q || (n.aliases ?? []).some((a) => a.toLowerCase() === q)) score += 100;
 
-    const body = prose(n.path);
+    const body = prose(n.path, LEVEL);
     let why = null, matched = 0;
     for (const term of terms) {
       /* Score the term itself at full weight, then its synonyms at half; a term
@@ -324,7 +360,7 @@ if (cmd === "get") {
     }
     console.log(`\n${scored.length} match(es). Next: kb.mjs get <id> [--block usage]`);
   }
-} else if (cmd === "set" || cmd === "wild" || cmd === "production") {
+} else if (cmd === "set" || cmd === "wild" || cmd === "production" || cmd === "explain" || cmd === "level") {
   /* Writing goes through here rather than hand-edited attribute strings: the JSON is
    * validated before it lands, placement is never guessed, and it is idempotent. */
   const graph = load("graph.json");
@@ -402,7 +438,7 @@ ${rows}
       writeFileSync(file, out);
       console.log(`${node.id}: wild = ${items.length} example(s)`);
     }
-  } else {
+  } else if (cmd === "production") {
     /* production — the system-builder block. Four labeled lists; the writer replaces
      * the whole block, so re-supply every list on edit. All-empty removes it. */
     const labeled = (v) =>
@@ -454,6 +490,73 @@ ${rows}
       writeFileSync(file, out);
       console.log(`${node.id}: production = ${groups.map(([c, , i]) => `${c.replace("prod-", "")}:${i.length}`).join(" ")}`);
     }
+  } else if (cmd === "explain") {
+    /* explain — the three-level reading ladder. One prose paragraph per level; the
+     * writer replaces the whole block, so re-supply all three on edit. All three
+     * empty removes it. */
+    const texts = LEVELS.map((l) => opt(l));
+    if (texts.some((t) => t == null)) {
+      console.error(`pass all three: ${LEVELS.map((l) => `--${l} "…"`).join(" ")} (all empty to remove)`);
+      process.exit(1);
+    }
+    const existing = root.querySelector('[data-kb-block="explain"]');
+    const cut = / *<section class="doc-section" id="explain"[\s\S]*?<\/section>\n\n/;
+    if (texts.every((t) => !t.trim())) {
+      if (existing) writeFileSync(file, root.toString().replace(cut, ""));
+      console.log(`${node.id}: explain removed`);
+    } else {
+      if (texts.some((t) => !t.trim())) { console.error("explain needs all three levels — a partial ladder is invalid"); process.exit(1); }
+      const items = LEVELS.map((l, i) =>
+        `        <div class="explain-item" id="explain-${l}" data-kb-level="${l}">
+          <h3>${LEVEL_LABELS[l]}</h3>
+          <p>${esc(texts[i])}</p>
+        </div>`).join("\n");
+      const block = `    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+${items}
+      </div>
+    </section>
+
+`;
+      let out = root.toString();
+      /* explain sits right after the kind's lead block: insert before the first
+       * later block that exists on the page. */
+      const later = BLOCKS[node.kind].slice(BLOCKS[node.kind].indexOf("explain") + 1)
+        .find((b) => root.querySelector(`[data-kb-block="${b}"]`));
+      out = existing
+        ? out.replace(cut, block)
+        : later
+          ? out.replace(new RegExp(`( *<section class="doc-section" id="${later}")`), block + "$1")
+          : out.replace(/(\n *<nav class="docnav")/, "\n" + block + "$1");
+      if (!out.includes('id="explain"')) { console.error(`${node.id}: could not place the block`); process.exit(1); }
+      writeFileSync(file, out);
+      console.log(`${node.id}: explain = ${LEVELS.map((l, i) => `${l}:${texts[i].trim().split(/\s+/).length}w`).join(" ")}`);
+    }
+  } else {
+    /* level — authored element-level reading level. Sections are policy-owned
+     * (BLOCK_LEVELS in lib/model.mjs, stamped by build-pages.mjs) and the explain
+     * ladder's levels are structural, so both are refused here. */
+    const [, , target, level] = positional;
+    if (!target || !level) { console.error("usage: kb.mjs level <id> <element-id> <basic|advanced|expert|none>"); process.exit(1); }
+    if (level !== "none" && !LEVELS.includes(level)) {
+      console.error(`"${level}" is not a level — use ${LEVELS.join("/")} or none`); process.exit(1);
+    }
+    const el = root.querySelector(`[id="${target}"]`);
+    if (!el) { console.error(`${node.id}: no element with id "${target}"`); process.exit(1); }
+    if (el.getAttribute("data-kb-block")) {
+      console.error(`"${target}" is a section — block levels come from BLOCK_LEVELS in scripts/lib/model.mjs, not per page`);
+      process.exit(1);
+    }
+    if (el.closest('[data-kb-block="explain"]')) {
+      console.error(`"${target}" is part of the explain ladder — its levels are structural, edit via kb.mjs explain`);
+      process.exit(1);
+    }
+    if (level === "none") el.removeAttribute("data-kb-level");
+    else el.setAttribute("data-kb-level", level);
+    const out = root.toString();
+    if (out !== src) writeFileSync(file, out);
+    console.log(`${node.id}: ${target} level=${level}${out === src ? " (unchanged)" : ""}`);
   }
 } else if (cmd === "ls") {
   const band = opt("band"), kind = opt("kind");

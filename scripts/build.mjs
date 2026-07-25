@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, FACETS, chipMatches, folderFor } from "./lib/model.mjs";
+import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, FACETS, chipMatches, folderFor, LEVELS, BLOCK_LEVELS } from "./lib/model.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
  * the kb:generated markers (and any comment an author writes). */
@@ -188,6 +188,39 @@ for (const { root, id } of raw) {
   }
 }
 
+/* ---------------- reading levels ----------------
+ * data-kb-level = "visible from this level up". Two provenances, one attribute:
+ * BLOCK_LEVELS policy (stamped onto sections by build-pages.mjs) and authored
+ * element tags. The node's `levels` map merges the policy IN CODE for blocks the
+ * page actually has — build.mjs runs before the stamp, and deriving from the policy
+ * keeps graph.json byte-identical whether or not the stamp has landed yet. */
+for (const { root, id, kind } of raw) {
+  const node = nodes[id];
+  const levels = {};
+  for (const [block, level] of Object.entries(BLOCK_LEVELS[kind] ?? {})) {
+    if (root.querySelector(`[data-kb-block="${block}"]`)) levels[block] = level;
+  }
+  for (const el of root.querySelectorAll("[data-kb-level]")) {
+    const level = el.getAttribute("data-kb-level");
+    if (!LEVELS.includes(level))
+      fail(`${id}: data-kb-level "${level}" is not in the closed vocabulary (${LEVELS.join("/")})`);
+    // Key by stable id (elements) or block name (sections); unkeyed elements are
+    // still validated and still drive the lens, they just have no graph handle.
+    const key = el.getAttribute("id") || el.getAttribute("data-kb-block");
+    if (key) levels[key] = level;
+  }
+  if (Object.keys(levels).length) node.levels = levels;
+
+  const explain = root.querySelector('[data-kb-block="explain"]');
+  if (explain) {
+    const got = explain.querySelectorAll(".explain-item").map((e) => e.getAttribute("data-kb-level"));
+    if (JSON.stringify(got) !== JSON.stringify(LEVELS))
+      fail(`${id}: explain block must hold exactly one .explain-item per level, in ` +
+           `${LEVELS.join(" → ")} order (got: ${got.join(", ") || "none"})`);
+    node.hasExplain = true;
+  }
+}
+
 /* ---------------- theme membership ---------------- */
 for (const { root, id, kind } of raw) {
   if (kind !== "theme") continue;
@@ -281,6 +314,7 @@ const catalog = {
     if (n.tags?.length) e.tags = n.tags;
     if (n.solves?.length) e.solves = n.solves;
     if (n.examples?.length) e.hasExample = true;
+    if (n.hasExplain) e.hasExplain = true;
     return e;
   }),
   // Facet chips resolved to id lists here, so the offline search only intersects sets and

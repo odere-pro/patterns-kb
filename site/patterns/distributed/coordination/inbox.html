@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
   <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -136,7 +137,7 @@ sequenceDiagram
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Synchronous processing</dt>
@@ -199,49 +200,45 @@ sequenceDiagram
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — receiving, storing, and processing with idempotency</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">// Handler receives message and stores it atomically
-async function handleMessage(tx: Transaction, message: Message) {
-  // Same local transaction: inbox row + business row
-  const idempotencyKey = message.id;
-  const existing = await tx.query(
-    "select id from inbox where idempotency_key = $1",
-    [idempotencyKey],
+        <summary>TypeScript — deduping a vendor callback on the sender's request id</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// inbox has a unique index on (flow_id, step, provider_request_id).
+// The collision — not a preceding SELECT — is what makes this safe when
+// two copies of the same callback arrive at once.
+async function onVendorCallback(tx: Transaction, cb: VendorCallback) {
+  const claimed = await tx.query(
+    `insert into inbox (flow_id, step, provider_request_id, payload, received_at)
+     values ($1, $2, $3, $4, now())
+     on conflict (flow_id, step, provider_request_id) do nothing
+     returning flow_id`,
+    [cb.flowId, cb.step, cb.providerRequestId, JSON.stringify(cb)],
   );
-  if (existing.rows.length > 0) {
-    // Already processed (broker retransmitted); return idempotently
-    return;
-  }
+  if (claimed.rows.length === 0) return;   // duplicate — no-op
 
-  // processed = true: effects apply below, in this same transaction.
-  // (Deferred processing would insert false for a background job to pick up.)
+  // Same transaction as the claim: the dedupe key, the flow transition
+  // and the client webhook event commit together, or none of them do.
   await tx.query(
-    `insert into inbox (id, idempotency_key, message, processed, received_at)
-     values ($1, $2, $3, true, now())`,
-    [randomUUID(), idempotencyKey, JSON.stringify(message)],
+    "update flow set state = $1 where id = $2",
+    [nextState(cb), cb.flowId],
   );
-
-  // Apply business logic
   await tx.query(
-    "insert into orders (id, status) values ($1, $2)",
-    [message.orderId, "received"],
+    `insert into outbox (id, flow_id, topic, payload, published)
+     values ($1, $2, $3, $4, false)`,
+    [randomUUID(), cb.flowId, `persona.${cb.step}`, JSON.stringify(cb.result)],
   );
-  // Both rows commit together, or neither does.
 }
 
-// Consume loop: commit first, then ack the delivery we are holding.
-// Acks are bound to the delivery — nothing can ack "later" by message id.
-async function onDelivery(db: Db, delivery: Delivery) {
-  await db.transaction((tx) => handleMessage(tx, delivery.message));
-  // Crash before this line? The broker redelivers, handleMessage() sees
-  // the recorded idempotency key, and the effects are not applied twice.
+// Commit first, then ack the delivery in hand.
+async function onDelivery(db: Db, delivery: Delivery&lt;VendorCallback&gt;) {
+  await db.transaction((tx) =&gt; onVendorCallback(tx, delivery.body));
+  // Crash before this line? The vendor retries, the insert collides,
+  // and the flow does not advance twice.
   await delivery.ack();
 }
 
 // Cleanup job: age out inbox rows once the deduplication window has passed
 async function cleanupInbox(db: Db, retentionDays: number) {
   await db.query(
-    "delete from inbox where received_at < now() - make_interval(days => $1)",
+    "delete from inbox where received_at &lt; now() - make_interval(days =&gt; $1)",
     [retentionDays],
   );
 }</code></pre>
@@ -256,7 +253,7 @@ async function cleanupInbox(db: Db, retentionDays: number) {
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -352,7 +349,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="consistency-and-replication"><a href="../../../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Make the receipt and the write atomic</span></div>

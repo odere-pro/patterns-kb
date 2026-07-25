@@ -5,8 +5,11 @@ system down the way a strong interview answer would, and `demonstrates` the patt
 
 Pages here: ad-click-aggregator, amazon-locker, bitly, bookmyshow, camelcamelcamel, chatgpt, connect-four, design-distributed-cache, design-rate-limiter, distributed-rate-limiter, dropbox, elevator, fb-live-comments, fb-news-feed, fb-post-search, file-system, google-docs, google-news, gopuff, instagram, inventory-management, job-scheduler, leetcode, logging-service, metrics-monitoring, online-auction, online-chess, parking-lot, payment-system, persona-identification, robinhood, strava, ticketmaster, tinder, top-k, uber, web-crawler, whatsapp, yelp, youtube
 
-Blocks, in order: `problem` → `requirements` → `sizing` → `entities` → `interface` → `architecture` → `deepdives` → `tradeoffs` → `levels` → `relationships`.
-Optional: `sizing`, `interface`, `levels` — a low-level-design kata may skip the first two.
+Blocks, in order: `problem` → `explain` → `requirements` → `sizing` → `entities` → `interface` → `architecture` → `deepdives` → `tradeoffs` → `levels` → `relationships`.
+Optional: `sizing`, `interface`, `levels`, `explain` — a low-level-design kata may skip
+the first two. `levels` is the interviewer rubric (Mid/Senior/Staff expectations);
+`explain` is the three-level reading ladder (basic/advanced/expert) — they are different
+blocks and both may exist.
 
 The `architecture` block carries the primary mermaid diagram (a `flowchart` for a distributed
 design, a `classDiagram` for a low-level one). A design links to the patterns it uses through the

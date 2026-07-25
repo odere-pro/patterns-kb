@@ -100,6 +100,7 @@ const html = `<!doctype html>
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
   <script src="../assets/theme.js"></script>
+  <script src="../assets/lens.js"></script>
 </head>
 <body class="doc theme">
   <main class="doc-wrap">

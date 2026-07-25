@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../assets/tokens.css">
   <link rel="stylesheet" href="../../assets/pattern.css">
   <script src="../../assets/theme.js"></script>
+  <script src="../../assets/lens.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -164,7 +165,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Static pool</dt>
@@ -227,32 +228,41 @@ flowchart LR
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — a worker pulling from a shared queue</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">interface Queue&lt;T&gt; {
-  receive(visibilityMs: number): Promise&lt;{ id: string; body: T } | null&gt;;
-  ack(id: string): Promise&lt;void&gt;;
-  nack(id: string): Promise&lt;void&gt;; // returns the message for another consumer
+        <summary>TypeScript — replicas claiming KYC tasks from one Postgres queue</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface Task { id: string; flowId: string; type: "verify_id" | "check_list"; }
+
+interface TaskQueue {
+  claim(leaseMs: number): Promise&lt;Task | null&gt;;
+  complete(id: string): Promise&lt;void&gt;;
+  release(id: string): Promise&lt;void&gt;; // returns the task for another consumer
 }
 
-async function runConsumer&lt;T&gt;(
-  queue: Queue&lt;T&gt;,
-  handle: (msg: T) =&gt; Promise&lt;void&gt;,
-) {
+const claimSql = `
+  UPDATE task SET status = 'processing', locked_at = now(), attempts = attempts + 1
+  WHERE id = (
+    SELECT id FROM task
+    WHERE status = 'pending' AND run_after &lt;= now()
+    ORDER BY run_after
+    FOR UPDATE SKIP LOCKED       -- the whole pattern: a locked row is invisible
+    LIMIT 1)
+  RETURNING id, flow_id, type`;
+
+async function runConsumer(queue: TaskQueue, handle: (t: Task) =&gt; Promise&lt;void&gt;) {
   while (true) {
-    const msg = await queue.receive(30_000); // hidden from others for 30s
-    if (!msg) continue;                      // nothing waiting, poll again
+    const task = await queue.claim(30_000); // leased to this replica for 30s
+    if (!task) continue;                    // nothing waiting, poll again
     try {
-      await handle(msg.body);
-      await queue.ack(msg.id);               // done — remove from queue
+      await handle(task);
+      await queue.complete(task.id);        // done — leaves the queue
     } catch {
-      await queue.nack(msg.id);               // let a sibling retry it
+      await queue.release(task.id);         // let a sibling retry it
     }
   }
 }
 
-// N interchangeable workers pulling from the same queue
+// N interchangeable replicas on the same table — capacity is replica count.
 for (let i = 0; i &lt; workerCount; i++) {
-  runConsumer(queue, processOrder);
+  runConsumer(taskQueue, runKycStep);
 }</code></pre>
       </details>
     </section>
@@ -267,7 +277,7 @@ for (let i = 0; i &lt; workerCount; i++) {
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -355,7 +365,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="streaming"><a href="../../themes/streaming.html">Streaming</a><span>Scale a stream across parallel workers</span></div>

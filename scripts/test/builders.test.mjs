@@ -183,6 +183,69 @@ test("kb.mjs unlink takes the rel-group with the last item in it", () => {
   }
 });
 
+test("build.mjs rejects a data-kb-level outside the closed vocabulary", () => {
+  const root = withFixture((r) =>
+    edit(r, ALPHA, 'data-kb-level="expert">An expert-only nuance', 'data-kb-level="wizard">An expert-only nuance'));
+  try {
+    const r = run("build.mjs", root);
+    assert.equal(r.status, 1, "unknown level must fail the build");
+    assert.match(r.stderr, /closed vocabulary/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("build.mjs rejects an incomplete explain ladder", () => {
+  const root = withFixture((r) =>
+    edit(r, ALPHA,
+      '<div class="explain-item" id="explain-advanced" data-kb-level="advanced"><h3>Advanced</h3><p>Alpha with architectural teeth for seniors.</p></div>\n',
+      ""));
+  try {
+    const r = run("build.mjs", root);
+    assert.equal(r.status, 1, "a two-rung ladder must fail the build");
+    assert.match(r.stderr, /explain block must hold exactly one/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("kb.mjs get --level basic prunes above-level elements and blocks", () => {
+  const root = built();
+  try {
+    const basic = run("kb.mjs", root, "get", "alpha", "--level", "basic");
+    assert.equal(basic.status, 0, basic.stderr);
+    assert.match(basic.stdout, /universal drawback/, "untagged items stay visible");
+    assert.doesNotMatch(basic.stdout, /expert-only nuance/, "expert-tagged item is pruned at basic");
+    assert.match(basic.stdout, /for beginners/, "the basic explain rung shows");
+    assert.doesNotMatch(basic.stdout, /architectural teeth|for staff/, "higher explain rungs are pruned");
+
+    const full = run("kb.mjs", root, "get", "alpha");
+    assert.equal(full.status, 0, full.stderr);
+    assert.match(full.stdout, /expert-only nuance/, "no --level reads the whole page");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("build-pages.mjs stamps policy levels on sections and removes strays", () => {
+  /* variations is "advanced" in the pattern BLOCK_LEVELS policy; description is not
+   * in the policy, so a hand-planted level there must be cleaned off. */
+  const root = built((r) =>
+    edit(r, ALPHA, 'id="description" data-kb-block="description">',
+      'id="description" data-kb-block="description" data-kb-level="expert">'));
+  try {
+    const r = run("build-pages.mjs", root);
+    assert.equal(r.status, 0, r.stderr);
+    const html = readFileSync(join(root, ALPHA), "utf8");
+    assert.match(html, /id="variations"[^>]*data-kb-level="advanced"/, "policy stamp lands on variations");
+    assert.doesNotMatch(html, /data-kb-block="description" data-kb-level/, "stray section level is cleaned");
+    assert.match(html, /id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="expert"/,
+      "authored element level is untouched");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("kb.mjs refs reports each carrier separately", () => {
   const root = built();
   try {

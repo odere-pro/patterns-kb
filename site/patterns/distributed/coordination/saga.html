@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
   <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
   <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
   <script type="application/ld+json">
 {
@@ -143,6 +144,24 @@
       </div>
     </section>
 
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>A big action made of many small steps across different services — book the flight, book the hotel, charge the card. If a later step fails, run undo steps for the ones already done, so nothing is left half-finished.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>A sequence of local transactions, each publishing an event or reply that triggers the next; a failure triggers compensating transactions for the steps already committed. Coordination comes in two styles — choreography (services react to each other's events) and orchestration (a coordinator drives the steps) — replacing distributed two-phase commit with eventual consistency plus explicit undo logic.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Pick a saga when a business process spans service boundaries and holding locks across them is unacceptable — you trade isolation for availability, and interim states become externally visible. The hard parts: compensations are business decisions, not rollbacks (a refund is not an un-charge); every step needs idempotency and deduplication; and orchestration versus choreography is a coupling-versus-legibility call that decides how debuggable the process is during an incident.</p>
+        </div>
+      </div>
+    </section>
+
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram">
@@ -158,7 +177,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Orchestration</dt>
@@ -189,10 +208,10 @@ flowchart LR
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">No isolation: partial saga state is visible to other transactions mid-flight, unless masked by a semantic lock.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="expert">No isolation: partial saga state is visible to other transactions mid-flight, unless masked by a semantic lock.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Every step needs a compensation designed for it, including ones that feel irreversible.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">A failure now spans several services — tracing and debugging needs distributed context.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Compensations must themselves be idempotent and retry-safe, and their own failure needs a plan.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Compensations must themselves be idempotent and retry-safe, and their own failure needs a plan.</li>
           </ul>
         </div>
       </div>
@@ -223,40 +242,35 @@ flowchart LR
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
       <details class="sketch">
-        <summary>TypeScript — a minimal orchestrated saga</summary>
-<pre><code class="language-typescript" data-kb-lang="typescript">interface Step {
-  action: () =&gt; Promise&lt;void&gt;;
-  compensate: () =&gt; Promise&lt;void&gt;;
+        <summary>TypeScript — a forward-only KYC saga with terminal failure states</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type FlowState =
+  | "pending" | "verifying" | "screening"
+  | "cleared" | "rejected" | "dead";
+
+interface Step {
+  running: FlowState;                        // state held while the step runs
+  run: (flowId: string, personaId: string) =&gt; Promise&lt;void&gt;;
 }
 
-class Saga {
-  private completed: Step[] = [];
-  constructor(private readonly steps: Step[]) {}
+const steps: Step[] = [
+  { running: "verifying", run: (f, p) =&gt; idVendor.submit(f, p) },
+  { running: "screening", run: (f, p) =&gt; sanctionsVendor.screen(f, p) },
+  { running: "cleared",   run: (f) =&gt; outbox.enqueue(f, "flow.cleared") },
+];
 
-  async run(): Promise&lt;void&gt; {
-    for (const step of this.steps) {
-      try {
-        await step.action();
-        this.completed.push(step);      // remember for compensation
-      } catch (err) {
-        await this.compensate();
-        throw err;
-      }
+async function runFlow(flowId: string, personaId: string): Promise&lt;void&gt; {
+  for (const step of steps) {
+    await flows.setState(flowId, step.running);
+    try {
+      await step.run(flowId, personaId);
+    } catch (err) {
+      // No compensation: a submitted ID check cannot be un-submitted.
+      // Failure is absorbed by a terminal state, not undone.
+      await flows.setState(flowId, err instanceof Refused ? "rejected" : "dead");
+      return;
     }
   }
-
-  private async compensate(): Promise&lt;void&gt; {
-    for (const step of this.completed.reverse()) {
-      await step.compensate();          // undo in reverse order
-    }
-  }
-}
-
-await new Saga([
-  { action: () =&gt; orders.create(), compensate: () =&gt; orders.cancel() },
-  { action: () =&gt; payments.charge(), compensate: () =&gt; payments.refund() },
-  { action: () =&gt; inventory.reserve(), compensate: () =&gt; inventory.release() },
-]).run();</code></pre>
+}</code></pre>
       </details>
     </section>
 
@@ -269,7 +283,7 @@ await new Saga([
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -370,7 +384,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="cap-theorem"><a href="../../../themes/cap-theorem.html">CAP Theorem</a><span>Choose availability, then reconcile with eventual consistency</span></div>
