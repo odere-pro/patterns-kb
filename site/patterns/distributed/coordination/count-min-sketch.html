@@ -57,7 +57,7 @@
   </script>
 </head>
 <body class="doc">
-  <main class="doc-wrap" data-kb-id="count-min-sketch" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Estimate per-item frequency in sublinear memory with hashed counters" data-kb-order="85" data-kb-aliases="[&quot;CMS&quot;,&quot;count-min sketch&quot;]" data-kb-tags="[&quot;scalability&quot;,&quot;performance&quot;,&quot;resource-management&quot;,&quot;read-optimization&quot;]" data-kb-solves="[&quot;I need the top-K heavy hitters over a huge stream but can't keep a counter per key&quot;,&quot;exact per-item counts for billions of keys won't fit in memory&quot;,&quot;which items are trending right now, approximately, without a full count&quot;]">
+  <main class="doc-wrap" data-kb-id="count-min-sketch" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Estimate per-item frequency in sublinear memory with hashed counters" data-kb-order="85" data-kb-aliases="[&quot;CMS&quot;,&quot;count-min sketch&quot;]" data-kb-tags="[&quot;scalability&quot;,&quot;performance&quot;,&quot;resource-management&quot;,&quot;read-optimization&quot;]" data-kb-solves="[&quot;I need the top-K heavy hitters over a huge stream but can't keep a counter per key&quot;,&quot;exact per-item counts for billions of keys won't fit in memory&quot;,&quot;which items are trending right now, approximately, without a full count&quot;,&quot;each worker only sees part of the stream, so no single machine knows the real totals&quot;,&quot;a full group-by just to find the most common values scans the entire dataset&quot;]">
 
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../index.html">Map</a>
@@ -86,6 +86,24 @@
         <p>A <strong>Count-Min Sketch</strong> is a two-dimensional array of counters — <em>d</em> rows by <em>w</em> columns, all zero to start — with one independent hash function per row. To record an occurrence of a key, hash it once per row and increment the single counter it lands on in that row, so each occurrence bumps <em>d</em> counters. To estimate how often a key has been seen, hash it the same <em>d</em> ways, read those counters, and take the <strong>minimum</strong>. The minimum, because every counter is shared by all the keys that hash to it, so a collision can only push a count up, never down — the smallest of a key's cells is the one least polluted by other keys, and the number it holds is an upper bound, never an undercount.</p>
         <p>The force it resolves is counting per-item frequency over a stream when the keys are far too many to hold an exact counter for each. An exact tally needs one counter per distinct key — trivial for thousands, hopeless for billions of URLs, IP addresses or search terms. The sketch fixes its size up front at <em>w</em>×<em>d</em> counters, a footprint that does not grow with the number of distinct keys no matter how many pour through it. It buys that fixed memory with a bounded over-estimate: width <em>w</em> governs how much error each estimate can pick up from collisions, and depth <em>d</em> governs the confidence that the true error stays within that bound.</p>
         <p>Cormode and Muthukrishnan described the structure in 2005. Like a Bloom filter it stores no keys — only collided counts — so it can tell you roughly how often a key you name has appeared, but it can neither list the keys it has seen nor recover them. That is why it is almost always paired with something that already holds the candidate keys: a small heap of hot keys turns it into an approximate top-K, and a running set of heavy hitters turns it into a trending list. On its own it is a frequency oracle you have to know what to ask.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>When the things pouring past are far too many to give each one its own tally, keep a fixed set of jars instead: every arrival drops a bean into a few of them, always the same few for that thing. Different things share jars, so a jar can only ever run heavy, never short — read the lightest jar a thing uses and you have your closest answer.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>Each occurrence hashes the key once per row of a fixed d-by-w counter grid and increments the single cell it lands on. An estimate re-hashes, reads those same d cells and returns the smallest — the one least polluted by other keys — so an answer can be too high but never too low. Its footprint is w times d counters and never grows with the key space, and because it retains no keys of its own it is deployed beside a heap or a candidate set that already knows what to ask about.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it when you need the frequent items out of a stream whose distinct keys would never fit an exact table, and an over-count is harmless — what you buy is per-item frequency in memory fixed once and mergeable across shards. The bill is skew: a heavy hitter spills onto every key sharing one of its cells, so estimates stay trustworthy for the head and drift toward noise on the long tail, precisely where the true totals are smallest. Merging only works between grids of identical dimensions, so the width and depth must be agreed before the first shard starts counting, and totals stay all-time unless you add decay.</p>
+        </div>
       </div>
     </section>
 
@@ -127,9 +145,9 @@ flowchart LR
           <h3>Pros</h3>
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Fixed memory, independent of the number of distinct keys — w×d counters whether you track thousands of keys or billions.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Insert and query are O(d) — a handful of hashes and increments, constant no matter how long the stream or how many keys.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">Insert and query are O(d) — a handful of hashes and increments, constant no matter how long the stream or how many keys.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">Never undercounts: the estimate is a guaranteed upper bound, so a key's true frequency is always at or below what the sketch reports.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Two sketches of the same dimensions add cell-by-cell — combine per-shard sketches into a global one, so counting parallelizes across a cluster.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Two sketches of the same dimensions add cell-by-cell — combine per-shard sketches into a global one, so counting parallelizes across a cluster.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -204,6 +222,54 @@ flowchart LR
         <div class="wild-item" data-kb-example="apache-spark"><strong>Apache Spark</strong><span>DataFrame.stat.countMinSketch(col, eps, confidence, seed) builds a sketch over a column, giving approximate frequencies without a full group-by shuffle over the whole dataset.</span></div>
         <div class="wild-item" data-kb-example="algebird"><strong>Twitter Algebird</strong><span>Provides Count-Min Sketch as a mergeable monoid for streaming aggregation; its top-N variant keeps the heaviest keys alongside the sketch — the classic sketch-plus-heap route to approximate top-K.</span></div>
         <div class="wild-item" data-kb-example="caffeine"><strong>Caffeine</strong><span>Its Window-TinyLFU eviction keeps a count-min frequency sketch — 4-bit counters, periodically halved to age out old counts — to judge which keys are hot enough to admit, an LFU-style signal.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Sketch width (w) — columns per row</strong> — The dominant accuracy dial: error is bounded by roughly e/w times the total counted volume, so doubling the width halves the over-estimate and doubles the memory. Sized either directly (a width-and-depth constructor) or indirectly by naming a target error, which the library turns into a width.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Sketch depth (d) — rows and independent hashes</strong> — How many independent hashes each key gets, and therefore how many chances it has to land on a lightly-loaded cell. Depth buys confidence that the error stays inside the width's bound — roughly ln(1/delta) rows for failure probability delta — and it sets the per-operation cost, since insert and query are both O(d).</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Counter width in bits</strong> — Bits per cell, from 4-bit nibbles up to 64-bit integers. Narrow counters shrink the sketch by an order of magnitude and let you spend the savings on more width, but they saturate on hot keys, so they only work paired with a decay scheme that pulls values back down.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Update rule — plain vs conservative</strong> — Plain update increments all d counters; conservative update raises only the counters currently sitting at the key's minimum, which markedly cuts the over-estimate on skewed streams. The price is that the sketch can no longer be decremented, so deletions and any subtractive aging are off the table.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Aging policy — reset, decay or window rotation</strong> — The error bound is relative to everything counted since the sketch was last cleared, so an unaged sketch degrades monotonically. Choose one: zero it on a schedule, periodically halve every counter, or keep per-window sketches and drop the oldest. The interval is what defines the window over which "frequent" is meant.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Total increments since last reset</strong> — A running sum of everything added to the sketch. This is the N the error bound scales against, so comparing it to the volume you sized for tells you directly how far the current over-estimate has drifted from plan.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Measured over-estimate on a control set</strong> — Keep exact counters for a small fixed sample of keys and periodically diff the sketch's estimate against them. The gap is the only ground-truth accuracy number you will ever have, and it is cheap for a few dozen keys.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Non-zero cell share per row</strong> — The fraction of each row's counters that have ever been touched. As it approaches saturation every lookup is reading a cell shared with other keys, and estimates for anything outside the heavy hitters stop meaning much.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Saturated cell share</strong> — The fraction of counters pinned at the maximum value the counter width can represent. Only relevant with narrow counters, where it is the direct measure of whether decay is keeping up with the hottest keys.</li>
+            <li id="production-signal-5" data-kb-polarity="signal"><strong>Row spread on queried keys</strong> — The gap between the largest and smallest of a key's d counters, available for free on every query since all d are read anyway. A wide spread means that key is colliding with heavy traffic in some rows, and a distribution of spreads that shifts upward is the sketch telling you it is getting crowded.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Error grows with the stream, not with the sketch</strong> — The over-estimate is bounded relative to total counted volume, so a sketch that is never aged keeps getting worse the longer it runs even at constant width and depth. It looks like rare keys gradually reporting similar, plausible-but-wrong non-zero counts, and the long tail becoming indistinguishable well before anything alerts.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Heavy hitters swamp the tail</strong> — Every counter is shared, and the minimum only rescues a key if at least one of its d cells stayed clean. Once traffic skews hard enough that a key collides with a heavy hitter in all d rows, its estimate is dominated by someone else's volume — so the sketch stays accurate exactly where it is already obvious and fails where you needed help.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Counter saturation on hot keys</strong> — With narrow counters, a burst pins the hottest keys at the maximum value. They all then compare equal, so any ranking or admission decision built on the sketch loses its ordering precisely during the load spike it was meant to handle.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Merge fails on mismatched sketches</strong> — Cell-by-cell addition is only valid between sketches with identical width, depth, hash functions and seeds. A rolling deploy that retunes the dimensions produces per-shard sketches that either refuse to merge or, if the code is careless enough to add them anyway, silently produce nonsense.</li>
+            <li id="production-failure-5" data-kb-polarity="failure"><strong>Discontinuity at the reset boundary</strong> — Clearing the sketch to fight drift throws away all history at once, so every key reads as cold immediately afterwards. Anything downstream that admits, evicts or throttles on frequency flips behaviour at that instant — which is why decay-by-halving is usually preferred over a hard zero.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Size width and depth from an explicit error target and the volume you expect between resets — the bound is relative to total counted volume, so that volume is part of the specification, not an afterthought.</li>
+            <li id="production-check-2" data-kb-polarity="check">Seed each row's hash independently and use a hash with good avalanche; rows that correlate collapse the depth guarantee back to a single row's accuracy.</li>
+            <li id="production-check-3" data-kb-polarity="check">Pair the sketch with a structure that holds the candidate keys — a heap of hot keys, an explicit watchlist — because the sketch can answer about a key you name but can never enumerate one.</li>
+            <li id="production-check-4" data-kb-polarity="check">Keep a small control set of keys with exact counts in production and compare the estimates against it, so accuracy drift is measured rather than assumed.</li>
+            <li id="production-check-5" data-kb-polarity="check">Decide the aging policy before shipping — reset, halve or window-rotate — and pick the counter width so the hottest key cannot saturate before the next decay.</li>
+            <li id="production-check-6" data-kb-polarity="check">Verify that every sketch you intend to merge shares identical dimensions, hash functions and seeds, and version them so a deploy cannot change them mid-stream.</li>
+            <li id="production-check-7" data-kb-polarity="check">Confirm the downstream logic is safe with an upper bound, and never let a rare key's inflated count drive a decision that breaks on an over-count.</li>
+          </ul>
+        </div>
       </div>
     </section>
 

@@ -88,7 +88,7 @@
   </script>
 </head>
 <body class="doc">
-  <main class="doc-wrap" data-kb-id="distributed-lock" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Hold exclusivity as a lease with a TTL that any server can see" data-kb-order="80" data-kb-aliases="[&quot;lease lock&quot;,&quot;Redlock&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;coordination&quot;,&quot;consistency&quot;,&quot;isolation&quot;]" data-kb-solves="[&quot;I need exactly one server in the fleet to run this job&quot;,&quot;a resource is held across many requests or minutes and a DB transaction cannot span that&quot;,&quot;two workers both believe they own the same task&quot;]">
+  <main class="doc-wrap" data-kb-id="distributed-lock" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Hold exclusivity as a lease with a TTL that any server can see" data-kb-order="80" data-kb-aliases="[&quot;lease lock&quot;,&quot;Redlock&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;coordination&quot;,&quot;consistency&quot;,&quot;isolation&quot;]" data-kb-solves="[&quot;I need exactly one server in the fleet to run this job&quot;,&quot;a resource is held across many requests or minutes and a DB transaction cannot span that&quot;,&quot;two workers both believe they own the same task&quot;,&quot;the mutex that guarded this code did nothing once we ran a second copy of the service&quot;,&quot;a process died holding a claim and everyone else is stuck behind it until someone clears it by hand&quot;]">
 
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../index.html">Map</a>
@@ -119,6 +119,24 @@
         <p>A distributed lock provides mutual exclusion across many independent processes — not within one database transaction, but across a whole fleet. Instead of a transaction-scoped row lock, it is a small record that says <em>who holds the lock and until when</em>, kept somewhere every server can read: a key in Redis, a node in ZooKeeper, a lease in etcd. Acquiring is an atomic "create only if absent"; releasing is deleting your own entry; and a time-to-live means a holder that crashes without releasing does not wedge the lock forever.</p>
         <p>The force it resolves is exclusivity that a database transaction cannot reach. Some critical sections are longer or wider than a single transaction: a scheduled job that must run once across a dozen replicas; a ten-minute seat hold while a user finishes checkout; a migration only one instance should perform. <code>SELECT … FOR UPDATE</code> cannot span that — it would pin a connection for ten minutes, and it is invisible to other stateless app servers anyway. A lease any server can inspect is what makes fleet-wide, time-bounded exclusivity possible.</p>
         <p>The hard part is that a distributed lock is <em>not</em> airtight. If the holder stalls — a long GC pause, a slow disk, a network blip — past the TTL, the lease expires and a second process acquires it while the first still believes it holds it. Now two holders run the critical section at once: a <strong>double grant</strong>. A TTL set too short causes exactly this; set too long, a crashed holder blocks everyone for that duration. The robust fix is not a better TTL but a <strong>fencing token</strong>: every acquisition hands out a monotonically increasing number, the holder stamps it on each write, and the protected resource rejects any write carrying a token older than the highest it has seen — turning a stale holder's writes into rejected writes rather than silent corruption. Martin Kleppmann's well-known critique of Redis's Redlock algorithm makes this exact point: under GC pauses and clock skew a lock service alone cannot guarantee mutual exclusion for correctness, so the resource itself must fence. Treat a distributed lock as safe for correctness only when the work is idempotent, the lock is a soft reservation where a rare double grant is tolerable, or a fencing token backs it.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>When several crews could each start the same job and only one should, keep a single sign-up sheet they can all see. Whoever writes their name down first goes ahead, and adds when they expect to finish. That way a crew that wanders off cannot hold the job up forever — but a crew that merely runs late loses its turn while still working, and someone else may start.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>Exclusivity lives outside any single transaction, in a store every server can reach: a small record naming the owner and an expiry. Acquiring is create-only-if-absent in one command — SET NX with a TTL in Redis, an ephemeral znode in ZooKeeper, a lease in etcd, a conditional UPDATE on a locked_until column. Releasing is an owner-checked delete; a dead holder simply lets the expiry pass; work that may run long heartbeats to extend it. When the grant must survive a partition it belongs in a consensus-backed store rather than one cache node.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it when exclusivity must span stateless servers and outlive a transaction — a run-once job across a dozen instances, a multi-minute seat hold — and you buy fleet-wide exclusion that self-heals when a holder crashes. It is not airtight: a stall past the TTL grants it twice while the stalled holder keeps working, so the protected resource must reject stale fencing tokens itself, the point of Kleppmann's Redlock critique. Treat it as safe only for idempotent work, soft reservations, or a fenced resource, and budget the rest — TTL tuning, jittered retries against the herd that wakes on release, alerts on expired-while-held, and a store that is now its own failure domain.</p>
+        </div>
       </div>
     </section>
 
@@ -182,7 +200,7 @@ sequenceDiagram
             <li id="tradeoffs-con-1" data-kb-polarity="con">Not airtight: a holder that stalls past the TTL can be double-granted the lock — the defining hazard of the pattern.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Correctness needs a fencing token checked by the resource; the lock service alone cannot guarantee it.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">TTL tuning is a bind — too short risks double grants, too long makes a single crash block everyone.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Clock skew across nodes and network partitions undermine the TTL and quorum assumptions the lock rests on.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Clock skew across nodes and network partitions undermine the TTL and quorum assumptions the lock rests on.</li>
             <li id="tradeoffs-con-5" data-kb-polarity="con">Adds infrastructure and a new failure domain; the lock store itself can become a bottleneck or a point of failure.</li>
           </ul>
         </div>
@@ -198,7 +216,7 @@ sequenceDiagram
             <li id="usage-when-1" data-kb-polarity="when">Exactly one process in a fleet must do something — run a scheduled job once, own a partition, perform a one-time migration.</li>
             <li id="usage-when-2" data-kb-polarity="when">The critical section outlives a single database transaction — a multi-minute reservation, a wait on a human or an external step.</li>
             <li id="usage-when-3" data-kb-polarity="when">The exclusivity has to be visible to many stateless servers, not just one database connection.</li>
-            <li id="usage-when-4" data-kb-polarity="when">A short lease can shrink the contention window — hold a seat for the instant of selection, not the whole checkout.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">A short lease can shrink the contention window — hold a seat for the instant of selection, not the whole checkout.</li>
           </ul>
         </div>
         <div class="avoid">

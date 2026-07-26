@@ -90,7 +90,7 @@
   </script>
 </head>
 <body class="doc">
-  <main class="doc-wrap" data-kb-id="conditional-write" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Make a write happen only if the store still matches a predicate" data-kb-order="77" data-kb-aliases="[&quot;compare-and-set&quot;,&quot;CAS&quot;,&quot;conditional update&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;consistency&quot;,&quot;transactions&quot;,&quot;data-access&quot;]" data-kb-solves="[&quot;two requests read the same row and one silently overwrites the other's change&quot;,&quot;I need to decrement stock only if it's still above zero, in one atomic step&quot;,&quot;checking a condition then writing is a race — another request slips in between the check and the write&quot;]">
+  <main class="doc-wrap" data-kb-id="conditional-write" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Make a write happen only if the store still matches a predicate" data-kb-order="77" data-kb-aliases="[&quot;compare-and-set&quot;,&quot;CAS&quot;,&quot;conditional update&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;consistency&quot;,&quot;transactions&quot;,&quot;data-access&quot;]" data-kb-solves="[&quot;two requests read the same row and one silently overwrites the other's change&quot;,&quot;I need to decrement stock only if it's still above zero, in one atomic step&quot;,&quot;checking a condition then writing is a race — another request slips in between the check and the write&quot;,&quot;two workers grabbed the same queued job because both saw it as unclaimed&quot;,&quot;my code booked the ticket even though the seat update quietly changed nothing&quot;]">
 
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../index.html">Map</a>
@@ -119,6 +119,24 @@
         <p>A conditional write hands the store both the change and the condition under which it may happen, and asks the store to check and write as a single indivisible operation. <code>UPDATE seats SET taken = true WHERE id = ? AND taken = false</code> only flips the seat if it is still free; a request that was too late matches no row and updates zero rows. The database serializes writes to the same row, so the loser's <code>WHERE</code> clause re-evaluates against the winner's committed state and quietly fails to apply — no lost update, no lock, no coordinator.</p>
         <p>The force it resolves is the read-then-write race. Read a value into your application, decide something, then write back, and there is a gap between the read and the write in which another request can slip in and change what you read. Two buyers both see one seat left, both decrement, and the count goes to −1 with both charged for the same seat — the classic lost update. Checking in application code and writing afterwards is a time-of-check-to-time-of-use hole; the check is only meaningful if nothing changes before the write, which nothing guarantees.</p>
         <p>A conditional write closes the gap by refusing to separate the check from the write. Because the predicate is evaluated inside the same statement that performs the write, there is no window for another request to intervene. It is the unifying primitive beneath higher-level schemes: optimistic concurrency control is a conditional write on a version column, distributed locks are a conditional write on a lease row, stock guards are a conditional write on a counter. The one requirement is that the entire decision fit into a predicate the store can evaluate; the moment deciding <em>what</em> to write needs application logic between the read and the write, this alone no longer suffices.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>When what you want might be taken while you are still deciding, do not ask first and act second — the answer goes stale in the gap. Say both at once to the person who can do it: sell me the last ticket, but only if it is still there. They look and hand it over in one motion, so two of you can never leave with the same ticket.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>The guard rides inside the change itself: the update carries a WHERE clause naming the state it requires — the seat still free, the counter still positive, the row still absent — and the store evaluates that predicate in the same statement that applies it. Single-row writes are already serialized, so a late writer re-evaluates against the winner's committed state, matches no row, and changes nothing; the affected-row count is the whole result. Every engine spells it differently — SQL's WHERE, DynamoDB's ConditionExpression, Cassandra's IF; optimistic concurrency control and lease locks are both built on it.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it when the entire safety rule fits in one predicate the store can evaluate — try it first, because it closes the race with no lock held, no second round-trip and no coordination service to run. The bill starts with the losing write: zero rows changed is not an error, so an unchecked affected-row count fails silently, and a follow-up insert issued anyway leaves an orphan. Guard the contended row itself rather than a proxy counter, or two winners land on the same unit. The ceiling is hard: once the decision needs application logic between the read and the write, no predicate carries it and you escalate to a lock or a retry loop.</p>
+        </div>
       </div>
     </section>
 
@@ -185,7 +203,7 @@ sequenceDiagram
             <li data-kb-polarity="con" id="tradeoffs-con-2">A losing write matches zero rows, which is not an error — forget to check the affected-row count and the failure is silent.</li>
             <li data-kb-polarity="con" id="tradeoffs-con-3">Guarding a proxy such as a bare counter can still let two writers collide on the same specific item; the predicate must protect the real contended thing.</li>
             <li data-kb-polarity="con" id="tradeoffs-con-4">An equality predicate is blind to the ABA problem — a value that leaves and returns looks unchanged. Guard a version that only ever increments.</li>
-            <li data-kb-polarity="con" id="tradeoffs-con-5">Loss behaviour depends on isolation level: silent zero-rows at common defaults, but a serialization error the app must catch and retry at stricter ones.</li>
+            <li data-kb-polarity="con" id="tradeoffs-con-5" data-kb-level="expert">Loss behaviour depends on isolation level: silent zero-rows at common defaults, but a serialization error the app must catch and retry at stricter ones.</li>
           </ul>
         </div>
       </div>
@@ -199,7 +217,7 @@ sequenceDiagram
           <ul>
             <li data-kb-polarity="when" id="usage-when-1">The safety rule is a predicate on the row you are writing — a status flag, a claim, a counter floor.</li>
             <li data-kb-polarity="when" id="usage-when-2">You want to decrement, claim, or flip a single row atomically without holding a lock across the operation.</li>
-            <li data-kb-polarity="when" id="usage-when-3">You are acquiring a lease with set-if-absent, or writing a version-checked update — both are conditional writes underneath.</li>
+            <li data-kb-polarity="when" id="usage-when-3" data-kb-level="advanced">You are acquiring a lease with set-if-absent, or writing a version-checked update — both are conditional writes underneath.</li>
             <li data-kb-polarity="when" id="usage-when-4">It should be the first thing you try; escalate to locking or a version loop only once a plain conditional write proves insufficient.</li>
           </ul>
         </div>
@@ -258,6 +276,54 @@ async function sellTicket(db: Db, concertId: string, userId: string) {
         <div class="wild-item" data-kb-example="redis-set-nx"><strong>Redis SET ... NX</strong><span>SET key value NX writes the key only if it does not already exist, returning nil when it is present. This set-if-absent is the acquire step of a Redis-based lock, usually paired with an EX/PX expiry so the lease self-releases.</span></div>
         <div class="wild-item" data-kb-example="cassandra-lwt"><strong>Cassandra lightweight transactions</strong><span>An INSERT ... IF NOT EXISTS or UPDATE ... IF col = value is a Paxos-backed compare-and-set; Cassandra runs a consensus round so the conditional write is linearizable, and the result set reports [applied] plus the values it checked against.</span></div>
         <div class="wild-item" data-kb-example="http-if-match"><strong>HTTP conditional requests</strong><span>A PUT or DELETE carrying If-Match: "etag" (or If-None-Match: *) tells the origin to apply the write only if the resource still matches that validator; on a mismatch the server returns 412 Precondition Failed and leaves the resource untouched.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>what the predicate is checked against</strong> — The guard can compare a business value (status = 'available'), a monotonic version or revision token, or mere absence (set-if-absent). This is the pattern's primary dial: equality on a mutable business value is blind to a value that leaves and comes back, while a version that only ever increments is not.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>isolation level of the surrounding transaction</strong> — At read committed and similar levels a losing write is a silent zero-row result; at serializable some of the same conflicts instead raise a serialization failure (SQLSTATE 40001 in PostgreSQL) the caller must catch and retry. Choose the level deliberately — it decides which of the two loss shapes your code has to handle.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>retry policy on a rejected write</strong> — Whether a losing write is retried at all, how many attempts it gets, and the backoff and jitter between them. A claim another request already won is usually final; a version conflict inside a read-modify-write cycle usually deserves a bounded retry. Immediate unbounded retry is how contention turns into a storm.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>row-lock and statement timeouts</strong> — A conditional write still holds the store's row lock for the duration of the statement, so concurrent writers to the same row queue behind it. lock_timeout and statement_timeout (PostgreSQL) or innodb_lock_wait_timeout (MySQL) bound how long a caller waits before failing fast instead of pinning a connection.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>serial consistency for replicated conditional writes</strong> — Where the conditional path runs a consensus round rather than a single-leader write, its consistency setting decides how far that round travels: Cassandra's SERIAL CONSISTENCY selects SERIAL (across datacentres) or LOCAL_SERIAL (the local one), trading cross-DC linearizability for latency.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>guard rejection rate</strong> — The share of conditional writes that changed zero rows or returned the store's precondition failure (ConditionalCheckFailedException, HTTP 412, an [applied] of false). This is the contention level measured directly; a step change means a row got hot or the predicate got wrong.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>attempts per successful write</strong> — For version-guarded read-modify-write loops, how many tries a success needed. A mean drifting above one, with a long tail, says contention is now being paid in latency rather than avoided.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>retry exhaustions and oldest in-flight attempt</strong> — Requests that gave up after their retry budget, and the age of the longest-running retry loop. Both are starvation indicators: the slowest writers keep losing to faster ones and never converge.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>p99 latency of the guarded statement</strong> — Measured including time queued on the row lock. It climbing while CPU sits idle is the fingerprint of serialization on one row, not of a saturated store.</li>
+            <li id="production-signal-5" data-kb-polarity="signal"><strong>conflict concentration by key</strong> — The share of rejections landing on the top few rows. The same overall rejection rate spread across many rows scales fine; concentrated on one row it does not.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>hot-row serialization</strong> — Every writer to one row queues behind it inside the store, so that row's ceiling is one critical section at a time however many app instances you add. It looks like a single endpoint's p99 climbing across an otherwise idle fleet.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>retry storm at high contention</strong> — Losers re-read and re-attempt at once, which adds load, which makes more of them lose. Without capped backoff and jitter, goodput can fall as offered concurrency rises.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>silent zero-row loss</strong> — A losing write is a no-op, not an error. An unchecked affected-row count lets the caller report success and any follow-on write land anyway — the ticket with no seat. It surfaces as data drift, never as an error rate, and load only widens the window.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>counter-floor collision</strong> — A predicate on an aggregate (available &gt; 0) proves a unit exists, not which one. With several free, two writers both pass the guard and can be handed the same specific item; the duplicates only appear once concurrency is high enough for both to be in flight.</li>
+            <li id="production-failure-5" data-kb-polarity="failure"><strong>serialization failures at strict isolation</strong> — Under serializable, conflicts that were silent at looser levels come back as errors instead, and that error rate scales with contention. Unhandled, they reach users as failed requests rather than as a retried write.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Inspect the affected-row count (or the store's applied / precondition-failed result) on every guarded write and map zero rows to an explicit outcome — never let it fall through as success.</li>
+            <li id="production-check-2" data-kb-polarity="check">Guard the actual contended row rather than a proxy aggregate whenever which item the caller gets matters.</li>
+            <li id="production-check-3" data-kb-polarity="check">Guard a monotonic version or revision instead of a mutable business value wherever that value can round-trip A → B → A.</li>
+            <li id="production-check-4" data-kb-polarity="check">Make any follow-on write depend on the guarded write having applied — a CTE feeding the insert, or an explicit affected-rows check inside the transaction.</li>
+            <li id="production-check-5" data-kb-polarity="check">Decide per call site whether losing is retryable; where it is, cap the attempts, back off with jitter, and return a definite outcome when the budget runs out.</li>
+            <li id="production-check-6" data-kb-polarity="check">Know the isolation level you run at and handle both loss shapes it can produce: a silent zero-row result and a serialization failure.</li>
+            <li id="production-check-7" data-kb-polarity="check">Load-test the single hottest row at target concurrency — that row, not the fleet, sets the throughput ceiling.</li>
+          </ul>
+        </div>
       </div>
     </section>
 

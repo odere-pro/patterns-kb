@@ -273,6 +273,65 @@ setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 
       </details>
     </section>
 
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="redis-active-expiry"><strong>Redis</strong><span>A key with a TTL is removed two ways at once — lazily, when a read touches an already-expired key, and by a background cycle that repeatedly samples keys from the set carrying an expiry and deletes the ones that have passed; without the active sweep, keys nobody ever reads again would hold memory forever.</span></div>
+        <div class="wild-item" data-kb-example="postgres-autovacuum"><strong>PostgreSQL autovacuum</strong><span>The autovacuum launcher wakes on a timer and starts workers against tables that have accumulated enough dead row versions, reclaiming the space left by UPDATE and DELETE once no live transaction can still see it — a scheduled scan for state everyone has finished with, and one that famously falls behind under heavy write load.</span></div>
+        <div class="wild-item" data-kb-example="kubernetes-ttl-after-finished"><strong>Kubernetes TTL-after-finished controller</strong><span>A Job that sets .spec.ttlSecondsAfterFinished is deleted, along with the pods it owns, once that long has elapsed since it completed or failed — and the documentation is explicit that cleanup happens some time after the TTL rather than at it, which is the sweeper's timing bargain stated in the API.</span></div>
+        <div class="wild-item" data-kb-example="s3-abort-incomplete-multipart-upload"><strong>Amazon S3 lifecycle rules</strong><span>A multipart upload that is never completed or aborted leaves its uploaded parts in the bucket — billed, and invisible to an ordinary object listing — and the AbortIncompleteMultipartUpload lifecycle action is a scheduled sweep that reclaims them a configured number of days after the upload was initiated: orphan collection with a grace period.</span></div>
+        <div class="wild-item" data-kb-example="django-clearsessions"><strong>Django clearsessions</strong><span>Django's database and file session backends never purge a session once it expires; the docs say plainly that expired records accumulate and it is your job to run the django-admin clearsessions management command regularly, typically from cron — the sweeper shipped as a command because the store cannot expire the row itself.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>sweep interval</strong> — how often the tick fires — it sets the worst-case delay between a deadline passing and anything happening, and it bounds how much work one tick must absorb; it has to stay comfortably above the tick's own runtime or ticks overlap</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>staleness threshold</strong> — the interval in the predicate that decides when work is presumed abandoned — a lease age, an SLA window, an orphan grace period; derive it from measured worker duration rather than guessing, because too short reclaims slow-but-alive work and too long strands resources</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>rows per tick</strong> — the cap on how many matches one pass resolves — it bounds transaction size and lock footprint so a backlog drains over several ticks instead of one long write that blocks the live workers the sweep exists to help</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>retry budget</strong> — how many attempts a record may burn before the sweep parks it in a dead state instead of reclaiming it again — the dial between rescuing transient failures and letting a poison record cycle forever</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>leader-lock TTL</strong> — how long the singleton runner's own lock lives before another replica may take the sweep — too short and two sweepers overlap on the same rows, too long and a crashed sweeper leaves nothing swept for that duration</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>tick duration against the interval</strong> — how long one pass takes as a fraction of its period; as it approaches the interval the sweep is one busy hour away from overlapping ticks and a growing backlog</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>backlog matching the predicate</strong> — the count of records currently past the staleness threshold, measured by running the select without acting — sustained growth means the sweep is not clearing what accumulates</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>age past deadline at resolution</strong> — now() minus the deadline at the moment a record is actually acted on — this is the delay the customer or the held resource experienced, and it diverges from the interval as soon as sweeps run late</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>guarded writes that affect zero rows</strong> — the share of updates that matched nothing because the holder moved on between select and update — the sweeper losing its race with live workers, and a rising rate says the staleness threshold is too aggressive</li>
+            <li id="production-signal-5" data-kb-polarity="signal"><strong>time since the last completed sweep</strong> — the heartbeat stamped at the end of a successful pass; the only observable that catches a sweeper that stopped, since its failure is itself a non-event</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>the sweep falls behind when it matters most</strong> — the scan and its writes take longest exactly when the table is largest and the database busiest, so ticks queue or overlap and leases expire unreclaimed — the pattern degrades in proportion to the damage</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>unindexed predicate turns into a scan</strong> — cost tracks table size rather than the amount of stuck work; a tick that was free at ten thousand rows saturates the database at ten million and competes with the very workers it is meant to unblock</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>mass false reclaim</strong> — under load healthy workers slow past the staleness threshold, and one tick returns a wave of live tasks to the pending pool; guarded writes stop the theft, but the duplicate work and the re-queued rows still land mid-incident</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>backlog flush after downtime</strong> — the first tick after the sweeper was stopped for an hour matches everything that piled up at once — one oversized transaction, a wave of dead-lettering, and an escalation storm to customers or an on-call operator in a single burst</li>
+            <li id="production-failure-5" data-kb-polarity="failure"><strong>silent death</strong> — the sweeper stops and nothing reports it, because noticing non-events is precisely the job it was doing; the symptoms surface hours later as stuck records and capacity nobody released</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Keep in the sweeper only what needs an action at the deadline — if the question is merely whether a record is still valid, answer it on read or let the store expire it</li>
+            <li id="production-check-2" data-kb-polarity="check">Confirm the staleness predicate is index-backed at the table size you expect in a year, not the size it is today</li>
+            <li id="production-check-3" data-kb-polarity="check">Guard every write on the values the row was selected with, so a slow-but-alive holder's row updates zero rows instead of being robbed</li>
+            <li id="production-check-4" data-kb-polarity="check">Make each resolution idempotent — stamp the escalated-at or dead marker in the same statement that selects the row, so a second pass is a no-op</li>
+            <li id="production-check-5" data-kb-polarity="check">Run it as a singleton under a lock or leader election, and still stay correct if two instances run anyway</li>
+            <li id="production-check-6" data-kb-polarity="check">Cap rows per tick so a backlog drains across several passes rather than one long transaction holding locks against live workers</li>
+            <li id="production-check-7" data-kb-polarity="check">Emit a heartbeat on successful completion and alert on its absence, and rehearse the first tick after an outage — including how many notifications it would send</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
       <h2 class="doc-h" id="h-rel">How it relates</h2>
           <div class="rel-group">

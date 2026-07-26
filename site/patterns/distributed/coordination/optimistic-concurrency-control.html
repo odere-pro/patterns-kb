@@ -93,7 +93,7 @@
   </script>
 </head>
 <body class="doc">
-  <main class="doc-wrap" data-kb-id="optimistic-concurrency-control" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Detect write conflicts with a version check and retry, instead of locking" data-kb-order="78" data-kb-aliases="[&quot;OCC&quot;,&quot;optimistic locking&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;consistency&quot;,&quot;transactions&quot;,&quot;performance&quot;]" data-kb-solves="[&quot;locking every read kills throughput but real conflicts are rare&quot;,&quot;two users edit the same record and the last save silently wipes the first's change&quot;,&quot;I don't want to hold a database lock across a user's think-time&quot;]">
+  <main class="doc-wrap" data-kb-id="optimistic-concurrency-control" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Detect write conflicts with a version check and retry, instead of locking" data-kb-order="78" data-kb-aliases="[&quot;OCC&quot;,&quot;optimistic locking&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;consistency&quot;,&quot;transactions&quot;,&quot;performance&quot;]" data-kb-solves="[&quot;locking every read kills throughput but real conflicts are rare&quot;,&quot;two users edit the same record and the last save silently wipes the first's change&quot;,&quot;I don't want to hold a database lock across a user's think-time&quot;,&quot;the record changes while my code is halfway through working out the new value&quot;,&quot;my API accepts a save from a client that was working off an old copy&quot;]">
 
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../index.html">Map</a>
@@ -122,6 +122,24 @@
         <p>Optimistic concurrency control lets a read-modify-write cycle run without holding a lock, and catches the collision at the end instead of preventing it up front. You read a row along with a value that changes on every write — most often a <code>version</code> integer — do whatever work you need, then write conditionally: <code>UPDATE ... SET ..., version = version + 1 WHERE id = ? AND version = ?</code>, supplying the version you originally read. If nobody has touched the row in between, one row updates and the version advances. If someone else committed first, the version no longer matches, zero rows change, and you know your write lost — so you reload the current state and retry from the top.</p>
         <p>It exists to resolve the lost update without paying for a lock. The pessimistic answer is to lock the row the instant you read it and hold that lock until you write, so no one else can interleave. That is correct, but it serializes every reader behind a writer and, worse, pins the lock across "think-time" — the seconds a user spends editing a form, or the round-trip of an external call — during which the row is frozen for everyone. When genuine conflicts are rare, almost all of that blocking is wasted: you paid to prevent collisions that were never going to happen.</p>
         <p>OCC inverts the bet. It assumes two writers will seldom race for the same row, so it holds nothing and simply verifies its assumption at commit time. That verification is a conditional write on the version, which makes OCC the read-modify-write cycle built on top of the conditional-write primitive. The trade is that when the bet is wrong the loser's work is thrown away and redone, so under heavy contention the retries pile into a storm and OCC does more work than a lock would — and because the check is an equality test, a version that leaves and returns to the same value (the ABA problem) can slip a stale write through unless the version strictly increments on every write.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>Two people rarely change the same thing at once, so nobody needs to take turns. Note how things stand, go and do your thinking, then come back and put your change in. If nothing moved, it goes in; if it did, your work is wasted and you start over. Like a wall calendar: you find Saturday free, plan a day out, and come back to find it pencilled over.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>You read a row together with a token that changes on every write — usually a version integer — do the application work holding nothing, then write conditionally: the new values plus a bumped version, applied where the version you first read still matches. One row changed means you won; zero means someone committed ahead of you, so you reload and replay the whole cycle. That makes it a read-modify-write loop sitting on the conditional-write primitive, and the same cycle travels over HTTP as an ETag on read and an If-Match on the update.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it when collisions are the exception and the gap between reading and writing is long or human — an open form, an external round-trip — because nothing is held while you think and no reader ever queues behind a writer. The bill lands on the caller: you own the reload-and-retry loop, and it only helps if the work replays cleanly against state that shifted underneath. On one hot row the losers keep redoing their work, more work than a lock would cost, so retries need bounds and backoff or contention becomes livelock. And because the check is equality, a version that leaves and returns to the same value waves a stale write through.</p>
+        </div>
       </div>
     </section>
 
@@ -186,7 +204,7 @@ sequenceDiagram
           <ul>
             <li data-kb-polarity="con" id="tradeoffs-con-1">Thrashes under high contention: many writers on one hot row means most of them lose, retry, and lose again — a retry storm that does more work than a lock would.</li>
             <li data-kb-polarity="con" id="tradeoffs-con-2">The loser's work is discarded and redone; without bounded retries and backoff, contention can turn into livelock.</li>
-            <li data-kb-polarity="con" id="tradeoffs-con-3">An equality version check is blind to the ABA problem unless the token strictly increments on every write.</li>
+            <li data-kb-polarity="con" id="tradeoffs-con-3" data-kb-level="expert">An equality version check is blind to the ABA problem unless the token strictly increments on every write.</li>
             <li data-kb-polarity="con" id="tradeoffs-con-4">The caller owns the reload-and-retry loop; skip it and a conflict becomes a silent lost update instead of a caught one.</li>
             <li data-kb-polarity="con" id="tradeoffs-con-5">Retries assume the work can simply replay — awkward when the read-modify-write had visible side effects between the read and the failed commit.</li>
           </ul>
@@ -212,7 +230,7 @@ sequenceDiagram
             <li data-kb-polarity="avoid" id="usage-avoid-1">Contention on a single row is high — retries pile up and pessimistic locking, which serializes cleanly, is cheaper overall.</li>
             <li data-kb-polarity="avoid" id="usage-avoid-2">The redone work is expensive or has side effects that cannot simply be replayed on retry.</li>
             <li data-kb-polarity="avoid" id="usage-avoid-3">The invariant spans multiple rows with no single row to version (write skew) — that needs a stricter isolation level, not a per-row check.</li>
-            <li data-kb-polarity="avoid" id="usage-avoid-4">There is no monotonic token available and the value you would compare on can round-trip — the equality check would miss the change.</li>
+            <li data-kb-polarity="avoid" id="usage-avoid-4" data-kb-level="advanced">There is no monotonic token available and the value you would compare on can round-trip — the equality check would miss the change.</li>
           </ul>
         </div>
       </div>
@@ -257,6 +275,54 @@ async function updateWithOcc(
         <div class="wild-item" data-kb-example="dynamodb-version"><strong>DynamoDB conditional update on a version attribute</strong><span>The common OCC recipe on DynamoDB: keep a numeric version attribute on the item and issue UpdateItem with a ConditionExpression like version = :expected while setting version = version + 1; a concurrent writer working from a stale version fails with ConditionalCheckFailedException and retries.</span></div>
         <div class="wild-item" data-kb-example="postgres-version"><strong>PostgreSQL</strong><span>Application-level OCC adds an explicit version column checked and incremented in the UPDATE ... WHERE id = ? AND version = ?; an affected-row count of zero signals a conflict. Postgres also exposes the xmin system column, the row-version left by MVCC, which can serve as the token without a hand-rolled column.</span></div>
         <div class="wild-item" data-kb-example="http-etag-ifmatch"><strong>HTTP ETag + If-Match</strong><span>A resource is served with an ETag validator; a later PUT or PATCH sends If-Match with that ETag, and the origin applies the change only if the resource still carries it, replying 412 Precondition Failed (or 409 Conflict) on a stale write — optimistic concurrency across a stateless protocol with no lock to hold.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Retry budget</strong> — The cap on attempts, or a wall-clock deadline, after which a conflict is surfaced as an error instead of retried. Too low turns ordinary contention into user-visible failures; too high lets one hot key soak up capacity redoing work it will lose again.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Backoff and jitter between attempts</strong> — The delay curve a loser waits before reloading and re-writing — fixed interval, capped exponential, or randomized. Randomization is the part that matters: without it every loser wakes at the same instant and collides again in lockstep.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>The precondition — what the write is checked against</strong> — A dedicated version column, an existing business value, the whole prior row in the WHERE clause, or a token the store hands you at read time (a PostgreSQL xmin, an Elasticsearch _seq_no/_primary_term pair, an HTTP ETag). Only a token that strictly increases on every write is safe against a value that leaves and returns.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Versioning granularity</strong> — Whether one token covers a whole record or a narrower part of it. A coarse token rejects edits that never actually overlapped, inflating the conflict rate; a fine one cuts conflicts but stops protecting any invariant that spans the fields it no longer covers.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Where the retry loop lives</strong> — Retry server-side and hide the conflict from the caller, or return a conflict status (409, or 412 on a failed If-Match) and let the client reload and resubmit. Client-side is the only honest choice when the merge needs a human decision rather than a blind replay.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Conflict rate</strong> — Share of conditional writes that fail the precondition — zero rows affected, an HTTP 412 or 409, a ConditionalCheckFailedException. The headline number: the optimistic bet is only paying while this stays low.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Attempts per successful write</strong> — The distribution, not the mean. A mean near one with a fat tail is the normal shape and says a few keys are contended while the rest are quiet; a rising body means contention has spread.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Give-up rate</strong> — Writes that exhausted the retry budget and returned an error. Each one is work done twice or more and then thrown away, with a caller told to try again.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Read-to-commit window</strong> — Elapsed time between reading the version and issuing the conditional write. Conflict probability scales with this window, so a slowdown anywhere inside it — an external call, a slow render, a user's think-time — raises the conflict rate with no increase in traffic.</li>
+            <li id="production-signal-5" data-kb-polarity="signal"><strong>Conflicts per key</strong> — Whether failed preconditions are spread across the keyspace or concentrated on a handful of rows. Concentration is the signature of a hot row that needs a different strategy, and the aggregate rate hides it.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Retry storm on a hot key</strong> — Concurrency on one row outruns the rate at which winners commit, so most writers lose, immediately re-read and re-write — and those retries are themselves load. Conflict rate on that key climbs toward total, latency and CPU rise, and useful throughput on the key falls while the rest of the keyspace looks healthy.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Lockstep retries</strong> — Losers that back off by the same fixed amount return at the same instant and collide again. Throughput oscillates in waves instead of degrading smoothly, and adding capacity does not help because the collisions are synchronized, not saturated.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Starvation of the slow writer</strong> — The longer a caller holds a version before committing, the likelier it is to lose. Under load the writers with long think-time or heavy work never win while quick writers sail through — a fairness failure that an aggregate success rate hides completely.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Side effects replayed on retry</strong> — Work done between the read and the failed commit that was not confined to the store — a message sent, an external call made, an event published — happens again on every attempt. A rising conflict rate turns what was a rare duplicate into a routine one.</li>
+            <li id="production-failure-5" data-kb-polarity="failure"><strong>ABA slip on a non-monotonic token</strong> — When the token is a business value that can return to a previous value, a higher write rate makes the round trip likelier. The equality check reads unchanged while a write did land, so the update is lost silently — no error, no retry, nothing in the conflict rate.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Bound the retry loop with a maximum attempt count or a deadline, and define exactly what the caller sees when it is exhausted.</li>
+            <li id="production-check-2" data-kb-polarity="check">Randomize the backoff between attempts so losers do not all return at the same moment and collide again.</li>
+            <li id="production-check-3" data-kb-polarity="check">Check the outcome of every conditional write — the affected-row count, or the precondition-failed status — and never let a zero-row update pass as success.</li>
+            <li id="production-check-4" data-kb-polarity="check">Use a token that strictly increases on every write, or compare the whole prior record, so the equality check cannot be fooled by a value that returns to itself.</li>
+            <li id="production-check-5" data-kb-polarity="check">Keep side effects out of the retried section, or make them idempotent, so a replayed attempt cannot duplicate them.</li>
+            <li id="production-check-6" data-kb-polarity="check">Load-test the hottest key at the concurrency you actually expect, and decide in advance what that key falls back to — a lock, or serializing it through a queue — if the conflict rate does not hold.</li>
+            <li id="production-check-7" data-kb-polarity="check">Alert on give-up rate and on conflicts concentrating in a few keys; both say the optimistic bet has stopped paying there.</li>
+          </ul>
+        </div>
       </div>
     </section>
 

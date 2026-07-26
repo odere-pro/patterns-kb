@@ -40,7 +40,7 @@
   </script>
 </head>
 <body class="doc">
-  <main class="doc-wrap" data-kb-id="hyperloglog" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Estimate the number of distinct items in a stream in ~kilobytes" data-kb-order="86" data-kb-aliases="[&quot;HLL&quot;]" data-kb-tags="[&quot;scalability&quot;,&quot;performance&quot;,&quot;resource-management&quot;,&quot;observability&quot;]" data-kb-solves="[&quot;I need unique-visitor counts over billions of events without storing every id&quot;,&quot;counting distinct values exactly uses far too much memory&quot;,&quot;approximate cardinality is fine if it fits in a few kilobytes&quot;]">
+  <main class="doc-wrap" data-kb-id="hyperloglog" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Estimate the number of distinct items in a stream in ~kilobytes" data-kb-order="86" data-kb-aliases="[&quot;HLL&quot;]" data-kb-tags="[&quot;scalability&quot;,&quot;performance&quot;,&quot;resource-management&quot;,&quot;observability&quot;]" data-kb-solves="[&quot;I need unique-visitor counts over billions of events without storing every id&quot;,&quot;counting distinct values exactly uses far too much memory&quot;,&quot;approximate cardinality is fine if it fits in a few kilobytes&quot;,&quot;recomputing the distinct count means rescanning every event from the beginning&quot;,&quot;adding up my daily unique counts double-counts anyone who came back&quot;]">
 
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../index.html">Map</a>
@@ -69,6 +69,24 @@
         <p><strong>HyperLogLog</strong> estimates the number of <em>distinct</em> items a stream has contained — its cardinality — from a fixed, tiny bank of registers. The trick is in the hash. Hash each item and look at the leading bits: a hash beginning with a 1 turns up about half the time, one beginning with <code>01</code> a quarter of the time, <code>001</code> an eighth, and so on. So a long run of leading zeros is rare, and the rarest run you have seen is evidence of how many distinct items must have passed through to produce it — see a hash with <em>k</em> leading zeros and you have probably observed on the order of 2<sup><em>k</em></sup> distinct values.</p>
         <p>A single longest-run counter would be wildly noisy, so HyperLogLog splits the work. The first few bits of each hash pick one of <em>m</em> registers; the rest supplies the leading-zero count, and each register keeps only the maximum it has seen. To read the cardinality, combine the registers with a harmonic mean (which tames the outliers) scaled by a bias constant, with small corrections at the very low and very high ends of the range. The standard error is about 1.04/√<em>m</em>, so accuracy improves predictably as you add registers — Redis's default of 16384 registers lands near 0.81%.</p>
         <p>The force it resolves is counting uniques when keeping every id is untenable. An exact distinct count needs a set that grows with the number of distinct items — gigabytes for billions of visitors or IP addresses. HyperLogLog fixes its footprint at roughly 12KB regardless of how many distinct items flow through, trading a small, bounded error for that flat memory. Introduced by Flajolet, Fusy, Gandouet and Meunier in 2007 as the refinement of earlier LogLog estimators, it answers only "how many distinct" — not which ones, not how often, not whether a given item is among them. Registers merge by taking the element-wise maximum, so per-shard or per-day sketches union losslessly into a grand total.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>When you want to know how many different people came in, not how many visits, writing down every name stops being possible past a certain size. So turn each name into a run of coin flips and remember only the luckiest streak. Twelve heads in a row almost never happens with a few people, so seeing it means a huge crowd came through. That streak gives a close-enough count.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>Hash every item and count its leading zeros: long runs are rare, so the longest observed is evidence of how many distinct values passed. One counter would be noisy, so the top bits of each hash choose which of m registers to update, the rest gives the run length, and a register keeps only the largest offered. Combining registers with a harmonic mean and a bias constant yields the estimate, standard error near 1.04 over the square root of m. It sits beside frequency sketches and membership filters, answering only the distinct-count question.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it when the answer you need is a distinct count over a stream too large to retain every identifier — the return is a footprint fixed near twelve kilobytes whatever the volume, with error you budget in advance by picking the register count. The bill: the number is never exact, so it cannot feed billing, deduplication or anything that must reconcile to the unit; below a few thousand distinct items a plain set is smaller and right. Merging is cheap and lossless, keeping the larger value in each register, but intersections through inclusion-exclusion compound two errors into one you cannot defend, and the sketch can never say which items it counted.</p>
+        </div>
       </div>
     </section>
 
@@ -112,7 +130,7 @@ flowchart LR
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Tiny, fixed memory — roughly 12KB of registers estimates cardinalities into the billions, versus gigabytes for an exact set of the same keys.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Bounded, predictable error — the standard error is about 1.04/√m, so more registers buy tighter accuracy on a known curve.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">Sketches merge losslessly by element-wise maximum — union per-shard or per-day sketches into a grand total without double-counting or re-reading events.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Insert is O(1): one hash, then a single max against one register.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Insert is O(1): one hash, then a single max against one register.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -121,7 +139,7 @@ flowchart LR
             <li id="tradeoffs-con-1" data-kb-polarity="con">Estimates only cardinality — it cannot tell you whether a specific item is present, how often it appeared, or list what it counted.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Always approximate: a small percentage error is inherent, so it is wrong for exact billing, dedup, or anything that must reconcile to the unit.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">Overkill for small sets — its fixed footprint and correction terms are not justified below a few thousand distinct items, where a plain hash set is smaller and exact.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Intersections are hard — union is exact via max, but estimating the overlap of two sets by inclusion-exclusion compounds the error badly.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Intersections are hard — union is exact via max, but estimating the overlap of two sets by inclusion-exclusion compounds the error badly.</li>
           </ul>
         </div>
       </div>
@@ -187,6 +205,53 @@ flowchart LR
         <div class="wild-item" data-kb-example="postgresql-hll"><strong>PostgreSQL postgresql-hll</strong><span>Adds an hll column type with hll_add and hll_union_agg aggregates, so distinct counts can be pre-aggregated per group and unioned across rows entirely in SQL.</span></div>
         <div class="wild-item" data-kb-example="bigquery"><strong>Google BigQuery</strong><span>APPROX_COUNT_DISTINCT, and the HLL_COUNT.INIT / MERGE / EXTRACT functions, estimate distinct values with HyperLogLog++ and let intermediate sketches be merged across queries.</span></div>
         <div class="wild-item" data-kb-example="presto-trino"><strong>Presto / Trino</strong><span>approx_distinct() computes cardinality with HyperLogLog, taking an optional target standard error, and exposes an HLL type so partial sketches can be merged.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Precision p / register count</strong> — m = 2^p registers set the accuracy — the standard error is about 1.04/√m, so p = 14 (16384 registers) lands near 0.81% in roughly 12KB. The one dial that trades bytes for error, and it is fixed for the life of a sketch.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Hash width</strong> — 32-bit versus 64-bit hashes. A 32-bit hash starts colliding as distinct counts climb into the billions, which is why HyperLogLog++ moved to 64 bits; choose the width from the largest cardinality the system will ever count.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Sparse-to-dense threshold</strong> — How large the sparse (index, value) encoding may grow before the sketch switches to the full flat register array — Redis exposes this as hll-sparse-max-bytes. Higher keeps near-empty sketches tiny; lower pays the full fixed footprint sooner but keeps updates cheap.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Rollup granularity — the sketch key</strong> — Which dimensions and time buckets each get their own sketch (per shard, per hour, per campaign). Fine granularity buys flexible unions later, but multiplies the fixed per-sketch footprint by the whole key cross-product.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Measured relative error</strong> — The estimate against an exact distinct count computed on a bounded window or a sample — the only way to know the error you actually deployed, and it should sit inside the 1.04/√m band you chose</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Total sketch storage</strong> — Live sketch count × bytes per sketch. Each sketch is capped, so this number grows through the count, not the size — it is the real memory story</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Per-sketch size distribution</strong> — Bytes per stored sketch shows how many are still in the sparse encoding versus paying the full dense register array, which is what predicts the next step up in storage</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Rollup latency versus sketches unioned</strong> — Time to answer a rolled-up count, plotted against how many sketches the union touches; it rises with that count, so a widening query is the cause before the data is</li>
+            <li id="production-signal-5" data-kb-polarity="signal"><strong>Estimated cardinality against the hash ceiling</strong> — The estimate itself, watched against the usable range of the hash width in use — approaching it means collisions are starting to bias the count downward</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Sketch-count explosion</strong> — The footprint of one sketch is fixed; the number of sketches is not. A high-cardinality rollup key — per user, per URL, per fine time bucket — multiplies ~12KB by millions and turns a kilobyte-sized structure into hundreds of gigabytes</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Slow rollup over many sketches</strong> — A month-from-days or global-from-shards answer unions every constituent sketch at read time, so latency grows with the number merged. The sketches stay small, but there are thousands of them and the union runs on every query</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Bulk sparse-to-dense transition</strong> — A traffic spike pushes a whole population of near-empty sketches past the sparse threshold at once, and memory steps up to the full register array for all of them together rather than gradually</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Collisions near the hash ceiling</strong> — With a 32-bit hash, once true cardinality reaches into the billions distinct items begin sharing hashes and the estimate flattens below the truth. It surfaces as a plausible number that has quietly stopped growing, not as an error</li>
+            <li id="production-failure-5" data-kb-polarity="failure"><strong>Compounded error on intersections and subtraction</strong> — Union is exact by element-wise maximum, but overlap computed by inclusion-exclusion subtracts two approximations. When the two sets are similar in size the errors dominate the difference, and the answer can come out nonsensical — including negative</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Pick the precision from a written error budget (1.04/√m) and fix it before any sketch is persisted — sketches built with a different precision or a different hash function cannot be merged.</li>
+            <li id="production-check-2" data-kb-polarity="check">Budget storage as sketch count × bytes across the full cross-product of the rollup key, not as the size of one sketch.</li>
+            <li id="production-check-3" data-kb-polarity="check">Choose the hash width from the largest cardinality the system will ever count, not from today's traffic.</li>
+            <li id="production-check-4" data-kb-polarity="check">Keep an exact path for anything that must reconcile to the unit — billing, dedup, invoices — and never let an approximate count feed it.</li>
+            <li id="production-check-5" data-kb-polarity="check">Validate the deployed estimate against an exact count on a bounded window before anyone is allowed to trust the dashboard.</li>
+            <li id="production-check-6" data-kb-polarity="check">Decide the merge story up front: same precision, same hash, and a serialization every reader as well as the writer understands.</li>
+            <li id="production-check-7" data-kb-polarity="check">Answer overlap questions with a sketch per segment or a structure built for similarity — never by subtracting two estimates.</li>
+          </ul>
+        </div>
       </div>
     </section>
 
