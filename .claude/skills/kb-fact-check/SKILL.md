@@ -80,6 +80,20 @@ with zero network instead: does the design's prose exercise the pattern each `de
 names (`demonstrates-unsupported`/`-missing`), and is the `estimation` arithmetic self-consistent
 (`estimation-arithmetic`)?
 
+At corpus scale one evaluator cannot hold every class, so each writes **staged** findings to
+`staging/<class>/<id>.json` against the contract in
+[`staged-findings-contract.md`](staged-findings-contract.md) — one file per page per class, written
+the moment that page is done so a run interrupted mid-batch loses nothing and a re-run skips what
+already exists. `merge-staged.mjs` then assembles the classes into one findings file per page:
+
+```
+node .claude/skills/kb-fact-check/merge-staged.mjs --all-staged --captured-at <ISO>
+node .claude/skills/kb-fact-check/merge-staged.mjs <id,id,…>  --captured-at <ISO>
+```
+
+It **replaces** the page's findings file from staging, so merge before repairing anything — a
+re-merge silently discards edits (verdicts, `absenceEvidence`) made in `findings/` afterwards.
+
 ## 5. Verify + gate
 
 A second reader gets only `{claim, source quotes, kb quote, absenceEvidence}` — never the first
