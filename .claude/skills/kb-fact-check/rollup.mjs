@@ -20,7 +20,12 @@ const argv = process.argv.slice(2);
 const CAPTURED_AT = (() => { const i = argv.indexOf("--captured-at"); return i >= 0 ? argv[i + 1] : "unknown"; })();
 
 const SEV_WEIGHT = { CRITICAL: 100, HIGH: 20, MEDIUM: 5, LOW: 1, NOTE: 0 };
-const FIX_OF = f => f.proposedFix?.writer || f.proposedFix?.action || "hand-edit prose";
+// Group by the KIND of edit, not by the writer — every finding names the same writer (kb-edit),
+// so keying on it collapses the whole corpus into one bucket and defeats fix-class review.
+const FIX_OF = f => f.proposedFix?.action || "hand-edit prose";
+// Per-class listing cap: budget the human's reading, but count what is not listed instead of
+// dropping it. CRITICAL and HIGH are never capped.
+const CLASS_CAP = Number((() => { const i = argv.indexOf("--cap"); return i >= 0 ? argv[i + 1] : 25; })());
 
 function loadFindings() {
   const pages = [];
@@ -52,7 +57,8 @@ for (const pg of pages) {
     const sev = f.severity || "MEDIUM";
     totals[sev] = (totals[sev] ?? 0) + 1; counts[sev] = (counts[sev] ?? 0) + 1;
     (byDimension[f.dimension] ??= []).push({ fid: f.fid, kbId: pg.kbId, severity: sev, verdict: f.verdict, claim: f.claim });
-    (byFix[FIX_OF(f)] ??= []).push(f.fid);
+    // Fix classes are a worklist: a NOTE records that we checked something, not work to do.
+    if (sev !== "NOTE") (byFix[FIX_OF(f)] ??= []).push(f.fid);
   }
   for (const n of pg.notes ?? []) { totals.NOTE++; notesCount++; (byDimension[n.dimension] ??= []).push({ fid: n.fid, kbId: pg.kbId, severity: "NOTE", claim: n.claim }); }
   const score = Object.entries(counts).reduce((a, [s, n]) => a + n * (SEV_WEIGHT[s] ?? 0), 0);
@@ -84,13 +90,27 @@ L.push(`Pages with no actionable finding (healthy null results): ${zeroFinding.l
 if (unsourced.length) L.push(`Pages with no external source (evaluated internally / KB's own synthesis): ${unsourced.join(", ")}.`, "");
 
 const sevRank = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, NOTE: 4 };
-L.push("", `## By fix class`, "", `Fix one class in one sitting to keep the KB's voice consistent.`, "");
+const line = (pg, f) => `- **${f.severity}** \`${pg}\` [${f.dimension}] ${f.verdict ? `(${f.verdict})` : ""} — ${f.claim}`;
+
+// The worklist: everything that ships an untruth, uncapped, read first and in one sitting.
+const urgent = [];
+for (const pg of pages) for (const f of pg.findings ?? []) if (active(f) && (f.severity === "CRITICAL" || f.severity === "HIGH")) urgent.push({ pg: pg.kbId, f });
+urgent.sort((a, b) => (sevRank[a.f.severity] ?? 9) - (sevRank[b.f.severity] ?? 9));
+L.push("", `## Worklist — CRITICAL + HIGH (${urgent.length})`, "", urgent.length
+  ? `Apply these before the MEDIUM tail: each asserts something the sources contradict.`
+  : `Nothing at CRITICAL or HIGH.`, "");
+for (const { pg, f } of urgent) L.push(`${line(pg, f)}  \n  → \`${FIX_OF(f)}\`: ${f.proposedFix?.intent ?? ""}`);
+
+L.push("", `## By fix class`, "", `Fix one class in one sitting to keep the KB's voice consistent. Each class lists up to ${CLASS_CAP} findings; any remainder is counted, not dropped — read it from \`findings/<kind>/<id>.eval.json\`.`, "");
 for (const [fix, fids] of Object.entries(byFix).sort((a, b) => b[1].length - a[1].length)) {
-  L.push(`### \`${fix}\` — ${fids.length}`, "");
   const rows = [];
-  for (const pg of pages) for (const f of pg.findings ?? []) if (active(f) && FIX_OF(f) === fix) rows.push({ pg: pg.kbId, f });
+  for (const pg of pages) for (const f of pg.findings ?? []) if (active(f) && f.severity !== "NOTE" && FIX_OF(f) === fix) rows.push({ pg: pg.kbId, f });
   rows.sort((a, b) => (sevRank[a.f.severity] ?? 9) - (sevRank[b.f.severity] ?? 9));
-  for (const { pg, f } of rows) L.push(`- **${f.severity}** \`${pg}\` [${f.dimension}] ${f.verdict ? `(${f.verdict})` : ""} — ${f.claim}`);
+  const shown = rows.filter(r => r.f.severity === "CRITICAL" || r.f.severity === "HIGH").length;
+  const limit = Math.max(CLASS_CAP, shown); // never cap away a CRITICAL/HIGH
+  L.push(`### \`${fix}\` — ${fids.length}`, "");
+  for (const { pg, f } of rows.slice(0, limit)) L.push(line(pg, f));
+  if (rows.length > limit) L.push("", `_… ${rows.length - limit} further finding(s) in this class not listed here (unreviewed, not dropped)._`);
   L.push("");
 }
 L.push(`## By page (ranked by damage score)`, "", "| page | kind | worst | C/H/M/L | notes | score |", "|---|---|---|---|---|---|");
