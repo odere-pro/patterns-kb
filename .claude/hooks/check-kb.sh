@@ -5,7 +5,9 @@
 #                            names the exact page and problem), then the whole-graph
 #                            safety net (make check, ~0.8s)
 #   scripts/** or Makefile → make check (a model/build edit can invalidate every page)
-#   site/assets/*          → nothing (presentation cannot break validity)
+#   site/assets/**/*.js    → node --check (hand-authored runtime — syntax only;
+#                            presentation cannot break KB validity)
+#   site/assets/* (rest)   → nothing
 #
 # Reads the hook payload on stdin; exits 2 to surface a problem back to Claude.
 set -uo pipefail
@@ -31,6 +33,15 @@ remind() {
 
 case "$file" in
   */scripts/test/*) exit 0 ;;  # test fixture corpus — exercised by 'make test', not the live graph
+  */site/assets/*.js)
+    out=$(node --check "$file" 2>&1)
+    if [ $? -ne 0 ]; then
+      echo "node --check FAILED for this hand-authored asset:" >&2
+      echo "$out" | head -8 >&2
+      exit 2
+    fi
+    exit 0
+    ;;
   */site/assets/*) exit 0 ;;   # presentation layer — validity is unaffected
   */site/*.html)
     out=$(node scripts/kb.mjs validate --file "$file" 2>&1)
