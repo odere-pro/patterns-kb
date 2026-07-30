@@ -85,6 +85,10 @@
     return hits;
   }
 
+  // The graph page reuses this scorer for its search and symptom seeds; mount() below
+  // early-returns there (no .controls), so exposing the function is the only coupling.
+  window.KB_MATCHES = matches;
+
   // ---- facets ----
   // Chips resolved to id lists by build.mjs. Rail groups AND together; chips within a rail
   // union. The active set intersects with the free-text hits before anything is shown.

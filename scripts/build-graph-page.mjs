@@ -1,93 +1,74 @@
 #!/usr/bin/env node
-/* build-graph-page.mjs — AUTHORING-TIME tool. Emits site/map/graph.html: a readable
- * overview of the relationship web from graph.json — a relation-type legend, one mermaid
- * cluster per theme (theme + its member patterns), and a "most connected" index. A single
- * all-nodes graph (146 and counting) would be an unreadable hairball, so we show
- * meaningful clusters instead. */
+/* build-graph-page.mjs — AUTHORING-TIME tool. Emits site/map/graph.html: the shell of
+ * the interactive relationship graph + architecture builder. The page replaced the old
+ * static per-theme mermaid clusters — all 260 nodes and their typed edges now render as
+ * one d3-force canvas with two modes (Explore / Build).
+ *
+ * This script emits STRUCTURE ONLY: header, mode tabs, the verb legend (which doubles
+ * as an edge filter), explore/build controls, the empty SVG + panel skeletons, and a
+ * noscript fallback. All runtime behavior is hand-authored in assets/graph-view.js and
+ * styled in assets/graph.css; the data ships as assets/graphdata.js (window.KB_GRAPH),
+ * emitted by build.mjs — a script, not a fetch, so file:// keeps working. */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { THEME_ORDER, ML_CASE_STUDIES, DESIGN_ORDER, esc } from "./lib/model.mjs";
+import { BANDS, DESIGN_ORDER, RELATION_TYPES, REL_ORDER, BUILDER_PRESETS, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json"), "utf8"));
 const N = graph.nodes;
-const mid = (id) => "n_" + id.replace(/-/g, "_");
 
-// From a page in site/map/, a sibling subpage is ../<dir>/<id>.html
-const pageHref = (id) => `../${N[id].path}`;
+const count = (kind) => Object.values(N).filter((n) => n.kind === kind).length;
+const counts = Object.fromEntries(["pattern", "hazard", "theme", "principle", "design"].map((k) => [k, count(k)]));
 
-function themeCluster(themeId) {
-  const t = N[themeId];
-  const members = t.memberPatterns.filter((m) => m.href); // skip stubs
-  const lines = [`flowchart LR`, `    ${mid(themeId)}(["${esc(t.name)}"])`];
-  for (const m of members) {
-    lines.push(`    ${mid(m.id)}["${esc(m.name)}"]`);
-    lines.push(`    ${mid(themeId)} --- ${mid(m.id)}`);
-    lines.push(`    click ${mid(m.id)} "${pageHref(m.id)}"`);
-  }
-  lines.push(`    click ${mid(themeId)} "../themes/${themeId}.html"`);
-  return lines.join("\n");
+/* ---- verb legend: one toggle per family ----
+ * A family is a symmetric verb or a directional pair; its canonical id is the
+ * sorted-first verb — the SAME canonicalization graph-view.js and graph.css use, so the
+ * button's data-family and fam-* class line up with the edge classes. Display order and
+ * pair-label order follow REL_ORDER. */
+const families = [];
+const seen = new Set();
+for (const [type, def] of Object.entries(RELATION_TYPES)) {
+  const canonical = def.symmetric ? type : [type, def.inverse].sort()[0];
+  if (seen.has(canonical)) continue;
+  seen.add(canonical);
+  const labels = def.symmetric ? [def.label] : [def.label, RELATION_TYPES[def.inverse].label];
+  labels.sort((a, b) => REL_ORDER.indexOf(a) - REL_ORDER.indexOf(b));
+  families.push({ canonical, label: labels.join(" / ") });
 }
+families.sort((a, b) =>
+  REL_ORDER.indexOf(a.label.split(" / ")[0]) - REL_ORDER.indexOf(b.label.split(" / ")[0]));
 
-function themeSection(themeId) {
-  const t = N[themeId];
-  return `      <section class="doc-section">
-        <h2 class="doc-h"><a href="../themes/${themeId}.html" style="color:inherit;text-decoration:none">${esc(t.name)}</a></h2>
-        <p class="prose">${esc(t.essence)}.</p>
-        <figure class="diagram">
-          <pre class="mermaid">
-${themeCluster(themeId)}
-          </pre>
-          <figcaption>${esc(t.name)} and the patterns that implement it — click any node to open its page.</figcaption>
-        </figure>
-      </section>`;
-}
+const legend = families.map((f) =>
+  `        <button type="button" class="legend-btn fam-${f.canonical}" data-family="${f.canonical}" aria-pressed="true"><span class="swatch" aria-hidden="true"></span>${esc(f.label)}</button>`,
+).join("\n");
 
-/* A design case study clusters with the patterns it `demonstrates` (its typed edges),
- * the case-study analogue of a theme's member patterns. */
-function designCluster(designId) {
-  const d = N[designId];
-  const used = d.relations.filter((r) => r.type === "demonstrates" && r.href);
-  const lines = [`flowchart LR`, `    ${mid(designId)}(["${esc(d.name)}"])`];
-  for (const r of used) {
-    lines.push(`    ${mid(r.to)}["${esc(r.name)}"]`);
-    lines.push(`    ${mid(designId)} --- ${mid(r.to)}`);
-    lines.push(`    click ${mid(r.to)} "${pageHref(r.to)}"`);
-  }
-  lines.push(`    click ${mid(designId)} "${pageHref(designId)}"`);
-  return lines.join("\n");
-}
+/* ---- controls ---- */
+const KIND_LABELS = { pattern: "Patterns", hazard: "Hazards", theme: "Themes", principle: "Principles", design: "Case studies" };
+const kindBtns = Object.entries(KIND_LABELS).map(([kind, label]) =>
+  `        <button type="button" class="gbtn kind-btn" data-kind="${kind}" aria-pressed="true">${esc(label)}</button>`,
+).join("\n");
 
-function designSection(designId) {
-  const d = N[designId];
-  return `      <section class="doc-section">
-        <h2 class="doc-h"><a href="${pageHref(designId)}" style="color:inherit;text-decoration:none">${esc(d.name)}</a></h2>
-        <p class="prose">${esc(d.essence)}.</p>
-        <figure class="diagram">
-          <pre class="mermaid">
-${designCluster(designId)}
-          </pre>
-          <figcaption>${esc(d.name)} and the patterns it demonstrates — click any node to open its page.</figcaption>
-        </figure>
-      </section>`;
-}
-const DESIGNS = DESIGN_ORDER.filter((id) => N[id]);
+const bandOptions = BANDS.map((b) =>
+  `          <option value="${b.id}">${esc(b.kind === "elevation" ? `${b.numeral} · ${b.label}` : b.label)}</option>`,
+).join("\n");
 
-// relation-type legend
-const legend = Object.entries(graph.relationTypes)
-  .filter(([, d]) => d.symmetric || d.inverse) // all of them, but list symmetric once + directional pairs
-  .map(([type, d]) => `          <div class="rel-item"><a href="#" onclick="return false" style="cursor:default">${esc(d.label)}</a><span class="rel-note">${d.symmetric ? "symmetric" : "paired with “" + esc(graph.relationTypes[d.inverse].label) + "”"}</span></div>`)
-  .join("\n");
+const presetBtns = BUILDER_PRESETS.map((p) =>
+  `        <button type="button" class="gbtn preset-btn" data-preset="${p.id}" aria-pressed="false">${esc(p.label)}</button>`,
+).join("\n");
 
-// most-connected patterns
+const designOptions = DESIGN_ORDER.filter((id) => N[id]).map((id) =>
+  `          <option value="${id}">${esc(N[id].name)}</option>`,
+).join("\n");
+
+/* ---- noscript fallback: the most connected patterns, as plain links ---- */
 const ranked = Object.values(N)
   .filter((n) => n.kind === "pattern")
-  .map((n) => ({ id: n.id, name: n.name, path: n.path, deg: n.relations.length }))
+  .map((n) => ({ name: n.name, path: n.path, deg: n.relations.length }))
   .sort((a, b) => b.deg - a.deg)
   .slice(0, 12);
 const rankedHtml = ranked
-  .map((r) => `          <div class="rel-item"><a href="../${r.path}">${esc(r.name)}</a><span class="rel-note">${r.deg} connections</span></div>`)
+  .map((r) => `            <div class="rel-item"><a href="../${r.path}">${esc(r.name)}</a><span class="rel-note">${r.deg} connections</span></div>`)
   .join("\n");
 
 const html = `<!doctype html>
@@ -95,48 +76,78 @@ const html = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Relationship Graph · Map</title>
-  <meta name="description" content="An overview of how the patterns relate — one cluster per systems-fluency theme, plus the relationship vocabulary.">
+  <title>Interactive Graph · Map</title>
+  <meta name="description" content="Every pattern, hazard, theme, principle and case study on one interactive canvas — explore the ${graph.meta.relationships} typed relationships, or build an architecture and watch suggestions, exclusions and hazard coverage derive live.">
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
+  <link rel="stylesheet" href="../assets/graph.css">
   <script src="../assets/theme.js"></script>
-  <script src="../assets/lens.js"></script>
+  <!-- no lens.js: this page carries no leveled prose, so the reading-level toggle would
+       render three dead buttons here -->
 </head>
-<body class="doc theme">
-  <main class="doc-wrap">
+<body class="doc theme mode-explore">
+  <main class="doc-wrap graph-page">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../index.html">Map</a>
       <span class="sep">▸</span>
-      <span aria-current="page">Relationship Graph</span>
+      <span aria-current="page">Interactive Graph</span>
     </nav>
 
     <header class="doc-head">
       <p class="doc-kicker">Map · The whole web</p>
-      <h1 class="doc-title">Relationship Graph</h1>
-      <p class="doc-essence">${graph.meta.patterns} patterns, ${graph.meta.hazards} hazards, and ${graph.meta.themes} themes, wired by ${graph.meta.renderedRelations} bidirectional relationships. Shown as one readable cluster per theme rather than a single hairball.</p>
+      <h1 class="doc-title">Interactive Graph</h1>
+      <p class="doc-essence">${counts.pattern} patterns, ${counts.design} case studies, ${counts.theme} themes, ${counts.hazard} hazards and ${counts.principle} principles, wired by ${graph.meta.relationships} typed relationships — one canvas. <strong>Explore</strong> the whole web with filters and search, or <strong>Build</strong>: seed an architecture, apply patterns, and watch suggestions, exclusions and hazard coverage derive live. Double-click any node to open its page.</p>
       <div class="doc-metarow">
-        <span class="badge">Overview</span>
+        <span class="badge">Interactive</span>
         <span class="badge muted">${graph.meta.relationships} relationships</span>
       </div>
     </header>
 
-    <section class="doc-section">
-      <h2 class="doc-h">Relationship vocabulary</h2>
-      <div class="rel-group"><div class="rel-list">
+    <div class="graph-controls">
+      <div class="mode-tabs" role="group" aria-label="Mode">
+        <button type="button" class="mode-tab" data-mode="explore" aria-pressed="true">Explore</button>
+        <button type="button" class="mode-tab" data-mode="build" aria-pressed="false">Build</button>
+      </div>
+      <div class="explore-controls" role="group" aria-label="Explore filters">
+${kindBtns}
+        <select class="graph-select" id="band-select" aria-label="Filter patterns by band">
+          <option value="">All bands</option>
+${bandOptions}
+        </select>
+        <button type="button" class="gbtn" id="fav-btn" aria-pressed="false">★ Favourites</button>
+        <input class="graph-input" id="graph-search" type="search" placeholder="Search — a name, or a symptom" aria-label="Search the graph by name or symptom" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="build-controls" role="group" aria-label="Builder seed">
+${presetBtns}
+        <select class="graph-select" id="design-select" aria-label="Seed from a case study">
+          <option value="">Seed from a case study…</option>
+${designOptions}
+        </select>
+        <input class="graph-input" id="symptom-search" type="search" placeholder="Describe a symptom to seed suggestions" aria-label="Describe a symptom to seed suggestions" autocomplete="off" spellcheck="false">
+        <span class="build-hint">…or click any node to start from it</span>
+      </div>
+    </div>
+
+    <div class="graph-legend" role="group" aria-label="Relationship families — click to show or hide edges">
 ${legend}
-      </div></div>
-    </section>
+    </div>
 
-${THEME_ORDER.map(themeSection).join("\n\n")}
+    <div class="graph-stage">
+      <svg id="kb-graph" role="application" aria-label="Pattern relationship graph. Tab to a node, Enter to select or apply, o to open its page."></svg>
+      <aside id="build-panel" aria-label="Your architecture stack"></aside>
+    </div>
 
-${ML_CASE_STUDIES.map(themeSection).join("\n\n")}${DESIGNS.length ? "\n\n" + DESIGNS.map(designSection).join("\n\n") : ""}
-
-    <section class="doc-section">
-      <h2 class="doc-h">Most connected patterns</h2>
-      <div class="rel-group"><div class="rel-list">
+    <noscript>
+      <section class="doc-section graph-noscript">
+        <h2 class="doc-h">This page is interactive — and needs JavaScript</h2>
+        <p class="prose">Without it, start from the most connected patterns below, or read the
+          <a href="../vocab.html">relationship vocabulary</a> — every pattern page lists its own
+          typed neighbours at the end.</p>
+        <div class="rel-group"><div class="rel-list">
 ${rankedHtml}
-      </div></div>
-    </section>
+        </div></div>
+      </section>
+    </noscript>
 
     <nav class="docnav" aria-label="Navigation">
       <a class="prev" href="../index.html">← The Map</a>
@@ -145,8 +156,11 @@ ${rankedHtml}
     </nav>
   </main>
 
-  <script src="../assets/vendor/mermaid.min.js"></script>
-  <script src="../assets/diagram.js"></script>
+  <script src="../assets/catalog.js"></script>
+  <script src="../assets/graphdata.js"></script>
+  <script src="../assets/search.js"></script>
+  <script src="../assets/vendor/d3.min.js"></script>
+  <script src="../assets/graph-view.js"></script>
 </body>
 </html>
 `;
@@ -158,5 +172,5 @@ if (process.argv.includes("--check")) {
   console.log("map/graph.html is up to date.");
 } else {
   writeFileSync(OUT, html);
-console.log("site/map/graph.html written.");
+  console.log(`site/map/graph.html written: ${Object.keys(N).length} nodes, ${families.length} relation families, ${BUILDER_PRESETS.length} presets.`);
 }

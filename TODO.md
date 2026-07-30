@@ -32,6 +32,32 @@ dependency — weigh against the zero-dependency ethos).
 
 **Effort.** Small (more solves) to large (embeddings).
 
+## 3. Review the builder preset curation
+
+**What.** The interactive graph's Build mode ships four seed presets (`BUILDER_PRESETS` in
+`scripts/lib/model.mjs`): HTTP API service, Frontend app, Data pipeline, Event-driven
+system. The candidate ids are build-validated (a renamed page fails `make check`), but the
+*selection* is editorial and was drafted in one pass. Worth a deliberate review: is each
+list the load-bearing dozen for that shape, and are four shapes the right four?
+
+**Effort.** Small — it is a curation pass, no code.
+
+## 4. Automated browser tests for the graph runtime
+
+**What.** `site/assets/graph-view.js` (the interactive graph's hand-authored runtime) has
+no automated tests — `make test` covers the data projection (`graphdata.js`) and preset
+validity, but Explore/Build behavior, the hash round-trip and the theme recolor are
+verified by hand (checklist in the **kb-graph** skill). The post-edit hook only
+syntax-checks the file.
+
+**How.** A browser test needs a driver (Playwright or similar), which reintroduces a real
+dev dependency — the same zero-dependency trade-off as mermaid pre-rendering (item 1).
+Cheaper middle ground: extract the pure derivation logic (family canonicalization, the
+`{seed, applied}` → suggestions/exclusions/warnings reduction, hash encode/decode) into a
+module `node --test` can import, and leave only d3 wiring untested.
+
+**Effort.** Small (extract + unit-test the reductions) to medium (real browser harness).
+
 ## Notes / non-tasks
 
 - **`mentions` / `mentionedBy`** are already derived into `graph.json` (prose links between

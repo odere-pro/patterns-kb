@@ -8,10 +8,14 @@
  * bake "&amp;" into a label here.
  */
 
+/* Where the site publishes. Used for absolute links in exports (the graph page's
+ * "Copy as Markdown") and as the base of the JSON-LD namespace below. */
+export const SITE_URL = "https://odere-pro.github.io/patterns-kb/";
+
 /* The namespace for KB-specific terms in JSON-LD. It is an identifier, not a fetch
  * target — nothing dereferences it — but it points at the published vocab page so a
  * reader can look a term up. One constant, so a repo rename is a one-line change. */
-export const VOCAB_NS = "https://odere-pro.github.io/patterns-kb/vocab.html#";
+export const VOCAB_NS = SITE_URL + "vocab.html#";
 export const KB_NAME = "Patterns KB";
 
 /* Blocks each kind of page is expected to carry, in order. The section id doubles as
@@ -280,6 +284,47 @@ export const DESIGN_ORDER = [
   "parking-lot", "elevator", "amazon-locker", "connect-four", "file-system",
   "logging-service", "inventory-management", "bookmyshow", "design-rate-limiter",
 ];
+/* ---- builder presets ----
+ * Seed architectures for the interactive graph's Build mode: each names a starting
+ * shape and the patterns such a system usually reaches for first. Candidate ids are
+ * validated against the live corpus by build.mjs, so a renamed or deleted page fails
+ * the build instead of silently dropping a suggestion. Curation is editorial — the
+ * load-bearing dozen, not everything that could conceivably apply. */
+export const BUILDER_PRESETS = [
+  {
+    id: "http-api", label: "HTTP API service",
+    candidates: [
+      "api-gateway", "load-balancer", "rate-limiter", "circuit-breaker",
+      "retry-backoff", "timeout-deadline", "health-endpoint", "cache-aside",
+      "repository", "service-layer", "stateless-service", "idempotency",
+    ],
+  },
+  {
+    id: "frontend-app", label: "Frontend app",
+    candidates: [
+      "container-presentational", "provider", "flux", "atomic-design",
+      "render-props", "micro-frontends", "bff", "client-side-cache", "mvvm",
+      "observer",
+    ],
+  },
+  {
+    id: "data-pipeline", label: "Data pipeline",
+    candidates: [
+      "pipe-filter", "mapreduce", "change-data-capture", "batching",
+      "splitter", "aggregator", "materialized-view", "backpressure",
+      "dead-letter-channel", "claim-check",
+    ],
+  },
+  {
+    id: "event-driven", label: "Event-driven system",
+    candidates: [
+      "eda", "pubsub", "message-queue", "event-sourcing", "cqrs", "outbox",
+      "saga", "competing-consumers", "dead-letter-channel", "idempotency",
+      "domain-event",
+    ],
+  },
+];
+
 export const HAZARD_ORDER = [
   "god-object", "spaghetti-code", "big-ball-of-mud", "anemic-domain-model",
   "golden-hammer", "boat-anchor",

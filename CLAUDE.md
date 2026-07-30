@@ -79,8 +79,9 @@ Each folder under `site/` has its own CLAUDE.md with local rules.
 site/patterns/<band>/[<group>/]<id>.html   the source of truth
 site/hazards/<id>.html · site/themes/<id>.html · site/principles/<id>.html
 site/designs/<id>.html                     worked case studies (system-design & LLD katas)
-site/assets/graph.json · catalog.json      DERIVED
-site/index.html · vocab.html · map/graph.html   DERIVED
+site/assets/graph.json · catalog.json · graphdata.js   DERIVED
+site/index.html · vocab.html · map/graph.html   DERIVED (graph.html = interactive graph + builder shell;
+                                                its runtime is hand-authored assets/graph-view.js + graph.css)
 scripts/kb.mjs        the reader/writer — your interface to all of it
 scripts/lib/model.mjs the taxonomy and both closed vocabularies
 ```
@@ -90,5 +91,5 @@ scripts/lib/model.mjs the taxonomy and both closed vocabularies
 ## Conventions
 
 - **Relative links only** — the site must work from `file://` as well as GitHub Pages.
-- **Vendored, never CDN** — mermaid and the HTML parser both live in-repo. There is no
+- **Vendored, never CDN** — mermaid, d3 and the HTML parser all live in-repo. There is no
   `package.json`, no `node_modules`, and no npm in CI. Keep it that way.
