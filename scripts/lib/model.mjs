@@ -267,7 +267,7 @@ export const ML_CASE_STUDIES = [
  * with the existing `distributed-cache` / `rate-limiter` pattern pages (ids are a global
  * key). The hub filters this list to pages that exist, so it can be populated one at a time. */
 export const DESIGN_ORDER = [
-  // system design (30)
+  // system design (31)
   "bitly", "design-distributed-cache", "distributed-rate-limiter", "web-crawler",
   "top-k", "ad-click-aggregator", "metrics-monitoring",
   "fb-news-feed", "instagram", "fb-post-search", "google-news",
@@ -275,7 +275,7 @@ export const DESIGN_ORDER = [
   "whatsapp", "fb-live-comments", "google-docs", "online-chess", "leetcode",
   "dropbox", "youtube", "chatgpt",
   "ticketmaster", "online-auction", "robinhood", "payment-system",
-  "camelcamelcamel", "job-scheduler",
+  "camelcamelcamel", "job-scheduler", "persona-identification",
   // low-level design (9)
   "parking-lot", "elevator", "amazon-locker", "connect-four", "file-system",
   "logging-service", "inventory-management", "bookmyshow", "design-rate-limiter",
