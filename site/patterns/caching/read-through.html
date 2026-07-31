@@ -114,7 +114,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>read-through</strong> cache sits directly in front of a backing store and takes on the job of loading data, not just holding it. The application calls a single <code>get(key)</code>; if the entry is present the cache returns it immediately, and if it's absent the cache itself invokes a loader bound to the backing store, populates the entry, and returns the result. The caller never branches on hit or miss — from where it stands, the cache simply always has the value.</p>
         <p id="description-p-2">The force it resolves is duplicated, drifting miss-handling logic. Against a plain cache, every caller that wants a value runs its own dance: check the cache, fall through to the database on a miss, write the result back, then return it — repeated at every call site, and prone to drifting apart across them (different TTLs, someone forgets to populate, two callers race and load twice). Read-through centralizes that logic once, inside the cache itself, so every caller gets identical, correct miss handling for free.</p>
-        <p id="description-p-3">Because the cache owns the load path, it can also protect the backing store: concurrent misses for the same key can collapse into a single in-flight load instead of stampeding the database, and a key known to be absent can be cached negatively so repeated lookups stop hitting the store. The trade is coupling — the cache has to know how to load, wired to a loader function or a co-located data source, which is a tighter arrangement than a cache that's merely a dumb key-value store.</p>
+        <p id="description-p-3" data-kb-level="advanced">Because the cache owns the load path, it can also protect the backing store: concurrent misses for the same key can collapse into a single in-flight load instead of stampeding the database, and a key known to be absent can be cached negatively so repeated lookups stop hitting the store. The trade is coupling — the cache has to know how to load, wired to a loader function or a co-located data source, which is a tighter arrangement than a cache that's merely a dumb key-value store.</p>
       </div>
     </section>
 
@@ -123,15 +123,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Ask the cache for a value and it always answers. If it does not have one, it fetches it from the database itself, stores a copy, and hands it back — the program asking never learns there was a gap. Like asking a librarian for a book: whether it was already on the shelf or had to be fetched from the basement is not your problem.</p>
+          <p>Every place in the code that wants a user record repeats the same little dance: look in the fast copy, and if it is missing, go to the database, keep a copy, then answer. Written out thirty times, a few of those copies forget a step and the answers stop agreeing. Ask one thing for the value instead and let it fetch whatever it does not have — like asking a librarian for a book, where whether it sat on the shelf or came up from the basement is not your problem.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>The cache is bound to a loader for the backing store, so a single get call covers both paths: on a hit it returns the entry, on a miss it invokes the loader, populates the entry with its TTL, and returns the value — the call site never branches. Because the load path lives inside the cache, concurrent misses for one key can collapse into a single in-flight fetch and absences can be cached negatively. It pairs with write-through or write-behind, which cover the write side it leaves alone.</p>
+          <p>That one thing is a cache wired to a loader for the backing store: get(key) returns the entry on a hit and, on a miss, calls the loader, populates the entry with a time-to-live, and returns the value inside the same call. Owning the load path buys protections a caller could not add on its own — concurrent misses for one key collapse into a single in-flight fetch, so a hot key expiring costs the store one query instead of ten thousand, and a known absence is cached so lookups for rows that do not exist stop round-tripping. The same wiring nests: an in-process cache loads from a shared cache, which loads from the store. It covers reads only; the write side is write-through or write-behind.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when many call sites would otherwise each hand-roll check-then-load-then-populate and drift apart on TTLs and correctness — centralizing the miss path buys uniform behaviour plus a place to coalesce concurrent loads, which is what actually shields the store from a herd. The costs are coupling and reach: the cache must know how to load, so it needs a client that supports a bound loader and it fixes one loading policy for every caller, which is exactly why cache-aside survives where callers genuinely differ. A cold start or an evicted hot key still pays a synchronous load, and writes remain someone else's problem.</p>
+          <p>Choose it when one loading policy should serve many call sites and uniformity is worth more than per-caller control; keep the fill in application code where callers genuinely need different fallbacks, freshness or stores. Three costs, each with a counter-move. A miss is synchronous, so a cold start or an eviction wave makes readers pay the full store round trip — reload hot keys shortly before they expire, and cap the loader with a timeout, because coalescing means every waiter on a slow load hangs together. Because the cache owns the load, a failing store surfaces as an exception on get() rather than a stale but usable answer — serve the expired entry while a background reload runs, and cache the absence so the failure does not repeat on every request. One policy for everyone is the price of consistency, and cache-aside is the escape hatch when that price is too high. Then work the loop: tune TTL, maximum size and loader timeout, watch hit rate, load latency and load-failure rate, expect the cold-start herd to break first, and gate release on a paired write strategy so reads cannot serve old values forever.</p>
         </div>
       </div>
     </section>
@@ -139,6 +139,26 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    App["Application code"]:::ext
+    subgraph Owned["One get() — the cache owns the fill"]
+        Cache[("Cache")]
+        Loader["Bound loader"]
+    end
+    Store[("Backing store")]
+    App --&gt;|"1 get user:42"| Cache
+    Cache --&gt;|"2 hit — value, done"| App
+    Cache --&gt;|"3 miss — one load per key"| Loader
+    Loader --&gt;|"4 read the row"| Store
+    Store --&gt;|"5 row"| Loader
+    Loader --&gt;|"6 populate with a TTL"| Cache
+    Cache --&gt;|"7 the same call returns the value"| App
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>Who fills the cache? The cache does, through the loader wired into it. The application makes one call and never branches — steps 3–6 all happen inside the box, which is what lets a thousand simultaneous misses for one key share a single trip to the store.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -173,10 +193,10 @@ sequenceDiagram
         <dd>Concurrent misses for the same key share one in-flight load instead of each triggering its own call — the first caller loads, the rest await that same promise.</dd>
         <dt id="variations-item-3">Negative caching</dt>
         <dd>Cache a short-lived "not found" marker for missing keys, so a flood of lookups for absent data doesn't repeatedly round-trip the store.</dd>
-        <dt id="variations-item-4"><a href="./refresh-ahead.html">Refresh-Ahead</a></dt>
-        <dd>Instead of waiting for a miss, proactively reload a hot key shortly before its entry expires, so the read-through load path stays cold for busy keys.</dd>
-        <dt id="variations-item-5">Multi-level read-through</dt>
-        <dd>A local in-process cache is itself read-through to a shared remote cache, which is read-through to the store — each tier only loads from the one behind it.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced"><a href="./refresh-ahead.html">Refresh-Ahead</a></dt>
+        <dd data-kb-level="advanced">Instead of waiting for a miss, proactively reload a hot key shortly before its entry expires, so the read-through load path stays cold for busy keys.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Multi-level read-through</dt>
+        <dd data-kb-level="expert">A local in-process cache is itself read-through to a shared remote cache, which is read-through to the store — each tier only loads from the one behind it.</dd>
       </dl>
     </section>
 
@@ -188,8 +208,8 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Application code just calls <code>get()</code> — no miss-handling branch scattered across callers.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Loading and population logic lives in one place, so TTLs, serialization, and coalescing stay consistent for everyone.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Can collapse concurrent misses into a single backing call, shielding the store from thundering herds.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Callers never talk to the store directly, so the store's shape can change behind the loader.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Can collapse concurrent misses into a single backing call, shielding the store from thundering herds.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Callers never talk to the store directly, so the store's shape can change behind the loader.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -197,7 +217,7 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="advanced">Needs a cache that supports a bound loader function — harder to bolt onto an existing dumb cache.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">A cold cache or an evicted hot key still pays a synchronous load penalty on the next read.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Ties the cache to one backing store's shape, which is awkward when different callers want different fallback logic.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Ties the cache to one backing store's shape, which is awkward when different callers want different fallback logic.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Solves reads only — writes still need a paired strategy or the cache goes stale silently.</li>
           </ul>
         </div>
@@ -211,8 +231,8 @@ sequenceDiagram
           <h3>Reach for it when</h3>
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Multiple services or call sites currently duplicate their own check-cache-else-load-else-populate logic.</li>
-            <li id="usage-when-2" data-kb-polarity="when">Callers should be shielded entirely from cache misses and the loading mechanics behind them.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The backing store benefits from load coalescing under bursts of concurrent reads for the same key.</li>
+            <li id="usage-when-2" data-kb-polarity="when" data-kb-level="advanced">Callers should be shielded entirely from cache misses and the loading mechanics behind them.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The backing store benefits from load coalescing under bursts of concurrent reads for the same key.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -220,7 +240,7 @@ sequenceDiagram
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Different callers need genuinely different loading or fallback logic for the same key — <a href="./cache-aside.html">Cache-Aside</a> keeps that control in application code.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">Writes are frequent and must be reflected immediately — pair with <a href="./write-through.html">Write-Through</a> rather than leaving reads stale.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">You don't control the cache client closely enough to wire in a loader function.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">You don't control the cache client closely enough to wire in a loader function.</li>
           </ul>
         </div>
       </div>
@@ -267,8 +287,8 @@ const u = await users.get("42");</code></pre>
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="caffeine" id="wild-caffeine"><strong>Caffeine (LoadingCache)</strong><span>Built from a CacheLoader, its LoadingCache computes absent entries inside get(), collapses concurrent misses for the same key into a single load, and exposes hit, miss, and load-failure counts once recordStats() is enabled.</span></div>
-        <div class="wild-item" data-kb-example="guava-cache" id="wild-guava-cache"><strong>Guava CacheLoader</strong><span>A CacheBuilder plus a CacheLoader yields a LoadingCache whose get() loads and populates missing entries transparently; getAll can batch-load, and expireAfterWrite and maximumSize bound each entry.</span></div>
-        <div class="wild-item" data-kb-example="ehcache" id="wild-ehcache"><strong>Ehcache CacheLoaderWriter</strong><span>Registering a CacheLoaderWriter makes the cache read from the system of record on a miss (and write through on put), so application code only ever calls get() and put().</span></div>
+        <div class="wild-item" data-kb-example="guava-cache" id="wild-guava-cache" data-kb-level="advanced"><strong>Guava CacheLoader</strong><span>A CacheBuilder plus a CacheLoader yields a LoadingCache whose get() loads and populates missing entries transparently; getAll can batch-load, and expireAfterWrite and maximumSize bound each entry.</span></div>
+        <div class="wild-item" data-kb-example="ehcache" id="wild-ehcache" data-kb-level="advanced"><strong>Ehcache CacheLoaderWriter</strong><span>Registering a CacheLoaderWriter makes the cache read from the system of record on a miss (and write through on put), so application code only ever calls get() and put().</span></div>
       </div>
     </section>
 
@@ -279,38 +299,38 @@ const u = await users.get("42");</code></pre>
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Entry TTL (expire-after-write)</strong> — How long a loaded value stays valid before the next read reloads it; Caffeine's expireAfterWrite and Guava's expireAfterWrite set this directly.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Maximum size or weight</strong> — The entry or memory ceiling that bounds the cache; Caffeine's maximumSize or maximumWeight decides when least-used entries are evicted.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Loader timeout</strong> — A bound on how long the caller blocks waiting for the loader; without it a slow source stalls every coalesced waiter on that key.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Coalescing / single-flight</strong> — Whether concurrent misses for one key share a single in-flight load; that collapse is what shields the store from a stampede.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Negative-cache TTL</strong> — A short lifetime for cached not-found results, so a flood of lookups for an absent key doesn't repeatedly hit the store.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Maximum size or weight</strong> — The entry or memory ceiling that bounds the cache; Caffeine's maximumSize or maximumWeight decides when least-used entries are evicted.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Loader timeout</strong> — A bound on how long the caller blocks waiting for the loader; without it a slow source stalls every coalesced waiter on that key.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Coalescing / single-flight</strong> — Whether concurrent misses for one key share a single in-flight load; that collapse is what shields the store from a stampede.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Negative-cache TTL</strong> — A short lifetime for cached not-found results, so a flood of lookups for an absent key doesn't repeatedly hit the store.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Hit ratio</strong> — Hits over total gets; the complement, loads over gets, is the miss ratio. Caffeine and Guava expose hitRate and missRate directly once recordStats is enabled.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Load latency</strong> — Time the loader takes; its p99 is the latency a miss adds to a read, and a rising trend means the store is struggling.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Load failure rate</strong> — Loader calls that throw; a spike means the backing store is failing and misses are turning into errors for callers.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>In-flight load count</strong> — Concurrent loads outstanding; if coalescing works this stays near the number of distinct hot keys, not the request rate.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Load latency</strong> — Time the loader takes; its p99 is the latency a miss adds to a read, and a rising trend means the store is struggling.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Load failure rate</strong> — Loader calls that throw; a spike means the backing store is failing and misses are turning into errors for callers.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>In-flight load count</strong> — Concurrent loads outstanding; if coalescing works this stays near the number of distinct hot keys, not the request rate.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Synchronous load penalty on cold or evicted key</strong> — A miss blocks the caller for the full loader round trip; a cold start or a wave of evictions makes many reads pay it at once.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Loader failure surfaces to callers</strong> — Because the cache owns the load, a failing backing store turns into exceptions on get(); without negative caching those failures repeat every request.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stale reads with no write path</strong> — Read-through solves reads only; if writes don't invalidate or write through, entries serve old values silently until the TTL.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Coalesced waiters stall on one slow load</strong> — When concurrent misses collapse into a single load and that load hangs, every waiter on the key hangs with it.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Loader failure surfaces to callers</strong> — Because the cache owns the load, a failing backing store turns into exceptions on get(); without negative caching those failures repeat every request.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Stale reads with no write path</strong> — Read-through solves reads only; if writes don't invalidate or write through, entries serve old values silently until the TTL.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Coalesced waiters stall on one slow load</strong> — When concurrent misses collapse into a single load and that load hangs, every waiter on the key hangs with it.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">The loader has a timeout so a slow source can't stall every waiter on a key</li>
-            <li id="production-check-2" data-kb-polarity="check">Concurrent misses coalesce (single-flight) where the store can't absorb a stampede</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Concurrent misses coalesce (single-flight) where the store can't absorb a stampede</li>
             <li id="production-check-3" data-kb-polarity="check">A write strategy — write-through or invalidation — is paired so reads don't serve stale data forever</li>
-            <li id="production-check-4" data-kb-polarity="check">Loader exceptions are surfaced, retried, or negatively cached, never silently swallowed</li>
-            <li id="production-check-5" data-kb-polarity="check">Cache stats (hit rate, load penalty, load-failure rate) are exported to monitoring</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Loader exceptions are surfaced, retried, or negatively cached, never silently swallowed</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Cache stats (hit rate, load penalty, load-failure rate) are exported to monitoring</li>
           </ul>
         </div>
       </div>

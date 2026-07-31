@@ -97,15 +97,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Keep the answer in the program's own memory, right where the work happens. Looking it up costs nothing — no call across the network, just reading something already in hand. Like keeping a pen on your desk instead of walking to the supply cupboard each time. The catch: every copy of the program keeps its own pen, and they can end up different.</p>
+          <p>Every request needs the same handful of settings, and the program fetches them from another machine each time. That fetch takes longer than the work the request came to do. Keep the settings in the program's own memory instead and reading them costs almost nothing — like keeping a pen on your desk rather than walking to the supply cupboard. The catch: every copy of the program keeps its own pen, so when someone changes a setting the copies disagree until each one goes back for a fresh look.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>Cached values live on the application's own heap — a map or a library-managed store such as Caffeine, Guava Cache or Ehcache — so a hit is a reference lookup with no hop and no serialization. Bounds are local: a maximum entry count or heap share, a TTL, and an eviction policy the process enforces itself. Each instance holds and warms a separate copy, which is why it is normally deployed as an L1 in front of a shared cache rather than on its own.</p>
+          <p>The values sit on the application's own heap — a plain map, or a library such as Caffeine, Guava Cache or Ehcache — so a hit is a reference lookup with no hop and no serialization, and the bounds are ones the process enforces itself: a maximum entry count or weight, an eviction policy, and a time-to-live. That TTL is the only invalidation you get for free, and it sets the width of the disagreement window — a 30-second expiry means two instances can answer differently for up to 30 seconds. Narrowing it further is machinery you build: a write publishes an invalidation over a pub/sub channel and every instance applies it to its own copy. The usual deployment is not standalone but an L1 in front of a shared tier, absorbing the hottest keys locally and deferring the rest.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it for small, hot, read-mostly data — configuration, feature flags, a lookup table — where even a shared cache's round trip is the dominant cost, or as an L1 that absorbs a hot key before it can concentrate on one node. The price is coherence: there is no single copy to update, so a change propagates only by TTL expiry or a broadcast invalidation you build yourself, and until it does instances answer the same question differently. Every instance also duplicates the working set and starts cold on each restart or deploy, so it stays a targeted optimization rather than a default.</p>
+          <p>Choose it for small, hot, read-mostly data — configuration, feature flags, a lookup table — where even a shared cache's round trip dominates the request, or as an L1 that absorbs a hot key before it concentrates on one node of the shared tier. Three costs come with it, each with a counter-move. There is no single copy to update, so instances diverge until expiry: price the disagreement window, set the TTL to match it, and if the price is too high keep the data in the shared tier rather than operating a broadcast invalidation of your own. Every instance pays for the working set again, so memory cost scales with instance count rather than with the data — bound each cache by size or weight and keep local only what is genuinely hot. A rolling deploy empties every copy at once and the source sees a miss storm shaped exactly like the rollout, so stagger restarts and coalesce concurrent misses in the process. Then run the loop: tune the bound and the expiry, watch hit ratio against heap occupancy, expect an unbounded map to break first as collector thrash, and gate on every cache carrying a size bound and an expiry before it ships.</p>
         </div>
       </div>
     </section>
@@ -115,13 +115,24 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    R["Request"] -->|"look up"| M{"In-process map hit?"}
-    M -->|"hit"| S["Serve from local memory"]
-    M -->|"miss"| L["Load from source (DB or shared cache)"]
-    L -->|"value"| P["Store in local memory"]
-    P -->|"then serve"| S
+    H1["Request handler 1"]
+    H2["Request handler 2"]
+    subgraph P1["Instance 1's process — its own copy"]
+        C1[("Local map, flags at v7")]
+    end
+    subgraph P2["Instance 2's process — a separate copy"]
+        C2[("Local map, flags at v6")]
+    end
+    Src[("Source of truth, now at v7")]:::ext
+    H1 --&gt;|"1 look up flags, miss"| C1
+    C1 --&gt;|"2 load"| Src
+    Src --&gt;|"3 v7, stored locally"| C1
+    H1 --&gt;|"4 every later read: memory only, no network"| C1
+    H2 --&gt;|"5 hit, and it is still v6"| C2
+    C2 -.-&gt;|"6 reloads only when its own TTL expires"| Src
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>A hit is a memory lookup with no network hop; a miss loads from the source and populates the local copy for next time.</figcaption>
+        <figcaption>What does "in the process" actually cost? Steps 1 to 4 never leave the machine, which is why a hit is nearly free — but instance 2 filled its copy earlier and keeps answering v6 until step 6, because nothing carries a change from one process to the other.</figcaption>
       </figure>
     </section>
 
@@ -132,10 +143,10 @@ flowchart LR
         <dd>A size cap plus an eviction policy (usually LRU) keeps the cache from growing without bound and consuming the process's heap — the common form for anything but a tiny fixed table.</dd>
         <dt id="variations-item-2">TTL-based expiry</dt>
         <dd>Each entry expires after a set time so the local copy can't drift too far from the source; the shorter the TTL, the narrower the cross-instance inconsistency window.</dd>
-        <dt id="variations-item-3">Near cache (L1 in front of L2)</dt>
-        <dd>The in-process cache fronts a shared distributed cache: it absorbs the hottest reads locally and defers everything else to the shared tier, cutting network hops for the keys that matter most.</dd>
-        <dt id="variations-item-4">Invalidation by broadcast</dt>
-        <dd>To fight divergence, a write publishes an invalidation (e.g. over a pub/sub channel) that every instance listens for and applies to its local copy — buying tighter consistency at the cost of more moving parts.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Near cache (L1 in front of L2)</dt>
+        <dd data-kb-level="advanced">The in-process cache fronts a shared distributed cache: it absorbs the hottest reads locally and defers everything else to the shared tier, cutting network hops for the keys that matter most.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Invalidation by broadcast</dt>
+        <dd data-kb-level="advanced">To fight divergence, a write publishes an invalidation (e.g. over a pub/sub channel) that every instance listens for and applies to its local copy — buying tighter consistency at the cost of more moving parts.</dd>
       </dl>
     </section>
 
@@ -147,7 +158,7 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">The fastest cache possible: a hit is an in-memory lookup with no network hop and no serialization.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">No extra infrastructure — it's a library or a plain map, with nothing new to deploy or operate.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">No shared-cache dependency in the read path, so it keeps working even if the shared tier is down.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">No shared-cache dependency in the read path, so it keeps working even if the shared tier is down.</li>
             <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">An effective L1 in front of a shared cache, soaking up the hottest keys before they leave the process.</li>
           </ul>
         </div>
@@ -156,8 +167,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Each instance has its own copy, so instances can serve different values for the same key.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">The same data is duplicated across every instance, wasting memory at scale.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">It starts cold on every restart or newly-scaled instance, so a deploy re-warms from scratch.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Invalidating a change across all instances is genuinely hard — there's no single copy to update.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">It starts cold on every restart or newly-scaled instance, so a deploy re-warms from scratch.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Invalidating a change across all instances is genuinely hard — there's no single copy to update.</li>
           </ul>
         </div>
       </div>
@@ -171,14 +182,14 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Small, hot, read-mostly data — config, feature flags, a lookup table — is needed on nearly every request.</li>
             <li id="usage-when-2" data-kb-polarity="when">You need the lowest latency possible and can't spare even a shared-cache network hop.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You want an L1 in front of a distributed cache to shield the hottest keys from the network.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You want an L1 in front of a distributed cache to shield the hottest keys from the network.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The data changes often and must read consistently across all instances — divergence will bite.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">The working set is large; duplicating it in every instance wastes memory a shared cache would pool.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">The working set is large; duplicating it in every instance wastes memory a shared cache would pool.</li>
             <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="expert">You run many instances and the memory duplication outweighs the latency you'd save.</li>
           </ul>
         </div>
@@ -212,8 +223,8 @@ function set&lt;V&gt;(key: string, value: V, ttlMs: number): void {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="caffeine" id="wild-caffeine"><strong>Caffeine</strong><span>A high-performance in-process caching library for Java with size- and time-based eviction.</span></div>
-        <div class="wild-item" data-kb-example="guava-cache" id="wild-guava-cache"><strong>Guava Cache</strong><span>Google Guava's in-memory LoadingCache, a common in-process cache in Java apps.</span></div>
-        <div class="wild-item" data-kb-example="ehcache" id="wild-ehcache"><strong>Ehcache</strong><span>A widely-used JVM in-process cache, often fronting a distributed tier as a near cache.</span></div>
+        <div class="wild-item" data-kb-example="guava-cache" id="wild-guava-cache" data-kb-level="advanced"><strong>Guava Cache</strong><span>Google Guava's in-memory LoadingCache, a common in-process cache in Java apps.</span></div>
+        <div class="wild-item" data-kb-example="ehcache" id="wild-ehcache" data-kb-level="advanced"><strong>Ehcache</strong><span>A widely-used JVM in-process cache, often fronting a distributed tier as a near cache.</span></div>
       </div>
     </section>
 
@@ -224,40 +235,40 @@ function set&lt;V&gt;(key: string, value: V, ttlMs: number): void {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Maximum size or weight</strong> — The entry count, or weighted capacity, at which eviction begins — maximumSize and maximumWeight in Caffeine and Guava Cache</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Expiry policy</strong> — Time-to-live measured after write or after last access: expireAfterWrite bounds how stale a value can get, expireAfterAccess reclaims memory held by keys nobody reads any more</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Eviction algorithm</strong> — What is dropped at capacity — least-recently-used, least-frequently-used, or the W-TinyLFU admission policy Caffeine uses</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Background refresh window</strong> — Whether an ageing entry is reloaded asynchronously on access instead of being evicted and reloaded synchronously — refreshAfterWrite in Caffeine and Guava Cache</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Share of the heap budgeted to the cache</strong> — How much process memory the cache may hold before it competes with request handling and pushes the collector</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Expiry policy</strong> — Time-to-live measured after write or after last access: expireAfterWrite bounds how stale a value can get, expireAfterAccess reclaims memory held by keys nobody reads any more</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Eviction algorithm</strong> — What is dropped at capacity — least-recently-used, least-frequently-used, or the W-TinyLFU admission policy Caffeine uses</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Background refresh window</strong> — Whether an ageing entry is reloaded asynchronously on access instead of being evicted and reloaded synchronously — refreshAfterWrite in Caffeine and Guava Cache</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Share of the heap budgeted to the cache</strong> — How much process memory the cache may hold before it competes with request handling and pushes the collector</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Hit ratio</strong> — Share of lookups served without a load; below the level that justifies the memory it occupies, the cache is pure overhead</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Eviction rate</strong> — How fast entries are dropped at capacity — a climbing rate means the working set no longer fits the bound you set</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Load latency and concurrent loads</strong> — How long a miss takes and how many loads run at once, which is what a miss actually costs a request</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Heap occupancy and collector pressure</strong> — Memory held by cached objects and the collection time attributable to it; an over-large cache shows up as garbage collection before it shows up as a cache problem</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Eviction rate</strong> — How fast entries are dropped at capacity — a climbing rate means the working set no longer fits the bound you set</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Load latency and concurrent loads</strong> — How long a miss takes and how many loads run at once, which is what a miss actually costs a request</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Heap occupancy and collector pressure</strong> — Memory held by cached objects and the collection time attributable to it; an over-large cache shows up as garbage collection before it shows up as a cache problem</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Instances answer the same question differently</strong> — With no shared copy, one instance picks up a change while the others keep serving their own entry until it expires</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Fleet-wide cold start on deploy</strong> — A rolling restart empties every cache at once, so the source sees a miss storm shaped exactly like the rollout</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Unbounded growth exhausts the heap</strong> — A cache with no size bound behaves as a memory leak and surfaces as collector thrash or an out-of-memory failure</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>The working set is paid for once per instance</strong> — Every instance holds the same entries, so memory cost scales with instance count rather than with the data</li>
-            <li id="production-failure-5" data-kb-polarity="failure"><strong>Concurrent misses each start their own load</strong> — Without coalescing, several threads missing on the same key at the same moment all load it independently</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Fleet-wide cold start on deploy</strong> — A rolling restart empties every cache at once, so the source sees a miss storm shaped exactly like the rollout</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Unbounded growth exhausts the heap</strong> — A cache with no size bound behaves as a memory leak and surfaces as collector thrash or an out-of-memory failure</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>The working set is paid for once per instance</strong> — Every instance holds the same entries, so memory cost scales with instance count rather than with the data</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="advanced"><strong>Concurrent misses each start their own load</strong> — Without coalescing, several threads missing on the same key at the same moment all load it independently</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Bound every cache by size or weight — an unbounded map is a leak, not a cache</li>
-            <li id="production-check-2" data-kb-polarity="check">Set an expiry that matches how stale the value may safely be, since expiry is the only invalidation you get for free</li>
-            <li id="production-check-3" data-kb-polarity="check">Coalesce concurrent misses so one load serves every waiter in the process</li>
-            <li id="production-check-4" data-kb-polarity="check">Decide what a divergent read costs before caching anything that changes; if it matters, keep the data in the shared tier</li>
-            <li id="production-check-5" data-kb-polarity="check">Export hit ratio, eviction count and load latency — an unmeasured local cache hides both its value and its staleness</li>
-            <li id="production-check-6" data-kb-polarity="check">Stagger restarts so the whole fleet does not cold-start onto the source at the same moment</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Set an expiry that matches how stale the value may safely be, since expiry is the only invalidation you get for free</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Coalesce concurrent misses so one load serves every waiter in the process</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Decide what a divergent read costs before caching anything that changes; if it matters, keep the data in the shared tier</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Export hit ratio, eviction count and load latency — an unmeasured local cache hides both its value and its staleness</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Stagger restarts so the whole fleet does not cold-start onto the source at the same moment</li>
           </ul>
         </div>
       </div>

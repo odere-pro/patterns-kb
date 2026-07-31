@@ -88,7 +88,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>message translator</strong> sits on the channel between a producer and a consumer and converts a message from the format one side speaks into the format the other expects: remapping field names, converting data types and units, restructuring nested shapes, and re-encoding between formats like XML, JSON, or Protobuf. It does no business logic and reshapes no interface — it only reshapes data in flight.</p>
         <p id="description-p-2">The force it resolves is that independently built systems rarely share a schema. A legacy system emits <code>snake_case</code> fields and prices as integer cents; a newer service expects camelCase and decimal currency; a partner's API version differs from yours by two years. Forcing either side to adopt the other's shape couples them directly and blocks either from evolving on its own schedule. A translator lets each side keep its native format and confines the one component that must know about both to a single, replaceable place.</p>
-        <p id="description-p-3">It's easy to conflate with <a href="../gof/structural/adapter.html">Adapter</a>, and the two often sit at the same seam. Adapter changes an <em>interface</em> — the methods and signatures a client calls — while a message translator changes the <em>content</em> of a message moving through a channel, indifferent to whether the caller is invoking a method or publishing an event. At a bounded-context boundary the translator is usually the actual mapping logic that an <a href="../ddd/acl.html">Anti-Corruption Layer</a> wraps in a broader, more defensive facade.</p>
+        <p id="description-p-3" data-kb-level="advanced">It's easy to conflate with <a href="../gof/structural/adapter.html">Adapter</a>, and the two often sit at the same seam. Adapter changes an <em>interface</em> — the methods and signatures a client calls — while a message translator changes the <em>content</em> of a message moving through a channel, indifferent to whether the caller is invoking a method or publishing an event. At a bounded-context boundary the translator is usually the actual mapping logic that an <a href="../ddd/acl.html">Anti-Corruption Layer</a> wraps in a broader, more defensive facade.</p>
       </div>
     </section>
 
@@ -97,15 +97,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Two systems that have to exchange messages often describe the same thing differently — one writes customer_name, the other customerName; one counts money in whole cents, the other in decimals. Rather than force either side to change how it speaks, a step in between rewrites each message from one vocabulary into the other as it passes. Neither side ever has to learn the other's dialect.</p>
+          <p>A partner sends you orders that call the buyer cust_name and the total amt_cents, and your billing service expects customerName and a decimal amount in pounds. The quick fix is to do the conversion inside billing, and it works until a second service needs the same orders: now two teams have written the same divide-by-a-hundred, one of them rounds the odd half-penny the other way, and the two disagree about what the customer was charged. Put one step on the way in instead. It rewrites each message from the sender's vocabulary into the receiver's — field names, units, structure — so both sides keep speaking as they always did and only one piece of code knows both.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A stateless step on the channel that converts a message from the producer's representation into the consumer's: renaming fields, converting types and units, restructuring nested shapes, and re-encoding between XML, JSON, Avro or Protobuf. It carries no business logic and changes no interface — an adapter does that for a call signature, while this reshapes data in flight. At a bounded-context boundary it is usually the mapping core that an anti-corruption layer wraps in a broader defensive facade.</p>
+          <p>That step is stateless and sits on the channel: it renames fields, converts types and units, flattens or nests structure, and re-encodes between XML, JSON, Avro or Protobuf. It carries no business logic and changes no interface — an adapter reshapes a call signature, this reshapes data in flight — which is why it can be tested by feeding it one message and asserting the output. Write the mapping as data rather than code, in XSLT, JSONata or a field-mapping config, and a schema change becomes a config revision instead of a redeploy. Three shapes follow from that. An envelope wrapper translates only the transport headers and leaves the payload untouched. A normalizer runs each incoming variant through its own mapping so everything downstream sees one shape. A canonical model has every system translate to and from one shared schema at its own edge, which costs N mappings where pairwise costs N squared.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when two schemas must evolve on independent schedules and neither side can be made to move — you confine the one component that knows both formats to a single replaceable place. The costs are a hop and serialization work on every message, worse for large payloads and heavy conversions, and silent lossiness: dropped fields, truncated precision and timezone drift fail quietly unless the output is validated against a schema. Pairwise translators between many systems grow as N squared, so past a handful of endpoints the cheaper structure is a canonical model translated once at each edge.</p>
+          <p>Reach for it when two schemas must move on independent schedules and neither side will change for the other; skip it when both already agree, because a hop that maps a field onto itself is pure cost. Three bills, each with a counter-move. The dangerous one is silence: a dropped field, a truncated precision, a timezone read as local passes through looking like a valid message — validate the output against the consumer's schema rather than merely parsing it, and test the mapping on missing fields, boundary values and unit extremes. The second is drift, since the mapping is now a third artefact to version — pin a mapping revision, tie it to a schema contract, and roll it forward deliberately when either side ships. The third is per-message work that grows with payload size, so stream documents above a size threshold instead of loading them whole, and replicate the translator freely because nothing in it holds state. Past four or five endpoints, stop adding pairwise mappings and move to the shared model at each edge — the switch is cheap before the sprawl, expensive after. Then run the loop: tune strict-versus-lenient validation and the streaming threshold, watch the rejection rate and output validation failures, expect an oversized payload to exhaust memory first, and gate release on every malformed or unmappable message having a bounded path out.</p>
         </div>
       </div>
     </section>
@@ -115,11 +115,22 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    P["Producer, format A"] -->|"message in A"| MT["Message Translator"]
-    MT -->|"mapped to B"| C["Consumer, format B"]
-    R["Mapping rules, schema"] -.-> MT
+    P["Partner: cust_name, amt_cents"]
+    subgraph Both["The only place that knows both schemas"]
+        M[("Mapping, versioned")]
+        MT["Message translator"]
+    end
+    V{"Check against consumer schema"}
+    C["Billing: customerName, decimal"]
+    DL[("Dead-letter channel")]:::ext
+    P --&gt;|"1 order in the sender's shape"| MT
+    M --&gt;|"2 field names, units, encoding"| MT
+    MT --&gt;|"3 rewritten to the receiver's shape"| V
+    V --&gt;|"4 valid, deliver"| C
+    V --&gt;|"5 field lost or unmappable"| DL
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>The translator sits between two endpoints. It applies its mapping rules to every message that passes through, so each side only ever sees its own format.</figcaption>
+        <figcaption>Who has to know both schemas? Only what sits inside the boundary — the partner keeps its snake_case cents and billing keeps its decimals (1–3), and the mapping is the single artefact that changes when either side moves. Step 4 is what makes the conversion trustworthy: validating the output, not just parsing it, sends a dropped field or a truncated amount to step 5 instead of letting it arrive quietly wrong.</figcaption>
       </figure>
     </section>
 
@@ -130,10 +141,10 @@ flowchart LR
         <dd>Translate every format to and from one shared canonical schema instead of pairwise — N systems then need N translators, not N².</dd>
         <dt id="variations-item-2">Envelope Wrapper</dt>
         <dd>Wraps or unwraps transport-specific headers and routing metadata around an unchanged payload, translating only the envelope.</dd>
-        <dt id="variations-item-3">Normalizer</dt>
-        <dd>Routes several differently-shaped but semantically equivalent inputs each through its own translator, so all emerge in one common shape.</dd>
-        <dt id="variations-item-4">Declarative / schema-driven mapping</dt>
-        <dd>Expresses the mapping as data — XSLT, JSONata, a field-mapping config — instead of code, so a schema change doesn't require a redeploy.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Normalizer</dt>
+        <dd data-kb-level="advanced">Routes several differently-shaped but semantically equivalent inputs each through its own translator, so all emerge in one common shape.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Declarative / schema-driven mapping</dt>
+        <dd data-kb-level="advanced">Expresses the mapping as data — XSLT, JSONata, a field-mapping config — instead of code, so a schema change doesn't require a redeploy.</dd>
       </dl>
     </section>
 
@@ -145,8 +156,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Decouples producer and consumer schemas — either evolves without breaking the other.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Confines format-conversion logic to one place instead of scattering it across every consumer.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Integrating a legacy or third-party format becomes additive — one new translator, not a system-wide schema change.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Testable in isolation: feed it a sample message, assert the output shape.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Integrating a legacy or third-party format becomes additive — one new translator, not a system-wide schema change.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Testable in isolation: feed it a sample message, assert the output shape.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -226,8 +237,8 @@ function onLegacyOrder(raw: LegacyOrder, publish: (o: CanonicalOrder) =&gt; void
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="xslt" id="wild-xslt"><strong>XSLT</strong><span>A W3C language dedicated to declaring a transform from one XML shape to another: xsl:template rules match nodes by XPath, and XSLT 3.0 adds streaming for documents too large to hold in memory. The mapping stays data, editable without recompiling.</span></div>
-        <div class="wild-item" data-kb-example="spring-integration-transformer" id="wild-spring-integration-transformer"><strong>Spring Integration Transformer</strong><span>A Transformer endpoint sits on a channel and converts each payload; built-in transformers cover object-to-JSON and XML marshalling, or a SpEL expression defines the mapping inline.</span></div>
-        <div class="wild-item" data-kb-example="dataweave" id="wild-dataweave"><strong>MuleSoft DataWeave</strong><span>A functional mapping language used in the Mule Transform Message component; one script converts between JSON, XML, CSV and flat-file payloads, with input and output formats declared in the script header.</span></div>
+        <div class="wild-item" data-kb-example="spring-integration-transformer" id="wild-spring-integration-transformer" data-kb-level="advanced"><strong>Spring Integration Transformer</strong><span>A Transformer endpoint sits on a channel and converts each payload; built-in transformers cover object-to-JSON and XML marshalling, or a SpEL expression defines the mapping inline.</span></div>
+        <div class="wild-item" data-kb-example="dataweave" id="wild-dataweave" data-kb-level="advanced"><strong>MuleSoft DataWeave</strong><span>A functional mapping language used in the Mule Transform Message component; one script converts between JSON, XML, CSV and flat-file payloads, with input and output formats declared in the script header.</span></div>
       </div>
     </section>
 
@@ -238,33 +249,33 @@ function onLegacyOrder(raw: LegacyOrder, publish: (o: CanonicalOrder) =&gt; void
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Strict vs. lenient validation</strong> — Whether the translator rejects a message with unknown or missing fields, or passes it through best-effort.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Streaming vs. in-memory parsing threshold</strong> — Payload size above which the document is streamed rather than loaded whole, bounding memory on heavy conversions like XML to JSON.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Mapping / schema version</strong> — Which mapping revision is applied, so a schema change on either side can be pinned and rolled forward deliberately.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Streaming vs. in-memory parsing threshold</strong> — Payload size above which the document is streamed rather than loaded whole, bounding memory on heavy conversions like XML to JSON.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Mapping / schema version</strong> — Which mapping revision is applied, so a schema change on either side can be pinned and rolled forward deliberately.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Translation error / rejection rate</strong> — Messages that fail to parse or map; a step change flags schema drift on the producer or consumer.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Translation latency (p99)</strong> — Time to convert per message, which climbs with payload size and conversion weight.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Output validation failures</strong> — Converted messages that fail the consumer schema check — the guard against silent lossy conversions.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Translation latency (p99)</strong> — Time to convert per message, which climbs with payload size and conversion weight.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Output validation failures</strong> — Converted messages that fail the consumer schema check — the guard against silent lossy conversions.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Silent lossy conversion</strong> — Dropped fields, truncated precision, or timezone drift pass through unnoticed unless the output is validated, not just parsed.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Schema drift</strong> — A field the mapping expects disappears or changes type on one side, producing malformed output or a mapping error.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Large-payload memory blowup</strong> — A conversion that loads the whole document into memory can exhaust the translator on an oversized message.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Schema drift</strong> — A field the mapping expects disappears or changes type on one side, producing malformed output or a mapping error.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Large-payload memory blowup</strong> — A conversion that loads the whole document into memory can exhaust the translator on an oversized message.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Output is validated against the consumer schema, not just parsed</li>
-            <li id="production-check-2" data-kb-polarity="check">The mapping is tested with edge cases: missing fields, boundary values, unit extremes</li>
-            <li id="production-check-3" data-kb-polarity="check">Schema changes on either side have a versioned-mapping path</li>
-            <li id="production-check-4" data-kb-polarity="check">Oversized or malformed payloads have a bounded handling path — a size limit or reject to a dead-letter channel</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">The mapping is tested with edge cases: missing fields, boundary values, unit extremes</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Schema changes on either side have a versioned-mapping path</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="expert">Oversized or malformed payloads have a bounded handling path — a size limit or reject to a dead-letter channel</li>
           </ul>
         </div>
       </div>

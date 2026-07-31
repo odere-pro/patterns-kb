@@ -95,15 +95,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>The app keeps a copy of things it has already downloaded on the phone or laptop itself. Ask for the same picture or page again and it comes straight off the device — no request goes anywhere. Like keeping a book you borrowed on your own shelf: instant to reach, but nobody tells you when a new edition comes out.</p>
+          <p>Open the app a second time and it downloads the same pictures, the same code and the same page it already fetched an hour ago, over whatever connection the user happens to have. Keep a copy on the phone or laptop itself and the second read never leaves the device: it is instant, it costs no data, and the server never even hears about it. Like keeping a borrowed book on your own shelf — instant to reach, but nobody tells you when a new edition comes out.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>Storage on the user's own device answers the read: the browser's HTTP cache driven by Cache-Control and ETag, or an app-managed store like localStorage, IndexedDB or a Service Worker cache. A hit costs no network at all — not the origin, not an edge — and each device warms and holds its own copy. Freshness is governed by response headers and revalidation rather than server-side invalidation, so it usually sits in front of a CDN and an origin cache, not instead of them.</p>
+          <p>The copy lives either in the browser's own HTTP cache, governed by the Cache-Control lifetime and the ETag the response carried, or in a store the app manages itself — Web Storage, IndexedDB, or the Cache API behind a Service Worker that intercepts each request and applies a strategy per route: cache-first for assets, network-first for data, stale-while-revalidate in between. The server's only lever is the header it already sent. Inside the lifetime nothing leaves the device; once it lapses the client sends a conditional request and usually gets 304 Not Modified rather than the body again. There is no invalidation, so a changed asset is retired by changing its URL — a content hash in the filename — and every device warms alone, which is why this layer sits in front of a CDN and an origin cache rather than replacing either.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the round trip itself is the cost — static assets, offline-capable or client-heavy apps — because it is the only placement that removes the network from the read entirely, taking that traffic off both the edge and the origin. The bill is control: once bytes rest on a device you cannot recall them, so freshness lives in header policy and content-hashed URLs rather than invalidation, storage is a quota the browser or OS may clear without warning, every device warms cold and alone, and anything cached there is readable by whoever holds the device — which rules it out for data the server must authorize or audit on every read.</p>
+          <p>Choose it when the round trip itself is the cost — static assets, offline-capable or client-heavy apps — because it is the only placement that takes the network out of the read entirely, relieving the edge and the origin together. Three costs come with that reach, each with a counter-move. You cannot recall bytes already resting on a device, so a long lifetime on a URL whose content changed pins the old copy until it expires: hash the content into the filename so a deploy retires it by URL, and keep a version the app checks on start for the entries you cannot rename. Storage is a quota the browser or the OS may reclaim without warning, so handle the quota-exceeded and eviction paths explicitly and treat the device as a cache that can vanish, never as the record. Whatever is cached there outlives the session and is readable by whoever holds the device, so mark authorization-dependent responses no-store and clear the store on logout. Then run the loop: tune lifetimes and validators, watch the share of reads served locally and the ratio of 304s to 200s, expect deploy skew between a cached bundle and a moved interface to break first, and gate on every response carrying an explicit Cache-Control.</p>
         </div>
       </div>
     </section>
@@ -113,13 +113,20 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    R["Read on the device"] -->|"look up key"| C{"Local store hit?"}
-    C -->|"hit"| S["Serve locally — no network"]
-    C -->|"miss"| N["Request over network (CDN / origin)"]
-    N -->|"response"| W["Write to local store"]
-    W -->|"then serve"| S
+    App["App code on the device"]
+    subgraph Dev["On the device — the server's only lever is the header it already sent"]
+        Store[("Local store: bytes + max-age + ETag")]
+    end
+    Edge["CDN edge"]:::ext
+    Origin["Origin"]:::ext
+    App --&gt;|"1 read: still inside max-age?"| Store
+    Store --&gt;|"2 yes, serve locally, nothing leaves the device"| App
+    Store --&gt;|"3 expired: conditional GET with the ETag"| Edge
+    Edge --&gt;|"4 forwards on a miss"| Origin
+    Origin --&gt;|"5 304 Not Modified, or fresh bytes and a new lifetime"| Store
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>The device checks its own store first; only a miss crosses the network, and the result is kept locally for next time.</figcaption>
+        <figcaption>What can the server still change once the bytes are on the device? Only what it said at step 1 — inside the lifetime no request is made at all, and the earliest chance to correct a value is the conditional request at step 3, which is why a bad long lifetime is fixed by changing the URL rather than by recalling the entry.</figcaption>
       </figure>
     </section>
 
@@ -130,10 +137,10 @@ flowchart LR
         <dd>The browser caches responses automatically based on headers the server sends — <code>Cache-Control</code> / <code>max-age</code> for freshness, <code>ETag</code> / <code>Last-Modified</code> for cheap revalidation — with no application code at all.</dd>
         <dt id="variations-item-2">Web storage / IndexedDB</dt>
         <dd>The app explicitly stashes data in <code>localStorage</code>, <code>sessionStorage</code>, or IndexedDB, giving it full control over what's kept and when it's cleared — useful for API responses and app state.</dd>
-        <dt id="variations-item-3">Service-worker offline cache</dt>
-        <dd>A service worker intercepts requests and serves cached responses, enabling true offline use and fine-grained cache strategies (cache-first, network-first, stale-while-revalidate).</dd>
-        <dt id="variations-item-4">Native on-device store with sync</dt>
-        <dd>A mobile app keeps data in memory or on local disk and syncs with the server when connectivity returns — the offline-first shape behind apps that keep working on a train.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Service-worker offline cache</dt>
+        <dd data-kb-level="advanced">A service worker intercepts requests and serves cached responses, enabling true offline use and fine-grained cache strategies (cache-first, network-first, stale-while-revalidate).</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Native on-device store with sync</dt>
+        <dd data-kb-level="advanced">A mobile app keeps data in memory or on local disk and syncs with the server when connectivity returns — the offline-first shape behind apps that keep working on a train.</dd>
       </dl>
     </section>
 
@@ -145,7 +152,7 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">The fastest read possible: served from the device with no network request at all.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Offloads the origin and the network entirely for anything the client already holds.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Enables offline use — the app keeps working when connectivity drops, then syncs later.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Enables offline use — the app keeps working when connectivity drops, then syncs later.</li>
             <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">For static assets, HTTP caching gets much of this for free, driven only by response headers.</li>
           </ul>
         </div>
@@ -154,7 +161,7 @@ flowchart LR
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">The least control over freshness: once data is on the device, invalidating it is hard and it readily goes stale.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Per-device only — nothing is shared between users, and every client warms its own cache.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Storage is limited and can be evicted or cleared by the browser or OS at any time.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Storage is limited and can be evicted or cleared by the browser or OS at any time.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">A security surface: sensitive data cached on a device can be read by anyone with access to it.</li>
           </ul>
         </div>
@@ -169,15 +176,15 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Static assets — images, scripts, styles — can be reused across page loads instead of re-downloaded.</li>
             <li id="usage-when-2" data-kb-polarity="when">The workload is offline-capable or client-heavy, and the app must work without a live connection.</li>
-            <li id="usage-when-3" data-kb-polarity="when">Per-user data rarely changes and the network round trip is the dominant cost, even with a CDN.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Per-user data rarely changes and the network round trip is the dominant cost, even with a CDN.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The data must always be fresh or consistent across users — the freshness window is hardest to control here.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">The data is sensitive and shouldn't rest on a device you don't control.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The server must authorize or observe every read, which a device-served cache bypasses.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">The data is sensitive and shouldn't rest on a device you don't control.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="expert">The server must authorize or observe every read, which a device-served cache bypasses.</li>
           </ul>
         </div>
       </div>
@@ -209,8 +216,8 @@ function writeCached&lt;V&gt;(key: string, value: V, ttlMs: number): void {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="http-cache" id="wild-http-cache"><strong>HTTP caching (Cache-Control, ETag)</strong><span>Browsers cache responses per the server's Cache-Control and revalidate with ETag/Last-Modified.</span></div>
-        <div class="wild-item" data-kb-example="service-worker" id="wild-service-worker"><strong>Service Worker Cache API</strong><span>Lets a web app intercept requests and serve cached responses, including fully offline.</span></div>
-        <div class="wild-item" data-kb-example="web-storage" id="wild-web-storage"><strong>Web Storage / IndexedDB</strong><span>localStorage and IndexedDB let an app persist data on the device under its own control.</span></div>
+        <div class="wild-item" data-kb-example="service-worker" id="wild-service-worker" data-kb-level="advanced"><strong>Service Worker Cache API</strong><span>Lets a web app intercept requests and serve cached responses, including fully offline.</span></div>
+        <div class="wild-item" data-kb-example="web-storage" id="wild-web-storage" data-kb-level="advanced"><strong>Web Storage / IndexedDB</strong><span>localStorage and IndexedDB let an app persist data on the device under its own control.</span></div>
       </div>
     </section>
 
@@ -221,42 +228,42 @@ function writeCached&lt;V&gt;(key: string, value: V, ttlMs: number): void {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Cache-Control lifetime</strong> — How long a response may be reused without asking the server again; s-maxage sets a separate lifetime for shared caches, and no-store keeps a response off the device entirely</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Validators for revalidation</strong> — Whether responses carry an ETag or Last-Modified, so a client can re-check a stale entry with a conditional request and get 304 Not Modified instead of the whole body</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Content-hashed asset URLs</strong> — Filenames that change whenever the bytes change, so long-lived assets can be cached hard and busted by URL rather than by waiting for expiry</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Per-route caching strategy</strong> — Which policy a request follows in a Service Worker — cache-first, network-first or stale-while-revalidate — and what is served when the network is unavailable</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Device store and storage budget</strong> — Which store holds the data (in-memory, Web Storage, IndexedDB, the Cache API) and how much of the browser or OS storage allowance the app is willing to occupy</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Validators for revalidation</strong> — Whether responses carry an ETag or Last-Modified, so a client can re-check a stale entry with a conditional request and get 304 Not Modified instead of the whole body</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Content-hashed asset URLs</strong> — Filenames that change whenever the bytes change, so long-lived assets can be cached hard and busted by URL rather than by waiting for expiry</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Per-route caching strategy</strong> — Which policy a request follows in a Service Worker — cache-first, network-first or stale-while-revalidate — and what is served when the network is unavailable</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Device store and storage budget</strong> — Which store holds the data (in-memory, Web Storage, IndexedDB, the Cache API) and how much of the browser or OS storage allowance the app is willing to occupy</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Share of reads served from the device</strong> — Requests answered locally with no network at all — the number that says whether the cache is doing anything</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Ratio of 304 to 200 responses</strong> — How many conditional requests come back Not Modified; mostly full 200s means validators are missing or not being honoured</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Bytes transferred on a repeat visit</strong> — Network bytes on a second visit compared with a first; if it barely falls, nothing is being reused</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Storage used against the quota</strong> — How close the app sits to its storage allowance, since crossing it triggers eviction of exactly the data offline mode depends on</li>
-            <li id="production-signal-5" data-kb-polarity="signal"><strong>Age of the entries being served</strong> — How old locally-served values actually are, which is the staleness users experience</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Ratio of 304 to 200 responses</strong> — How many conditional requests come back Not Modified; mostly full 200s means validators are missing or not being honoured</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Bytes transferred on a repeat visit</strong> — Network bytes on a second visit compared with a first; if it barely falls, nothing is being reused</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Storage used against the quota</strong> — How close the app sits to its storage allowance, since crossing it triggers eviction of exactly the data offline mode depends on</li>
+            <li id="production-signal-5" data-kb-polarity="signal" data-kb-level="expert"><strong>Age of the entries being served</strong> — How old locally-served values actually are, which is the staleness users experience</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Stale bytes pinned on returning devices</strong> — A long lifetime on a URL whose content changed leaves devices serving the old copy until it expires — there is no way to recall it</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Eviction under storage pressure</strong> — The browser or OS reclaims space and clears the store, so an offline-capable app loses its data without warning</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Deploy skew between shell and API</strong> — A device still holds an old application bundle while the server has moved on, so cached client code calls an interface that has changed</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Every new device pays the full cost</strong> — Nothing is cached before a first visit, so the origin absorbs the entire payload for each new device and each cleared one</li>
-            <li id="production-failure-5" data-kb-polarity="failure"><strong>Private data outliving the session</strong> — Cached responses persist after logout unless explicitly cleared, leaving them readable by the next person to use the device</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Eviction under storage pressure</strong> — The browser or OS reclaims space and clears the store, so an offline-capable app loses its data without warning</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Deploy skew between shell and API</strong> — A device still holds an old application bundle while the server has moved on, so cached client code calls an interface that has changed</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Every new device pays the full cost</strong> — Nothing is cached before a first visit, so the origin absorbs the entire payload for each new device and each cleared one</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="advanced"><strong>Private data outliving the session</strong> — Cached responses persist after logout unless explicitly cleared, leaving them readable by the next person to use the device</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Set an explicit Cache-Control on every response — silence leaves the lifetime to heuristics you do not control</li>
-            <li id="production-check-2" data-kb-polarity="check">Version immutable assets by content hash so a deploy busts them by URL instead of waiting on expiry</li>
-            <li id="production-check-3" data-kb-polarity="check">Send a validator (ETag or Last-Modified) on anything cacheable, so a stale entry can be re-checked without re-downloading it</li>
-            <li id="production-check-4" data-kb-polarity="check">Mark responses carrying personal or authorization-dependent data no-store, and clear device storage on logout</li>
-            <li id="production-check-5" data-kb-polarity="check">Handle the quota-exceeded and eviction paths explicitly — treat device storage as a cache that can vanish, never as the record</li>
-            <li id="production-check-6" data-kb-polarity="check">Test the second visit and the offline path, not just the first load; a cold-only test never exercises the cache</li>
-            <li id="production-check-7" data-kb-polarity="check">Keep a way to force a client past a bad cached entry, such as a versioned URL or a kill switch the app checks on start</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Version immutable assets by content hash so a deploy busts them by URL instead of waiting on expiry</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Send a validator (ETag or Last-Modified) on anything cacheable, so a stale entry can be re-checked without re-downloading it</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Mark responses carrying personal or authorization-dependent data no-store, and clear device storage on logout</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Handle the quota-exceeded and eviction paths explicitly — treat device storage as a cache that can vanish, never as the record</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="advanced">Test the second visit and the offline path, not just the first load; a cold-only test never exercises the cache</li>
+            <li id="production-check-7" data-kb-polarity="check" data-kb-level="expert">Keep a way to force a client past a bad cached entry, such as a versioned URL or a kill switch the app checks on start</li>
           </ul>
         </div>
       </div>

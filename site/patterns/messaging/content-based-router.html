@@ -88,7 +88,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>content-based router</strong> sits on a single inbound channel, opens each message's body, and forwards it to one of several outbound channels depending on what it finds there — a large order to a fraud-review queue, a ticket tagged "billing" to the billing team's queue, a malformed payload to a dead-letter channel. The rule set is usually short: a chain of conditions evaluated in order, a lookup table, or a small rules engine, with a default channel for anything that matches nothing.</p>
         <p id="description-p-2">The problem it resolves is a producer and consumer that shouldn't need to know about each other's variations. Without a router, branching logic like "if this order is over the fraud threshold, route it for review" gets copy-pasted into every consumer, or worse, pushed back onto the producer, coupling it to downstream concerns it has no business knowing about. Centralizing that one decision means the producer emits a single kind of message onto a single channel, and each consumer only ever sees the subset meant for it.</p>
-        <p id="description-p-3">It differs from a plain <a href="./message-router.html">Message Router</a> in what drives the decision. A router in general can dispatch on metadata, round-robin, or external state; a content-based router dispatches strictly on values found inside the message itself, so the same routing logic works regardless of which system produced the message or how it got there.</p>
+        <p id="description-p-3" data-kb-level="advanced">It differs from a plain <a href="./message-router.html">Message Router</a> in what drives the decision. A router in general can dispatch on metadata, round-robin, or external state; a content-based router dispatches strictly on values found inside the message itself, so the same routing logic works regardless of which system produced the message or how it got there.</p>
       </div>
     </section>
 
@@ -97,15 +97,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Messages arriving on one line are not all alike, and different teams should handle different ones. So one step reads what is actually inside each message and sends it down the right path — a very large order to the checks team, a billing question to billing, anything unrecognised to a side channel. The sender writes one kind of message and stops worrying about who deals with it.</p>
+          <p>Every order lands on the same channel and looks identical from the outside — the envelope just says "order". Inside, though, one is a fifty-pound repeat purchase and the next is a fifteen-thousand-pound first-time order that somebody should check before it ships. Push that judgement into the consumers and each one starts by opening the message to work out whether it was even meant for it. Put one step in front instead: it opens each message, reads the number that decides the case, and sends it to the team that handles that case. Anything it cannot recognise goes to a named side channel, so an odd message is waiting for someone rather than lost.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A filter on a single inbound channel that parses each message body and forwards it to exactly one of several outbound channels, driven by values in the payload — a threshold on an amount, a category field, a document type — expressed as an ordered condition chain, a lookup table, or a small rules engine, with a default channel for unmatched traffic. Unlike a header-based message router it must deserialize the body, so it takes a hard dependency on the payload schema.</p>
+          <p>Deciding from inside means the router deserializes the body, so it evaluates real values — a threshold on an amount, a category field, a document type — as an ordered condition chain, a lookup table, or a predicate in a rules DSL such as XPath or JSONPath. First match wins, and the branch that matches nothing needs a channel of its own. That parse is the pattern's whole price and its whole dependency: the router now knows your payload schema, and a producer renaming the field a rule reads changes nothing visible until every affected message quietly lands in the default branch. Two variants soften it. A header prefilter checks a cheap type or version field first and parses the full body only for the cases the header cannot settle. Externalized rules live in a table or engine an operator edits, so a new destination costs a config change rather than a redeploy — and once more than one condition may match the same message, copying it to every match turns the router into a recipient list.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the destination genuinely depends on data only the body carries, and that decision would otherwise be copy-pasted into every consumer or pushed back onto the producer. You buy one named, testable place for the branching; you pay with a component the whole flow depends on, a schema dependency that turns payload evolution into a routing problem, and deserialization cost on every message at full volume. Conditions accrete, so budget for auditing them and for alerting on the default branch — an unwatched catch-all silently swallows everything nobody classified.</p>
+          <p>Reach for it when the destination depends on data only the body carries; reach for the cheaper header-based router when a type or version field already settles it, because parsing every message at full volume buys nothing there. The costs come with counter-moves. The schema dependency is the sharp one — pin the routed fields with a versioned contract or a schema registry, keep rules off deep nested paths, and treat a rule as code that has a test against a representative payload. A permissive default branch swallows the evidence, so give unmatched and unparseable messages an explicit dead-letter channel and alert on that rate rather than graphing it. Every flow behind the router depends on it, so keep it stateless and run replicas, since nothing in evaluating a predicate needs to be pinned to one instance. Then run the loop: tune rule order and the header prefilter, watch per-branch distribution and the unmatched rate, expect upstream schema drift to break first and show up as a branch going silent, and gate release on no path that drops a message without recording it.</p>
         </div>
       </div>
     </section>
@@ -115,12 +115,22 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    IN["Inbound message"] -->|"read body"| R{"Inspect body"}
-    R -->|"amount &gt; 10000"| HP["Fraud review channel"]
-    R -->|"region == EU"| EU["EU billing channel"]
-    R -->|"else"| DEF["Default channel"]
+    P["Order service"]
+    subgraph Parse["Payload schema the rules depend on"]
+        B[("Order body: amount, region")]
+        R{"Content-based router"}
+    end
+    F["Fraud-review queue"]
+    EU["EU billing queue"]
+    DL[("Dead-letter channel")]:::ext
+    P --&gt;|"1 one message type, one channel"| B
+    B --&gt;|"2 deserialize the routed fields"| R
+    R --&gt;|"3 amount &gt; 10000, first match wins"| F
+    R --&gt;|"4 region = EU"| EU
+    R --&gt;|"5 no rule matched, or body unreadable"| DL
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>The router evaluates conditions against the message body in order and forwards to the first match, falling through to a default channel when nothing matches.</figcaption>
+        <figcaption>How much of the message must the router open to decide? Everything inside the boundary: the producer emits one message type (1) and the router deserializes the fields its rules name (2), which is why renaming one of them upstream changes routing here. The first matching condition wins (3, then 4), and whatever classifies as nothing goes to an explicit channel (5) rather than to the void.</figcaption>
       </figure>
     </section>
 
@@ -131,10 +141,10 @@ flowchart LR
         <dd>Rules live in a lookup table — a field value mapped to a channel name — so operators can add or change destinations without redeploying router code.</dd>
         <dt id="variations-item-2">Dynamic / rule-engine routing</dt>
         <dd>Conditions are expressed in a rules DSL, JSONPath/XPath predicate, or business-rule engine, letting the routing logic evolve independently of the integration code around it.</dd>
-        <dt id="variations-item-3">Header-assisted routing</dt>
-        <dd>A cheap header check (a type or version field) narrows the candidates first, so the router only parses the full body when the header alone can't decide.</dd>
-        <dt id="variations-item-4">Multi-match / recipient hybrid</dt>
-        <dd>When more than one condition can match the same message, it's copied to every matching channel instead of exactly one — the point where this pattern shades into a Recipient List.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Header-assisted routing</dt>
+        <dd data-kb-level="advanced">A cheap header check (a type or version field) narrows the candidates first, so the router only parses the full body when the header alone can't decide.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Multi-match / recipient hybrid</dt>
+        <dd data-kb-level="advanced">When more than one condition can match the same message, it's copied to every matching channel instead of exactly one — the point where this pattern shades into a Recipient List.</dd>
       </dl>
     </section>
 
@@ -146,8 +156,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Centralizes branching logic in one place instead of scattering conditionals through every consumer.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Keeps the producer ignorant of how many consumer variants exist downstream.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">New destination channels are added by extending the router, not by touching producers or existing consumers.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Makes the routing rules visible, named, and testable as a single unit.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">New destination channels are added by extending the router, not by touching producers or existing consumers.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Makes the routing rules visible, named, and testable as a single unit.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -156,7 +166,7 @@ flowchart LR
             <li id="tradeoffs-con-1" data-kb-polarity="con">Becomes a central, must-not-break piece of infrastructure — a bug there misroutes everything behind it.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Must parse the full message body to route, adding cost and a dependency on the message schema.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">Conditions accrete over time into a tangle of nested, hard-to-audit rules.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">A catch-all default branch can silently swallow or misroute anything unclassified.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">A catch-all default branch can silently swallow or misroute anything unclassified.</li>
           </ul>
         </div>
       </div>
@@ -223,9 +233,9 @@ dispatch({ amount: 15_000, region: "US" }, {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="apache-camel-choice" id="wild-apache-camel-choice"><strong>Apache Camel choice()</strong><span>The choice().when(predicate) DSL evaluates predicates — Simple, XPath, or JSONPath expressions over the message body — and sends each exchange down exactly one branch, with otherwise() as the explicit catch-all for anything unmatched.</span></div>
-        <div class="wild-item" data-kb-example="aws-eventbridge" id="wild-aws-eventbridge"><strong>AWS EventBridge</strong><span>Rules match JSON event patterns against the event payload itself, including nested fields, and deliver each matching event only to that rule targets. There is no otherwise branch — an event matching no rule is simply not delivered, so a catch-all rule is needed to observe unclassified events.</span></div>
-        <div class="wild-item" data-kb-example="spring-integration-router" id="wild-spring-integration-router"><strong>Spring Integration payload routers</strong><span>Routers such as payload-type-router and expression-based routers resolve the output channel from the message payload rather than its headers; a default-output-channel catches unmatched messages, and resolution-required controls whether an unresolvable message raises an error instead.</span></div>
-        <div class="wild-item" data-kb-example="amazon-sns-filter-policy" id="wild-amazon-sns-filter-policy"><strong>Amazon SNS filter policies</strong><span>Each subscription to a topic can carry a filter policy matched against a message attributes (or, optionally, its body), so a subscriber receives only the messages that match — content-based routing applied at the topic edge, per subscriber, instead of in a central router.</span></div>
+        <div class="wild-item" data-kb-example="aws-eventbridge" id="wild-aws-eventbridge" data-kb-level="advanced"><strong>AWS EventBridge</strong><span>Rules match JSON event patterns against the event payload itself, including nested fields, and deliver each matching event only to that rule targets. There is no otherwise branch — an event matching no rule is simply not delivered, so a catch-all rule is needed to observe unclassified events.</span></div>
+        <div class="wild-item" data-kb-example="spring-integration-router" id="wild-spring-integration-router" data-kb-level="advanced"><strong>Spring Integration payload routers</strong><span>Routers such as payload-type-router and expression-based routers resolve the output channel from the message payload rather than its headers; a default-output-channel catches unmatched messages, and resolution-required controls whether an unresolvable message raises an error instead.</span></div>
+        <div class="wild-item" data-kb-example="amazon-sns-filter-policy" id="wild-amazon-sns-filter-policy" data-kb-level="expert"><strong>Amazon SNS filter policies</strong><span>Each subscription to a topic can carry a filter policy matched against a message attributes (or, optionally, its body), so a subscriber receives only the messages that match — content-based routing applied at the topic edge, per subscriber, instead of in a central router.</span></div>
       </div>
     </section>
 
@@ -236,35 +246,35 @@ dispatch({ amount: 15_000, region: "US" }, {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Rule order (first-match)</strong> — The sequence in which conditions are evaluated; with first-match-wins semantics, reordering rules changes where overlapping messages land.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Default / otherwise branch</strong> — Where a message that matches no rule goes — an explicit channel versus an implicit drop determines whether unclassified traffic is caught or lost.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Header prefilter vs. body parse</strong> — Whether a cheap header or type check narrows candidates before the router parses the full body, trading routing cost against how much of the payload it must read.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Rule source</strong> — Whether rules are hardcoded or externalized to a table or rules engine that operators can change without redeploying the router.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Default / otherwise branch</strong> — Where a message that matches no rule goes — an explicit channel versus an implicit drop determines whether unclassified traffic is caught or lost.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Header prefilter vs. body parse</strong> — Whether a cheap header or type check narrows candidates before the router parses the full body, trading routing cost against how much of the payload it must read.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Rule source</strong> — Whether rules are hardcoded or externalized to a table or rules engine that operators can change without redeploying the router.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Per-branch match distribution</strong> — Volume routed to each destination channel; a branch that drops to zero is an early sign of upstream schema drift.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Unmatched / default rate</strong> — Fraction of messages falling through to the default branch — a spike means messages stopped classifying as expected.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Parse-failure rate</strong> — Messages the router cannot deserialize far enough to route — a direct dependency on the payload schema showing up at runtime.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Unmatched / default rate</strong> — Fraction of messages falling through to the default branch — a spike means messages stopped classifying as expected.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Parse-failure rate</strong> — Messages the router cannot deserialize far enough to route — a direct dependency on the payload schema showing up at runtime.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Schema drift</strong> — A producer renames or restructures a routed field and every affected message silently falls through to the default branch.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Unparseable payload</strong> — A malformed body the router cannot read leaves it with no basis to route, and no fallback means the message is stuck or dropped.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Catch-all swallows traffic</strong> — A permissive default branch quietly absorbs anything unclassified, hiding misrouting until someone notices the missing messages downstream.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Rule tangle</strong> — Overlapping conditions accreted over time cause the wrong rule to match first, misrouting a subset that is hard to spot.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Unparseable payload</strong> — A malformed body the router cannot read leaves it with no basis to route, and no fallback means the message is stuck or dropped.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Catch-all swallows traffic</strong> — A permissive default branch quietly absorbs anything unclassified, hiding misrouting until someone notices the missing messages downstream.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Rule tangle</strong> — Overlapping conditions accreted over time cause the wrong rule to match first, misrouting a subset that is hard to spot.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Route unmatched or unparseable messages to an explicit channel or dead-letter, never drop them silently.</li>
-            <li id="production-check-2" data-kb-polarity="check">Alert on the unmatched / default branch rate.</li>
-            <li id="production-check-3" data-kb-polarity="check">Version the message schema the rules depend on and test the rules against it.</li>
-            <li id="production-check-4" data-kb-polarity="check">Keep per-branch counters so a branch going quiet surfaces drift early.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Alert on the unmatched / default branch rate.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Version the message schema the rules depend on and test the rules against it.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="expert">Keep per-branch counters so a branch going quiet surfaces drift early.</li>
           </ul>
         </div>
       </div>

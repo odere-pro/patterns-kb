@@ -88,7 +88,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>splitter</strong> takes one message that carries a composite payload — a batch of records, an order with line items, an XML document with repeating elements — and emits one message per element, each carrying just that element's data. It's the messaging-layer sibling of a loop over a collection, made explicit as a channel-to-channel step.</p>
         <p id="description-p-2">The problem it resolves is a mismatch between the unit a message carries and the unit downstream endpoints know how to handle. Most processing steps, validators, and routers are written against a single logical item; handed a whole batch, they either special-case the loop internally, duplicating that logic everywhere, or treat the batch as one atomic, all-or-nothing unit — one bad line item fails the whole shipment. Splitting up front lets every downstream step stay simple, and lets items advance, retry, and scale independently of one another.</p>
-        <p id="description-p-3">The tricky part is correlation. A splitter that just emits N unrelated messages throws away the fact that they came from one origin — you can no longer tell when all N have finished, or reassemble a response in the original order. A well-built splitter stamps each fragment with a correlation id, usually the parent message's id, plus a sequence number and total count, so an <a href="./aggregator.html">Aggregator</a> or anything counting completions can recombine or reconcile the pieces later.</p>
+        <p id="description-p-3" data-kb-level="advanced">The tricky part is correlation. A splitter that just emits N unrelated messages throws away the fact that they came from one origin — you can no longer tell when all N have finished, or reassemble a response in the original order. A well-built splitter stamps each fragment with a correlation id, usually the parent message's id, plus a sequence number and total count, so an <a href="./aggregator.html">Aggregator</a> or anything counting completions can recombine or reconcile the pieces later.</p>
       </div>
     </section>
 
@@ -97,15 +97,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>A message sometimes arrives carrying a whole batch — an order with twenty lines, a file with a thousand records. Most of the steps behind it are written to deal with one thing at a time, so one step up front takes the batch apart and sends each item onward separately. Each item then moves, fails and is retried on its own, instead of the whole batch standing or falling together.</p>
+          <p>A message arrives carrying a whole batch — an order with twenty lines, a file with a thousand records. Every step behind it was written to handle one item, so it either grows its own loop or treats the batch as all-or-nothing, and one bad line rejects the other nineteen. Put a step in front that takes the batch apart and sends each item onward as its own message. Each item then moves, fails and retries alone, so the nineteen good lines ship while the bad one is fixed.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A stateless step that decomposes one composite message — a batch, an order with line items, a document with repeating elements — into one message per element, each stamped with the parent's correlation identifier, a sequence number and the total count so the set stays reconstructable. Downstream endpoints then stay single-item, and elements can be routed, retried and scaled independently of one another. It is the inverse of an aggregator, and the two are normally deployed as a pair.</p>
+          <p>The step itself holds no state: it reads the repeating field, emits one message per element, and stamps each one with the parent's identifier, a sequence number and the total count. That stamp is the only thing left saying those N messages were once one, so a fragment emitted without it can never be counted or recombined. Where the parts come from separates the variants — a static split cuts at design-time boundaries such as header from body, an iterative split walks a repeating field, and a recursive split descends through nested composites until the pieces are atomic. Stream a large source and emit elements in chunks rather than one at a time, or a single input becomes ten thousand messages in one burst. Fragments now route, retry and scale independently, and knowing the batch is finished becomes a counting problem — which is the job of the aggregator on the other end.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the unit a message carries is not the unit downstream logic is written against, and per-item independence is worth more than batch atomicity. That trade is the whole story: you gain parallelism and failure isolation per item, and you give up all-or-nothing semantics — the batch now finishes as some succeeded and some did not, a state something must own and report. Volume multiplies, and with it header, serialization and broker overhead. Ordering and grouping survive only if the correlation metadata is carried and honoured at every later step.</p>
+          <p>Reach for it when the unit a message carries is not the unit your logic is written against, and per-item independence is worth more than batch atomicity; leave the batch whole when an invariant holds only across the full set, such as a ledger that must balance. Three costs come with the split, each with a counter-move. You give up all-or-nothing semantics, so the batch ends as some-succeeded-some-did-not — give that state an owner, an aggregator or completion counter keyed on the correlation id, with a timeout so a fragment that never returns surfaces as an alert rather than a hang. Volume multiplies by the element count and drags header, serialization and broker cost with it — chunk the split and cap per-split parallelism so one large composite cannot flood the fragment channel. Ordering dies at the split — restore it with a resequencer, or partition the fragment channel by correlation id so one group stays with one consumer. Then run the loop: tune chunk size and parallelism, watch the amplification factor and the fragment-channel backlog, expect an oversized composite to break the channel first, and gate on every fragment carrying id, sequence and total.</p>
         </div>
       </div>
     </section>
@@ -115,12 +115,26 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    IN["Composite message, 3 items"] -->|"receive"| SP["Splitter"]
-    SP -->|"emit seq 1"| A["Item 1, correlation id"]
-    SP -->|"emit seq 2"| B["Item 2, correlation id"]
-    SP -->|"emit seq 3"| C["Item 3, correlation id"]
+    Prod["Order Service"]:::ext
+    In[("Order channel")]
+    SP["Splitter"]
+    subgraph Grp["One correlation group: parent id, sequence, total"]
+        F1["Line 1 of 3"]
+        F2["Line 2 of 3"]
+        F3["Line 3 of 3"]
+    end
+    Work["Line workers"]:::ext
+    Prod --&gt;|"1 one order, three lines"| In
+    In --&gt;|"2 receive composite"| SP
+    SP --&gt;|"3 stamp and emit"| F1
+    SP --&gt;|"4 stamp and emit"| F2
+    SP --&gt;|"5 stamp and emit"| F3
+    F1 --&gt;|"6 processed alone"| Work
+    F2 --&gt;|"6"| Work
+    F3 --&gt;|"6"| Work
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>One inbound message becomes N outbound messages, each stamped with a correlation id and sequence number so the fragments can later be tracked or recombined.</figcaption>
+        <figcaption>Once the batch is gone, what still says these three messages belong together? Only the stamp applied at steps 3–5 — the parent id, the sequence and the total — which is why a fragment emitted without it can be processed at step 6 but never counted or recombined.</figcaption>
       </figure>
     </section>
 
@@ -131,12 +145,12 @@ flowchart LR
         <dd>Breaks a message into a fixed, known set of parts — header vs. body, metadata vs. payload — where the shape of the split is decided at design time, not from the data.</dd>
         <dt id="variations-item-2">Iterative split</dt>
         <dd>Iterates a repeating field — an array, a list of XML elements — and emits one message per element. The common case for orders, batch files, and CSV rows.</dd>
-        <dt id="variations-item-3">Recursive split</dt>
-        <dd>Splits a composite that itself contains nested composites, recursing until only atomic messages remain — a folder into files, then a file into records.</dd>
-        <dt id="variations-item-4"><a href="./aggregator.html">Correlated split</a></dt>
-        <dd>Stamps every fragment with a correlation id, sequence number, and total count so a paired Aggregator can recombine results once every fragment has returned.</dd>
-        <dt id="variations-item-5"><a href="./scatter-gather.html">Fan-out split</a></dt>
-        <dd>The scatter half of Scatter-Gather — the split feeds a recipient list or router that sends each fragment to a different endpoint for parallel processing.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Recursive split</dt>
+        <dd data-kb-level="advanced">Splits a composite that itself contains nested composites, recursing until only atomic messages remain — a folder into files, then a file into records.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced"><a href="./aggregator.html">Correlated split</a></dt>
+        <dd data-kb-level="advanced">Stamps every fragment with a correlation id, sequence number, and total count so a paired Aggregator can recombine results once every fragment has returned.</dd>
+        <dt id="variations-item-5" data-kb-level="expert"><a href="./scatter-gather.html">Fan-out split</a></dt>
+        <dd data-kb-level="expert">The scatter half of Scatter-Gather — the split feeds a recipient list or router that sends each fragment to a different endpoint for parallel processing.</dd>
       </dl>
     </section>
 
@@ -148,17 +162,17 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Lets every downstream endpoint stay simple — built for one item, not a batch.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Enables per-item parallelism, so a slow or heavy batch scales across a worker pool.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Isolates failure — one bad item errors alone instead of failing the entire batch.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Different fragments can be routed to different endpoints based on their own content.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Isolates failure — one bad item errors alone instead of failing the entire batch.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Different fragments can be routed to different endpoints based on their own content.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Multiplies message volume and the per-message overhead — headers, serialization, broker load.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Drops ordering and grouping unless a correlation id and sequence are carried through, and honored, downstream.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Needs a paired Aggregator, or equivalent tracking, to know when all fragments have completed.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Partial failure across fragments creates a "some succeeded, some didn't" state that must be handled explicitly, not ignored.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Drops ordering and grouping unless a correlation id and sequence are carried through, and honored, downstream.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Needs a paired Aggregator, or equivalent tracking, to know when all fragments have completed.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Partial failure across fragments creates a "some succeeded, some didn't" state that must be handled explicitly, not ignored.</li>
           </ul>
         </div>
       </div>
@@ -172,7 +186,7 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">An inbound message is a batch or composite, and downstream logic is written to handle one item at a time.</li>
             <li id="usage-when-2" data-kb-polarity="when">The elements can be processed, scaled, or retried independently of one another.</li>
-            <li id="usage-when-3" data-kb-polarity="when">Different elements need different routing or handling based on their own content.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Different elements need different routing or handling based on their own content.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -180,7 +194,7 @@ flowchart LR
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The message is already a single atomic unit — there's nothing meaningful to split.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">Processing must stay strictly ordered or transactional across the whole batch, with no way to reconcile pieces later.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="expert">The elements aren't independent — splitting would break an invariant that only holds across the full set, like a balanced double-entry ledger.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The elements aren't independent — splitting would break an invariant that only holds across the full set, like a balanced double-entry ledger.</li>
           </ul>
         </div>
       </div>
@@ -224,7 +238,7 @@ for (const fragment of splitOrder(order)) {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="apache-camel-split" id="wild-apache-camel-split"><strong>Apache Camel split()</strong><span>Its split() EIP turns one exchange carrying a collection into one exchange per element; parallelProcessing fans them across a thread pool, streaming() avoids loading the whole body, and each fragment gets CamelSplitIndex and CamelSplitSize headers plus an optional aggregationStrategy to recombine.</span></div>
-        <div class="wild-item" data-kb-example="aws-step-functions-map" id="wild-aws-step-functions-map"><strong>AWS Step Functions Map state</strong><span>A Map state runs the same sub-workflow once per array element; MaxConcurrency caps the parallel branches, a tolerated-failure threshold decides how many item failures fail the whole map, and Distributed Map mode scales to large datasets read from S3.</span></div>
+        <div class="wild-item" data-kb-example="aws-step-functions-map" id="wild-aws-step-functions-map" data-kb-level="advanced"><strong>AWS Step Functions Map state</strong><span>A Map state runs the same sub-workflow once per array element; MaxConcurrency caps the parallel branches, a tolerated-failure threshold decides how many item failures fail the whole map, and Distributed Map mode scales to large datasets read from S3.</span></div>
       </div>
     </section>
 
@@ -235,33 +249,33 @@ for (const fragment of splitOrder(order)) {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Per-split parallelism</strong> — Whether fragments are processed sequentially or dispatched in parallel across a worker pool.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Batch / chunk size</strong> — For a very large composite, how many elements go into each emitted message rather than one per element.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Fragment size limit</strong> — The broker per-message size ceiling each fragment must fit under after the split.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Batch / chunk size</strong> — For a very large composite, how many elements go into each emitted message rather than one per element.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="expert"><strong>Fragment size limit</strong> — The broker per-message size ceiling each fragment must fit under after the split.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Fan-out amplification factor</strong> — Fragments emitted per input message; the volume multiplier the downstream channel must absorb.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Downstream backlog after split</strong> — Queue depth on the fragment channel, which spikes when one large composite explodes into many messages.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Per-fragment failure rate</strong> — Fragments that error on their own, indicating a partial-batch condition to reconcile.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Downstream backlog after split</strong> — Queue depth on the fragment channel, which spikes when one large composite explodes into many messages.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Per-fragment failure rate</strong> — Fragments that error on their own, indicating a partial-batch condition to reconcile.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Volume explosion</strong> — One large composite emits thousands of fragments at once, flooding the downstream channel and broker.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Lost grouping</strong> — Fragments without a correlation id, sequence, and total cannot be recombined or counted for completion; the aggregator never knows when all N have arrived.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Partial batch failure</strong> — Some fragments succeed and some fail, leaving a half-processed batch that must be reconciled, not ignored.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Lost grouping</strong> — Fragments without a correlation id, sequence, and total cannot be recombined or counted for completion; the aggregator never knows when all N have arrived.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Partial batch failure</strong> — Some fragments succeed and some fail, leaving a half-processed batch that must be reconciled, not ignored.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Each fragment carries a correlation id, sequence number, and total count for recombination</li>
-            <li id="production-check-2" data-kb-polarity="check">The fragment channel and its workers are sized for the post-split volume multiplier</li>
-            <li id="production-check-3" data-kb-polarity="check">Partial-failure handling is defined — retry the fragment or reconcile the batch</li>
-            <li id="production-check-4" data-kb-polarity="check">If order matters, sequence numbers are honored downstream, not assumed</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">The fragment channel and its workers are sized for the post-split volume multiplier</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Partial-failure handling is defined — retry the fragment or reconcile the batch</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="expert">If order matters, sequence numbers are honored downstream, not assumed</li>
           </ul>
         </div>
       </div>

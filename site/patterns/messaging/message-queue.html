@@ -169,8 +169,8 @@
       <div class="prose">
         <p id="description-p-1">A <strong>message queue</strong> is an ordered, durable channel sitting between a producer and one or more consumers. A producer enqueues a message and moves on; the queue holds it until a consumer dequeues and processes it. The defining trait is point-to-point delivery: even with several consumers attached to the same queue, each message is delivered to and consumed by exactly one of them — never broadcast to all.</p>
         <p id="description-p-2">The force it resolves is <strong>coupling to the consumer's uptime and pace</strong>. A producer that calls a consumer directly is at the mercy of that consumer being reachable, fast, and available right now — if it's down, slow, or already overloaded, the producer blocks or the work is simply lost. A queue breaks that dependency: the producer enqueues and returns immediately, the consumer drains at whatever rate it can sustain, and neither side needs the other online at the same instant.</p>
-        <p id="description-p-3">It also absorbs bursts. Real traffic rarely arrives at a steady rate; a queue lets producers write as fast as they like while consumers pull at a sustainable pace, turning a spike that would overwhelm a consumer into a backlog that drains over the following seconds or minutes instead of failing outright.</p>
-        <p id="description-p-4">Durability is what separates a queue from an in-process buffer. Messages are typically persisted to disk or replicated across broker nodes, so a crash between enqueue and processing doesn't silently drop the work — the message is still sitting there when a consumer, or its replacement, comes back to look.</p>
+        <p id="description-p-3" data-kb-level="advanced">It also absorbs bursts. Real traffic rarely arrives at a steady rate; a queue lets producers write as fast as they like while consumers pull at a sustainable pace, turning a spike that would overwhelm a consumer into a backlog that drains over the following seconds or minutes instead of failing outright.</p>
+        <p id="description-p-4" data-kb-level="advanced">Durability is what separates a queue from an in-process buffer. Messages are typically persisted to disk or replicated across broker nodes, so a crash between enqueue and processing doesn't silently drop the work — the message is still sitting there when a consumer, or its replacement, comes back to look.</p>
       </div>
     </section>
 
@@ -179,15 +179,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>The sender hands work over and carries on, instead of standing there until it is done. The work waits in a line, stored safely, until whoever picks it up is free — and each item is taken by exactly one of them, so nothing gets done twice. A sudden rush piles up and drains away over the next few minutes rather than knocking anyone over.</p>
+          <p>Checkout calls the email service directly, so when that service is slow the customer waits on a spinner, and when it is down the confirmation is lost with no way to get it back. Write the request into a line instead: checkout drops it off, returns at once, and a worker takes it when it is free. The line is stored on disk, so a crash loses nothing, and each item goes to exactly one worker, so no job is done twice. An evening rush piles up in the line and drains over the next few minutes instead of knocking the workers over.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>An ordered, durable, point-to-point channel between producers and consumers: an enqueue returns as soon as the broker has persisted or replicated the message, and each message is delivered to exactly one attached consumer rather than broadcast to all of them. It decouples the two sides in time, converts arrival spikes into a backlog that drains at consumer pace, and turns throughput into a function of consumer replica count. Delivery is at-least-once, so every handler owes idempotency and a dead-letter path.</p>
+          <p>The line is a broker-managed channel, and the enqueue returns only once the broker has persisted or replicated the message — that acknowledgement is what makes the handoff safe to forget about. Delivery is point-to-point: the broker hands each message to one attached consumer and hides it from the rest for a visibility timeout, deleting it on ack and releasing it for redelivery if the lease expires, which is where at-least-once comes from. Throughput then becomes a function of consumer replicas, because a pool of competing consumers drains one queue with the single-delivery guarantee intact. Two mechanics ride on the same lease: a message that fails a bounded number of attempts is diverted to a dead-letter channel instead of cycling forever, and a FIFO queue trades throughput for strict order and dedup within a message group where a standard queue trades order for rate.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the caller does not need the result now and the work must survive a crash between acceptance and processing — you are trading a synchronous answer and a readable call stack for durability and load smoothing. The bill is a broker to run, monitor and keep available, end-to-end latency you cannot argue away, duplicate handling on every consumer, and flow that no longer follows a stack trace. Queue depth and oldest-message age become the real health signals, because a backlog that never fully drains is a capacity shortfall wearing the disguise of a working system.</p>
+          <p>Reach for it when the caller does not need the answer now and the work must outlive a crash between acceptance and processing; reach past it when the request needs an answer in the same breath, or when every interested party needs the message rather than one of them. Each cost has a counter-move. Duplicates arrive by design, so make the handler idempotent on message id or a business key and dedupe at the boundary with an inbox. A poison message would burn a consumer slot forever, so bound the retry count and route it to a dead-letter channel. Writing your database and the queue in one breath is a dual write nobody can make atomic, so publish through an outbox. The flow no longer follows a stack trace, so carry a correlation id and trace the hops. Then run the loop: tune the visibility timeout above worst-case processing and the prefetch to the memory you can spare, watch queue depth and the age of the oldest unacknowledged message, expect backlog runaway to break first when sustained arrivals exceed drain rate, and gate release on an idempotent consumer, a configured dead-letter path, and a load test that drains faster than peak.</p>
         </div>
       </div>
     </section>
@@ -195,6 +195,25 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    P["Checkout service"]
+    subgraph Lease["One in-flight visibility window"]
+        Q[("Order queue")]
+        C["Fulfilment worker"]
+    end
+    C2["Second worker"]
+    DLQ[("Dead-letter queue")]:::ext
+    P --&gt;|"1 enqueue, returns on broker ack"| Q
+    Q --&gt;|"2 deliver, hide from others"| C
+    C --&gt;|"3 ack, message deleted"| Q
+    Q --&gt;|"4 lease expired, no ack"| C2
+    Q --&gt;|"5 after N failed attempts"| DLQ
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does the work survive a worker that dies mid-job? Step 1 returns as soon as the broker has stored the message; between 2 and 3 the message is hidden from every other consumer, so exactly one worker holds it. If the ack never comes the lease expires and the message goes out again — which is why step 4 can run the same work twice, and why step 5 exists for the message that fails every time.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -225,12 +244,12 @@ sequenceDiagram
         <dd>Run a pool of consumer instances against the same queue to scale throughput horizontally — the queue still guarantees any one message reaches only one of them.</dd>
         <dt id="variations-item-2">Visibility timeout / lease-based redelivery</dt>
         <dd>A dequeued message is hidden rather than deleted until the consumer acknowledges it; if the lease expires without an ack, another consumer picks it up — the basis of at-least-once delivery.</dd>
-        <dt id="variations-item-3"><a href="./dead-letter-channel.html">Dead Letter Channel</a></dt>
-        <dd>A message that fails processing past a retry limit is diverted to a separate channel instead of blocking the queue or being redelivered forever.</dd>
-        <dt id="variations-item-4">FIFO vs. standard queues</dt>
-        <dd>FIFO queues guarantee strict order and exactly-once processing within a group, at the cost of throughput; standard queues favor throughput and tolerate occasional reordering or duplicates.</dd>
-        <dt id="variations-item-5"><a href="./claim-check.html">Claim Check</a></dt>
-        <dd>Store a large payload externally and put only a reference in the message, so broker size limits and throughput aren't spent moving bulk data around.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced"><a href="./dead-letter-channel.html">Dead Letter Channel</a></dt>
+        <dd data-kb-level="advanced">A message that fails processing past a retry limit is diverted to a separate channel instead of blocking the queue or being redelivered forever.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">FIFO vs. standard queues</dt>
+        <dd data-kb-level="advanced">FIFO queues guarantee strict order and exactly-once processing within a group, at the cost of throughput; standard queues favor throughput and tolerate occasional reordering or duplicates.</dd>
+        <dt id="variations-item-5" data-kb-level="expert"><a href="./claim-check.html">Claim Check</a></dt>
+        <dd data-kb-level="expert">Store a large payload externally and put only a reference in the message, so broker size limits and throughput aren't spent moving bulk data around.</dd>
       </dl>
     </section>
 
@@ -242,8 +261,8 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Decouples producer and consumer lifecycles — either can be down without losing submitted work.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Absorbs bursts, turning spiky arrival rates into a steady, sustainable consumer load.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Consumers scale horizontally against one queue without any change to producers.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Durable persistence protects in-flight work across crashes and restarts.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Consumers scale horizontally against one queue without any change to producers.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Durable persistence protects in-flight work across crashes and restarts.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -327,8 +346,8 @@ class MessageQueue&lt;T&gt; {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="rabbitmq" id="wild-rabbitmq"><strong>RabbitMQ</strong><span>Holds each message until the consumer sends basic.ack; basic.qos sets per-consumer prefetch, quorum queues replicate the queue across nodes, and a dead-letter exchange catches rejected or expired messages.</span></div>
-        <div class="wild-item" data-kb-example="amazon-sqs" id="wild-amazon-sqs"><strong>Amazon SQS</strong><span>Managed queue with a configurable VisibilityTimeout and MessageRetentionPeriod up to 14 days; a redrive policy dead-letters a message after maxReceiveCount attempts, and FIFO queues add ordering plus dedup within a message group.</span></div>
-        <div class="wild-item" data-kb-example="activemq" id="wild-activemq"><strong>Apache ActiveMQ</strong><span>A JMS broker whose queues give classic point-to-point delivery; a redelivery policy retries with backoff before routing to a dead-letter queue, and the KahaDB store persists messages across restarts.</span></div>
+        <div class="wild-item" data-kb-example="amazon-sqs" id="wild-amazon-sqs" data-kb-level="advanced"><strong>Amazon SQS</strong><span>Managed queue with a configurable VisibilityTimeout and MessageRetentionPeriod up to 14 days; a redrive policy dead-letters a message after maxReceiveCount attempts, and FIFO queues add ordering plus dedup within a message group.</span></div>
+        <div class="wild-item" data-kb-example="activemq" id="wild-activemq" data-kb-level="advanced"><strong>Apache ActiveMQ</strong><span>A JMS broker whose queues give classic point-to-point delivery; a redelivery policy retries with backoff before routing to a dead-letter queue, and the KahaDB store persists messages across restarts.</span></div>
       </div>
     </section>
 
@@ -339,38 +358,38 @@ class MessageQueue&lt;T&gt; {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Visibility timeout (message lease)</strong> — How long a dequeued message stays hidden before redelivery; set above worst-case processing time or extend it with a heartbeat.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Consumer prefetch / concurrency</strong> — How many unacknowledged messages one consumer holds in flight; caps memory and spreads load across the pool.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Max receive count before dead-lettering</strong> — Number of failed delivery attempts before a message is diverted to a dead-letter channel.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Message retention / TTL</strong> — How long an unconsumed message survives before the broker discards it.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Consumer pool size</strong> — Number of competing consumers draining one queue.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Consumer prefetch / concurrency</strong> — How many unacknowledged messages one consumer holds in flight; caps memory and spreads load across the pool.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Max receive count before dead-lettering</strong> — Number of failed delivery attempts before a message is diverted to a dead-letter channel.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Message retention / TTL</strong> — How long an unconsumed message survives before the broker discards it.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Consumer pool size</strong> — Number of competing consumers draining one queue.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Queue depth (backlog)</strong> — Messages waiting to be consumed; the primary saturation signal.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Age of oldest unacknowledged message</strong> — How long the front of the queue has waited to be picked up.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Dead-letter and redelivery rate</strong> — Messages diverted or redelivered per interval; a rise flags poison messages or failing consumers.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Enqueue vs. dequeue rate</strong> — Whether consumers are keeping pace with producers.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Age of oldest unacknowledged message</strong> — How long the front of the queue has waited to be picked up.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Dead-letter and redelivery rate</strong> — Messages diverted or redelivered per interval; a rise flags poison messages or failing consumers.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Enqueue vs. dequeue rate</strong> — Whether consumers are keeping pace with producers.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Poison message</strong> — A message that always fails is redelivered each cycle, burning a consumer slot until it hits the dead-letter threshold.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Lease shorter than processing time</strong> — The visibility timeout expires mid-work, a second consumer takes the same message, and it runs twice.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Backlog runaway</strong> — Sustained enqueue above consumer capacity grows depth without bound; latency climbs until retention drops the oldest.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Duplicate delivery</strong> — At-least-once redelivery double-applies non-idempotent side effects.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Lease shorter than processing time</strong> — The visibility timeout expires mid-work, a second consumer takes the same message, and it runs twice.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Backlog runaway</strong> — Sustained enqueue above consumer capacity grows depth without bound; latency climbs until retention drops the oldest.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Duplicate delivery</strong> — At-least-once redelivery double-applies non-idempotent side effects.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Consumers are idempotent — dedupe on message id or a business key</li>
-            <li id="production-check-2" data-kb-polarity="check">A dead-letter channel is configured with a bounded retry count</li>
-            <li id="production-check-3" data-kb-polarity="check">Visibility timeout exceeds worst-case processing, or the consumer extends the lease with a heartbeat</li>
-            <li id="production-check-4" data-kb-polarity="check">Queue depth and oldest-message age are alerted, not just graphed</li>
-            <li id="production-check-5" data-kb-polarity="check">Load test confirms consumers drain faster than sustained peak enqueue rate</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">A dead-letter channel is configured with a bounded retry count</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Visibility timeout exceeds worst-case processing, or the consumer extends the lease with a heartbeat</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Queue depth and oldest-message age are alerted, not just graphed</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">Load test confirms consumers drain faster than sustained peak enqueue rate</li>
           </ul>
         </div>
       </div>

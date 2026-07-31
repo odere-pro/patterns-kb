@@ -144,7 +144,7 @@
       <div class="prose">
         <p id="description-p-1">Fan-out is a delivery topology: one published message is replicated into an independent copy for every consumer, and each consumer processes its own copy in parallel — one way, with no reply expected and no results merged back. The producer emits once; the messaging fabric — a topic, an exchange, a broker — does the multiplying.</p>
         <p id="description-p-2">The force it resolves is a producer that must inform many consumers of the same fact — an order was placed — where those consumers have nothing to do with one another. Notifying them by a hard-coded list of direct calls couples the producer to every consumer's address, availability, and speed, and lets the slowest or most broken of them stall the rest. Fan-out puts each consumer on its own path, so their number, pace, and failures become independent.</p>
-        <p id="description-p-3">It is easy to conflate with publish-subscribe, but the two answer different questions. Pub/sub is the <em>contract</em> — publishers and subscribers never know each other. Fan-out is the <em>topology</em> that contract produces: one-to-many parallel delivery. You reach for fan-out specifically when it matters that the copies are independent — buffered, retried, and consumed separately — not merely that the sender is decoupled.</p>
+        <p id="description-p-3" data-kb-level="advanced">It is easy to conflate with publish-subscribe, but the two answer different questions. Pub/sub is the <em>contract</em> — publishers and subscribers never know each other. Fan-out is the <em>topology</em> that contract produces: one-to-many parallel delivery. You reach for fan-out specifically when it matters that the copies are independent — buffered, retried, and consumed separately — not merely that the sender is decoupled.</p>
       </div>
     </section>
 
@@ -153,15 +153,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>One thing happened, and several unrelated teams each need to know about it. Rather than telephoning them one after another and waiting, the news is posted once and everyone who cares gets their own copy to deal with in their own time. A slow reader holds nobody else up, and nobody is expected to send an answer back.</p>
+          <p>One thing happens — an order is placed — and four unrelated systems need to hear about it: billing, search, email, analytics. Call them one after another and the producer waits for the slowest, and the one that is down takes the other three notifications with it. Publish the fact once instead, and let the messaging fabric hand each system its own copy to work through in its own time. A slow reader holds nobody up, a broken one fails alone, and nobody is expected to send an answer back.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A one-way delivery topology: a single publish is replicated into an independent copy per consumer — typically its own durable queue behind a topic or exchange — and each copy is buffered, retried and dead-lettered on its own. No replies are correlated and nothing is merged back. Per-branch subscription filters keep each consumer's volume relevant. It is the topology publish-subscribe produces, and you name it this when the independence of the copies, not merely sender decoupling, is the point.</p>
+          <p>Each copy usually lands in its own durable queue behind a topic or exchange, and that queue is the isolation boundary: its own backlog, its own in-flight window, its own retry count, its own dead-letter queue. Delivery is at-least-once per copy and the branches share nothing, so every consumer needs its own idempotent handler. Three dials distinguish deployments. A branch can take the whole stream or attach a subscription filter that trims it to the attributes it cares about. The broker can push each copy to an endpoint, or let the consumer poll and pull at the rate it can sustain. And ordering, where you need it, is preserved per key at the cost of some of the parallelism that made the topology worth using. This is the shape publish-subscribe produces; you call it fan-out when the independence of the copies, rather than the decoupling of the sender, is the point.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Reach for it when consumers are genuinely unrelated and must be isolated from each other's pace and failures — total time then tracks the slowest single branch rather than the sum of all of them. Amplification is the bill: one logical event becomes N physical deliveries, N sets of retries and N idempotent handlers, and that cost grows with every consumer added. There is no global completion signal either, so answering did everyone get it means building per-branch telemetry rather than reading it off the publish. Size the branches for the burst, or one publish becomes a thundering herd.</p>
+          <p>Reach for it when the consumers are genuinely unrelated, because total time then tracks the slowest single branch instead of the sum of all of them. Skip it when a message must reach exactly one of several workers — that is a queue with competing consumers — and skip it when you need the answers back, which is scatter-gather. Three costs come with the topology, each with a counter-move. Amplification is the first: one logical event becomes N deliveries, N retry budgets and N handlers, and a publish burst lands on every consumer at the same moment — attach subscription filters so a branch never carries traffic it does not need, and size each branch's consumer pool for the burst rather than the average. The second is that no global completion signal exists, so did-everyone-get-it cannot be read off the publish — answer it with per-branch backlog and oldest-message age, and alert on each branch's dead-letter depth separately. The third is silent loss: a wrong filter drops messages and nothing errors anywhere — test filter rules the way you test code, and reconcile per-branch delivery counts against publish counts. Then run the loop: tune filters, in-flight window and batch size; watch per-queue backlog, oldest-message age and dead-letter depth; expect one branch to back up alone while the rest stay healthy; and gate on every consumer being idempotent before the first duplicate arrives.</p>
         </div>
       </div>
     </section>
@@ -171,12 +171,24 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    P["Publisher"] -->|"publish"| T(["Topic"])
-    T -->|"all"| QA[["Queue A"]] -->|"drain"| CA["Consumer A"]
-    T -->|"all"| CB["Consumer B"]
-    T -->|"filtered"| QC[["Queue C"]] -->|"drain"| CC["Consumer C"]
+    Pub["Order Service"]:::ext
+    T(["Topic"])
+    subgraph Br["One branch, one buffer: its own retries and dead letters"]
+        QA[("Billing queue")]
+        DLQ[("Billing dead-letter queue")]
+    end
+    CA["Billing"]
+    QS[("Search queue")]
+    CS["Search"]:::ext
+    Pub --&gt;|"1 publish once"| T
+    T --&gt;|"2 copy, filter applied"| QA
+    T --&gt;|"2 copy, filter applied"| QS
+    QA --&gt;|"3 drain at its own pace"| CA
+    CA --&gt;|"4 give up after N retries"| DLQ
+    QS --&gt;|"3 drain at its own pace"| CS
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>One publish to the topic becomes an independent copy per consumer. A durable queue in front of a consumer lets it drain at its own pace, and a per-subscription filter can trim a branch to only the messages it cares about.</figcaption>
+        <figcaption>What stops a broken consumer from touching the others? The queue in front of it. Billing's copy is its own message from step 2 onward, so it can back up at step 3 and dead-letter at step 4 while search drains normally — and no arrow ever runs back to the publisher.</figcaption>
       </figure>
     </section>
 
@@ -187,10 +199,10 @@ flowchart LR
         <dd>Every consumer receives every message, or each subscription carries a filter — by attribute or by content — so a branch only sees messages it cares about, trimming volume and cost per consumer.</dd>
         <dt id="variations-item-2">Direct fan-out vs. queue-per-consumer hybrid</dt>
         <dd>The topic pushes straight to each consumer, or a durable queue sits in front of each one; the queue absorbs bursts and lets a slow branch fall behind without holding up the fast ones.</dd>
-        <dt id="variations-item-3">Push vs. poll delivery</dt>
-        <dd>The broker pushes each copy to a consumer's endpoint, or each consumer polls its own queue and pulls at the rate it can actually handle.</dd>
-        <dt id="variations-item-4">Ordered vs. unordered fan-out</dt>
-        <dd>Delivery is best-effort parallel with no order across messages, or ordering is preserved per key at the cost of some of the parallelism.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Push vs. poll delivery</dt>
+        <dd data-kb-level="advanced">The broker pushes each copy to a consumer's endpoint, or each consumer polls its own queue and pulls at the rate it can actually handle.</dd>
+        <dt id="variations-item-4" data-kb-level="expert">Ordered vs. unordered fan-out</dt>
+        <dd data-kb-level="expert">Delivery is best-effort parallel with no order across messages, or ordering is preserved per key at the cost of some of the parallelism.</dd>
       </dl>
     </section>
 
@@ -202,17 +214,17 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Consumers process in parallel, each at its own pace, so total time tracks the slowest single branch, not the sum of them.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">A durable queue per consumer isolates one slow or failed branch from all the others.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">New consumers attach to the topic without touching or redeploying the producer.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Filtering keeps each branch's volume relevant instead of forcing every consumer to see everything.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">New consumers attach to the topic without touching or redeploying the producer.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Filtering keeps each branch's volume relevant instead of forcing every consumer to see everything.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="expert">One logical message becomes N physical deliveries — load and cost that grow with the number of consumers.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Each branch needs its own idempotency, retry, and dead-lettering; delivery is at-least-once per copy.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">There is no built-in "did everyone get it" — completion and failure are per-branch, not global.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">A misconfigured filter silently drops messages a consumer needed, with nothing in the call to trace.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">One logical message becomes N physical deliveries — load and cost that grow with the number of consumers.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Each branch needs its own idempotency, retry, and dead-lettering; delivery is at-least-once per copy.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">There is no built-in "did everyone get it" — completion and failure are per-branch, not global.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">A misconfigured filter silently drops messages a consumer needed, with nothing in the call to trace.</li>
           </ul>
         </div>
       </div>
@@ -226,7 +238,7 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Several independent consumers must each act on the same event, in parallel and without coordinating.</li>
             <li id="usage-when-2" data-kb-polarity="when">Consumers run at different speeds and one must be free to fall behind without stalling the others.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You want to add or remove consumers without redeploying or even informing the producer.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You want to add or remove consumers without redeploying or even informing the producer.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -234,12 +246,12 @@ flowchart LR
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Each message must go to exactly one of several workers, not all of them — that is a message queue, not a broadcast.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">You need the combined result of asking many parties — that is Scatter-Gather, which adds a correlated gather.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">A strict synchronous response is required before the producer can continue.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">A strict synchronous response is required before the producer can continue.</li>
           </ul>
         </div>
       </div>
       <div class="prose">
-        <p id="usage-p-1">Left unbounded, fan-out is also how a single publish becomes a thundering herd — every consumer hit at once — so size the branches for the amplification before it finds you.</p>
+        <p id="usage-p-1" data-kb-level="advanced">Left unbounded, fan-out is also how a single publish becomes a thundering herd — every consumer hit at once — so size the branches for the amplification before it finds you.</p>
       </div>
     </section>
 
@@ -279,8 +291,8 @@ async function fanOut(consumers: Consumer[], message: Message): Promise&lt;void&
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="sns-sqs" id="wild-sns-sqs"><strong>Amazon SNS → SQS fanout</strong><span>Publishing to an SNS topic pushes an independent copy to every subscribed SQS queue; each microservice owns a queue and drains it at its own pace, a Lambda event source mapping polls each queue in batches, subscription filter policies route by message attribute, and delivery failures land in a redrive dead-letter queue.</span></div>
-        <div class="wild-item" data-kb-example="azure-sb-topics" id="wild-azure-sb-topics"><strong>Azure Service Bus topics</strong><span>A topic delivers each message into every subscription, and a subscription is its own durable queue-like buffer that a consumer reads independently; SQL and correlation filter rules decide which messages land in each subscription.</span></div>
-        <div class="wild-item" data-kb-example="llm-fanout" id="wild-llm-fanout"><strong>Parallel LLM &amp; agent fan-out</strong><span>An orchestrator dispatches one request to several models, tools, or sub-agents at once — running independent tool calls or sampling multiple generations in parallel so none waits on the others — and a fan-in gathers the results.</span></div>
+        <div class="wild-item" data-kb-example="azure-sb-topics" id="wild-azure-sb-topics" data-kb-level="advanced"><strong>Azure Service Bus topics</strong><span>A topic delivers each message into every subscription, and a subscription is its own durable queue-like buffer that a consumer reads independently; SQL and correlation filter rules decide which messages land in each subscription.</span></div>
+        <div class="wild-item" data-kb-example="llm-fanout" id="wild-llm-fanout" data-kb-level="expert"><strong>Parallel LLM &amp; agent fan-out</strong><span>An orchestrator dispatches one request to several models, tools, or sub-agents at once — running independent tool calls or sampling multiple generations in parallel so none waits on the others — and a fan-in gathers the results.</span></div>
       </div>
     </section>
 
@@ -291,38 +303,38 @@ async function fanOut(consumers: Consumer[], message: Message): Promise&lt;void&
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Per-subscription filter</strong> — Which messages a branch receives — narrows a consumer to the subset it cares about instead of the whole stream.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>In-flight / visibility timeout</strong> — How long a delivered copy is hidden from redelivery while a consumer works it; too short redelivers prematurely, too long slows recovery from a crash.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Redelivery limit before dead-lettering</strong> — How many times a copy is retried on one branch before it is moved to that branch dead-letter queue (a maxReceiveCount-style dial).</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Delivery retry / backoff policy</strong> — How the fabric spaces retries to a failing branch so a struggling consumer is not hammered.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Per-consumer batch size</strong> — How many copies a consumer pulls and processes per fetch, trading latency against throughput on that branch.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>In-flight / visibility timeout</strong> — How long a delivered copy is hidden from redelivery while a consumer works it; too short redelivers prematurely, too long slows recovery from a crash.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Redelivery limit before dead-lettering</strong> — How many times a copy is retried on one branch before it is moved to that branch dead-letter queue (a maxReceiveCount-style dial).</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Delivery retry / backoff policy</strong> — How the fabric spaces retries to a failing branch so a struggling consumer is not hammered.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Per-consumer batch size</strong> — How many copies a consumer pulls and processes per fetch, trading latency against throughput on that branch.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Per-queue backlog</strong> — Pending copies on a single branch; the core per-consumer saturation signal (e.g. an approximate-messages-visible count).</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Age of the oldest unprocessed copy</strong> — How far the slowest branch has fallen behind the head of its queue.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Dead-letter-queue depth</strong> — Copies a branch gave up on after exhausting retries — poison messages or a broken consumer.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Delivery-failure / throttle rate</strong> — How often the fabric fails or is throttled delivering to a branch endpoint.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Age of the oldest unprocessed copy</strong> — How far the slowest branch has fallen behind the head of its queue.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Dead-letter-queue depth</strong> — Copies a branch gave up on after exhausting retries — poison messages or a broken consumer.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Delivery-failure / throttle rate</strong> — How often the fabric fails or is throttled delivering to a branch endpoint.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>One branch backs up in isolation</strong> — A slow or failed branch sees its queue grow while the others stay healthy — the isolation win, visible as a single climbing backlog.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Poison message redelivery loop</strong> — A copy that always fails redelivers on its branch until the redelivery limit moves it to the dead-letter queue.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Silent filter drop</strong> — A misconfigured filter excludes messages a consumer needed; nothing errors, the branch simply never sees them.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Publish-burst amplification</strong> — A burst on the topic multiplies into a simultaneous copy on every branch, hitting all consumers at once.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Poison message redelivery loop</strong> — A copy that always fails redelivers on its branch until the redelivery limit moves it to the dead-letter queue.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Silent filter drop</strong> — A misconfigured filter excludes messages a consumer needed; nothing errors, the branch simply never sees them.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Publish-burst amplification</strong> — A burst on the topic multiplies into a simultaneous copy on every branch, hitting all consumers at once.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Every consumer is idempotent — delivery is at-least-once per copy</li>
-            <li id="production-check-2" data-kb-polarity="check">Each branch has its own dead-letter queue and someone watches its depth</li>
-            <li id="production-check-3" data-kb-polarity="check">Filter rules are tested — a wrong filter drops messages silently</li>
-            <li id="production-check-4" data-kb-polarity="check">Per-queue backlog and oldest-message age are monitored per branch</li>
-            <li id="production-check-5" data-kb-polarity="check">Fan-out breadth is sized for the N-fold amplification of a publish burst</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Each branch has its own dead-letter queue and someone watches its depth</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Filter rules are tested — a wrong filter drops messages silently</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Per-queue backlog and oldest-message age are monitored per branch</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">Fan-out breadth is sized for the N-fold amplification of a publish burst</li>
           </ul>
         </div>
       </div>

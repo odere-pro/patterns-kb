@@ -176,7 +176,7 @@
       <div class="prose">
         <p id="description-p-1"><strong>Cache-Aside</strong> — also called lazy loading — puts the application in charge of both reading the cache and filling it. On a read, the app asks the cache for the key. A hit returns the value immediately, never touching the source of truth. A miss sends the app to the database (or service, or file) to fetch the value, which it then writes into the cache before handing it back to the caller. On a write, the app updates the source of truth directly and either deletes the now-stale cache entry or overwrites it — the cache is never written to on its own initiative.</p>
         <p id="description-p-2">The force it resolves is a mismatch between what the application knows and what a generic cache knows. A key-value store like Redis or Memcached has no idea what a "user" or an "order" is, how to load one, or when its copy has gone stale — it only knows keys and values. Cache-Aside keeps that ignorance intentional: the cache stays a dumb, general-purpose store, and all the domain logic — what to cache, how to load it, when to invalidate it — lives in application code, where it's visible and can differ per call site.</p>
-        <p id="description-p-3">That division also makes the cache optional in the failure sense. If it's down or cold, the app falls straight through to the source and keeps serving, just slower — there's no hard dependency on the cache being correct or even present. And because entries are only created on demand, the cache holds exactly the working set that's actually being requested, rather than being pre-warmed with data no one reads.</p>
+        <p id="description-p-3" data-kb-level="advanced">That division also makes the cache optional in the failure sense. If it's down or cold, the app falls straight through to the source and keeps serving, just slower — there's no hard dependency on the cache being correct or even present. And because entries are only created on demand, the cache holds exactly the working set that's actually being requested, rather than being pre-warmed with data no one reads.</p>
       </div>
     </section>
 
@@ -185,15 +185,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>The app looks in the cache first. If the answer is there, use it; if not, fetch it from the database, save a copy in the cache, and answer. The next time someone asks the same thing, it is fast.</p>
+          <p>Every page view asks the database for the same handful of rows, and once a few thousand people read at once the database is the part that falls over. Put a small, fast memory store in front of it: look there first, and when the answer is missing, ask the database once, keep a copy, and serve everyone else from that copy until it gets old.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>The application owns the protocol: on a read miss it loads from the store and populates the cache with a TTL; on writes it updates the store and invalidates the key. The cache is a look-aside, never the system of record, so losing it costs latency, not data. Staleness is bounded by TTL and invalidation discipline.</p>
+          <p>The application owns that protocol, not the cache: on a miss it queries the store and writes the value back under a key with a time-to-live; on a write it updates the store and deletes the key so the next read reloads. The cache therefore holds only what has actually been asked for and knows nothing about your schema, which is why a generic key-value store is enough and why losing it costs latency, not data. Delete rather than overwrite on write — a delete cannot lose a race with a concurrent update, an overwrite can — and cache the not-found answer too, so repeated lookups for an absent key stop reaching the store.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Reach for it when reads dominate and slightly stale data is acceptable — it is the lowest-coupling caching shape because the store stays authoritative. The concerns that matter at scale are the failure edges: invalidation races that pin stale values, thundering herds when a hot key expires (pair it with stampede protection), and the fact that every caller must repeat the protocol correctly — which is why teams bury it in a data-access layer.</p>
+          <p>Choose it when reads dominate, the same keys repeat, and a second of staleness is cheaper than a slow page; choose otherwise when every read must be current or the data turns over faster than it is read. Three costs come with it, each with a counter-move. The window between the store write and the key delete serves stale values — put a short TTL underneath the invalidation, and move the path to write-through where that lag is unacceptable. A hot key expiring drops every concurrent reader onto the store at once — pay that with jittered TTLs and single-flight coalescing, or refresh the few keys that matter before they expire. The check-miss-load-populate dance repeated at forty call sites drifts out of agreement — bury it in one data-access helper, or hand the fill to the cache's own loader and run read-through instead. Then work the loop: tune TTL and the memory cap, watch hit ratio and the miss rate reaching the store, expect the hot-key herd to break first, and gate release on every write path invalidating the key it touched.</p>
         </div>
       </div>
     </section>
@@ -201,6 +201,26 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Caller["Request handler"]:::ext
+    subgraph Own["The app owns the fill"]
+        App["Application code"]
+        Cache[("Cache")]
+    end
+    DB[("Database")]
+    Caller --&gt;|"1 get user 42"| App
+    App --&gt;|"2 look up user:42"| Cache
+    Cache --&gt;|"3 hit — value, done"| App
+    App --&gt;|"4 miss — read the row"| DB
+    DB --&gt;|"5 row"| App
+    App --&gt;|"6 set user:42 with a TTL"| Cache
+    App --&gt;|"7 answer"| Caller
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>Who puts the value in the cache? The application does. Steps 4–6 run only on a miss, and there is no arrow from the cache to the database — the cache never loads anything by itself, so it needs to know nothing about your schema.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -228,10 +248,10 @@ sequenceDiagram
         <dd>The cache library itself loads on a miss instead of the app doing it — same effect, opposite owner of the fetch logic.</dd>
         <dt id="variations-item-2">Write-invalidate on update</dt>
         <dd>A write deletes the cache key rather than updating it, so the next read repopulates from the source of truth instead of risking a bad overwrite.</dd>
-        <dt id="variations-item-3">TTL / lazy expiration</dt>
-        <dd>Entries expire after a fixed time-to-live in addition to (or instead of) explicit invalidation, bounding staleness cheaply when writes are hard to track.</dd>
-        <dt id="variations-item-4">Negative caching</dt>
-        <dd>Cache a "not found" marker too, so repeated lookups for a key that doesn't exist don't hit the database on every single request.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">TTL / lazy expiration</dt>
+        <dd data-kb-level="advanced">Entries expire after a fixed time-to-live in addition to (or instead of) explicit invalidation, bounding staleness cheaply when writes are hard to track.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Negative caching</dt>
+        <dd data-kb-level="advanced">Cache a "not found" marker too, so repeated lookups for a key that doesn't exist don't hit the database on every single request.</dd>
       </dl>
     </section>
 
@@ -242,15 +262,15 @@ sequenceDiagram
           <h3>Pros</h3>
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">The cache holds only data that's actually been requested, so it stays small and relevant.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro">A generic key-value cache needs zero knowledge of the backing store or domain model.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">A generic key-value cache needs zero knowledge of the backing store or domain model.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">A cache outage degrades gracefully — reads just fall through to the source, slower but correct.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">The read path is simple to reason about: check, miss, load, populate, return.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">The read path is simple to reason about: check, miss, load, populate, return.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Every call site that reads must repeat the check-miss-load-populate logic, or share a helper that does.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="advanced">Every call site that reads must repeat the check-miss-load-populate logic, or share a helper that does.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">The first reader after an eviction pays the full latency of the source — the "cache penalty."</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">There's a stale window between a write to the source and the cache entry being invalidated.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">No built-in protection against a hot key expiring under load and a herd of misses hitting the source at once.</li>
@@ -267,7 +287,7 @@ sequenceDiagram
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Reads vastly outnumber writes and the same keys get requested repeatedly.</li>
             <li id="usage-when-2" data-kb-polarity="when">Access is sparse or unpredictable, so pre-warming or caching everything would waste memory.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You're using a generic cache that has no knowledge of your data model or loading logic.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You're using a generic cache that has no knowledge of your data model or loading logic.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -275,7 +295,7 @@ sequenceDiagram
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Data changes so often the hit rate would stay low anyway — caching adds complexity for little gain.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">Every read needs a guarantee of the freshest value — the cache can be stale between a write and its invalidation.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The loading and invalidation logic belongs with the storage layer itself — reach for <a href="./read-through.html">Read-Through</a> instead.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The loading and invalidation logic belongs with the storage layer itself — reach for <a href="./read-through.html">Read-Through</a> instead.</li>
           </ul>
         </div>
       </div>
@@ -312,7 +332,7 @@ async function updateUser(id: string, patch: Partial&lt;User&gt;): Promise&lt;vo
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="memcached" id="wild-memcached"><strong>Memcached</strong><span>A deliberately dumb key-value store with no loader concept: the app checks it with get, falls through to the source on a miss, and populates by hand with set; its slab allocator and -m memory ceiling drive LRU eviction once full.</span></div>
-        <div class="wild-item" data-kb-example="redis" id="wild-redis"><strong>Redis</strong><span>The default read-cache in front of a relational database, where application code owns the GET, the fallback query, the SET (usually with an EXPIRE for its TTL), and the DEL on write; maxmemory with an LRU or LFU maxmemory-policy bounds its footprint.</span></div>
+        <div class="wild-item" data-kb-example="redis" id="wild-redis" data-kb-level="advanced"><strong>Redis</strong><span>The default read-cache in front of a relational database, where application code owns the GET, the fallback query, the SET (usually with an EXPIRE for its TTL), and the DEL on write; maxmemory with an LRU or LFU maxmemory-policy bounds its footprint.</span></div>
       </div>
     </section>
 
@@ -323,37 +343,37 @@ async function updateUser(id: string, patch: Partial&lt;User&gt;): Promise&lt;vo
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Entry TTL</strong> — Time-to-live per key bounds how long a stale value can serve after the source changes; a shorter TTL trades hit rate for freshness.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Negative-cache TTL</strong> — A separate, usually shorter lifetime for cached not-found markers, so repeated lookups for an absent key don't round-trip the store every time.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Eviction policy and memory cap</strong> — The memory ceiling and reclaim policy — LRU or LFU via Redis maxmemory-policy, or the -m limit on Memcached — decide which keys are dropped once the cache fills.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Serialization format</strong> — How values are encoded before the SET; a compact encoding shrinks memory and network cost but adds CPU on every populate.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Negative-cache TTL</strong> — A separate, usually shorter lifetime for cached not-found markers, so repeated lookups for an absent key don't round-trip the store every time.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Eviction policy and memory cap</strong> — The memory ceiling and reclaim policy — LRU or LFU via Redis maxmemory-policy, or the -m limit on Memcached — decide which keys are dropped once the cache fills.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Serialization format</strong> — How values are encoded before the SET; a compact encoding shrinks memory and network cost but adds CPU on every populate.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Hit ratio</strong> — Hits over total lookups; a falling ratio means the working set no longer fits or the TTL is too short to pay off.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Source read rate on miss</strong> — Queries per second reaching the backing store; a spike reveals mass evictions or a stale-key stampede.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Eviction rate</strong> — Keys evicted per second; sustained eviction means the cache is undersized for its working set.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Read latency p99</strong> — Tail latency separates cheap hits from the full source round trip a miss pays.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Source read rate on miss</strong> — Queries per second reaching the backing store; a spike reveals mass evictions or a stale-key stampede.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Eviction rate</strong> — Keys evicted per second; sustained eviction means the cache is undersized for its working set.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Read latency p99</strong> — Tail latency separates cheap hits from the full source round trip a miss pays.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Stale read after write</strong> — Between a source write and the cache invalidation, readers see the old value; a crash between the two steps can leave it stale until the TTL fires.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Thundering herd on hot-key expiry</strong> — A popular key expires and every concurrent reader misses at once, all hitting the source together; cache-aside has no built-in coalescing.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Cache-penalty latency spike</strong> — The first reader after an eviction pays the full source latency; a wave of evictions surfaces as a tail-latency spike.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Unbounded growth</strong> — Without a memory cap and eviction policy, populated entries accumulate until the cache exhausts memory.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Thundering herd on hot-key expiry</strong> — A popular key expires and every concurrent reader misses at once, all hitting the source together; cache-aside has no built-in coalescing.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Cache-penalty latency spike</strong> — The first reader after an eviction pays the full source latency; a wave of evictions surfaces as a tail-latency spike.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Unbounded growth</strong> — Without a memory cap and eviction policy, populated entries accumulate until the cache exhausts memory.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Every write path invalidates or overwrites the cache key it touches</li>
-            <li id="production-check-2" data-kb-polarity="check">A TTL backs every entry even where explicit invalidation already exists</li>
-            <li id="production-check-3" data-kb-polarity="check">An eviction policy and memory cap are set so the cache cannot grow unbounded</li>
-            <li id="production-check-4" data-kb-polarity="check">The read path degrades to a direct source read when the cache is unavailable</li>
-            <li id="production-check-5" data-kb-polarity="check">Hot keys have stampede protection — coalescing, jittered TTL, or a lock — where a miss storm is unacceptable</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">A TTL backs every entry even where explicit invalidation already exists</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">An eviction policy and memory cap are set so the cache cannot grow unbounded</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">The read path degrades to a direct source read when the cache is unavailable</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">Hot keys have stampede protection — coalescing, jittered TTL, or a lock — where a miss storm is unacceptable</li>
           </ul>
         </div>
       </div>

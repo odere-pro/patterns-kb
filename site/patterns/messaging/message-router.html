@@ -90,7 +90,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>message router</strong> is a filter that sits on a single input channel and, based on a set of conditions, forwards each message to exactly one of several possible output channels. It doesn't split, transform, or enrich the message — it only decides where it goes next, using whatever it needs to make that call: a header, a message type, the sender's identity, or an external rule table. The body passes through untouched.</p>
         <p id="description-p-2">The force it resolves is <strong>routing knowledge that doesn't belong to the sender</strong>. Without a router, every producer would need to know the full set of possible consumers and pick among them directly — hardcoding destination logic into business code that has nothing to do with routing. The router centralizes that decision: producers publish to one channel, the router owns the mapping from condition to destination, and either side can change without touching the other.</p>
-        <p id="description-p-3">It's the base of a small family. A plain router evaluates fixed rules against message metadata; a <a href="./content-based-router.html">Content-Based Router</a> inspects the payload itself to decide; a dynamic router loads its rules from a registry so they can change without a redeploy; and a recipient list abandons the "exactly one" constraint entirely, fanning the same message out to every channel that matches.</p>
+        <p id="description-p-3" data-kb-level="advanced">It's the base of a small family. A plain router evaluates fixed rules against message metadata; a <a href="./content-based-router.html">Content-Based Router</a> inspects the payload itself to decide; a dynamic router loads its rules from a registry so they can change without a redeploy; and a recipient list abandons the "exactly one" constraint entirely, fanning the same message out to every channel that matches.</p>
       </div>
     </section>
 
@@ -99,15 +99,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Several different handlers sit behind one incoming line, and each message belongs to exactly one of them. A step in the middle reads the label on the message — what kind it is, where it came from — and passes it to the right handler without opening or changing it. Senders address one place and never have to learn who is behind it.</p>
+          <p>The order service holds the address of the refunds handler, the support desk and the fulfilment team, and picks between them itself. Add a fourth handler and you edit the order service, which has no business knowing who reads its messages. Put one step in between instead: senders write to a single address, and that step reads the label on the outside of the message — what kind it is, who sent it — and hands it to the one handler it belongs to. The message is passed on exactly as it arrived, and anything the labels do not cover goes to a default handler rather than disappearing.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A stateless filter on one input channel that evaluates rules against message metadata — a header, the message type, the sender's identity, or an external rule table — and forwards each message unchanged to exactly one of several output channels. The body is never parsed or modified, which keeps the decision cheap and independent of payload schema. It is the base of a family: a content-based router reads the payload instead, a dynamic router loads its rules from a registry, and a recipient list drops the exactly-one constraint.</p>
+          <p>That step is a stateless filter with one input channel and several output channels, and it decides from metadata alone — a header, the message type, the sender's identity, or a lookup in a rule table. Because it never parses the body, the decision costs the same whatever the payload is and survives a payload schema change untouched. Rules are ordered and first match wins, so a broad rule placed above a narrow one shadows it permanently, and the fall-through case needs a real default channel or unmatched messages dead-end. Three variants differ in where the rules live: a static router compiles them in and needs a redeploy to add a route, a dynamic router re-reads them from a registry or control channel at runtime, and a recipient list keeps the same evaluation but drops the exactly-one constraint and delivers to every rule that matched.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the destination is derivable from metadata and that mapping changes on a different schedule from either side's code — the win is one auditable home for rules that would otherwise be hardcoded into every sender. The costs are structural: all traffic flows through one component, making it both a coupling point and a throughput ceiling, and rules reading mutable external state make behaviour impossible to reason about statically. Rule sets sprawl, and a misrouted message is diagnosed by auditing the table rather than reading the message, so version the rules and keep each decision traceable.</p>
+          <p>Reach for it when the destination follows from metadata and the mapping changes on a different schedule from the code on either side; skip it when the broker can do the same job with bindings, because a topic exchange matching routing keys costs you no component to operate. Three costs, each with a counter-move. Every message crosses one component, so it is both a coupling point and a throughput ceiling — keep evaluation to a header lookup and run a stateless replica pool off the same input channel, since nothing in the decision is stateful. A misroute is silent, because the body arrives intact and the wrong consumer processes it happily — watch per-channel distribution for a channel that drops to zero, and carry a correlation identifier so one message's path is reconstructable. Rule sets sprawl into decision trees nobody dares edit, and rules that read mutable external state cannot be reasoned about statically — version the rule set, review changes like code, and test each rule against representative messages. Then run the loop: tune evaluation order and the reload interval, watch the unroutable rate, expect no-match-with-no-default to lose messages first, and gate release on a fallback channel that exists and is alerted.</p>
         </div>
       </div>
     </section>
@@ -117,12 +117,23 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    S["Sender"] -->|"message"| R{"Message Router"}
-    R -->|"rule A matches"| A["Channel A"]
-    R -->|"rule B matches"| B["Channel B"]
-    R -->|"no rule matches"| D["Default channel"]
+    S["Order service"]
+    subgraph Decide["Decision surface: labels only"]
+        R{"Message router"}
+        T[("Rule table")]
+    end
+    A["Refunds queue"]
+    B["Support queue"]
+    D[("Default queue")]:::ext
+    S --&gt;|"1 publish to one address"| R
+    R --&gt;|"2 match headers, never the body"| T
+    T --&gt;|"3 first rule that matches wins"| R
+    R --&gt;|"4 type=refund"| A
+    R --&gt;|"5 priority=vip"| B
+    R --&gt;|"6 nothing matched"| D
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>The router evaluates an ordered set of rules against each message and forwards it, unmodified, to exactly one channel. Anything that matches nothing falls through to a default.</figcaption>
+        <figcaption>How does a sender reach the right handler without knowing that handler exists? It writes to one address (1), and the router decides from the labels alone (2–3), so the body crosses the boundary unparsed and unchanged. Exactly one output wins (4 or 5) — and the message no rule claims lands in the default queue (6) instead of disappearing.</figcaption>
       </figure>
     </section>
 
@@ -133,10 +144,10 @@ flowchart LR
         <dd>Routes by inspecting the message body itself, rather than a header or an external rule table.</dd>
         <dt id="variations-item-2">Static / rule-table router</dt>
         <dd>A fixed, config-file or hardcoded mapping from condition to channel — simplest form, but adding a route means a redeploy.</dd>
-        <dt id="variations-item-3">Dynamic router</dt>
-        <dd>Rules are loaded from a registry or control channel and can be changed or reloaded at runtime without touching the router's code.</dd>
-        <dt id="variations-item-4">Recipient list</dt>
-        <dd>Sends the message to every channel that matches, not just one — a fan-out cousin rather than an exclusive routing decision.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Dynamic router</dt>
+        <dd data-kb-level="advanced">Rules are loaded from a registry or control channel and can be changed or reloaded at runtime without touching the router's code.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Recipient list</dt>
+        <dd data-kb-level="advanced">Sends the message to every channel that matches, not just one — a fan-out cousin rather than an exclusive routing decision.</dd>
       </dl>
     </section>
 
@@ -148,8 +159,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Centralizes routing logic, so producers stay decoupled from the number and identity of consumers.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">New destinations are added by changing the router's rules, not the sender's code.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Leaves the message body untouched — routing stays a separate, easily reasoned-about concern.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Rules live in one place, so they're testable and auditable instead of scattered across senders.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Leaves the message body untouched — routing stays a separate, easily reasoned-about concern.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Rules live in one place, so they're testable and auditable instead of scattered across senders.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -229,8 +240,8 @@ publish(router.route(incoming), incoming); // decide once, forward unchanged</co
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="apache-camel" id="wild-apache-camel"><strong>Apache Camel</strong><span>Its routing DSL implements the EIP catalog directly: choice().when().otherwise() for a content-based router, routingSlip() for a route read from a header, dynamicRouter() for rules evaluated per message, and recipientList() for fan-out.</span></div>
-        <div class="wild-item" data-kb-example="spring-integration" id="wild-spring-integration"><strong>Spring Integration</strong><span>Ships router endpoints — HeaderValueRouter, PayloadTypeRouter, or a SpEL expression — that resolve one input channel to an output channel, with a default-output-channel for unmatched messages.</span></div>
-        <div class="wild-item" data-kb-example="rabbitmq-exchanges" id="wild-rabbitmq-exchanges"><strong>RabbitMQ exchanges</strong><span>A direct exchange matches the routing key to a binding exactly, a topic exchange matches routing-key patterns with the * and # wildcards, and a headers exchange routes on header attributes instead — publishers address the exchange and bindings decide the queue.</span></div>
+        <div class="wild-item" data-kb-example="spring-integration" id="wild-spring-integration" data-kb-level="advanced"><strong>Spring Integration</strong><span>Ships router endpoints — HeaderValueRouter, PayloadTypeRouter, or a SpEL expression — that resolve one input channel to an output channel, with a default-output-channel for unmatched messages.</span></div>
+        <div class="wild-item" data-kb-example="rabbitmq-exchanges" id="wild-rabbitmq-exchanges" data-kb-level="advanced"><strong>RabbitMQ exchanges</strong><span>A direct exchange matches the routing key to a binding exactly, a topic exchange matches routing-key patterns with the * and # wildcards, and a headers exchange routes on header attributes instead — publishers address the exchange and bindings decide the queue.</span></div>
       </div>
     </section>
 
@@ -241,34 +252,34 @@ publish(router.route(incoming), incoming); // decide once, forward unchanged</co
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Default / fallback channel</strong> — Where a message matching no rule goes; without one, unmatched messages are dropped or dead-ended.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Rule evaluation order</strong> — First-match vs. evaluate-all ordering of the rule list decides which of several matching rules wins.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Rule reload interval</strong> — For a dynamic router, how often rules are re-read from the registry or control channel without a redeploy.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Rule evaluation order</strong> — First-match vs. evaluate-all ordering of the rule list decides which of several matching rules wins.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Rule reload interval</strong> — For a dynamic router, how often rules are re-read from the registry or control channel without a redeploy.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Unroutable / fallback rate</strong> — Fraction of messages hitting the default channel or matching no rule; a spike means the rules have drifted from the traffic.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Per-channel distribution</strong> — Message counts per output channel; a channel that suddenly drops to zero flags a broken or shadowed rule.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Routing latency per message</strong> — Time to evaluate the rule set, which matters when a rule consults external or mutable state.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Per-channel distribution</strong> — Message counts per output channel; a channel that suddenly drops to zero flags a broken or shadowed rule.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="expert"><strong>Routing latency per message</strong> — Time to evaluate the rule set, which matters when a rule consults external or mutable state.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Silent misroute</strong> — A wrong rule forwards a message to the wrong channel; because the body is untouched, nothing downstream signals the error.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>No match, no fallback</strong> — A message that satisfies no rule and has no default channel is dropped or dead-ended.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stale external rule table</strong> — Rules that depend on mutable state route to a decommissioned or renamed channel after the topology changes underneath them.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Router bottleneck</strong> — All traffic funnels through one router; heavy per-message rule evaluation makes it the throughput ceiling for everything downstream.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>No match, no fallback</strong> — A message that satisfies no rule and has no default channel is dropped or dead-ended.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Stale external rule table</strong> — Rules that depend on mutable state route to a decommissioned or renamed channel after the topology changes underneath them.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Router bottleneck</strong> — All traffic funnels through one router; heavy per-message rule evaluation makes it the throughput ceiling for everything downstream.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">A default or fallback channel exists for messages that match no rule</li>
-            <li id="production-check-2" data-kb-polarity="check">Rules are tested in isolation against representative messages</li>
-            <li id="production-check-3" data-kb-polarity="check">Unroutable-message rate is monitored and alerted</li>
-            <li id="production-check-4" data-kb-polarity="check">Rule changes are versioned and reviewable, not edited live without a record</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Rules are tested in isolation against representative messages</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Unroutable-message rate is monitored and alerted</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="expert">Rule changes are versioned and reviewable, not edited live without a record</li>
           </ul>
         </div>
       </div>

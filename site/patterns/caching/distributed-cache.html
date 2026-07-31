@@ -122,15 +122,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Instead of every server keeping its own copy of an answer, they all share one memory store that sits next to them. Whichever server looks something up first puts the answer there, and the rest get it for free. Like a shared fridge in an office kitchen: one person stocks it, everyone eats, and nobody argues about whose milk is newer.</p>
+          <p>Twenty servers answer requests, and each one asks the database the same question and keeps its own copy of the answer. That is twenty copies of one piece of data, twenty times the database work, and nineteen servers still handing out the old value after the twentieth learns it changed. Put the answers in one memory store that all twenty servers reach instead. Whichever server looks something up first puts the answer there, and every other server reads it back without going near the database. Like a shared fridge in an office kitchen rather than a mini-fridge under each desk.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A dedicated caching tier — typically Redis or Memcached — runs as its own service beside the application. Every instance reads it over the network, so one populated key serves the whole fleet, and entries survive restarts, deploys and autoscaling because their lifetime is decoupled from any process. Capacity and throughput scale by sharding and replicating that tier rather than by growing the app. It is the default placement in most system designs, usually paired with a read strategy such as cache-aside or read-through.</p>
+          <p>That store is a dedicated service — Redis and Memcached are the usual choices — running in its own tier, so its memory ceiling, its eviction policy and its lifetime are set independently of any application process, and entries survive deploys, restarts and autoscaling. Past one node's capacity or throughput it shards: clients map each key to an owning node, and consistent hashing (or a fixed slot map, as in Redis Cluster's 16,384 hash slots) keeps a node change from reshuffling the whole keyspace. Each shard usually carries replicas, so losing a node does not cold-start its slice. The tier is only the store — how reads and writes flow through it is a separate choice, cache-aside by default, read-through or write-through when that logic moves into the cache layer — and a small in-process cache in front of it answers the hottest keys without the hop.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when many instances must agree on one view and the cache has to outlive any single process — that shared, independently scaled tier is what makes it the default rather than a local one. You pay a network hop plus serialization on every hit, which an in-process layer avoids entirely, and you take on a component to run: memory ceilings and eviction policy to set, shards to route with consistent hashing, replicas and failover to configure. A single hot key still lands on one node however wide the cluster, and a cold or lost node hands its whole slice straight to the origin.</p>
+          <p>Choose it when instances must agree on one view and the cache has to outlive any single process; keep the data local instead when one instance serves the traffic or the working set is tiny, because a local read has no hop to pay. Three costs come with the tier, each with a counter-move. Every hit pays a network round trip plus serialization on both ends, so put a small near cache in front of the handful of keys that dominate reads and accept the cross-instance staleness that buys. One very popular key lands on a single node however wide the cluster, saturating it while the rest look idle — replicate that key under several suffixed names, or coalesce concurrent misses so one request reaches the origin instead of thousands. A node that dies or restarts hands its whole slice to the origin at once, so replicate every shard with automatic failover and jitter TTLs so keys do not expire in lockstep. Then run the loop: tune max memory and the eviction policy, watch hit rate and per-node request skew, expect a hot key to break first, and gate on the ceiling, the routing and the failover being set before the tier carries traffic.</p>
         </div>
       </div>
     </section>
@@ -140,13 +140,21 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    A1["App instance 1"] -->|"get(key)"| C["Distributed cache (own tier)"]
-    A2["App instance 2"] -->|"get(key)"| C
-    A3["App instance 3"] -->|"get(key)"| C
-    C -->|"miss"| DB[("Database")]
-    DB -->|"value"| C
+    A1["App instance 1"]
+    A2["App instance 2"]
+    A3["App instance 3"]
+    subgraph Tier["Shared cache tier — one network hop from every instance"]
+        C[("Cache node holding user:42")]
+    end
+    DB[("Database")]:::ext
+    A1 --&gt;|"1 get(user:42), miss"| C
+    A1 --&gt;|"2 load from the source"| DB
+    A1 --&gt;|"3 set(user:42) with a TTL"| C
+    A2 --&gt;|"4 get(user:42), hit"| C
+    A3 --&gt;|"5 same entry, same value"| C
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>Every instance reaches the same cache tier over the network, so a key populated by one is a hit for all; only a miss touches the database.</figcaption>
+        <figcaption>Which instance pays for the fill? Only the first one — instance 1 misses at step 1 and populates at step 3, and every instance after it gets that entry back for one network hop instead of a database query.</figcaption>
       </figure>
     </section>
 
@@ -157,10 +165,10 @@ flowchart LR
         <dd>One cache node is simplest; past its capacity or throughput, the cache is sharded across a cluster and clients pick the owning node — commonly by consistent hashing so a node change reshuffles the fewest keys.</dd>
         <dt id="variations-item-2">Replicated for availability</dt>
         <dd>Each shard keeps replicas so a node failure doesn't cold-start that slice of the cache; the same replication also lets reads of a hot key spread across copies.</dd>
-        <dt id="variations-item-3">Near cache (L1 + L2)</dt>
-        <dd>A small in-process cache sits in front of the distributed cache: the local copy answers the hottest reads, and the shared tier backs everything else — trading a little cross-instance staleness for fewer network hops.</dd>
-        <dt id="variations-item-4">Strategy on top</dt>
-        <dd>The distributed cache is just the store; how reads and writes flow through it is a separate choice — cache-aside (app-managed) is the default, read-through / write-through move that logic into the cache layer.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Near cache (L1 + L2)</dt>
+        <dd data-kb-level="advanced">A small in-process cache sits in front of the distributed cache: the local copy answers the hottest reads, and the shared tier backs everything else — trading a little cross-instance staleness for fewer network hops.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Strategy on top</dt>
+        <dd data-kb-level="advanced">The distributed cache is just the store; how reads and writes flow through it is a separate choice — cache-aside (app-managed) is the default, read-through / write-through move that logic into the cache layer.</dd>
       </dl>
     </section>
 
@@ -172,8 +180,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">One shared view: every application instance sees the same entries, so they don't diverge or duplicate memory.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Outlives the app: the cache survives instance restarts and deploys, so a rollout doesn't cold-start it.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Scales independently: cache capacity and throughput grow by scaling the cache tier, not the app.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Holds far more than one process's heap, and can be sized and tuned as its own component.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Scales independently: cache capacity and throughput grow by scaling the cache tier, not the app.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Holds far more than one process's heap, and can be sized and tuned as its own component.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -196,16 +204,16 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Multiple application instances need to share one consistent cache instead of each keeping its own.</li>
             <li id="usage-when-2" data-kb-polarity="when">The cache must outlive individual processes — surviving restarts, deploys, and autoscaling.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The working set is larger than any single process can comfortably hold in memory.</li>
-            <li id="usage-when-4" data-kb-polarity="when">You want to scale cache capacity or throughput independently of the application tier.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The working set is larger than any single process can comfortably hold in memory.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">You want to scale cache capacity or throughput independently of the application tier.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">A single instance serves the traffic, or the data is tiny and read on every request — an in-process cache is faster and simpler.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">You need sub-millisecond reads and can't afford the network hop.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The data is so cheap to recompute that running a whole cache tier isn't worth the operational cost.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">You need sub-millisecond reads and can't afford the network hop.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The data is so cheap to recompute that running a whole cache tier isn't worth the operational cost.</li>
           </ul>
         </div>
       </div>
@@ -235,8 +243,8 @@ async function getUser(id: string): Promise&lt;User&gt; {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="redis" id="wild-redis"><strong>Redis</strong><span>In-memory key-value store widely deployed as a shared application cache, with clustering and replication.</span></div>
-        <div class="wild-item" data-kb-example="memcached" id="wild-memcached"><strong>Memcached</strong><span>A classic multithreaded in-memory cache; clients shard keys across nodes.</span></div>
-        <div class="wild-item" data-kb-example="hazelcast" id="wild-hazelcast"><strong>Hazelcast</strong><span>A distributed in-memory data grid used as a clustered cache across application nodes.</span></div>
+        <div class="wild-item" data-kb-example="memcached" id="wild-memcached" data-kb-level="advanced"><strong>Memcached</strong><span>A classic multithreaded in-memory cache; clients shard keys across nodes.</span></div>
+        <div class="wild-item" data-kb-example="hazelcast" id="wild-hazelcast" data-kb-level="advanced"><strong>Hazelcast</strong><span>A distributed in-memory data grid used as a clustered cache across application nodes.</span></div>
       </div>
     </section>
 
@@ -247,39 +255,39 @@ async function getUser(id: string): Promise&lt;User&gt; {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Per-key TTL &amp; eviction policy</strong> — How long entries live and what is dropped at capacity — LRU/LFU/FIFO (e.g. a maxmemory-policy like allkeys-lru)</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Max memory per node</strong> — The per-node memory ceiling at which eviction begins (e.g. Redis maxmemory)</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Shard count &amp; key routing</strong> — How many nodes and how keys map to them — consistent hashing or a fixed slot map (Redis Cluster uses 16,384 hash slots)</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Replication mode</strong> — Async primary-to-replica, or a synchronous acknowledgement (Redis WAIT) for stronger durability at higher latency</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Connection pool size</strong> — Client connections held per node, so a burst does not exhaust the server connection budget</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Max memory per node</strong> — The per-node memory ceiling at which eviction begins (e.g. Redis maxmemory)</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Shard count &amp; key routing</strong> — How many nodes and how keys map to them — consistent hashing or a fixed slot map (Redis Cluster uses 16,384 hash slots)</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Replication mode</strong> — Async primary-to-replica, or a synchronous acknowledgement (Redis WAIT) for stronger durability at higher latency</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Connection pool size</strong> — Client connections held per node, so a burst does not exhaust the server connection budget</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Hit rate</strong> — Fraction of reads served from cache — the number that justifies the cache existing at all</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Per-node request skew</strong> — Requests per second per node; a spike concentrated on one node is a hot key forming</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Memory used vs max &amp; eviction rate</strong> — How close each node is to its ceiling and how fast it evicts — rising evictions mean the working set no longer fits</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>p99 read latency</strong> — Tail latency of a cache read; a cache slow at the tail is buying little</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Per-node request skew</strong> — Requests per second per node; a spike concentrated on one node is a hot key forming</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Memory used vs max &amp; eviction rate</strong> — How close each node is to its ceiling and how fast it evicts — rising evictions mean the working set no longer fits</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>p99 read latency</strong> — Tail latency of a cache read; a cache slow at the tail is buying little</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Node loss under async replication</strong> — A node dying before its writes replicate loses those entries, and the load lands on the origin</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Hot key overloads one node</strong> — A single popular key sends all of its traffic to one node regardless of cluster size</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stampede on synchronized expiry</strong> — Many keys expiring at the same instant send a herd of misses to the origin at once</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Cold cache after restart</strong> — A restarted or newly added node serves nothing until it warms, so the origin absorbs the miss storm</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Hot key overloads one node</strong> — A single popular key sends all of its traffic to one node regardless of cluster size</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Stampede on synchronized expiry</strong> — Many keys expiring at the same instant send a herd of misses to the origin at once</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Cold cache after restart</strong> — A restarted or newly added node serves nothing until it warms, so the origin absorbs the miss storm</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Set a max-memory ceiling and an eviction policy so a node degrades gracefully instead of running out of memory</li>
-            <li id="production-check-2" data-kb-polarity="check">Route keys with consistent hashing or a managed slot map so adding a node reshuffles few keys</li>
-            <li id="production-check-3" data-kb-polarity="check">Replicate each shard and enable automatic failover so losing a node does not drop a whole slice</li>
-            <li id="production-check-4" data-kb-polarity="check">Mitigate hot keys with a local in-process cache, key replication, or request coalescing</li>
-            <li id="production-check-5" data-kb-polarity="check">Add jitter to TTLs and coalesce concurrent misses to avoid a synchronized stampede on the origin</li>
-            <li id="production-check-6" data-kb-polarity="check">Size connection pools so a traffic burst cannot exhaust a node connections</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Route keys with consistent hashing or a managed slot map so adding a node reshuffles few keys</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Replicate each shard and enable automatic failover so losing a node does not drop a whole slice</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Mitigate hot keys with a local in-process cache, key replication, or request coalescing</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Add jitter to TTLs and coalesce concurrent misses to avoid a synchronized stampede on the origin</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Size connection pools so a traffic burst cannot exhaust a node connections</li>
           </ul>
         </div>
       </div>
