@@ -4,6 +4,20 @@ Follow-ups that were consciously left out of the HTML5-knowledge-layer build. No
 blocks the KB; each is a distinct, self-contained piece of work. Ordered roughly by
 value-to-effort.
 
+## 0. Register-standard sweep over the 236 non-favourite pages
+
+**What.** The 2026-08 overhaul brought every ★ favourite (37 pages) plus the three pilots
+to the per-lens register standard; the rest of the corpus has the mechanism but not the
+adapted content. Ready-to-execute wave plans (exact page ids, per-kind recipes, calibrated
+budgets, QA gates) live in `tmp/plans/levels/` (gitignored — regenerate the id lists from
+graph.json if lost). Exemplars: circuit-breaker, big-ball-of-mud, bitly.
+
+**Small riders from the same overhaul:** reconcile hot-key's "also called a hot partition"
+and cache-stampede's "also called a thundering herd" lines against the new hazard pages;
+give sweeper a theme home (long-running-tasks); fact-check claim-check's SQS 1 MiB claim;
+consider request-coalescing/single-flight and load-shedding pattern pages (several
+mitigation blocks want the edge); a fluency↔tour make-check integrity rule.
+
 ## 1. Pre-render mermaid diagrams to SVG
 
 **What.** Every one of the 147 mermaid-bearing pages loads the vendored `mermaid.min.js`
