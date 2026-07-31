@@ -86,7 +86,7 @@ site/patterns/<band>/[<group>/]<id>.html   the source of truth
 site/hazards/<id>.html · site/themes/<id>.html · site/principles/<id>.html
 site/designs/<id>.html                     worked case studies (system-design & LLD katas)
 site/assets/graph.json · catalog.json · graphdata.js   DERIVED
-site/index.html · vocab.html · map/graph.html   DERIVED (graph.html = interactive graph + builder shell;
+site/index.html · vocab.html · map/graph.html   DERIVED (graph.html = interactive graph explorer shell;
                                                 its runtime is hand-authored assets/graph-view.js + graph.css)
 scripts/kb.mjs        the reader/writer — your interface to all of it
 scripts/lib/model.mjs the taxonomy and both closed vocabularies

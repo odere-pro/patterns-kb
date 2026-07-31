@@ -35,9 +35,9 @@ server needed.
 `variant-of`, `alternative-to`, `prevents-hazard`, `demonstrated-by` — each with a note
 saying *why* they relate. The 15 verbs are a closed vocabulary, published at
 [`site/vocab.html`](site/vocab.html), and each edge is declared on both pages it joins. The
-whole web renders at [`site/map/graph.html`](site/map/graph.html) — an interactive d3 canvas
-with filters and search, plus a **Build** mode: seed an architecture, apply patterns, and
-watch suggestions, exclusions and hazard coverage derive live from the typed edges.
+whole web renders at [`site/map/graph.html`](site/map/graph.html) — a live force-directed
+canvas in the Obsidian-graph mould: drag and zoom, filter by kind, band, tag or
+favourites, color your own query groups, and tune the physics from the settings panel.
 
 Every claim has a stable id, so it can be cited precisely:
 `…/circuit-breaker.html#tradeoffs-con-2`.
