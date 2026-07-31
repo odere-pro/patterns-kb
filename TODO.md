@@ -4,13 +4,17 @@ Follow-ups that were consciously left out of the HTML5-knowledge-layer build. No
 blocks the KB; each is a distinct, self-contained piece of work. Ordered roughly by
 value-to-effort.
 
-## 0. Register-standard sweep over the 236 non-favourite pages
+## 0. Lens model v2 sweep — cumulative lenses, AWS-short basic, topology walks
 
-**What.** The 2026-08 overhaul brought every ★ favourite (37 pages) plus the three pilots
-to the per-lens register standard; the rest of the corpus has the mechanism but not the
-adapted content. Ready-to-execute wave plans (exact page ids, per-kind recipes, calibrated
-budgets, QA gates) live in `tmp/plans/levels/` (gitignored — regenerate the id lists from
-graph.json if lost). Exemplars: circuit-breaker, big-ball-of-mud, bitly.
+**What.** Owner review corrected the lens model: lenses are CUMULATIVE (basic = AWS-short
+untagged core; advanced = basic + system-design depth; expert = everything), the explain
+ladder stacks its rungs, `data-kb-register` is demoted to a rare replacement tool, and
+implementation patterns gain an AWS-style numbered topology-walk diagram (subgraph
+boundary, steps 1..N) with the sequence diagram demoted to advanced. The corpus still
+implements v1. Ready-to-execute plans live in `tmp/plans/levels/` (gitignored —
+regenerate id lists from graph.json if lost): **M0** mechanism flip → **C0** .claude
+assets → **F0** redo the 38 v1-swept pages (outbox first, the exemplar) → **L1–L8** the
+remaining ~235. Sizing bands and the full spec are in that index.
 
 **Small riders from the same overhaul:** reconcile hot-key's "also called a hot partition"
 and cache-stampede's "also called a thundering herd" lines against the new hazard pages;
