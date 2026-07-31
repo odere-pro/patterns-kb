@@ -62,7 +62,8 @@ why they are asking.
 - **Check `avoid-when` before recommending.** If their case is in it, say so. "A simple
   timeout plus a bounded retry already covers the risk" is often the honest answer.
 - **Hazards are answers too.** If the symptom describes an anti-pattern (`kind: hazard` in
-  the results), the fix is in its `mitigation` block.
+  the results), the fix is in its `mitigation` block, and the patterns that fix it are the
+  `mitigated-by` edges in its `relationships` block.
 - **Themes answer "how do I think about X".** For a broad question ("how do I handle traffic
   spikes"), a theme's `decide` block is a literal problem→pattern table.
 

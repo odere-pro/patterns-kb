@@ -74,11 +74,10 @@ node scripts/kb.mjs link <id> combines-with bulkhead --note "why, from this page
 Verbs are closed — see [site/vocab.html](../../../site/vocab.html). Directional verbs
 (`variant-of`/`has-variant`) get the inverse written on the far side automatically.
 
-One exception: a **hazard has no `relationships` block**, so `kb.mjs link` cannot write the
-hazard side of a `prevents-hazard`/`mitigated-by` edge (common when adding a principle that
-guards against an anti-pattern, e.g. `single-responsibility` → `god-object`). Run `link` to
-write the principle side, then hand-add the inverse `mitigated-by` rel-item inside the
-hazard's `mitigation` block's `.rel-list` (copy the shape of an existing item there).
+Hazards carry a real `relationships` block like every other kind, so `kb.mjs link` writes
+both sides of a `prevents-hazard`/`mitigated-by` edge (common when adding a principle that
+guards against an anti-pattern, e.g. `single-responsibility` → `god-object`). The hazard's
+`mitigation` block holds prose narrative only — never typed edges.
 
 ## 6. Metadata
 

@@ -12,13 +12,14 @@ in it must land somewhere: in an FR, an NFR, or an explicit out-of-scope entry.
 ## The markup
 
 ```html
-<section class="doc-section" id="problem" aria-labelledby="h-problem" data-kb-block="problem">
+<section class="doc-section" id="description" aria-labelledby="h-problem" data-kb-block="description">
   <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
   <div class="prose"> … </div>
 </section>
 ```
 
-The heading text is always **"Understanding the problem"**. The block is hand-edited
+The heading text is always **"Understanding the problem"**; the block id is `description`
+— the unified opener every kind shares (base schema, 2026-08). The block is hand-edited
 HTML; the PostToolUse hook checks structure, not content.
 
 ## Two forms — pick by how specified the task is
@@ -93,5 +94,5 @@ together when writing a page.
    "(open)" — and is all of it plain text, with no `<em>` anywhere in the block?
 4. Walk the trace both ways — every tag resolves to a requirement, every requirement has
    a source. This is the check that does the work.
-5. `make all && make check`, then `node scripts/kb.mjs get <id> --block problem` — the
+5. `make all && make check`, then `node scripts/kb.mjs get <id> --block description` — the
    reader output should read as a crisp Q&A, not an essay.

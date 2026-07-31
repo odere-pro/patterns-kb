@@ -55,9 +55,9 @@ node scripts/kb.mjs backlinks <id>    # inbound edges as the OTHER side phrases 
 ```
 
 Directional verbs are paired (`variant-of` ↔ `has-variant`, `prevents-hazard` ↔
-`mitigated-by`), so the two sides use *different* verbs — `unlink` is verb-agnostic and
-removes whatever each side declared, which is also why it works on the hazard side of a
-`mitigated-by` edge, where `link` cannot write. See
+`mitigated-by`), so the two sides use *different* verbs — `link` writes both sides
+(every kind, hazards included, carries a `relationships` block) and `unlink` is
+verb-agnostic, removing whatever each side declared. See
 [site/vocab.html](../../../site/vocab.html). The **notes** may differ per side by design —
 each page describes the relationship from its own end.
 
@@ -66,8 +66,7 @@ each page describes the relationship from its own end.
 Rewriting prose routinely changes which other pages a page leans on, and none of that shows
 up in the diff of the page you edited. A cross-page reference rides on **four** carriers —
 the typed relation, the prose link, a mermaid `click`, and hand-authored membership (a
-theme's `data-kb-member`, a pattern's `.fluency-item`, a hazard's `mitigation` list). Only
-the first has a writer.
+theme's `data-kb-member`, a pattern's `.fluency-item`). Only the first has a writer.
 
 ```
 node scripts/kb.mjs refs <id>          # everything this page points AT, read live off the page
@@ -82,8 +81,7 @@ you start (or `git diff` the page after), then reconcile the difference:
    always `demonstrates`. Write the two notes from each page's own end; they should read
    differently.
 2. **Stopped using it** — `kb.mjs unlink <id> <other>`, then sweep the carriers no writer
-   can see: the prose link, any mermaid `click`, the theme tour step, the fluency item, the
-   hazard `mitigation` entry.
+   can see: the prose link, any mermaid `click`, the theme tour step, the fluency item.
 3. **Still uses it, differently** — do **not** unlink. Rewrite the `.rel-note` on both
    pages. This is the most common case and the one that rots silently.
 

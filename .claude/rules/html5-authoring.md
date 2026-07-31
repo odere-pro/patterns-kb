@@ -92,29 +92,38 @@ sure that product has it. Feature-specific claims are the ones that turn out wro
 Fixed vocabulary, fixed order, per kind — see `BLOCKS` in `scripts/lib/model.mjs`.
 `make check` fails on a missing, unknown or out-of-order block.
 
+Every kind extends ONE base skeleton: it opens `description` → `explain` and closes
+`relationships`; only the middle is kind-specific (`BASE_OPEN`/`BASE_CLOSE` in model.mjs).
+The opener's *anchor* is `description` on all five kinds — the visible heading stays
+kind-flavoured ("The question", "Understanding the problem") — so
+`kb.mjs get <any-id> --block description` works everywhere.
+
 | kind | blocks |
 |---|---|
-| pattern | `description` `explain`* `structure` `variations` `tradeoffs` `usage` `sketch` `wild`* `production`* `relationships` `fluency`* |
-| hazard | `description` `explain`* `causes` `cost` `mitigation` |
-| theme | `framing` `explain`* `architecture`* `tradespace` `tour` `decide` `siblings` |
-| principle | `statement` `explain`* `rationale` `applying` `overreach` `relationships` |
-| design | `problem` `explain`* `requirements` `sizing`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
+| pattern | `description` `explain` `structure` `variations` `tradeoffs` `usage` `sketch` `wild`* `production`* `fluency`* `relationships` |
+| hazard | `description` `explain` `causes` `cost` `mitigation` `relationships` |
+| theme | `description` `explain` `architecture`* `tradespace` `tour` `decide` `siblings` `relationships`* |
+| principle | `description` `explain` `rationale` `applying` `overreach` `relationships` |
+| design | `description` `explain` `requirements` `sizing`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
 
-`*` optional. A **design** is a worked case study (a system-design or low-level-design kata):
-`problem` frames it, `requirements` states FR + NFR, `sizing` ("Right-sizing") argues from those
+`*` optional (per kind — see `OPTIONAL_BLOCKS` in model.mjs; a theme's `relationships` is
+optional because themes join the graph through tour membership). A **design** is a worked
+case study (a system-design or low-level-design kata):
+its `description` ("Understanding the problem") frames it, `requirements` states FR + NFR, `sizing` ("Right-sizing") argues from those
 requirements to the cheapest set of technology capabilities the numbers allow, `architecture` carries the primary mermaid
 diagram, `deepdives` argues the hard sub-problems, and the typed `relationships` block joins it to the
 patterns it uses via `demonstrates` (see Relationships). Designs carry `data-kb-solves` like a pattern,
 tag distributed katas `system-design` and OOP ones `low-level-design`, and live flat in `site/designs/`. Same question, same place, on every page — that is what makes block-level
 extraction possible.
 
-A **principle** is a design maxim (SOLID, DRY, KISS, YAGNI, …), not a mechanism: `statement`
-says what it is, `rationale` why it helps, `applying` how to honour it, and `overreach` — a
-mandatory, honest block — how it fails when taken too far. Principles carry `solves` and link
-into the typed graph (usually `combines-with` a pattern that embodies them, or
-`prevents-hazard` an anti-pattern they guard against). Because a hazard has no `relationships`
-block, the hazard side of a `prevents-hazard`/`mitigated-by` edge is hand-authored inside its
-`mitigation` block — `kb.mjs link` can only write the principle side.
+A **principle** is a design maxim (SOLID, DRY, KISS, YAGNI, …), not a mechanism: its
+`description` ("What it says") states it, `rationale` why it helps, `applying` how to honour
+it, and `overreach` — a mandatory, honest block — how it fails when taken too far.
+Principles carry `solves` and link into the typed graph (usually `combines-with` a pattern
+that embodies them, or `prevents-hazard` an anti-pattern they guard against). Hazards carry
+a real `relationships` block like every other kind, so `kb.mjs link` writes both sides of a
+`prevents-hazard`/`mitigated-by` edge — the `mitigation` block keeps its prose narrative
+and any figure, but no typed edges.
 
 **`production`** (patterns only, optional) — the system-builder block: what it takes to *run*
 the pattern, written through the validated writer:
@@ -189,8 +198,8 @@ page to a pattern or principle it puts to work — write it with `kb.mjs link <d
 <pattern>`, which adds the "Demonstrated by" backlink on the pattern.
 
 Retiring an edge goes through `kb.mjs unlink <a> <b>`. It removes both sides whatever verb
-each declared — including the hazard side of a `mitigated-by` edge, which `link` cannot write
-— and takes the `rel-group` with its last item. Re-typing an edge is `unlink` then `link`.
+each declared, and takes the `rel-group` with its last item. Re-typing an edge is `unlink`
+then `link`.
 `kb.mjs refs <id>` lists everything a page points at, read live off the page, so an edit that
 changed what the page uses can be reconciled before the build.
 
