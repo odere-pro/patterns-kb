@@ -43,6 +43,18 @@
   var model = core.buildGraph(DATA);
   var nodes = model.nodes;
   var byId = model.byId;
+
+  /* graphdata.js carries the AUTHORED favourite, which is only the default — the visitor's
+     own picks live in localStorage, owned by favourites.js (overrides only, so a missing id
+     means "no opinion, use the default"). Fold them in here, once, so "★ Favourites only"
+     and the `fav:true` query mean the same thing on the graph as on the hub. Applied to the
+     node data rather than inside computeVisibility, which stays a pure function of it. */
+  try {
+    var favOverrides = JSON.parse(localStorage.getItem("kb-favourites-v1") || "{}") || {};
+    nodes.forEach(function (n) {
+      if (Object.prototype.hasOwnProperty.call(favOverrides, n.id)) n.favourite = !!favOverrides[n.id];
+    });
+  } catch (e) { /* unreadable store — the authored defaults stand */ }
   var edges = model.edges;
   var neighbors = model.neighbors;   // id -> {id: 1} across every family (ego-highlight)
   var degree = model.degree;

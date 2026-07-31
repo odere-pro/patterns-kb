@@ -86,9 +86,16 @@ produced 280 tags of which 154 were used exactly once. Hence the closed list.)
 **`favourite`** (optional) — `data-kb-favourite="true"` marks a page as an editorial pick. It is the
 only boolean field: present-and-true or absent, written with `kb.mjs set <id> --favourite true|false`.
 The build projects it into `graph.json`, and the hub renders a `★` chip plus a **★ Favourites**
-filter that collapses the map to the picks. It is fixed page metadata — the same for every visitor —
-and is **not** the per-visitor "Practiced" tracker, which lives in `localStorage` and shares nothing
-with it. Favourite a page because it is worth reading first, not because it is good.
+filter that collapses the map to the picks. Favourite a page because it is worth reading first,
+not because it is good.
+
+What you are authoring is the **default**, not the answer. `favourites.js` reads the rendered
+state as its seed and lets the visitor toggle any page from the hub star, the page metarow or the
+floating `★`; their choices live in `localStorage` under `kb-favourites-v1` and win over yours.
+That store holds **overrides only** — a page appears in it only while the visitor disagrees with
+you — so re-curating the picks here still moves every visitor who never expressed an opinion.
+It remains a separate store and a separate question from the "Practiced" tracker: *worth reading
+first* versus *I have worked through this*.
 
 **"In the wild"** (optional block) — real, well-known implementations only. This is the one
 place you can do real damage: a fabricated library name is a lie that ships to a public site.
