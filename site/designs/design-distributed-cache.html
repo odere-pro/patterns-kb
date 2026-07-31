@@ -64,6 +64,16 @@
       "@id": "../principles/kiss.html#kiss",
       "name": "Keep It Simple (KISS)",
       "kb:note": "the single-node get/set/delete is built and made correct before any distribution is layered on"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/sweeper.html#sweeper",
+      "name": "Sweeper",
+      "kb:note": "a background janitor samples keys carrying TTLs and reclaims the expired ones, because lazy expiry never touches a key nobody reads"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/count-min-sketch.html#count-min-sketch",
+      "name": "Count-Min Sketch",
+      "kb:note": "hot keys are found by an approximate frequency structure on the client, since exact per-key counters at 100k req/s cost more than the traffic they measure"
     }
   ]
 }
@@ -96,7 +106,9 @@
     <section class="doc-section" id="description" aria-labelledby="h-problem" data-kb-block="description">
       <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
       <div class="prose">
-        <p id="description-p-1">Callers want three primitives — read a value by key, write one, delete one — answered from memory in single-digit milliseconds. A single-node cache does that trivially with a hash table, but it is capped by one machine's RAM and one machine's network card. The whole exercise is what happens when the data no longer fits and the traffic no longer fits: the cluster has to <em>cooperatively</em> partition the keys across nodes and keep redundant copies so a lost node does not lose data. This question sits deliberately astride two interview styles — the low-level data-structure design of the single node, and the distributed-systems design of the fleet — so the answer has to earn both halves.</p>
+        <p id="description-p-1">Callers want three primitives — read a value by key, write one, delete one — answered from memory in single-digit milliseconds, with an optional time-to-live so entries retire on their own. The data behind those keys belongs to somebody else: a database, a service, a computation nobody wants to run twice. That single fact shapes every decision here, because it means the cache is allowed to lose data and never allowed to be slow.</p>
+        <p id="description-p-2">The naive build is one process holding a hash table, and it fails in four ways that have nothing to do with each other. The working set grows past one machine's RAM, so entries start falling out and the hit ratio collapses. The request rate grows past one machine's network card, so latency rises while the CPU sits idle. The process restarts and the whole cache is empty at once, so every request behind it lands on the database in the same second. And one key turns out to be a thousand times hotter than the rest, so whichever box owns it is saturated while the others do nothing.</p>
+        <p id="description-p-3">Those four are the agenda, and this page argues them in that order. Split the keyspace across a fleet in a way that survives the fleet changing size (dive 1), keep a second copy of every shard and be honest about what a failover costs (dive 2), stay inside the memory budget without putting a lock on the read path (dive 3), handle the key that does not spread (dive 4), make a delete stick across copies (dive 5), and then spend the remaining milliseconds on the network rather than the lookup (dive 6). The question sits deliberately astride two interview styles — the data-structure design of one node and the distributed-systems design of the fleet — so the answer has to earn both halves.</p>
       </div>
     </section>
 
@@ -105,15 +117,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Keep recently used values in memory so they can be handed back in a few milliseconds instead of fetched from a slower store. One machine does that easily with a lookup table, but it runs out of memory and network card. The exercise is what happens next: split the keys across many machines, keep spare copies so losing one does not lose its data, and discard the least recently used entries when memory fills.</p>
+          <p>A cache keeps recently used answers in memory so they come back in milliseconds instead of being fetched from something slower. One machine does that with a lookup table, and then four things go wrong. The data grows past the machine's memory, so useful entries start falling out. The traffic grows past its network card, so everything slows down. The machine restarts, its memory is empty, and every request behind it hits the slow store in the same second. And one popular item is asked for a thousand times more than anything else, so whichever machine holds it is overwhelmed while the rest do nothing. The answer is a group of machines that split the keys between them, keep a spare copy so losing one machine does not lose its data, and throw away whatever nobody has asked for lately when memory runs out.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>Two independent estimates size the fleet and the larger one wins: storage points at roughly fifty nodes while throughput needs only eight, so provision for storage and the request rate is covered for free. Keys are placed by consistent hashing rather than a modulus, because changing the node count under a modulus remaps nearly every key and the whole tier misses at once; the ring doubles as a client-side routing table, removing a lookup hop. Replication is asynchronous — a replica acknowledgement has no business on a ten-millisecond path.</p>
+          <p>Two independent estimates size the fleet and the larger one wins: storage points at ~50 nodes while throughput needs ~8, so provision for memory and the request rate comes free at ~2k req/s per node. Keys are placed by consistent hashing rather than a modulus, because changing the node count under a modulus remaps nearly every key and the whole tier misses at once; each node is placed many times on the ring under derived names so the arcs come out even, and the ring doubles as a client-side routing table, which removes a lookup hop from a 10 ms budget. Replication is asynchronous — a replica acknowledgement has no business on that path — so a failover loses whatever had not shipped. Inside a node, eviction is a sampled approximation of LRU rather than exact LRU, because a true recency list means writing shared state on every read; TTLs are checked lazily on read and swept in the background, so entries nobody reads still release their memory.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>The signal is running both capacity estimates and saying which one binds, then conceding the figures depend on instance type, value size and read-write mix and honestly end in benchmark the real workload. What not to build is durability, strong consistency or synchronous replication: the source of truth lives elsewhere, which is exactly what makes a failover that drops the last few unacknowledged writes an acceptable price rather than a bug. The edge worth raising unprompted is skew — uniform sharding assumes traffic follows keys, so one viral key lands wholly on one shard and needs duplicated copies or suffix sharding. That is a special case bolted onto an otherwise uniform scheme, and it is the cost of the simplicity everywhere else.</p>
+          <p>Run both capacity estimates and say which binds: memory does, by six times, which means the fleet is bought by the gigabyte and every throughput argument is already answered. From there the numbers that matter are ratios, not totals. Five points of hit ratio doubles the load on the source of truth, so memory is bought in hit-ratio units; replication factor two doubles the RAM bill, which makes availability the most expensive line on the page; and value size, not request rate, decides whether a node's network card binds before its CPU. What not to build is durability, strong consistency or synchronous replication — the authoritative copy lives elsewhere, which is what makes a failover that drops the last unshipped writes a price rather than a bug. Two edges are worth raising unprompted. That same window resurrects deletes, so every key wants a TTL as the backstop for the invalidation that did not arrive. And uniform sharding assumes traffic follows keys: one viral key lands wholly on one node and needs duplicated copies, client-side batching and a set-if-absent refill lock bolted on — per-key machinery to detect, maintain and retire. That exception is the cost of a scheme that is otherwise a hash function and a ring.</p>
         </div>
       </div>
     </section>
@@ -145,21 +157,61 @@
     <section class="doc-section" id="sizing" aria-labelledby="h-sizing" data-kb-block="sizing">
       <h2 class="doc-h" id="h-sizing">Right-sizing: how many nodes?</h2>
       <div class="prose">
-        <p id="sizing-p-1">Two independent estimates set the cluster size, and the larger one wins.</p>
-        <p id="sizing-p-2"><strong>By throughput.</strong> Take a working assumption of ~20,000 req/s that one node sustains before latency degrades. 100,000 &divide; 20,000 = <strong>5 nodes</strong> as a floor; pad for spikes and in-flight failures and call it <strong>~8</strong>.</p>
-        <p id="sizing-p-3"><strong>By storage.</strong> A 32&nbsp;GB-RAM instance leaves roughly <strong>24&nbsp;GB</strong> usable for cached data once process and OS overhead are subtracted. 1&nbsp;TB (1024&nbsp;GB) &divide; 24&nbsp;GB &asymp; 43 nodes; round up for headroom to <strong>~50</strong>.</p>
-        <p id="sizing-p-4">Storage (50) dwarfs throughput (8), so provision for storage — 50 nodes comfortably covers the request rate as a side effect. <strong>Plan for a ~50-node cluster.</strong> These figures are deliberately rough: real capacity depends on instance type, value size, read/write mix, and replication overhead, so the honest answer always ends in "benchmark the actual workload."</p>
+        <p id="sizing-p-1" data-kb-register="basic">The numbers below settle one question: how many machines, and what decides it. Two estimates are run — one from how much data must fit, one from how many requests must be served — and they disagree by six times. Memory wins, which means the fleet is bought by the gigabyte and the spare request capacity comes free. Everything else on this page is about not wasting that memory.</p>
+        <p id="sizing-p-2"><strong>The problem:</strong> 1&nbsp;TB of cached data answered at 100k req/s in under 10&nbsp;ms, where the authoritative copy of every value lives in someone else's store. <strong>The shape:</strong> synchronous request/response — every call is a blocking dependency inside somebody else's request, so nothing may be deferred to a worker; the one asynchronous element is replication, and it is asynchronous precisely to keep it off this path. <strong>The stores:</strong> two — the fleet's own memory, which is the data and is deliberately not durable, and a small membership store holding the ring and who is alive, which is the only state whose loss would confuse the cluster rather than merely empty it.</p>
+        <p id="sizing-p-3"><strong>Required capabilities:</strong></p>
+        <ul>
+          <li id="sizing-li-1">In-memory keyed store with O(1) get, set and delete — the whole product, and the reason the answer is not a database. → FR: get/set/delete; NFR: latency.</li>
+          <li id="sizing-li-2">Per-key expiry plus an eviction policy under a hard memory ceiling — memory is finite and the ceiling must be enforced by the cache, not discovered by the kernel. → FR: TTL; FR: eviction.</li>
+          <li id="sizing-li-3">Client-side routing table over the keyspace — a lookup hop to find the owner would be a third of the latency budget spent on addressing. → NFR: latency.</li>
+          <li id="sizing-li-4">Membership with failure detection — the ring is only correct while the fleet agrees on who is in it. → NFR: availability.</li>
+          <li id="sizing-li-5">Asynchronous replication of each shard — a node's death must not be its data's death, and a replica acknowledgement must not be on the write path. → NFR: availability; latency.</li>
+          <li id="sizing-li-6">Pooled long-lived connections — a handshake per request is a tail-latency generator, not a feature. → NFR: latency.</li>
+          <li id="sizing-li-7">Per-node hit ratio, eviction rate and p99 telemetry — the cache's value is a ratio, and an unmeasured ratio is an unmanaged bill. → NFR: scale.</li>
+        </ul>
+        <p id="sizing-p-4"><strong>The numbers:</strong></p>
+        <ul>
+          <li id="sizing-li-8">By storage: a 32&nbsp;GB-RAM instance leaves roughly 24&nbsp;GB usable once process and OS overhead are subtracted; 1024&nbsp;GB ÷ 24&nbsp;GB ≈ 43, rounded up for headroom to <strong>~50 nodes</strong>. → NFR: scale.</li>
+          <li id="sizing-li-9">By throughput: take ~20,000 req/s as what one node sustains before latency degrades (assumed — it moves with value size and instance type); 100,000 ÷ 20,000 = 5 as a floor, padded for spikes and in-flight failures to <strong>~8 nodes</strong>. → NFR: scale.</li>
+          <li id="sizing-li-10">The binding constraint is memory, and by six times. Fifty nodes serve 100k req/s at <strong>~2k req/s each</strong>, an eighth of what a node can do — so "add nodes for throughput" is the wrong instinct here, and CPU headroom is something this design already owns. → NFR: scale.</li>
+          <li id="sizing-li-11">Replication factor: keeping one copy of every shard doubles the memory bill to <strong>~100 nodes, 2&nbsp;TB of RAM</strong>. It is the single largest cost decision on the page, and it buys availability rather than capacity. → NFR: availability.</li>
+          <li id="sizing-li-12">Network: 100k req/s × ~1&nbsp;KB average value ≈ <strong>100&nbsp;MB/s ≈ 0.8&nbsp;Gbit/s</strong> across the fleet, which is nothing. One node at 20k req/s of 10&nbsp;KB values is <strong>200&nbsp;MB/s ≈ 1.6&nbsp;Gbit/s</strong>, which saturates a card long before the CPU notices — value size, not request rate, decides whether the network binds. → NFR: latency.</li>
+          <li id="sizing-li-13">Hit-ratio economics: at 100k req/s, a 95% hit ratio leaves <strong>5k misses/s</strong> on the source of truth and 90% leaves <strong>10k/s</strong>. Five points of hit ratio doubles the load on the database this cache exists to protect, so memory is bought in hit-ratio units, not gigabytes. → NFR: scale.</li>
+          <li id="sizing-li-14">Bookkeeping: 1&nbsp;TB at ~1&nbsp;KB values is <strong>~1 billion entries</strong>, each carrying a hash slot, two list pointers and an expiry — assume several tens of bytes, so <strong>roughly a tenth of the fleet's RAM</strong> is overhead before the allocator's own rounding. Small values make this ratio much worse, which is why a cache of 50-byte counters is a different sizing exercise. → NFR: scale.</li>
+          <li id="sizing-li-15">Rebalance cost: adding one node to a 50-node ring moves about 1/51 of the keyspace ≈ <strong>20&nbsp;GB</strong>, which arrives as misses refilled from the source of truth rather than as a copy between nodes — a temporary 2% dent in the hit ratio, not an outage. → NFR: scale.</li>
+        </ul>
+        <p id="sizing-p-5"><strong>Verdict per candidate:</strong></p>
+        <ul>
+          <li id="sizing-li-16">Event-driven or write-behind core — <strong>rejected</strong>: every call is a blocking dependency of someone else's request, and a queued cache read has already missed its budget. → NFR: latency.</li>
+          <li id="sizing-li-17">Synchronous request/response — <strong>adopted</strong>: read, answer, done, with replication the only thing allowed to happen afterwards. → NFR: latency.</li>
+          <li id="sizing-li-18">Sizing by storage — <strong>adopted</strong> as the binding estimate: 50 nodes covers the request rate as a side effect. Sizing by throughput — <strong>rejected</strong>: 8 nodes hold under a fifth of the working set and evict the rest continuously. → NFR: scale.</li>
+          <li id="sizing-li-19">Consistent hashing, computed client-side — <strong>adopted</strong>: it survives the fleet changing size and doubles as the routing table, removing a hop. → NFR: scale; latency.</li>
+          <li id="sizing-li-20">Modulus sharding — <strong>rejected</strong>: one node added or lost remaps nearly every key, so the whole tier misses at once (dive 1). → NFR: scale.</li>
+          <li id="sizing-li-21">Central proxy or routing tier — <strong>deferred</strong>: client-side routing is free today; the trigger is clients in three languages, or a socket count no client library can pool sanely. → NFR: latency.</li>
+          <li id="sizing-li-22">Asynchronous replication, one copy per shard — <strong>adopted</strong>: staying available through a node loss needs a copy to promote, and that copy must not sit on the write path. → NFR: availability.</li>
+          <li id="sizing-li-23">Synchronous replication — <strong>rejected</strong>: it puts a replica's latency inside a 10&nbsp;ms budget to buy a consistency guarantee the requirements traded away. → NFR: latency.</li>
+          <li id="sizing-li-24">No replication, refill on loss — <strong>rejected</strong>, and not obviously: losing one node's 20&nbsp;GB costs about two points of hit ratio and sends its share of misses at the source of truth in one burst. It is the cheaper answer only when the origin can absorb that herd, which is exactly what a cache exists to avoid. → NFR: availability.</li>
+          <li id="sizing-li-25">Durability across restarts — <strong>rejected</strong>: the authoritative copy is elsewhere, and a cache that persists is a database with worse guarantees and a slower write path. → NFR: latency.</li>
+          <li id="sizing-li-26">Quorum writes or consensus — <strong>rejected</strong>: it prices a strong-consistency guarantee that is explicitly out of scope, in latency the budget cannot pay. → NFR: latency.</li>
+          <li id="sizing-li-27">Sampled approximate LRU under a memory ceiling — <strong>adopted</strong>: exact LRU makes every read a write to a shared list, which is a lock in the hot path (dive 3). → FR: eviction; NFR: latency.</li>
+          <li id="sizing-li-28">Lazy expiry plus sampled active expiry — <strong>adopted</strong>: reads catch what they touch and a background pass catches what nobody touches. A full periodic sweep — <strong>rejected</strong>: scanning a billion keys to reclaim a few thousand. → FR: TTL.</li>
+          <li id="sizing-li-29">Dedicated hot-key tier — <strong>deferred</strong>: uniform sharding holds while traffic follows keys; the trigger is one shard's request rate running several times the fleet median (dive 4). → NFR: scale.</li>
+          <li id="sizing-li-30">Near-cache inside the client process — <strong>deferred</strong>: it removes the network entirely for a tiny hot set, and adds a second staleness window nobody can invalidate; the trigger is a hot set small enough to fit in an application's heap. → NFR: latency.</li>
+          <li id="sizing-li-31">Cross-region replication — <strong>rejected</strong>: a remote cache is refilled from a local source of truth more cheaply than it is shipped over a WAN, and a stale cross-region copy is the worst of both. → NFR: availability.</li>
+        </ul>
+        <p id="sizing-p-6"><strong>When this stops being right.</strong> The hit ratio wears out first, and it wears out quietly. As the working set grows past provisioned memory the cache begins evicting entries that are still wanted, so each eviction becomes a future miss, and misses land on the source of truth out of all proportion to the memory shortfall — five points of hit ratio is double the database load. The signal: eviction rate per node plotted with hit ratio, both of which move well before the cache's own latency does, because an evicting cache is still fast at being wrong. Exits in adoption order: raise the memory ceiling on the existing instances; add nodes, which the ring makes a ~20&nbsp;GB refill rather than a remap; split by workload class so one team's churn cannot evict another team's hot set; then spill cold entries to local SSD, trading a millisecond for an order of magnitude more bytes per pound. → NFR: scale.</p>
       </div>
     </section>
 
     <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
       <h2 class="doc-h" id="h-entities">Core entities</h2>
       <div class="prose">
-        <p id="entities-p-1">The domain is as thin as it gets — <strong>keys</strong> and <strong>values</strong> — but the storage representation carries two extra facts that make the requirements work:</p>
+        <p id="entities-p-1">The domain is as thin as it gets — <strong>keys</strong> and <strong>values</strong> — but the storage representation carries three extra facts that make the requirements work:</p>
         <ul>
-          <li id="entities-li-1"><strong>Key</strong> — the opaque string a caller hands in; also what the router hashes to find the owning node.</li>
-          <li id="entities-li-2"><strong>Value</strong> — stored not bare but as a <code>(value, expiry)</code> pair, so a read can check the TTL before returning.</li>
-          <li id="entities-li-3"><strong>Node</strong> — internally each entry is wrapped in a linked-list node (key, value, expiry) so LRU order can be tracked in O(1); this is an implementation detail, not part of the API contract.</li>
+          <li id="entities-li-1"><strong>Key</strong> — the opaque string a caller hands in; also what the client hashes to find the owning node, which is why key naming is a routing decision and not only a naming one.</li>
+          <li id="entities-li-2"><strong>Value</strong> — stored not bare but as a <code>(value, expiry)</code> pair, so a read can check the TTL before returning and a missing entry is distinguishable from a stored null.</li>
+          <li id="entities-li-3"><strong>Entry</strong> — internally each pair is wrapped in a doubly linked-list node so recency order can be maintained in O(1). An implementation detail, not part of the API contract, and the place the per-entry overhead in Right-sizing is spent.</li>
+          <li id="entities-li-4"><strong>Member</strong> — one cache node as the cluster sees it: an address, a health state, and the ring positions it owns. It is the only entity the fleet has to agree on, which is why it lives in the membership store rather than in any node's memory.</li>
         </ul>
       </div>
     </section>
@@ -179,31 +231,42 @@ GET /{key}
 &rarr; 200 { "value": "…" }               # 404 if absent or expired
 
 DELETE /{key}
-&rarr; 204 No Content</code></pre>
+&rarr; 204 No Content
+
+POST /mget                              # one round trip, many keys
+{ "keys": ["a", "b", "c"] }
+&rarr; 200 { "a": "…", "c": "…" }         # absent keys simply missing</code></pre>
       </details>
+      <div class="prose">
+        <p id="interface-p-2">A miss and a stored empty value must be different answers. Collapsing them is the classic way a cache turns into an outage: the caller cannot tell "not cached" from "cached as nothing", so it either re-queries the database for every legitimately empty result or caches a null and never notices the real value arriving. The distinction is also what makes negative caching possible — storing "this key does not exist" for a short TTL, the cheapest defence against a scan of keys that will never hit.</p>
+        <p id="interface-p-3">Two additions earn their place beyond the three primitives. A multi-key read folds many lookups into one round trip, which matters because at 10&nbsp;ms the network dominates and a page needing thirty values should not pay thirty latencies. And a <strong>set-if-absent</strong> — write only when the key is unset, with a TTL — is the primitive that lets one client claim the right to refill a key while the others wait, so a popular miss becomes one database query instead of a thousand (dive 4). Without it, single-flight needs a coordinator the cache was supposed to replace.</p>
+        <p id="interface-p-4">The TTL is a caller-facing contract, not an implementation detail. It bounds how wrong a value may be, which means it is also the only correctness lever most callers get: a value that must never be more than a minute out of date carries a 60-second TTL and does not need an invalidation protocol at all. Deleting is the other lever, and the one with sharp edges — see dive 5.</p>
+      </div>
     </section>
 
     <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
       <h2 class="doc-h" id="h-arch">How the system is built</h2>
       <div class="prose">
-        <p id="architecture-p-1">Start at the node, then multiply it. A single node is two data structures working together: a <strong>hash table</strong> for O(1) lookup by key, and a <strong>doubly linked list</strong> that orders entries by recency so the least-recently-used one is always at the tail, ready to evict. Following the simplest-thing-first instinct of <a href="../principles/kiss.html">KISS</a>, the get/set/delete logic is built and made correct on one box before any of the distribution is added — the cluster is just this node, replicated and sharded.</p>
-        <p id="architecture-p-2">TTL needs two mechanisms. <em>Lazy</em> expiry is free — a read checks the timestamp and drops the entry if it is stale — but lazy expiry alone lets untouched-but-expired entries squat in memory forever. So a background <strong>janitor</strong> periodically sweeps the list and reclaims them; running it on a coarse schedule (say once a minute) trades a little CPU for tighter memory, and that dial is itself a tuning knob.</p>
-        <p id="architecture-p-3">Multiplied out, the cluster is ~50 such nodes. A client-side router hashes each key onto a consistent-hash ring to find its owner, opens the request over a pooled connection, and every shard streams asynchronously to a replica so a node loss does not become a data loss.</p>
+        <p id="architecture-p-1">Start at the node, then multiply it. A single node is two data structures working together: a <strong>hash table</strong> for O(1) lookup by key, and a <strong>doubly linked list</strong> that orders entries by recency so the least-recently-used one is always at the tail, ready to evict. Following the simplest-thing-first instinct of <a href="../principles/kiss.html">KISS</a>, get, set and delete are built and made correct on one box before any distribution is added — the cluster is this node, sharded and replicated.</p>
+        <p id="architecture-p-2">TTL needs two mechanisms, because either alone leaks. <em>Lazy</em> expiry is free — a read checks the timestamp and drops the entry if it is stale — but an entry nobody reads is an entry nobody expires, so untouched keys squat in memory until they are evicted for being old rather than for being dead. A background <a href="../patterns/distributed/coordination/sweeper.html">janitor</a> closes that gap by sampling keys that carry TTLs and reclaiming the expired ones; how often it runs trades CPU against memory, and it is the first knob to turn when memory is tight but the hit ratio is fine.</p>
+        <p id="architecture-p-3">Multiplied out, the cluster is ~50 such nodes and one shared fact: who owns what. A client library hashes each key onto a consistent-hash ring, sends the request over a pooled connection straight to the owner, and every shard streams asynchronously to a replica. The membership store holds the ring and each member's health, and it is the only thing the fleet must agree on — which is why it holds kilobytes and never sits on the request path.</p>
       </div>
       <figure class="diagram">
         <pre class="mermaid">
-flowchart LR
-    Client["Client library"] -->|"hash(key) picks owner"| Ring["Consistent-hash ring · client-side"]
-    Ring -->|"pooled connection"| Owner["Owning cache node · 1 of ~50"]
-    Owner -->|"O(1) get / set by key"| Store[("Hash table + LRU list")]
-    Owner -.->|"async replicate"| Rep[("Replica")]
-    Janitor["TTL janitor"] -->|"sweep expired"| Owner
+flowchart TB
+    Client["Client library · consistent-hashing"] -->|"hash(key) picks owner"| Owner["Cache node · 1 of ~50"]
+    Client -->|"watch ring + health"| Members[("Membership store")]
+    Owner -->|"O(1) get / set / delete"| Store[("Hash table + LRU list")]
+    Owner -.->|"async replicate · replication"| Rep[("Replica shard")]
+    Janitor["TTL janitor · sweeper"] -->|"sample and reclaim expired"| Store
+    Owner -->|"miss"| Origin["Source of truth"]:::ext
+    classDef ext stroke-dasharray:4 4;
         </pre>
-        <figcaption>The client hashes locally to route straight to the owning node; each node pairs a hash table with an LRU list, streams to a replica asynchronously, and is swept for expired keys by a janitor.</figcaption>
+        <figcaption>Where does one request go? The client hashes locally and talks straight to the owner; the membership store is read to learn the ring, never per request, and a miss is the caller's problem to refill from the origin.</figcaption>
       </figure>
       <details class="sketch">
         <summary>Pseudocode — the O(1) LRU node</summary>
-<pre><code class="language-python" data-kb-lang="python">class Node:  # key, value, expiry — one link in the LRU list
+<pre><code class="language-python" data-kb-lang="python">class Entry:  # key, value, expiry — one link in the LRU list
 
 get(key):
     node = table[key]
@@ -213,61 +276,176 @@ get(key):
     return node.value
 
 set(key, value, ttl):
-    node = table.get(key) or Node(key)
+    node = table.get(key) or Entry(key)
     node.value  = value
     node.expiry = now() + ttl if ttl else None
     move_to_front(node)
     table[key] = node
-    if size &gt; capacity:
+    while used_memory &gt; ceiling:
         evict(tail.prev)         # O(1): drop least-recently-used</code></pre>
       </details>
+      <div class="prose">
+        <h3>Components &amp; communication</h3>
+        <ul>
+          <li id="architecture-li-1"><strong>Client library</strong> — where requests enter: it hashes the key onto the ring, picks the owner, and sends get/set/delete over a pooled connection. Holding the routing table is what makes a cache hit exactly one network hop.</li>
+          <li id="architecture-li-2"><strong>Cache node</strong> — one of ~50 members, each owning a set of ring arcs; serves the three primitives from its own hash table and LRU list, and enforces its memory ceiling by evicting from the tail.</li>
+          <li id="architecture-li-3"><strong>Hash table + LRU list</strong> — the storage inside a node: the table answers by key in O(1), the list keeps recency order in O(1), and every Entry carries its expiry so a read can refuse a stale value.</li>
+          <li id="architecture-li-4"><strong>Replica shard</strong> — an asynchronous copy of an owner's arcs on another member, kept warm for promotion rather than for reads (dive 2).</li>
+          <li id="architecture-li-5"><strong>TTL janitor</strong> — a background pass that samples keys with expiries and reclaims the dead ones, so memory is not held by entries nobody will read again.</li>
+          <li id="architecture-li-6"><strong>Membership store</strong> — the ring and each member's health; clients watch it for changes and nothing reads it per request. Given, not built: any small coordination service does this job.</li>
+        </ul>
+        <h3>Where each requirement lands</h3>
+        <ul>
+          <li id="architecture-li-7">Set, get and delete a value by key — Client library (hash → owner) &rarr; Cache node &rarr; Hash table, with the write mirrored to the Replica shard afterwards. <em>→ FR: get/set/delete.</em></li>
+          <li id="architecture-li-8">Attach an optional TTL — the expiry is stored on the Entry, checked by Cache node on every read, and reclaimed in the background by the TTL janitor. <em>→ FR: TTL.</em></li>
+          <li id="architecture-li-9">Evict on an LRU policy once full — Cache node drops from the tail of the LRU list whenever used memory crosses the ceiling. <em>→ FR: eviction.</em></li>
+        </ul>
+      </div>
     </section>
 
     <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
       <h2 class="doc-h" id="h-deep">Deep dives</h2>
       <div class="prose">
-        <h3 id="deepdives-dive-1">1 · Staying available when a node dies</h3>
-        <p id="deepdives-p-1">High availability means keeping more than one copy of every shard, and the interesting choice is <em>when</em> the copies must agree. <a href="../patterns/distributed/coordination/replication.html">Replication</a> offers a spectrum:</p>
+        <p id="deepdives-p-1" data-kb-register="basic">Six questions decide this design. How do you split a billion keys across fifty machines so that adding a machine does not move all of them? What happens the moment one machine dies? How do you stay inside the memory you paid for without slowing every read down? What do you do about the one key everybody wants? How do you make a deletion stick when there are copies? And where do the last few milliseconds actually go?</p>
+      </div>
+      <div class="prose">
+        <h3 id="deepdives-dive-1">1 · Splitting the keyspace so it survives resizing <em>→ NFR: scale</em></h3>
+        <p id="deepdives-p-2"><strong>Choose the placement function for what happens when the fleet changes size, not for how evenly it spreads — every candidate spreads evenly, and only some survive a node being added.</strong> One node holds neither 1&nbsp;TB nor 100k req/s, so keys must be <a href="../patterns/distributed/routing/sharding.html">sharded</a>; the question is only by what rule.</p>
         <ul>
-          <li id="deepdives-li-1"><strong>Synchronous — bad here.</strong> The write blocks until every replica acknowledges. That buys strong consistency we explicitly said we do not need, and it puts a replica's latency on the critical path of a 10&nbsp;ms budget. Wrong trade for a cache.</li>
-          <li id="deepdives-li-2"><strong>Asynchronous — good.</strong> The primary answers immediately and ships the write to replicas in the background. It honours the latency and availability requirements; the price is a small window where a failover can lose the last few unacknowledged writes — acceptable when the source of truth lives elsewhere. Redis defaults to this, and its <code>WAIT</code> command lets a caller opt into replica acknowledgement per write when it matters ("semi-synchronous").</li>
-          <li id="deepdives-li-3"><strong>Peer-to-peer — good for scale.</strong> Drop the primary/replica distinction; every node owns some ranges and replicates others, gossiping updates around. It scales the furthest and removes the single-writer bottleneck, at the cost of more complex conflict handling. This is the Cassandra-style answer.</li>
+          <li id="deepdives-li-1"><strong>Modulus — <code>hash(key) % N</code>.</strong> Perfectly uniform and catastrophic under change: move from 50 nodes to 51 and the divisor changes for every key, so almost the entire cache misses at once and the source of truth takes 100k req/s it has never seen. Rejected on the first capacity change, which is to say on the first good day.</li>
+          <li id="deepdives-li-2"><strong>An explicit slot map.</strong> Fix a large number of slots, assign slots to nodes in a table, and move slots by hand. It gives exact control and makes rebalancing a deliberate act, at the cost of a table every client must agree on and an operator who must maintain it. Reasonable, and more machinery than this design needs.</li>
+          <li id="deepdives-li-3"><strong><a href="../patterns/distributed/routing/consistent-hashing.html">Consistent hashing</a> (chosen).</strong> Place nodes and keys on a circular keyspace with the same hash function and give each key to the first node clockwise. Adding or removing a node remaps only the keys in that node's arc — about 1/51 of them, the ~20&nbsp;GB priced in Right-sizing — while every other key keeps its owner. Rendezvous hashing gets the same property by a different route; either is fine, and the ring is the one most client libraries already implement.</li>
         </ul>
-        <p id="deepdives-p-2">The interview move is to name the trade rather than declare a winner; asynchronous replication is the pragmatic default.</p>
-
-        <h3 id="deepdives-dive-2">2 · Sharding the keyspace evenly</h3>
-        <p id="deepdives-p-3">One node cannot hold 1&nbsp;TB or absorb 100k req/s, so the keys must be split — <a href="../patterns/distributed/routing/sharding.html">sharded</a> — across the fleet. The naïve router, <code>hash(key) % N</code>, distributes evenly but is catastrophic under change: move from 50 to 51 nodes and the modulus shifts almost every key to a new owner, so the whole cache misses at once. <a href="../patterns/distributed/routing/consistent-hashing.html">Consistent hashing</a> fixes this by placing nodes and keys on a circular keyspace (via a hash like MurmurHash) and assigning each key to the first node clockwise; adding or removing a node only remaps the slice of keys in that node's arc, not the entire ring. It doubles as the routing table — the client computes the owner locally and skips a round trip to any central lookup service.</p>
-
-        <h3 id="deepdives-dive-3">3 · Hot keys — reads and writes</h3>
-        <p id="deepdives-p-4">Sharding assumes traffic spreads with the keys. A <strong>hot key</strong> breaks that assumption: a viral post, a flash-sale inventory counter, and one shard takes traffic the other 49 never see. It is usually a property of how the cache is <em>used</em>, but a strong answer raises it unprompted.</p>
+        <p id="deepdives-p-3">Two details make it work in practice. A node placed once on the ring owns one arbitrary arc, and arbitrary arcs are uneven — so each node is placed many times under derived names (virtual nodes), which averages the arcs out and lets a bigger instance own proportionally more of the ring. And because the ring is a pure function of the member list, the client computes ownership locally: routing costs no round trip, and the membership store is read when the fleet changes rather than when a key is fetched. The cost is that every client must see the same member list, which is why membership is the one thing this design coordinates.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    Key["key 'user:42'"] -->|"hash to a ring position"| Ring["Consistent-hash ring · virtual nodes"]
+    Ring -->|"first node clockwise"| A["Node A · owns arc 1"]
+    Ring --> B["Node B · owns arc 2"]
+    Ring --> C["Node C · owns arc 3"]
+    New["Node D joins"] -.->|"takes one slice of arc 2 only"| B
+        </pre>
+        <figcaption>What moves when a node joins? Only the keys in the arc the newcomer takes over — every other key keeps its owner, which is the whole reason the modulus was rejected.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-2">2 · When a node dies: replicate, or just refill? <em>→ NFR: availability</em></h3>
+        <p id="deepdives-p-4"><strong>Keeping a second copy of every shard is not obviously right for a cache, because the data can always be fetched again — the argument is about what the refill does to the system underneath.</strong> Losing one node of fifty drops the fleet's hit ratio by roughly two points and sends that shard's entire miss stream at the source of truth in the same second.</p>
         <ul>
-          <li id="deepdives-li-4"><strong>Hot reads.</strong> Vertically scaling the hot shard barely helps and wastes the rest. Better options fan the reads out: a dedicated cache tier for hot keys, read replicas of the shard, or — best — keeping several <em>copies</em> of a hot key on different nodes (e.g. suffixing it, <code>key#1…key#3</code>) so readers spread across them. This is the read-side story the <a href="../themes/scaling-reads.html">Scaling Reads</a> theme develops in full.</li>
-          <li id="deepdives-li-5"><strong>Hot writes.</strong> Harder, because copies must converge. <a href="../patterns/concurrency/batching.html">Batching</a> writes at the client — coalescing many increments into one flush — cuts the write rate to the shard dramatically; alternatively, shard the hot key itself across nodes with random suffixes and reconcile on read. See <a href="../themes/scaling-writes.html">Scaling Writes</a>.</li>
+          <li id="deepdives-li-4"><strong>No replication — refill from the origin.</strong> The cheapest answer, and the one that outsources the failure: the ring closes over the dead node's arc, the new owner holds none of those keys, and the database absorbs a <a href="../hazards/thundering-herd.html">herd</a> of misses for as long as the refill takes. Acceptable when the origin is over-provisioned; unacceptable when the cache exists because it is not.</li>
+          <li id="deepdives-li-5"><strong>Synchronous replication.</strong> The write blocks until the replica acknowledges, which buys a strong-consistency guarantee this design explicitly does not need and puts another machine's latency inside a 10&nbsp;ms budget. Wrong trade for a cache.</li>
+          <li id="deepdives-li-6"><strong>Asynchronous replication (chosen).</strong> The owner answers immediately and ships the write to its replica in the background, so the latency budget is untouched and a promotion has a warm copy to work with. The price is a window in which the last unacknowledged writes are lost on failover — acceptable exactly because the source of truth still has them. Redis works this way by default, and its <code>WAIT</code> command lets a caller demand replica acknowledgement for the individual writes where it matters.</li>
+          <li id="deepdives-li-7" data-kb-level="advanced"><strong>Peer-to-peer.</strong> Drop the owner/replica distinction: every node owns some ranges and replicates others, gossiping updates around. It scales furthest and removes the single-writer per shard, at the cost of conflict handling nobody wants inside a cache. The Cassandra-shaped answer, and more machinery than this problem asks for.</li>
         </ul>
-
-        <h3 id="deepdives-dive-4">4 · Squeezing out the last milliseconds</h3>
-        <p id="deepdives-p-5">At single-node scale, "performance" is just the O(1) hash table. Across ~50 nodes it becomes a networking problem: how fast a client finds the owner, and how much chatter each request costs. Three levers, some already in place: consistent hashing removes the routing round trip; request <a href="../patterns/concurrency/batching.html">batching</a> folds many operations into one network call; and <strong>connection pooling</strong> — an <a href="../patterns/gof/extra/object-pool.html">object pool</a> of long-lived TCP connections — avoids paying a handshake per request, which is what usually pins the p95/p99 tail.</p>
+        <p id="deepdives-p-5">Failover has one edge worth stating unprompted: a promoted replica can resurrect data. If a delete was applied to the owner and not yet shipped when the owner died, the replica still holds the old value, so promotion brings a deleted key back to life with a full TTL ahead of it. Nothing in the cache can prevent this — the fix is at the caller, which either keeps TTLs short enough to bound the resurrection or writes values whose key carries a version (dive 5). The two windows are one: whatever replication lag you accept is both how much data a failover loses and how long a deleted key can come back for.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Client library
+    participant O as Cache node
+    participant R as Replica shard
+    participant D as Source of truth
+    C->>O: SET user:42
+    O-->>C: 200 OK
+    O--)R: replicate in background
+    Note over O,R: owner dies before the last writes ship
+    C->>R: SET/GET after promotion
+    R-->>C: MISS — the unshipped writes are gone
+    C->>D: refill from the origin
+        </pre>
+        <figcaption>What does a failover cost? Exactly the writes that had not shipped when the owner died — the replica serves everything else, so the origin sees a trickle instead of a shard's worth of misses.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-3">3 · Living inside the memory budget <em>→ FR: eviction; NFR: latency</em></h3>
+        <p id="deepdives-p-6"><strong>A cache is a fixed amount of memory pretending to be an unbounded map, and the eviction policy is where the pretence is maintained — cheaply, or on the hot path.</strong> The textbook LRU is exact: every read moves an entry to the head of a shared list. That is a write on every read, and under concurrency a write to shared structure is a lock.</p>
+        <ul>
+          <li id="deepdives-li-8"><strong>Exact LRU.</strong> Correct ordering, O(1) per operation, and a single mutable list every reader must touch. On one thread it is perfect; across cores it turns the read path into a contention point for the sake of an ordering nobody inspects.</li>
+          <li id="deepdives-li-9"><strong>Sampled approximate LRU (chosen).</strong> Do not maintain a global order at all: on eviction, sample a handful of candidate keys and drop the one with the oldest access stamp. The result is almost the same victim for a fraction of the bookkeeping, which is why Redis approximates LRU rather than implementing it exactly. The cost is admitted: occasionally a slightly-less-cold entry is evicted, and nobody can tell.</li>
+          <li id="deepdives-li-10"><strong>Frequency-based eviction.</strong> LRU has one bad day — a scan. Reading a million keys once evicts the entire working set in favour of data nobody will ask for again, and a frequency-based policy resists it by preferring entries that have been popular rather than recent. Worth naming as the swap to make when the workload is scan-heavy; LRU is the right default for read-mostly traffic with a stable hot set.</li>
+        </ul>
+        <p id="deepdives-p-7" data-kb-level="expert">Then there is the memory the cache does not think it is using. An allocator that carves memory into fixed size classes — memcached's slabs being the clearest example — can hold free space in the wrong class, so a workload whose value sizes drift strands memory it cannot reuse without a restart. Per-entry overhead compounds the same way: at ~1&nbsp;KB values the tenth of RAM spent on hash slots, list pointers and expiries is a rounding error, and at 50-byte values it is most of the machine. Set the ceiling on <em>resident</em> memory rather than on the sum of stored values, and leave room above it — a cache whose memory the operating system reclaims does not degrade, it stops.</p>
+        <p id="deepdives-p-8">Expiry is the other half of the budget, and it needs both mechanisms. Lazy expiry, checked on read, is free and incomplete: a key nobody reads is a key nobody expires. The janitor closes the gap by sampling keys with TTLs, deleting the expired ones and going round again while the expired fraction of the sample stays high — cheap when there is nothing to do, self-accelerating when there is. Run it too rarely and dead entries evict live ones; too often and it competes with the traffic for the same cores.</p>
+      </div>
+      <div class="prose">
+        <h3 id="deepdives-dive-4">4 · The key that does not spread <em>→ NFR: latency; scale</em></h3>
+        <p id="deepdives-p-9"><strong>Sharding assumes traffic follows keys, and one <a href="../hazards/hot-key.html">hot key</a> is the case where it does not: a viral post or a flash-sale counter puts a whole product's traffic on one of fifty nodes.</strong> It is usually a property of how the cache is used rather than of the cache, which is exactly why a strong answer raises it before being asked.</p>
+        <ul>
+          <li id="deepdives-li-11"><strong>Hot reads — spread the copies, not the node.</strong> Vertically scaling the owning node buys a little and wastes the other 49. Fanning out works: read replicas of that shard, a separate tier for known-hot keys, or — simplest — keeping several copies of the value under derived names (<code>key#1…key#3</code>) so readers pick one at random and the load divides by three. The general read-side story is the <a href="../themes/scaling-reads.html">Scaling Reads</a> theme.</li>
+          <li id="deepdives-li-12"><strong>Hot writes — coalesce before you split.</strong> Copies must converge, so splitting a hot write across suffixes means reconciling on read. <a href="../patterns/concurrency/batching.html">Batching</a> at the client is the cheaper first move: fold a thousand increments a second into one flush and the shard sees one write instead of a thousand, at the cost of a flush interval's worth of staleness. See <a href="../themes/scaling-writes.html">Scaling Writes</a>.</li>
+          <li id="deepdives-li-13"><strong>Stampede on expiry.</strong> A hot key's TTL is a scheduled outage: the moment it expires, every request for it misses at once and they all go to the source of truth — a <a href="../hazards/cache-stampede.html">stampede</a> whose size is the key's popularity. Jitter TTLs so hot keys do not expire together, and let one client claim the refill with a set-if-absent lock while the others wait or serve the previous value; the origin then sees one query per expiry rather than thousands.</li>
+          <li id="deepdives-li-14"><strong>Detection before mitigation.</strong> None of the above can be applied to a key nobody has identified, and exact per-key counters at 100k req/s cost more than the traffic they measure. Sample the request stream or keep an approximate frequency structure such as a <a href="../patterns/distributed/coordination/count-min-sketch.html">count-min sketch</a> on the client, which names the heavy hitters in fixed memory and is wrong only in the direction of over-counting.</li>
+        </ul>
+        <p id="deepdives-p-10">Every one of these is a special case bolted onto an otherwise uniform scheme, and that is the honest summary: uniform sharding is simple everywhere and wrong in one place, and the fix is per-key machinery to maintain, monitor and eventually retire when the key goes cold. Take the simplicity, know the exception, and keep the detection running so the exception is found by a dashboard rather than by a pager.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant M as Many clients
+    participant K as Cache node
+    participant D as Source of truth
+    Note over M,K: the hot key's TTL expires
+    M->>K: N concurrent GETs — all miss
+    M->>K: SET-IF-ABSENT refill lock
+    K-->>M: one winner, others refused
+    M->>D: winner queries the origin once
+    M->>K: winner SETs the value with jittered TTL
+    K-->>M: waiters read the fresh value
+        </pre>
+        <figcaption>How does one expiry avoid becoming a thousand database queries? A set-if-absent lock elects one refiller; everyone else waits on the key they were already asking for.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-5">5 · Making a delete stick <em>→ FR: delete; NFR: availability</em></h3>
+        <p id="deepdives-p-11"><strong>A cache with one copy has no invalidation problem; this one has replicas, client pools and possibly a near-cache, so "delete" means "delete everywhere, eventually" — and eventually is a number somebody has to choose.</strong> Deletion is the only operation here where the eventual-consistency licence in the requirements has teeth.</p>
+        <ul>
+          <li id="deepdives-li-15"><strong>Explicit delete on write.</strong> Whoever updates the source of truth deletes the key, so the next read refills it. Simple and correct while there is one copy; with an asynchronous replica it opens the resurrection window from dive 2, and with a client-side near-cache it does not reach the copy that matters at all.</li>
+          <li id="deepdives-li-16"><strong>Short TTL instead of deletion.</strong> Let staleness expire rather than chasing it. It needs no invalidation path, costs a lower hit ratio (every key is refetched on its TTL whether or not it changed), and bounds wrongness by a number the caller picked — which is often exactly the trade a cache should make.</li>
+          <li id="deepdives-li-17"><strong>Versioned keys (chosen where identity allows it).</strong> Put the version of the underlying data in the key — <code>user:42:v7</code> — so an update writes a new key and never has to delete the old one, which ages out on its own. Invalidation stops being a distributed operation and becomes a naming convention; the cost is that the caller must know the version before it reads, which only works when the version is cheap to obtain.</li>
+        </ul>
+        <p id="deepdives-p-12">Two consequences are worth carrying away. A delete that is lost — dropped by an asynchronous replica, or applied to a node that then failed over — leaves a value that will be served confidently until its TTL runs out, so <em>every</em> key wants a TTL even when the design intends to delete it explicitly; the TTL is the backstop for the invalidation that did not arrive. And the same reasoning is why a near-cache inside the application is deferred rather than adopted: it is the fastest layer in the system and the one no delete can reach.</p>
+      </div>
+      <div class="prose">
+        <h3 id="deepdives-dive-6">6 · Where the last milliseconds go <em>→ NFR: latency</em></h3>
+        <p id="deepdives-p-13"><strong>At one node, latency is the O(1) lookup and there is nothing to discuss; across fifty, it is entirely a networking problem — how many round trips a request costs and what makes the slow ones slow.</strong> A memory lookup is on the order of a hundred nanoseconds and a round trip inside a datacentre is closer to half a millisecond, so the budget is spent before the cache does any work.</p>
+        <ul>
+          <li id="deepdives-li-18"><strong>Remove the hop.</strong> Client-side consistent hashing means the request goes straight to the owner instead of asking a router where to go — one round trip instead of two, and the single largest saving on this list (dive 1).</li>
+          <li id="deepdives-li-19"><strong>Remove the handshake.</strong> A fresh TCP connection costs a round trip before the first byte, and TLS costs more; an <a href="../patterns/gof/extra/object-pool.html">object pool</a> of long-lived connections amortises that to nothing. This is usually what pins p99: the median request reuses a warm connection and the unlucky one opens a new one.</li>
+          <li id="deepdives-li-20"><strong>Remove the round trips you cannot remove one at a time.</strong> Multi-key reads and pipelining fold thirty lookups into one network cost — with the caveat that a pooled connection carrying a pipeline has head-of-line blocking, so one very large value in the batch delays everything behind it.</li>
+        </ul>
+        <p id="deepdives-p-14" data-kb-level="expert">Two tail-latency sources deserve naming because an average hides both. A node that executes commands on a single thread is fast until one command is not O(1): a request touching a large collection or enumerating keys blocks every other client for its duration, which is why such commands are banned from production paths rather than merely discouraged. And the caller's timeout is part of this design — set it near the budget rather than at ten times it, and treat a timeout as a miss. A slow cache must fail open and let the request reach the source of truth, because a cache outage that becomes an application outage has inverted the point of the tier.</p>
       </div>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
       <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="prose">
+        <p id="tradeoffs-p-1"><strong>The biggest flaw, named first: the design is uniform everywhere, and traffic is not — one hot key lands wholly on one node and has to be answered with per-key machinery bolted onto the side.</strong> That exception is the price of a scheme that is otherwise a hash function and a ring.</p>
+      </div>
       <div class="tradeoffs">
         <div class="col pros">
-          <h3>What it buys</h3>
+          <h3>Strengths</h3>
           <ul>
-            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Scales horizontally to 1&nbsp;TB and 100k req/s by adding nodes, with each node doing O(1) get, set, and eviction.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">Survives node loss through async replicas, and reshapes with almost no key movement thanks to the consistent-hash ring.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Holds the sub-10&nbsp;ms budget: client-side routing, batching, and pooled connections keep the network path short.</li>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro"><strong>Resizing is cheap by construction.</strong> The ring moves one arc when a node joins or leaves — ~20&nbsp;GB of refill, not a fleet-wide remap (see dive 1).</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro"><strong>Routing costs no round trip.</strong> The client computes the owner locally, so a cache hit is one hop and one memory lookup (see dive 6).</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro"><strong>Every operation is O(1).</strong> Get, set, delete and eviction are all constant-time on the node, so latency does not drift as the cache fills.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro"><strong>A node's death is a trickle, not a herd.</strong> The replica serves everything that shipped, so the source of truth never sees a shard's worth of misses at once (see dive 2).</li>
+            <li id="tradeoffs-pro-5" data-kb-polarity="pro">Sizing is settled by one estimate — memory — and the request capacity comes free with it.</li>
+            <li id="tradeoffs-pro-6" data-kb-polarity="pro">The only agreed-on state is the member list, so the fleet coordinates kilobytes rather than terabytes.</li>
           </ul>
         </div>
         <div class="col cons">
-          <h3>What it gives up</h3>
+          <h3>Risks</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Only eventual consistency — an async failover can serve a stale value or drop the last few unreplicated writes.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">No durability: a node restart empties its shard until the working set refills from the source of truth.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Uniform sharding does not fix skew — hot keys still need copies or suffix-sharding bolted on as a special case.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">More moving parts to operate: the ring, replication lag, and the TTL janitor all become things that can misbehave under load.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con"><strong>A failover loses the writes that had not shipped.</strong> The same window resurrects deletes that had not shipped, so a deleted key can come back with a full TTL (see dive 2).</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con"><strong>Replication doubles the memory bill.</strong> Availability here is bought with RAM — ~100 nodes instead of ~50 — and RAM is the whole cost of the system.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con"><strong>Nothing survives a restart.</strong> A node that comes back is empty, and its share of traffic goes to the source of truth until the working set refills.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con"><strong>The hit ratio is a cliff, not a slope.</strong> Five points of it doubles the load on the database the cache exists to protect (named in Right-sizing).</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con">Approximate LRU occasionally evicts an entry a stricter policy would have kept, and a scan can still flush the hot set (see dive 3).</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">More moving parts to operate: the ring, replication lag, the janitor's CPU and the memory ceiling all misbehave under load in different ways.</li>
+            <li id="tradeoffs-con-7" data-kb-polarity="con">A near-cache in the client would be the fastest layer and the one no invalidation can reach, which is why it stays deferred (see dive 5).</li>
           </ul>
         </div>
       </div>
@@ -276,10 +454,28 @@ set(key, value, ttl):
     <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
       <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
       <div class="prose">
+        <h3>Mid-level</h3>
         <ul>
-          <li id="levels-li-1"><strong>Mid-level</strong> — spends more time on the single-node design and reaches the right data-structure pairing (hash table + doubly linked list) for O(1) operations within the latency budget. Can problem-solve toward basic availability and scale — recognising that replication is needed and sketching a couple of ways to do it.</li>
-          <li id="levels-li-2"><strong>Senior</strong> — moves through the low-level design quickly and spends the bulk of the time on scale: weighing replication modes against the requirements, handling hot reads and hot writes, and reaching for consistent hashing as second nature. Justifies decisions from the stated non-functionals rather than reciting options.</li>
-          <li id="levels-li-3"><strong>Staff+</strong> — treats all of the above as assumed. The interesting signal is proactively surfacing the operational realities — replication lag and failover data loss, ring rebalancing during a node swap, janitor CPU versus memory pressure — and being explicit that this particular design is one point in a space of defensible combinations.</li>
+          <li id="levels-li-1">Reaches the hash table plus doubly linked list pairing and can say why each half is needed.</li>
+          <li id="levels-li-2">Keeps get, set, delete and eviction all O(1), and says where the constant-time claim would break.</li>
+          <li id="levels-li-3">Stores the expiry with the value and checks it on read, rather than trusting a background job.</li>
+          <li id="levels-li-4">Recognises that one box runs out and sketches replication and sharding as the next moves.</li>
+        </ul>
+        <h3>Senior</h3>
+        <ul>
+          <li id="levels-li-5">Runs both capacity estimates and states which one binds, instead of picking a node count.</li>
+          <li id="levels-li-6">Rejects the modulus on what happens when the fleet resizes, not on distribution quality.</li>
+          <li id="levels-li-7">Argues replication modes against the stated non-functionals and lands on asynchronous with the loss window named.</li>
+          <li id="levels-li-8">Raises hot keys unprompted and separates the read fix from the write fix.</li>
+          <li id="levels-li-9">Puts the routing table in the client and says which round trip that removes.</li>
+        </ul>
+        <h3>Staff+</h3>
+        <ul>
+          <li id="levels-li-10">Prices the hit ratio against origin load, and treats memory as bought in hit-ratio units.</li>
+          <li id="levels-li-11">Names the failover resurrection of a lost delete, and makes a TTL the backstop for it.</li>
+          <li id="levels-li-12">Explains why exact LRU is refused — a write on every read — and what the sampled version gives up.</li>
+          <li id="levels-li-13">Prices the deferred exits against their triggers: a proxy tier on client sprawl, a hot-key tier on shard skew, a near-cache only where staleness is affordable.</li>
+          <li id="levels-li-14">Defends uniform sharding as the design's biggest flaw, chosen deliberately, and keeps hot-key detection running so the exception is found before it pages.</li>
         </ul>
       </div>
     </section>
@@ -296,6 +492,8 @@ set(key, value, ttl):
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="batching"><a href="../patterns/concurrency/batching.html">Batching</a><span class="rel-note">clients coalesce many operations — and hot-key writes — into a single network call</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-pool"><a href="../patterns/gof/extra/object-pool.html">Object Pool</a><span class="rel-note">long-lived TCP connections are pooled so no request pays a fresh handshake</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="kiss"><a href="../principles/kiss.html">Keep It Simple (KISS)</a><span class="rel-note">the single-node get/set/delete is built and made correct before any distribution is layered on</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sweeper"><a href="../patterns/distributed/coordination/sweeper.html">Sweeper</a><span class="rel-note">a background janitor samples keys carrying TTLs and reclaims the expired ones, because lazy expiry never touches a key nobody reads</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="count-min-sketch"><a href="../patterns/distributed/coordination/count-min-sketch.html">Count-Min Sketch</a><span class="rel-note">hot keys are found by an approximate frequency structure on the client, since exact per-key counters at 100k req/s cost more than the traffic they measure</span></div>
         </div>
       </div>
 

@@ -93,7 +93,7 @@
     <header class="doc-head">
       <p class="doc-kicker">Case study</p>
       <h1 class="doc-title">YouTube</h1>
-      <p class="doc-essence">A video platform lets anyone upload a file and lets everyone else watch it. Only two verbs, but the file is tens of gigabytes, the viewer is on an unreliable connection, and one popular clip is read millions of times for every single write. The whole design lives in that gap between a trivial surface and a punishing load.</p>
+      <p class="doc-essence">A video platform accepts a file from one person and plays it back to everyone else. The surface is small and the load is not: the file is tens of gigabytes, the viewer's bandwidth moves while they watch, and one clip is read a hundred thousand times for every time it is written. Every decision on this page is about which of those bytes you touch, and where.</p>
       <div class="doc-metarow">
         <span class="badge">Design</span>
         <label class="practice" title="Mark as practiced (saved in your browser)">
@@ -106,7 +106,9 @@
     <section class="doc-section" id="description" aria-labelledby="h-problem" data-kb-block="description">
       <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
       <div class="prose">
-        <p id="description-p-1">Strip the platform down and there are exactly two interactions: a user uploads a video, and a user watches one. That tiny functional surface is deceptive — almost all the engineering pressure comes from the shape of the load around those two verbs. Uploads are single files in the tens of gigabytes. Playback has to stay smooth for a viewer whose bandwidth drops mid-stream. And a single video is written once but read on a scale that ranges from a handful to hundreds of millions. So the requirements to pin down first are not <em>what</em> the system does but <em>how much</em> and <em>how reliably</em>. The upload half overlaps heavily with the large-file mechanics of a Dropbox-style design; the watch half is a streaming problem in its own right.</p>
+        <p id="description-p-1">A video platform has two moving parts and a very long life in between them. Someone hands you a file — tens of gigabytes, in whatever format their phone produced — and from that moment it is yours to keep, convert and hand back on demand, for years. The upload happens once and takes minutes. The playback happens anywhere from twice to fifty million times, starts in about two seconds each time, and runs over a connection you have never measured.</p>
+        <p id="description-p-2">The naive build is one endpoint that takes the file, writes it to a disk, and serves it back. It survives a demo and breaks in five places. A ten-gigabyte upload pins an application process for the whole transfer and produces nothing if the connection drops at 90%. Handing the file back as it arrived sends a phone on a train the uploader's 4K master, which stalls on the first second. A single file cannot be swapped for a smaller one halfway through, so a bandwidth drop is a freeze rather than a softer picture. One origin makes a viewer on another continent pay a round trip on each of the seventy-odd fetches a watch takes. And the day one clip is shared everywhere, every read of its record lands on the one node holding it.</p>
+        <p id="description-p-3">Those five breakages are the design, and this page takes them in order: get the bytes in without an application server carrying them, convert each upload once into a ladder of qualities the player can move between, put the result where the viewer already is, keep one hot record from taking a storage node down — then decide which of the accumulated petabytes is worth keeping forever. The playback half is the entry point for the <a href="../themes/streaming.html">Streaming</a> theme; the upload half shares its mechanics with a <a href="./dropbox.html">Dropbox</a>-style large-file design.</p>
       </div>
     </section>
 
@@ -115,15 +117,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>There are only two things people do here: put a video up, and watch one. That simplicity hides the difficulty. The files are enormous, so an upload interrupted halfway must carry on rather than start over. And one clip may be uploaded once and watched by millions, on connections that suddenly slow down — the picture should quietly get grainier rather than freeze.</p>
+          <p>Someone hands you a file so big that sending it takes an hour, and a stranger on the other side of the world wants to watch it two seconds after clicking. Keep the file exactly as it arrived and send it back when asked, and it fails three ways. The upload dies at 90% and starts over from nothing. The viewer's phone is handed a file made for a cinema screen and stalls on the first second. And when their connection slows mid-watch there is nothing smaller to fall back to, so the picture freezes. Three moves fix all three. Take the file in small pieces, so a broken upload only loses the piece it was on. Make several smaller copies of every video once, up front, so there is always one the viewer's connection can keep up with. And keep those copies near the viewer, so watching does not mean reaching across the planet every few seconds.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>Two pivots. Storing the source as one file is unusable, so processing splits it into short segments and transcodes each into several renditions, with manifests indexing them; because segments have no cross-dependencies the expensive transcode fans out across workers that pass URLs, not bytes, coordinated by a workflow engine. Uploads are chunked and fingerprinted with per-chunk state in metadata, so resuming is skipping what already landed, and completion emits one idempotent trigger. Bytes go to the blob store and edge caches, metadata to a partitioned store. The dominant axis is bandwidth and read fan-out, not request rate.</p>
+          <p>Two paths that share only a video id. On the write path the client is handed scoped upload URLs and PUTs parts straight into an object store, recording each acknowledged part on the metadata row so a resume is a diff rather than a restart. Completion emits one event, and a workflow orchestrator fans out one transcode job per segment per rendition — passing object URLs, not bytes — then fans in to write the manifests and flip the video to Playable. Those jobs are bounded, retryable and keyed deterministically, so at-least-once delivery is safe without a dedup table, and a dead-letter queue catches the file that crashes the encoder. On the read path one cached metadata lookup returns a manifest URL and every byte after that comes from an edge cache; because all renditions are cut on aligned boundaries, the player switches rungs at any segment as bandwidth moves. The sizing axes are bytes and fan-out — ~95 Gbit/s in, ~520 Gbit/s out, ~14,000 transcode cores — not request rate, which peaks in the low thousands.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>The signal is separating the two piles: a million uploads a day is about twelve a second, a trivial request rate, while the same day writes something near a petabyte of renditions — so the write path is bandwidth-bound and metadata, a few hundred gigabytes a year, is almost free. A watch is not one request either; the player pulls a manifest and then segments for the whole runtime, which is why the edge, not the origin, carries playback. The named hazard is a viral clip pinning one partition, answered by extra replicas plus a cache. Every extra rendition multiplies storage and transcode cost.</p>
+          <p>The judgment is which numbers to design against, and they are not the ones the problem statement hands you. A million uploads a day is twelve a second and decides nothing; the same day writes ~1.7 PB and delivers ~5.6 PB, and that decides everything — so writes are event-driven, reads are plain cacheable GETs, and no application process carries a byte in either direction. Three bills follow. Publish latency is designed in, paid with a segment-sized unit of work, a state field the client can poll, and separate queues so a twelve-hour upload cannot park a ninety-second one. Egress is rented rather than built, paid with a 95% edge hit ratio and the admission that a CDN outage is an origin overload, not a degradation. And storage compounds against a revenue curve that does not, paid with cold-tiered masters, re-derived rather than replicated renditions, and top rungs built on demand once the never-requested share passes a quarter. What you decline to build carries the same weight: no search index, no custom streaming protocol, no relational primary, and no durable write per view — a total that trails ten seconds costs nothing, a write hot spot on the most popular row costs everything.</p>
         </div>
       </div>
     </section>
@@ -134,19 +136,42 @@
         <div class="functional">
           <h3>Functional</h3>
           <ol>
-            <li>A user can upload a video.</li>
-            <li>A user can watch (stream) a video.</li>
+            <li>A user uploads a video file with a title and a description.</li>
+            <li>A user resumes an interrupted upload without re-sending the parts that already landed.</li>
+            <li>A user sees whether an uploaded video is still processing or ready to watch.</li>
+            <li>A user watches a video at a quality their connection can sustain.</li>
+            <li>A watch counts toward the video's view total.</li>
           </ol>
-          <p class="prose">Out of scope: view counts, search, comments, recommendations, and channel/subscription management — named explicitly so the design stays on the upload-and-playback core.</p>
+          <p class="prose">Out of scope: search, comments, recommendations, channel subscriptions, live streaming, monetisation and moderation — named explicitly so the design stays on upload, processing and playback.</p>
         </div>
         <div class="nonfunctional">
           <h3>Non-functional</h3>
           <ul>
-            <li><strong>Availability</strong> — favoured over consistency; a stale or briefly-missing video is tolerable, an outage is not.</li>
-            <li><strong>Large files</strong> — uploads and playback for videos in the tens of gigabytes.</li>
-            <li><strong>Low-latency streaming</strong> — playback starts quickly and stays smooth, even on low-bandwidth connections.</li>
-            <li><strong>Scale</strong> — roughly 1M videos uploaded and 100M videos watched per day.</li>
-            <li><strong>Resumable uploads</strong> — an interrupted upload resumes where it stopped rather than restarting.</li>
+            <li><strong>Scale</strong>
+              <ul>
+                <li>1M uploads and 100M watches a day, roughly 100 watches per upload.</li>
+                <li>Popularity is concentrated: a small share of the catalogue takes most of the watches.</li>
+              </ul>
+            </li>
+            <li><strong>Throughput</strong>
+              <ul>
+                <li>A single upload can be tens of gigabytes and hours long.</li>
+                <li>Bytes moved, not requests served, is the axis the system is sized on.</li>
+              </ul>
+            </li>
+            <li><strong>Latency</strong>
+              <ul>
+                <li>Playback starts in about two seconds.</li>
+                <li>Playback does not stall when the viewer's bandwidth halves mid-watch.</li>
+              </ul>
+            </li>
+            <li><strong>Availability &amp; resilience</strong>
+              <ul>
+                <li>99.9% for playback, favoured over consistency; a video minutes late is acceptable, playback going dark is not.</li>
+                <li>Every failed processing step retries or ends with a recorded reason the uploader can see.</li>
+              </ul>
+            </li>
+            <li><strong>Durability</strong> — an accepted upload's original file is never lost; copies derived from it may be rebuilt rather than replicated.</li>
           </ul>
         </div>
       </div>
@@ -155,21 +180,69 @@
     <section class="doc-section" id="sizing" aria-labelledby="h-sizing" data-kb-block="sizing">
       <h2 class="doc-h" id="h-sizing">Right-sizing</h2>
       <div class="prose">
-        <p id="sizing-p-1"><strong>Writes (uploads).</strong> 1M uploads/day is only ~12 uploads/sec on average — trivial as a request rate. What matters is not the count but the payload: each is a multi-gigabyte transfer, so the write path is bandwidth-bound, not QPS-bound.</p>
-        <p id="sizing-p-2"><strong>Reads (watches).</strong> 100M watches/day ≈ ~1,200 watches/sec on average, spiky well above that at peak. But a "watch" is not one request — the player pulls a manifest and then a steady stream of short segment files for the whole runtime, so the edge sees <em>orders of magnitude</em> more requests than the raw watch count. The read-to-write ratio is the defining asymmetry: a viral clip is uploaded once and watched millions of times.</p>
-        <p id="sizing-p-3"><strong>Storage.</strong> Two very different piles. Metadata is tiny — ~365M new rows/year at roughly a kilobyte each is a few hundred GB/year, comfortable for a partitioned store. Video bytes are enormous — even a conservative ~1&nbsp;GB of stored renditions per upload puts new blob data near a <strong>petabyte a day</strong>. That gap is the load-bearing fact: bytes go to a blob store, metadata goes to a database, and the two are designed independently.</p>
+        <p id="sizing-p-1" data-kb-register="basic">Two kinds of number decide this design and they point opposite ways. One is how many things happen — a million uploads and a hundred million watches a day, which for a computer is barely anything. The other is how many bytes move to make them happen, and that one is enormous. Everything here spends money to move bytes as few times, and as short a distance, as it can.</p>
+        <p id="sizing-p-2"><strong>The problem:</strong> a million uploads and a hundred million watches a day, where the load that decides the architecture is bytes moved rather than requests served. <strong>The shape:</strong> event-driven writes, synchronous reads — converting one upload is thousands of core-seconds that cannot sit inside a request, it arrives in bursts the workers should absorb, and completion is a fact told to the pipeline exactly once; a segment fetch changes no state and is answered in one hop. <strong>The stores:</strong> five that we run — the blob store, the metadata store, a durable work queue, the orchestrator's own workflow history, and a read cache in front of the metadata store — plus a rented edge cache, capacity bought rather than operated.</p>
+        <p id="sizing-p-3"><strong>Required capabilities:</strong></p>
+        <ul>
+          <li id="sizing-li-1">Object store for large immutable blobs — a master of tens of GB per upload plus every derived segment, written once and read by URL. → NFR: throughput; FR: upload.</li>
+          <li id="sizing-li-2">Short-lived scoped write tokens — the client writes into that store directly, without the bytes crossing an application tier. → NFR: throughput; FR: upload.</li>
+          <li id="sizing-li-3">Durable work queue feeding an elastic compute pool — transcode work must survive a worker dying mid-job, and the pool is sized in thousands of cores. → NFR: throughput; availability &amp; resilience.</li>
+          <li id="sizing-li-4">Workflow state that outlives a process — a video is finished only when its last segment is. → NFR: availability &amp; resilience; FR: state.</li>
+          <li id="sizing-li-5">Poison-job quarantine — a file that crashes the encoder must stop being retried and become visible. → NFR: availability &amp; resilience.</li>
+          <li id="sizing-li-6">Partitioned metadata store keyed by video — 365M new rows a year, read only by exact key. → NFR: scale; FR: watch.</li>
+          <li id="sizing-li-7">Read cache in its own tier — a viral clip's row is read thousands of times a second while every other row is read once. → NFR: scale.</li>
+          <li id="sizing-li-8">Edge cache near the viewer — the latency budget goes on distance before work, and is spent per segment rather than per watch. → NFR: latency.</li>
+          <li id="sizing-li-9">Counter aggregation — a hundred million increments a day on a few videos, none worth a durable write alone. → FR: views.</li>
+          <li id="sizing-li-10">Cross-region copy of the master — the one artifact here that cannot be recomputed. → NFR: durability.</li>
+        </ul>
+        <p id="sizing-p-4"><strong>The numbers:</strong></p>
+        <ul>
+          <li id="sizing-li-11">Ingest: 1M uploads/day is <strong>12 upload starts/s</strong>, a rate that decides nothing — but × ~1&nbsp;GB average master (assumed: ten minutes at a consumer ~10&nbsp;Mbit/s is 0.75&nbsp;GB, rounded up for longer files) ≈ <strong>~95 Gbit/s inbound</strong>, ~290 at peak. The second figure is what removes the application tier from the byte path. → NFR: scale; throughput.</li>
+          <li id="sizing-li-12">Storage per hour of video: a five-rung ladder — 240p 0.3, 360p 0.6, 480p 1, 720p 2.5, 1080p 5&nbsp;Mbit/s — sums to 9.4&nbsp;Mbit/s ≈ <strong>4.2&nbsp;GB/hour of finished video</strong> against 4.5&nbsp;GB/hour for the master alone; one 4K rung at ~18&nbsp;Mbit/s adds 8.1&nbsp;GB/hour, more than the five below it combined. → NFR: throughput.</li>
+          <li id="sizing-li-13">New bytes stored: ~1&nbsp;GB of master plus ~0.7&nbsp;GB of ladder per ten-minute upload ≈ <strong>~1.7&nbsp;PB/day</strong>, ~600&nbsp;PB a year, never deleted — an accumulating figure, not a rate. → NFR: durability.</li>
+          <li id="sizing-li-14">Object count: ten minutes at four-second segments is 150 objects per rendition, × 5 renditions plus audio and manifests ≈ <strong>~800 objects per upload</strong>, ~800M a day. Object stores charge per request as well as per byte, so segment duration is a cost dial. → NFR: throughput.</li>
+          <li id="sizing-li-15">Transcode compute: 600M video-seconds/day × ~2 core-seconds each for the ladder (assumed: the 1080p rung dominates) ≈ <strong>~14,000 cores flat out</strong>, or nearer 40,000 if sized for the peak hour instead of queued across the day. → NFR: throughput.</li>
+          <li id="sizing-li-16">Read fan-out: a five-minute session (assumed median) pulls one manifest and ~75 segments; × 100M watches ≈ <strong>~88k requests/s at the edge</strong> against <strong>~1,200 metadata reads/s</strong>, both tripling at peak. → NFR: scale.</li>
+          <li id="sizing-li-17">Egress: 100M watches × 300&nbsp;s × ~1.5&nbsp;Mbit/s delivered on average (assumed: a mobile-heavy audience settles below the top rung) ≈ <strong>~5.6&nbsp;PB/day ≈ 520 Gbit/s</strong>. At a 95% edge hit ratio the origin serves ~26 Gbit/s of it. → NFR: latency; throughput.</li>
+          <li id="sizing-li-18">Metadata storage: 365M rows/year × ~1&nbsp;KB ≈ <strong>365&nbsp;GB/year</strong> — free, except while an upload runs, when a 10&nbsp;GB master at 10&nbsp;MB parts carries a ~120&nbsp;KB part list, a hundred times the finished row. → NFR: scale.</li>
+          <li id="sizing-li-19">Latency geography: a viewer 15,000&nbsp;km away pays ~150&nbsp;ms per round trip in fibre; across 76 fetches that is <strong>~11&nbsp;s of pure round-trip time</strong> inside a five-minute watch. → NFR: latency.</li>
+        </ul>
+        <p id="sizing-p-5"><strong>Verdict per candidate:</strong></p>
+        <ul>
+          <li id="sizing-li-20">Synchronous request/response on the write path — <strong>rejected</strong>: converting ten minutes of video is thousands of core-seconds, so nothing can wait inside a request. → NFR: throughput.</li>
+          <li id="sizing-li-21">Event-driven write path on a durable queue — <strong>adopted</strong>: completion is one fact told once to a pipeline that owns the work, and the queue turns a 14,000-core appetite into a fleet sized for the mean. → NFR: throughput; availability &amp; resilience.</li>
+          <li id="sizing-li-22">Synchronous request/response on the read path — <strong>adopted</strong>: a segment fetch is a cacheable GET with no state change to announce. → NFR: latency.</li>
+          <li id="sizing-li-23">Object store — <strong>adopted</strong>: 1.7&nbsp;PB a day of write-once, read-by-URL blobs, and no other tier answers that shape. → NFR: throughput.</li>
+          <li id="sizing-li-24">Scoped upload tokens — <strong>adopted</strong>: 95 Gbit/s of inbound that never touches an application process, paid for by trusting the store to enforce the token. → NFR: throughput; FR: upload.</li>
+          <li id="sizing-li-25">Workflow orchestrator — <strong>adopted</strong>: fan-out to hundreds of segments, fan-in on the last, retries and timers; hand-rolling it means a counter row and a scheduler you will rebuild badly. → NFR: availability &amp; resilience; FR: state.</li>
+          <li id="sizing-li-26">Dead-letter channel — <strong>adopted</strong>: a file that crashes the encoder is otherwise retried forever, and the fleet spends real cores discovering that. → NFR: availability &amp; resilience.</li>
+          <li id="sizing-li-27">Separate queues by job size, plus a per-account upload cap — <strong>adopted</strong>: one FIFO puts a ninety-second clip behind a twelve-hour upload, and no account should claim the fleet. → NFR: throughput.</li>
+          <li id="sizing-li-28">Partitioned key-value metadata store rather than a relational primary — <strong>adopted</strong>: 365M rows a year, every access an exact-key lookup, nothing to join. → NFR: scale.</li>
+          <li id="sizing-li-29">Read cache in its own tier — <strong>adopted</strong>: 1,200 reads/s is nothing spread evenly and everything when one row takes most of it. → NFR: scale.</li>
+          <li id="sizing-li-30">Edge cache — <strong>adopted</strong>: rented, not built; it turns 520 Gbit/s of egress into 26 and 11&nbsp;s of round-trip time into one continent's worth. → NFR: latency.</li>
+          <li id="sizing-li-31">A durable write per view — <strong>rejected</strong>: 1,200 increments/s on a handful of rows is a write hot spot bought for a number nobody reads precisely. → FR: views.</li>
+          <li id="sizing-li-32">Aggregated view counters — <strong>adopted</strong>: tally in the serving tier, flush deltas on an interval, accept that the total trails by it. → FR: views.</li>
+          <li id="sizing-li-33">Cross-region copy of the master but not the renditions — <strong>adopted</strong> for the master, which cannot be recomputed; <strong>rejected</strong> for the ladder, where re-deriving is compute scheduled once against storage billed monthly. → NFR: durability.</li>
+          <li id="sizing-li-34">Search index — <strong>rejected</strong>: search is out of scope and every read here is by video id. → NFR: scale.</li>
+          <li id="sizing-li-35">A custom streaming protocol — <strong>rejected</strong>: plain HTTP segments are what lets a rented edge carry playback. → NFR: latency.</li>
+          <li id="sizing-li-36">Hardware transcoding — <strong>deferred</strong>: software encoding is easier to schedule and change; the trigger is transcode passing storage in the monthly bill. → NFR: throughput.</li>
+          <li id="sizing-li-37">Just-in-time packaging of the top rungs — <strong>deferred</strong>: it cuts storage and pays with a slow first watch; the trigger is the share of renditions never requested in 90 days passing a quarter. → NFR: durability.</li>
+        </ul>
+        <p id="sizing-p-6"><strong>When this stops being right.</strong> Nothing here fails as it grows — the bill does. Every day adds ~800M objects and ~1.7&nbsp;PB that are never deleted, and object stores charge per request as well as per byte, so both recur every month while the income paying for them tracks only what people watched today. The cost curve follows the accumulated catalogue, the revenue curve follows new watches, and the two diverge from the first day. The signal is the share of stored renditions with no request in 90 days, read next to bytes stored per watch-hour delivered. Exits in adoption order: cold-store each master once its ladder is published; build the top rungs on first request rather than eagerly; then re-encode the cold catalogue with a more efficient codec. → NFR: durability.</p>
       </div>
     </section>
 
     <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
       <h2 class="doc-h" id="h-entities">Core entities</h2>
       <div class="prose">
-        <p id="entities-p-1">A short list is enough to anchor the design:</p>
+        <p id="entities-p-1">Six entities, and the split between two of them carries the design:</p>
         <ul>
-          <li id="entities-li-1"><strong>User</strong> — either an uploader or a viewer.</li>
-          <li id="entities-li-2"><strong>Video</strong> — the media itself: the original source plus the derived <em>segments</em>, each a few-seconds playable unit stored in several formats (a codec + container combination).</li>
-          <li id="entities-li-3"><strong>VideoMetadata</strong> — the queryable record: <code>videoId</code>, <code>uploaderId</code>, name, description, the blob-store URLs, a pointer to the manifest, and a <code>chunks</code> list that tracks upload progress.</li>
-          <li id="entities-li-4"><strong>Manifest</strong> — the streaming index: a primary manifest listing every available format, and per-format media manifests listing the segment URLs the player fetches in order.</li>
+          <li id="entities-li-1"><strong>User</strong> — an uploader or a viewer, present so a video has an owner and an uploader can see the state of their own upload.</li>
+          <li id="entities-li-2"><strong>Video</strong> — the logical asset: the master as it arrived plus every rendition derived from it. Nothing reads a Video directly; everything reads one of the records below.</li>
+          <li id="entities-li-3"><strong>VideoMetadata</strong> — the row every watch reads: <code>videoId</code>, <code>uploaderId</code>, title, duration, <code>state</code> (Uploading → Processing → Playable → Failed) and the manifest URL. While the upload runs it also carries the part list, the largest thing in the row and dead weight the moment the upload completes.</li>
+          <li id="entities-li-4"><strong>Segment</strong> — a few seconds of one rendition, its own object under a key built from <code>videoId</code>, rendition and sequence number. Derived rather than allocated, which is what makes a retried transcode overwrite its own output.</li>
+          <li id="entities-li-5"><strong>Manifest</strong> — the streaming index: a primary manifest listing the renditions, and one media manifest per rendition listing its segments in order. Once the player has it, it never asks us anything again.</li>
+          <li id="entities-li-6"><strong>ViewCount</strong> — the per-video total, kept out of VideoMetadata because it is written far more often than the row is read, and it is the only value here allowed to be slightly wrong.</li>
         </ul>
       </div>
     </section>
@@ -177,106 +250,261 @@
     <section class="doc-section" id="interface" aria-labelledby="h-interface" data-kb-block="interface">
       <h2 class="doc-h" id="h-interface">The interface</h2>
       <div class="prose">
-        <p id="interface-p-1">The naïve first cut — <code>POST /upload</code> carrying <code>{ Video, VideoMetadata }</code> — routes multi-gigabyte payloads through the application tier. It doesn't survive contact with the requirements, so the upload endpoint evolves into a request for an upload <em>slot</em> rather than a byte sink:</p>
+        <p id="interface-p-1">Five endpoints, and both halves of the product do the same thing: hand back a URL and get out of the byte path.</p>
       </div>
       <details class="sketch">
-        <summary>HTTP — upload, track progress, watch</summary>
-<pre><code class="language-http" data-kb-lang="http">POST /presigned_url
-{ "name": "...", "description": "...", "chunks": [{ "fingerprint": "...", "status": "NotUploaded" }] }
-&rarr; 200 { "videoId": "...", "urls": ["https://blob.example/upload/part/1?sig=...", ...] }
-     (client then uploads bytes DIRECTLY to the blob store, one part at a time)
+        <summary>HTTP — request a slot, track parts, complete, watch</summary>
+<pre><code class="language-http" data-kb-lang="http">POST /videos
+{ "title": "...", "description": "...", "size_bytes": 10737418240, "part_size": 10485760,
+  "parts": [{ "number": 1, "fingerprint": "sha256:..." }, ...] }
+&rarr; 201 { "video_id": "...", "state": "Uploading",
+        "upload_urls": [{ "number": 1, "url": "https://blob.example/...?sig=..." }, ...] }
+      (the client then PUTs each part straight to the blob store)
 
-PATCH /videos/{videoId}/chunks
-{ "partNumber": 3, "eTag": "..." }        // relay each S3 part ack so the server marks it Uploaded
-&rarr; 200 { "status": "Uploaded" }
+PATCH /videos/{video_id}/parts
+{ "number": 3, "etag": "..." }        // relay the store's ack so the server marks the part landed
+&rarr; 200 { "landed": 3, "of": 1024 }
 
-GET /videos/{videoId}
-&rarr; 200 VideoMetadata                     // carries the manifest URL the player needs to stream</code></pre>
+POST /videos/{video_id}/complete
+&rarr; 202 Accepted { "state": "Processing" }   // repeating this returns the same state, never a second pipeline
+      (409 Conflict + the list of part numbers still missing)
+
+GET /videos/{video_id}
+&rarr; 200 { "state": "Playable", "manifest_url": "https://cdn.example/{id}/primary.m3u8", ... }
+&rarr; 200 { "state": "Processing", "progress": 0.42 }   // while the pipeline runs
+      (404 if it never existed, 410 if it was removed)
+
+POST /videos/{video_id}/views
+&rarr; 202 Accepted                    // counted off the playback path; the only call the player may drop</code></pre>
       </details>
       <div class="prose">
-        <p id="interface-p-2">Note what left the request body: the video bytes. The server hands back a signed URL and the client streams the file straight to storage. <code>GET /videos/{videoId}</code> returns only metadata — the content lives in the blob store and the manifest inside that metadata tells the player how to reach it.</p>
+        <p id="interface-p-2">Note what appears in no request or response body: video bytes. <code>POST /videos</code> returns write URLs the client uses against the store directly, and <code>GET /videos/{video_id}</code> returns a manifest URL pointing at the edge. The application tier issues locations and never carries content — which is why ~95 Gbit/s inbound and ~520 Gbit/s outbound never appear on a graph of its network usage.</p>
+        <p id="interface-p-3"><code>POST /videos/{video_id}/complete</code> answers <strong>202 Accepted</strong> rather than 200, because the work it starts outlives the request by minutes. That is also why <code>state</code> is a field rather than something the client infers: an uploader who has finished their part needs to see that the system has not. Repeating the call returns the current state and starts nothing, and its <code>409</code> carries the part numbers still missing — so recovery is a call the client already makes.</p>
+        <p id="interface-p-4"><code>POST /videos/{video_id}/views</code> is its own call answering 202, and the only request whose failure the player may ignore. Counting a view inside the playback path would put a write in front of the thing the design exists to make fast — a dropped view costs a number, a delayed first frame costs the viewer.</p>
       </div>
     </section>
 
     <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
       <h2 class="doc-h" id="h-arch">How the system is built</h2>
       <div class="prose">
-        <p id="architecture-p-1">Every request enters through an API gateway and load balancer that handle routing, authentication, and rate limiting, then reach a stateless <strong>Video Service</strong>. On upload, the Video Service does not touch the bytes: it writes the metadata row and issues a <a href="../patterns/distributed/routing/valet-key.html">presigned URL</a> so the client uploads each part <em>directly</em> to the blob store, keeping the application tier thin. That blob store is an <a href="../patterns/distributed/routing/object-storage.html">object store</a> — the only thing that scales to petabytes of video a day. When an upload completes, the store emits an event that fires the processing pipeline. On watch, the Video Service returns metadata — served through a <a href="../patterns/caching/cache-aside.html">cache</a> so hot videos never hit the database — and the player then pulls the manifest and segments from a <a href="../patterns/distributed/routing/cdn.html">CDN</a> at the edge, so the origin is out of the streaming loop entirely.</p>
+        <p id="architecture-p-1">Requests enter at one gateway and split into two paths sharing nothing but a video id. The write path is asynchronous: the Video Service records a row, issues scoped upload URLs and steps aside while the client's bytes go straight into the blob store, and the store's completion event hands the work to a pipeline that owns it for minutes. The read path is synchronous and mostly not ours: one cached metadata lookup gives the player a manifest URL, and every byte after that comes from the edge. The structural decision is that no application process ever holds a video byte, which is what lets a tier sized for ~3,500 requests/s sit in front of half a terabit of traffic.</p>
       </div>
       <figure class="diagram">
         <pre class="mermaid">
 flowchart TB
     Client["Client / player"]
-    Gateway["API Gateway + Load Balancer"]
-    Video["Video Service · stateless"]
-    Cache[("Metadata cache")]
-    Meta[("Metadata DB — Cassandra")]
-    Blob[("Blob store — S3")]
-    Pipeline["Processing pipeline — orchestrator + transcode workers"]
-    CDN["CDN / edge"]
+    Gateway["API Gateway · api-gateway"]
+    Video["Video Service · stateless-service"]
+    Cache[("Metadata cache · cache-aside")]
+    Meta[("Metadata store · sharding")]
+    Blob[("Blob store · object-storage")]
+    Pipeline["Processing pipeline · workflow-orchestration"]
+    Edge["CDN / edge · cdn"]:::ext
 
-    Client -->|"POST /presigned_url, GET /videos"| Gateway
-    Gateway -->|"route"| Video
-    Video -->|"read/write metadata"| Cache
+    Client -->|"POST /videos, GET /videos/{id}"| Gateway
+    Gateway -->|"authenticate, rate limit, route"| Video
+    Video -->|"lookup videoId"| Cache
     Cache -->|"miss"| Meta
-    Video -->|"issue presigned URL"| Blob
-    Client -->|"direct chunked upload"| Blob
-    Blob -->|"ObjectCreated event"| Pipeline
-    Pipeline -->|"segments + manifests"| Blob
-    Blob -->|"segments + manifests"| CDN
-    CDN -->|"adaptive segments"| Client
+    Video -->|"issue scoped upload URLs · valet-key"| Blob
+    Client -->|"PUT parts — bytes skip the app tier"| Blob
+    Blob -->|"upload complete event"| Pipeline
+    Pipeline -->|"renditions + manifests"| Blob
+    Pipeline -->|"state = Playable"| Meta
+    Client -->|"GET manifest, GET segments"| Edge
+    Edge -->|"fill on miss"| Blob
+    classDef ext stroke-dasharray:4 4;
         </pre>
-        <figcaption>Bytes bypass the app tier on the way in (presigned direct upload) and on the way out (CDN edge); the Video Service only ever moves metadata.</figcaption>
+        <figcaption>Bytes bypass the application tier on the way in (scoped upload URLs) and on the way out (the edge); the Video Service only ever moves metadata.</figcaption>
       </figure>
+      <div class="prose">
+        <h3>Components &amp; communication</h3>
+        <ul>
+          <li id="architecture-li-1"><strong>API Gateway</strong> — the single <a href="../patterns/distributed/routing/api-gateway.html">entry point</a>: terminates TLS, authenticates the uploader, and applies the per-account limits that stop one uploader claiming the transcode fleet.</li>
+          <li id="architecture-li-2"><strong>Video Service</strong> — serves all five endpoints: reads and writes VideoMetadata, issues scoped upload URLs, returns the manifest URL on a watch. It is <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>, so instances multiply behind the gateway.</li>
+          <li id="architecture-li-3"><strong>Metadata cache</strong> — hot VideoMetadata rows in a shared tier, so every Video Service instance sees the same entries. A row stops changing once the video is Playable, so its TTL is a memory-budget decision.</li>
+          <li id="architecture-li-4"><strong>Metadata store</strong> — the system of record for VideoMetadata and ViewCount, partitioned by <code>videoId</code> (365&nbsp;GB/year of rows, per Right-sizing). Every access is an exact-key lookup.</li>
+          <li id="architecture-li-5"><strong>Blob store</strong> — masters, segments and manifests, written once and read by URL. It is also the write path's event source: completing a multipart upload emits exactly one object-level event.</li>
+          <li id="architecture-li-6"><strong>Processing pipeline</strong> — the orchestrator and its transcode workers; consumes the completion event, fans out one job per segment per rendition, writes renditions and manifests back to the blob store, and flips <code>state</code> to Playable.</li>
+          <li id="architecture-li-7"><strong>CDN / edge</strong> — rented, not built: serves manifests and segments from near the viewer, fills from the blob store on a miss, and answers ~95% of the design's egress.</li>
+          <li id="architecture-li-8"><strong>Client / player</strong> — a heavy participant by design: splits the upload into parts, retries them, reads the manifest, and chooses which rendition to pull next.</li>
+        </ul>
+        <h3>Where each requirement lands</h3>
+        <ul>
+          <li id="architecture-li-9">Upload a video file with a title and description — <code>POST /videos</code> &rarr; Video Service &rarr; Metadata store for the row, then Client &rarr; Blob store for the bytes. <em>→ FR: upload.</em></li>
+          <li id="architecture-li-10">Resume an interrupted upload — <code>PATCH /videos/{id}/parts</code> &rarr; Video Service &rarr; Metadata store records each acknowledged part, and <code>GET /videos/{id}</code> returns the list the client needs to work out what is left. <em>→ FR: resume.</em></li>
+          <li id="architecture-li-11">See whether a video is processing or ready — <code>state</code> on VideoMetadata, written by the Processing pipeline and read back through Metadata cache &rarr; Video Service. <em>→ FR: state.</em></li>
+          <li id="architecture-li-12">Watch at a quality the connection sustains — <code>GET /videos/{id}</code> &rarr; Video Service returns the manifest URL; the player then goes Client &rarr; CDN for the manifest and every segment. <em>→ FR: watch.</em></li>
+          <li id="architecture-li-13">Count a watch toward the video's total — <code>POST /videos/{id}/views</code> &rarr; Video Service tallies in memory and flushes deltas &rarr; Metadata store. <em>→ FR: views.</em></li>
+        </ul>
+      </div>
     </section>
 
     <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
       <h2 class="doc-h" id="h-deep">Deep dives</h2>
       <div class="prose">
-        <h3 id="deepdives-dive-1">1 · Processing a video for adaptive bitrate streaming</h3>
-        <p id="deepdives-p-1">Storing the raw file is a non-starter: different devices need different formats, and a single giant file can't be streamed a few seconds at a time. So the upload is post-processed into small <strong>segments</strong>, each transcoded into several codec + container formats, plus manifest files that index them. That work is a <a href="../patterns/architecture/pipe-filter.html">pipeline</a>: split the source with a tool like <code>ffmpeg</code>, transcode each segment (and process audio and transcripts), generate the primary and media manifests, then mark the upload complete. Crucially the segments have no cross-dependencies, so the pipeline is really a <strong>DAG</strong> whose transcode stage — the expensive, CPU-bound step — fans out across a fleet of <a href="../patterns/messaging/competing-consumers.html">worker nodes</a> pulling independent segments in parallel. A <a href="../patterns/distributed/coordination/workflow-orchestration.html">workflow orchestrator</a> such as Temporal builds the graph and schedules the workers; intermediate artifacts live in the blob store and workers pass URLs, not bytes, to keep the coordination cheap. The payoff at watch time is <strong>adaptive bitrate streaming</strong>: the player reads the manifest, picks a rendition for current conditions, and — if bandwidth drops mid-clip — quietly switches to more-compressed, lower-resolution segments instead of stalling.</p>
-        <h3 id="deepdives-dive-2">2 · Resumable uploads</h3>
-        <p id="deepdives-p-2">An upload of tens of gigabytes will be interrupted; restarting from zero is unacceptable. So the client splits the file into ~5–10&nbsp;MB chunks, each with a fingerprint hash, and registers that chunk list in <code>VideoMetadata</code> with every entry marked <code>NotUploaded</code>. It then uploads each part directly to the blob store via multipart upload; the store acknowledges each part with a part number and an <strong>ETag</strong>, which the client relays back (<code>PATCH /videos/{id}/chunks</code>) so the server verifies it and flips that chunk to <code>Uploaded</code>. Resuming is then trivial: fetch the metadata, see which chunks already landed, and skip them. When the client finally calls <code>CompleteMultipartUpload</code>, the store emits exactly one object-level event that kicks off processing — an <strong>idempotent</strong> trigger, so retries and duplicate notifications never launch the pipeline twice.</p>
-        <h3 id="deepdives-dive-3">3 · Scaling reads, hot videos, and streaming distance</h3>
-        <p id="deepdives-p-3">The Video Service is a <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> tier of presigned-URL and point-lookup handlers, so it scales out behind the load balancer without ceremony. Metadata sits in Cassandra, partitioned by <code>videoId</code> — the design only needs point look-ups, never bulk scans, so a horizontally-partitioned leaderless store is a clean fit. The classic failure mode is the <strong>hot key</strong>: a viral video pins its partition to one node that then buckles under the read load. Two fixes stack — <a href="../patterns/distributed/coordination/replication.html">replicate</a> popular metadata onto a few extra nodes so several can share the queries, and put a distributed cache keyed by <code>videoId</code> in front so the hottest records are served from memory and never reach the database at all. The video bytes have their own hot-spot problem: a bucket lives in one region, so a viewer far away sees slow starts and buffering. The answer is the <a href="../patterns/distributed/routing/cdn.html">CDN</a> — push segments and manifests to edge servers near the viewer, and once everything a player needs is at the edge, streaming never touches the origin. Upload bursts, meanwhile, are absorbed by a queue in front of the pipeline whose depth drives elastic worker scaling.</p>
+        <p id="deepdives-p-1" data-kb-register="basic">Five questions decide this design. How do you get a ten-gigabyte file in without an application server carrying it? How do you turn one file into something a phone on a train can play? How do you reach a viewer on the other side of the world without them waiting? What happens the day one clip is watched by everybody at once? And what is worth keeping forever?</p>
+      </div>
+      <div class="prose">
+        <h3 id="deepdives-dive-1">1 · Getting tens of gigabytes in <em>→ NFR: throughput</em></h3>
+        <p id="deepdives-p-2"><strong>Take the application tier out of the byte path and the size of an upload stops being your problem — it becomes the object store's, which is built for exactly this.</strong> Three ways to accept a file, and the first two fail on different numbers.</p>
+        <ul>
+          <li id="deepdives-li-1"><strong>Naïve — POST the file to an endpoint.</strong> One process is pinned for the whole transfer, the file has to live somewhere while it arrives, and a drop at 90% has produced nothing. At ~95 Gbit/s that is a tier paid for carrying bytes it never reads.</li>
+          <li id="deepdives-li-2"><strong>Chunk it, but through the application tier.</strong> Resuming works, and the bandwidth bill does not move: every byte still crosses a process you run and a network you pay for, twice.</li>
+          <li id="deepdives-li-3"><strong>Scoped write URLs straight into the store (chosen).</strong> The client asks for a slot, gets a <a href="../patterns/distributed/routing/valet-key.html">time-limited token</a> per part, and PUTs the bytes into <a href="../patterns/distributed/routing/object-storage.html">object storage</a> itself. The application tier handles a few hundred bytes of JSON per gigabyte transferred.</li>
+        </ul>
+        <p id="deepdives-p-3">Resuming falls out of tracking the parts. The client splits at a fixed part size — 5–10&nbsp;MB is usual, so a 10&nbsp;GB master is around a thousand parts — fingerprints each, and registers the list on VideoMetadata before sending anything. The store acknowledges each part with an ETag, the client relays it, the server marks the part landed. A resume is a diff: read the row, send what is unmarked, complete.</p>
+        <p id="deepdives-p-4" data-kb-level="advanced">Two checksums do two different jobs. The store's ETag proves what the store received; the client's fingerprint proves what the client meant to send. Together they catch a corrupted part and a client that re-split the file differently between attempts — when boundaries move, every fingerprint after the change misses, and the honest answer is to restart. That is why part size is fixed at creation and recorded on the row.</p>
+        <p id="deepdives-p-5">Completion is one call and one event: the store emits a single object-level notification once the multipart upload is assembled, and that event starts the pipeline — an <a href="../patterns/messaging/idempotency.html">idempotent trigger</a>, so a retried <code>complete</code> never runs the work twice. Name the failure branch. If the event is lost the video sits in Processing until someone complains, and an event source you do not own has no retry you can see — so a <a href="../patterns/distributed/coordination/sweeper.html">sweeper</a> over rows stuck past a threshold is what closes the gap.</p>
+        <p id="deepdives-p-6">The residual is that the client is a participant rather than a caller, and an abandoned client is an upload that never finishes. Object stores keep the parts of an incomplete multipart upload and charge for them, so those bytes pile up as storage that appears in no listing of videos. A lifecycle rule aborting stale uploads is not optional.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant V as Video Service
+    participant M as Metadata store
+    participant B as Blob store · object-storage
+    C->>V: POST /videos — title, part list
+    V->>M: INSERT row, state = Uploading
+    V-->>C: 201 + scoped upload URLs · valet-key
+    loop each part
+        C->>B: PUT part N
+        B-->>C: ETag
+        C->>V: PATCH /parts — number, ETag
+        V->>M: mark part N landed
+    end
+    Note over C,M: connection drops — the client re-reads the row and sends only the unmarked parts
+    C->>V: POST /complete
+    V->>B: assemble the multipart upload
+    V-->>C: 202 Accepted, state = Processing
+        </pre>
+        <figcaption>What does a resumable upload cost the server? One row, one ack per part, and no bytes — the client talks to the store for everything that is large.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-2">2 · One file into a ladder of renditions <em>→ NFR: availability &amp; resilience</em></h3>
+        <p id="deepdives-p-7"><strong>Make the unit of work one segment of one rendition and every hard property of the pipeline follows: it retries cheaply, it fans out without coordination, and no single failure costs more than a few seconds of video.</strong> The alternatives are worth walking, because the cost of each shows up in a different place.</p>
+        <ul>
+          <li id="deepdives-li-4"><strong>Naïve — one job per video.</strong> A two-hour 1080p rung is hours of one core, a crash at 95% costs all of it, and jobs that long leave a fleet idle behind the longest one.</li>
+          <li id="deepdives-li-5"><strong>One job per rendition, checkpointed.</strong> Halves the loss on a crash and keeps the tail: the slowest rendition still sets the publish time, and nothing parallelises inside a rendition. Rejected as a smaller version of the same shape.</li>
+          <li id="deepdives-li-6"><strong>Split first, then one job per segment (chosen).</strong> Cutting on keyframes re-encodes nothing, so it is cheap, and the resulting segments have no dependencies on each other, so the run becomes a <a href="../patterns/architecture/pipe-filter.html">pipeline</a> whose expensive stage is <a href="../patterns/messaging/competing-consumers.html">embarrassingly parallel</a> across as many workers as you will pay for.</li>
+        </ul>
+        <p id="deepdives-p-8">Something has to know when the video is done, and it will not be the process that started it: hundreds of tasks fan out, the manifests wait on the last ack, and the whole thing spans hours across workers that restart. That is durable <a href="../patterns/distributed/coordination/workflow-orchestration.html">workflow state</a> — the orchestrator holds the graph, survives its own crashes, and owns the retries and timers. A counter row each worker decrements works until the first lost or double ack, and from there you are writing a scheduler.</p>
+        <p id="deepdives-p-9">Workers pass references, not payloads. A segment's input and output both live in the blob store, so the queue message is a few hundred bytes of URLs — the <a href="../patterns/messaging/claim-check.html">claim check</a> move; put the video in the message and the broker needs the bandwidth budget of the store. The <a href="../patterns/distributed/resilience/load-leveling.html">queue in front of the workers</a> lets the fleet sit near the daily mean of ~14,000 cores rather than the peak hour's ~40,000, paid for in publish delay during a burst.</p>
+        <p id="deepdives-p-10">Queue shape decides who waits. One FIFO by arrival puts a twelve-hour upload's ten thousand segments in front of a ninety-second clip's twenty-three; separate queues by expected job count let the short ones through in minutes. Scale workers on queue depth and oldest-message age rather than CPU — a transcode fleet runs at 100% CPU by definition, so <a href="../patterns/distributed/routing/autoscaling.html">autoscaling</a> on utilisation would never fire.</p>
+        <p id="deepdives-p-11">Redelivery causes both remaining problems. It is safe for an ordinary job because a segment's output key is derived rather than allocated: the retry recomputes the same bytes into the same <code>videoId/rendition/NNNN</code> object, overwriting its earlier attempt rather than leaving a second copy for the manifest to choose between. It is fatal for a job that never succeeds, because a file that crashes the encoder comes back and crashes again, forever. Bound the attempts and route the survivor to a <a href="../patterns/messaging/dead-letter-channel.html">dead-letter channel</a>, marking the video Failed with a reason the uploader can read.</p>
       </div>
       <figure class="diagram">
         <pre class="mermaid">
 flowchart TB
-    Blob[("Blob store — S3")] -->|"ObjectCreated event"| Orch
+    Blob[("Blob store · object-storage")] -->|"upload complete event"| Orch
     subgraph Pipeline["Processing pipeline"]
         direction TB
-        Orch["Workflow orchestrator (Temporal)"] -->|"split with ffmpeg"| Split["Segmenter"]
-        Split -->|"independent segments, a DAG"| Transcode["Transcode workers — fan out"]
-        Transcode -->|"all segments done"| Manifest["Manifest generator"]
+        Orch["Orchestrator · workflow-orchestration"] -->|"split on keyframes, no re-encode"| Split["Segmenter · pipe-filter"]
+        Split -->|"one task per segment × rendition, URLs not bytes · claim-check"| Queue[["Transcode queue · load-leveling"]]
+        Queue -->|"pull, bounded attempts"| Workers["Transcode workers ×N · competing-consumers"]
+        Queue -->|"attempts exhausted"| DLQ[["Dead letters · dead-letter-channel"]]
+        Workers -->|"last segment acked"| Man["Manifest builder"]
     end
-    Transcode -->|"per-segment renditions"| Blob
-    Manifest -->|"primary + media manifests"| Blob
-    Manifest -->|"mark upload complete"| Meta[("Metadata DB")]
+    Workers -->|"PUT videoId/rendition/NNNN · idempotency"| Blob
+    Man -->|"primary + media manifests"| Blob
+    Man -->|"state = Playable"| Meta[("Metadata store")]
         </pre>
-        <figcaption>Inside the Processing pipeline: how does one uploaded file become transcoded segments and manifests? The orchestrator builds the DAG; the transcode stage fans out because segments have no cross-dependencies.</figcaption>
+        <figcaption>Inside the Processing pipeline: how does one file become a ladder? Bounded per-segment jobs fan out, deterministic keys make redelivery safe, and the jobs that never succeed leave the loop instead of circling in it.</figcaption>
       </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-3">3 · Playback that starts fast and does not stall <em>→ NFR: latency</em></h3>
+        <p id="deepdives-p-12"><strong>Two seconds of startup and no stalls are bought in two places: distance to the viewer, and having a smaller rendition ready to switch to.</strong> Neither is something the origin can optimise its way to.</p>
+        <p id="deepdives-p-13">Geography goes first because it is physics. A viewer 15,000&nbsp;km from the origin pays about 150&nbsp;ms per round trip in fibre, and a five-minute watch makes 76 of them — roughly 11&nbsp;s of waiting before any transfer. A long round trip also caps what one connection can pull, so a distant viewer cannot sustain the top rung on any local link. The answer's first tier is a copy of the segments near the viewer — a <a href="../patterns/distributed/routing/cdn.html">CDN</a>.</p>
+        <p id="deepdives-p-14">The ladder answers startup. A four-second 1080p segment at 5&nbsp;Mbit/s is 2.5&nbsp;MB, which takes four seconds to fetch on a 5&nbsp;Mbit/s link — the player would begin exactly at the edge of stalling. The same four seconds at 480p is 500&nbsp;KB and lands in under one. That is why a player starts low and steps up, and why the pipeline builds rungs nobody would choose to watch.</p>
+        <p id="deepdives-p-15">Switching rungs mid-watch is a pipeline property rather than a player feature. Every rendition is cut at the same boundaries with aligned keyframes, so segment 40 of the 480p rung starts at the same instant as segment 40 of the 1080p rung and the player can change its mind at any boundary without re-buffering. Cut each rendition independently, the boundaries drift, and switching becomes impossible. Segment duration is the dial: four seconds starts faster and reacts sooner, at ~800M new objects a day; ten seconds halves that count and leaves the player stuck on a bad rung for longer.</p>
+        <p id="deepdives-p-16">Caching is unusually easy here because a published segment never changes. Every tier runs on a long TTL with no invalidation protocol — the only question at each hop is whether the object is present, never whether it is right. The exception is the first minute of a viral clip, when every edge location misses the same objects at once: a <a href="../hazards/thundering-herd.html">thundering herd</a> aimed at one prefix. Edge request collapsing bounds it to one origin fetch per object per location, and works because the objects are immutable.</p>
+        <p id="deepdives-p-17" data-kb-level="expert">The residual is that losing the edge has no graceful version. The origin is sized for ~5% of egress, so a full CDN failure is a 20× overload, and no origin headroom you would pay for closes that gap. The answer is a second edge vendor with DNS-level failover — a procurement decision rather than an engineering one, and worth naming as such instead of drawing a box for it.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant P as Player
+    participant V as Video Service
+    participant E as CDN edge · cdn
+    participant B as Blob store
+    P->>V: GET /videos/{id}
+    V-->>P: 200 state = Playable, manifest URL
+    P->>E: GET primary manifest
+    E-->>P: rendition list
+    loop every ~4 s of playback
+        P->>E: GET segment N at the chosen rung
+        alt edge hit
+            E-->>P: segment
+        else edge miss
+            E->>B: one fetch per object per location
+            B-->>E: segment
+            E-->>P: segment
+        end
+    end
+    Note over P,E: bandwidth halves — the next request is for a lower rung, at the same boundary
+        </pre>
+        <figcaption>What does one watch touch? One metadata read, then 76 edge fetches — the origin sees an object once per location, and the switch happens at a boundary the pipeline aligned.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-4">4 · The one clip everybody watches <em>→ NFR: scale</em></h3>
+        <p id="deepdives-p-18"><strong>Metadata is trivially small and trivially fast right up to the moment popularity concentrates, and then two different things go wrong on the same row.</strong> One is a read hot spot and the other is a write hot spot, and they need different answers.</p>
+        <p id="deepdives-p-19">VideoMetadata is <a href="../patterns/distributed/routing/sharding.html">partitioned</a> by <code>videoId</code>: every access is an exact-key lookup, so hashing the id spreads 365M rows a year evenly and no query needs a scan. That is correct for the average and irrelevant to the outlier.</p>
+        <p id="deepdives-p-20">A clip taking 10M views in an hour is ~2,800 reads/s of one row. Partitioning cannot help — by construction that row lives on one set of replicas, which is the <a href="../hazards/hot-partition.html">hot partition</a>. Consistent hashing is the tempting wrong answer for the same reason: spreading keys evenly fixes an uneven catalogue, not one key everybody wants. Two things work and they stack — raise the replication factor for popular rows, and put a <a href="../patterns/caching/distributed-cache.html">shared cache</a> in front keyed by <code>videoId</code>. The <a href="../patterns/caching/cache-aside.html">cache</a> does nearly all the work; the <a href="../patterns/distributed/coordination/replication.html">extra replicas</a> stop a miss landing on one node.</p>
+        <p id="deepdives-p-21">The write hot spot is the oddity, and it is the view counter. A hundred million views a day is ~1,200 increments/s under the same concentration. A durable read-modify-write per view puts every one of those on the row that is already the hottest thing in the system, so contention gets worse exactly when the product is winning — and it buys nothing anyone asked for, because no requirement needs a total correct to the second.</p>
+        <p id="deepdives-p-22">So count where the requests already are. Each Video Service instance keeps an in-memory tally per video and flushes an atomic add every few seconds — the <a href="../patterns/caching/write-behind.html">write-behind</a> shape. A ten-second flush turns 1,200 increments/s into a handful of writes per hot video, and the total trails by at most one interval. State the bill: an instance that dies loses its unflushed window, and nobody can say which views those were. Where exactness matters — payouts, billing — the answer is the playback log the edge already writes, aggregated offline, which is the <a href="./ad-click-aggregator.html">ad-click aggregator</a>'s design.</p>
+        <p id="deepdives-p-23">The residual is that cache and counter key on the same id, so the most popular video is the hottest entry in both and one cache node's network card is the next ceiling. Replicating that entry across cache nodes is the exit, deferred because the edge already absorbs the segment traffic — a key hot enough to saturate a cache node has to get past the CDN first.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Watch["~2,800 watches/s of ONE videoId"]:::ext --> V["Video Service ×N · stateless-service"]
+    V -->|"read videoId"| K[("Metadata cache · distributed-cache")]
+    K -->|"miss — one fill, then never again"| M[("Metadata store · sharding")]
+    M -->|"raise the replication factor on hot rows · replication"| R[("Extra replicas of that partition")]
+    V -->|"tally in memory, flush deltas every ~10 s · write-behind"| M
+    classDef ext stroke-dasharray:4 4;
+        </pre>
+        <figcaption>One key, two problems: reads are absorbed in memory before the partition sees them, and writes are collapsed into one flush per interval instead of one per view.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-5">5 · What is worth keeping <em>→ NFR: durability</em></h3>
+        <p id="deepdives-p-24"><strong>Exactly one artifact here cannot be recreated, and treating everything else as equally precious is how the storage bill quietly becomes the largest line in the design.</strong> Sort the bytes by whether you could make them again and the durability decisions answer themselves.</p>
+        <p id="deepdives-p-25">The master is irreplaceable: the uploader has moved on and asking for a re-upload is not a recovery procedure. It gets the strongest durability the store offers and a copy in a second region — the only cross-region replication here. Its access pattern then argues for tiering it down, because it is read exactly twice: once by the pipeline that builds the ladder, and again only if the ladder must be rebuilt.</p>
+        <p id="deepdives-p-26">Everything downstream is derived. Losing a rendition costs ~2 core-seconds per video-second to rebuild — compute you schedule, for only the videos anyone wants. Replicating the ladder instead adds ~0.7&nbsp;GB per upload per region, about 250&nbsp;PB a year, billed every month whether or not a region is ever lost. So renditions live in one region with normal redundancy, and recovery means re-running the pipeline.</p>
+        <p id="deepdives-p-27">That asymmetry is what makes the exits in Right-sizing affordable: cold-tiering a master, building the top rungs on demand and re-encoding the cold catalogue all trade storage for compute, and they are only safe because the compute reproduces the bytes exactly. Price them before the catalogue is large — deleting a rendition you turn out to need costs the transcode again, and re-encoding a mature catalogue is a fleet-years job.</p>
+      </div>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
       <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="prose">
+        <p id="tradeoffs-p-1"><strong>The biggest flaw, named first: a video is not watchable until a pipeline whose timing nobody controls has finished with it — publish latency is designed in, not an incident.</strong> The uploader pays for everything the read path wins.</p>
+      </div>
       <div class="tradeoffs">
         <div class="col pros">
-          <h3>What it buys</h3>
+          <h3>Strengths</h3>
           <ul>
-            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Multi-gigabyte uploads never pass through an app server — presigned direct-to-blob keeps the tier thin and cheap to scale.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">Adaptive bitrate keeps playback smooth as bandwidth swings — the player downgrades resolution rather than stalling.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Read scale is handled at the edge and in cache — hot videos are insulated from both the database and the origin bucket.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Transcoding, the one expensive job, is embarrassingly parallel across an elastic worker fleet.</li>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro"><strong>No application process ever holds a video byte.</strong> ~95 Gbit/s inbound and ~520 Gbit/s outbound bypass the tier that serves the API.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro"><strong>The unit of work is one segment.</strong> A crash costs a few seconds of video, and the expensive stage fans out with no coordination.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro"><strong>Everything downstream of the master is derived.</strong> A lost rendition is a re-run, not a data loss, so only one artifact needs a second region.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro"><strong>Playback degrades instead of stopping.</strong> A bandwidth drop moves the player down the ladder at the next segment boundary.</li>
+            <li id="tradeoffs-pro-5" data-kb-polarity="pro" data-kb-level="advanced">Retried transcode jobs overwrite their own output, because a segment's key is derived rather than allocated.</li>
+            <li id="tradeoffs-pro-6" data-kb-polarity="pro">The read path never writes: one cached row read, then bytes from a rented edge.</li>
+            <li id="tradeoffs-pro-7" data-kb-polarity="pro">A new region is an edge and a cache — additive, with nothing to join and no consensus group to grow.</li>
           </ul>
         </div>
         <div class="col cons">
-          <h3>What it gives up</h3>
+          <h3>Risks</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">The client becomes a heavy participant — chunking, ETag bookkeeping, manifest parsing, and bitrate selection all live on it.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Availability over consistency — a just-uploaded video isn't watchable until the pipeline finishes and the caches and CDN warm up.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">The processing pipeline is operationally heavy — an orchestrator, a worker fleet, and piles of intermediate blobs to garbage-collect.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Storing every segment in every format multiplies storage several-fold over the original source file.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con"><strong>Publish latency is unbounded from the uploader's side.</strong> A long video waits behind the fleet, and the API promises only a state field (see dive 2).</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con"><strong>Losing the edge has no graceful version.</strong> The origin is sized for ~5% of egress, so a CDN outage is a 20× overload rather than a degradation (see dive 3).</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con"><strong>The client is a heavy participant.</strong> Splitting, part bookkeeping, manifest parsing and rendition choice live in code you ship but do not run (see dive 1).</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con"><strong>The storage bill compounds and the revenue does not.</strong> ~1.7&nbsp;PB a day is never deleted, while income tracks only today's watches (named in Right-sizing).</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con">View totals trail by one flush interval and lose an instance's unflushed window when it dies (see dive 4).</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">Abandoned multipart uploads are billable storage that appears in no listing of videos until a lifecycle rule aborts them (see dive 1).</li>
+            <li id="tradeoffs-con-7" data-kb-polarity="con" data-kb-level="expert">One crafted file can burn real fleet capacity in the window before the attempt limit dead-letters it (see dive 2).</li>
           </ul>
         </div>
       </div>
@@ -285,10 +513,28 @@ flowchart TB
     <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
       <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
       <div class="prose">
+        <h3>Mid-level</h3>
         <ul>
-          <li id="levels-li-1"><strong>Mid-level</strong> — a working end-to-end flow for upload and playback, clear API endpoints and data model, and the two key convergences: hand bytes straight to a blob store, and stream in segments rather than downloading the whole file.</li>
-          <li id="levels-li-2"><strong>Senior</strong> — moves quickly through the high-level design to spend real time on the hard parts, explaining how multipart upload enables resumable uploads and how a video is post-processed into parallel-transcoded, multi-format segments for adaptive streaming, with the trade-offs argued unprompted.</li>
-          <li id="levels-li-3"><strong>Staff+</strong> — reasons from practice, naming concrete technologies (Cassandra, S3, Temporal, ffmpeg) and why they fit; anticipates the hot-key and streaming-distance bottlenecks and pre-empts them with caching, replication, and a CDN; and steers the conversation as a peer rather than being steered.</li>
+          <li id="levels-li-1">Asks how large one upload is and how many watches one upload earns, before drawing anything.</li>
+          <li id="levels-li-2">Produces a working end-to-end flow — ask for a slot, upload parts, process, watch — with the bytes outside the application tier.</li>
+          <li id="levels-li-3">Explains why one stored file cannot serve every device, and reaches for several renditions.</li>
+          <li id="levels-li-4">Reaches for an edge cache when told the audience is worldwide, and can say what a miss costs.</li>
+        </ul>
+        <h3>Senior</h3>
+        <ul>
+          <li id="levels-li-5">Makes the unit of transcode work a segment, and says what that buys on retry and fan-out.</li>
+          <li id="levels-li-6">Derives the resume mechanism from the tracked part list rather than reciting multipart upload.</li>
+          <li id="levels-li-7">Separates the two piles — request rate against bytes moved — and sizes each on its own number.</li>
+          <li id="levels-li-8">Treats a viral clip as its own failure mode rather than as a larger average.</li>
+          <li id="levels-li-9">Names what happens to the job that never succeeds, when prompted, and bounds the attempts.</li>
+        </ul>
+        <h3>Staff+</h3>
+        <ul>
+          <li id="levels-li-10">Prices a rendition ladder per hour of video before choosing how many rungs to build.</li>
+          <li id="levels-li-11">Names the view counter as a write hot spot and trades exactness for an aggregated flush, unprompted.</li>
+          <li id="levels-li-12">Separates what must be replicated from what can be re-derived, and states what re-deriving costs.</li>
+          <li id="levels-li-13">Prices the deferred exits — just-in-time packaging, hardware transcoding — against the triggers in Right-sizing.</li>
+          <li id="levels-li-14">Defends designed-in publish latency as the design's biggest flaw, chosen deliberately.</li>
         </ul>
       </div>
     </section>

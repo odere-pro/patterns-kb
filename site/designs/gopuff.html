@@ -59,6 +59,36 @@
       "@id": "../patterns/caching/in-process-cache.html#in-process-cache",
       "name": "In-Process Cache",
       "kb:note": "the Nearby Service holds the whole DC table in memory and refreshes it every five minutes to prune candidates before any drive-time call"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "POST /orders carries an idempotency key so a client that times out mid-commit replays into the same order instead of a second set of reservations"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/sweeper.html#sweeper",
+      "name": "Sweeper",
+      "kb:note": "a scheduled job is the only actor allowed to return units whose held_until has passed, so nothing races to free the same unit"
+    },
+    {
+      "@id": "../patterns/distributed/routing/geohash.html#geohash",
+      "name": "Geohash",
+      "kb:note": "the in-memory DC table is keyed by cell, so a lat/long becomes a cell lookup instead of a scan over 10k depots"
+    },
+    {
+      "@id": "../patterns/distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "Availability, Orders and Nearby hold no per-request state, so browsing capacity is added by adding instances"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/retry-backoff.html#retry-backoff",
+      "name": "Retry with Backoff",
+      "kb:note": "a serialization abort is replayed a bounded number of times with jittered backoff, then answered 409"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/rate-limiter.html#rate-limiter",
+      "name": "Rate Limiter",
+      "kb:note": "per-source limits at the edge shed browsing during a surge so the order path never queues"
     }
   ]
 }
@@ -91,8 +121,9 @@
     <section class="doc-section" id="description" aria-labelledby="h-problem" data-kb-block="description">
       <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
       <div class="prose">
-        <p id="description-p-1">Instead of a handful of large warehouses, the network is hundreds of micro distribution centers (DCs) sprinkled through cities so that most goods sit within an hour of most customers. That inverts the usual inventory question. Availability is not a property of one store — it is the <em>union</em> of stock across every DC that can actually reach a given location inside the delivery window. A customer browsing at a corner in Brooklyn should see everything that any in-range DC can deliver, merged into one list.</p>
-        <p id="description-p-2">Two forces pull in opposite directions and shape the whole design. Browsing is read-heavy and latency-sensitive: the availability lookup behaves like search and must feel instant, which puts it squarely in the read-first playbook of the <a href="../themes/scaling-reads.html">Scaling Reads</a> theme. Ordering is the opposite: it touches physical goods, so it must be strongly consistent — two people must never be sold the same can of soda. Catalog and search, payments, driver routing, cancellations and returns are all deliberately out of scope; the system is only availability plus ordering.</p>
+        <p id="description-p-1">Stock does not sit in a handful of large warehouses. It sits in hundreds of micro distribution centers (DCs) placed inside the cities they serve, so that most goods are within an hour of most customers. That inverts the usual inventory question: what a customer can buy is not one store's shelf but the <em>union</em> of stock across every DC that can reach their address inside the delivery window, merged into a single list. The system is two operations wide — answer "what can reach me?", and "reserve these units for me".</p>
+        <p id="description-p-2">The naive build is one inventory table, a distance filter, and an order that reads stock and then writes it. It demonstrates well and breaks in four places on a Friday evening. Two carts read the same last carton as available and both are told yes, so one customer gets a refund instead of dinner. A DC eight miles away across a river sits inside the radius and outside the hour, so the list promises deliveries no rider can make. Browsing outnumbers buying two hundred to one, so the database that arbitrates orders spends its capacity on people who are not buying. And when a storm doubles demand in one city, the extra load lands on exactly the rows that are already contended.</p>
+        <p id="description-p-3">Those breakages are the agenda. Serialize the claim on a physical unit so it can be sold only once (dive 1), decide reachability by drive time rather than by distance (dive 2), answer availability from copies the order path never touches (dive 3), keep the ledger honest when the shelf disagrees with it (dive 4), and decide in advance what gives way when a surge arrives (dive 5). The read half is the playbook of the <a href="../themes/scaling-reads.html">Scaling Reads</a> theme; the write half belongs to <a href="../themes/dealing-with-contention.html">Dealing with Contention</a>. Payments, driver dispatch, catalog search, cancellations and returns stay out of scope.</p>
       </div>
     </section>
 
@@ -101,15 +132,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Instead of a few large warehouses, hundreds of tiny depots sit inside cities so that most goods are within an hour of most people. What a shopper can buy is therefore not one shop's shelf but everything any depot in range could bring them inside the hour, merged into one list. Browsing that list has to feel instant, while buying must never sell the same physical can to two different people.</p>
+          <p>Your stock is not in one big warehouse. It sits in hundreds of small depots inside the city, so what you can buy is everything any nearby depot could bring within the hour, merged into one list. The obvious build goes wrong twice. Two people are both told they got the last carton of milk, because both saw the same count a moment before either paid, and one of them gets an apology instead of milk. And far more people look than buy, so the machine that takes orders spends its day answering window shoppers. The fix is to split the jobs. Buying goes down one careful path that hands each carton to exactly one person; looking is answered from cheap copies that may be a minute out of date, and the careful path checks again before it takes your money.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>Two opposite requirements split the design down the middle. Ordering is made atomic by keeping orders and stock in one relational store and running the reservation, the order row and the decrement as a single serializable transaction, so a concurrent claim on the same unit simply fails at commit. The alternative — separate best-fit stores coordinated by a distributed lock — buys independence but pays in crash and deadlock modes needing a sweeper. Reads go the other way entirely: a short-lived cache, regional partitioning, and read replicas.</p>
+          <p>Two requirements pull the design apart, and the split runs through the middle of the data. Ordering is one transaction in one relational store: claim every requested unit with an update whose row count is the stock check, insert the order, commit — at SERIALIZABLE isolation, so a concurrent claim on the same unit aborts at commit instead of overselling it, and the client replays under an idempotency key. The rival, separate best-fit stores joined by a distributed lock, buys a store per concern and pays in lease expiry, crash recovery and lock-ordering deadlocks. Reads run the other way. A location resolves to its in-range depots through an in-memory table keyed by spatial cell and pruned by a fixed radius before any drive-time call, and the query fans out over region-partitioned inventory on read replicas behind a cache keyed by cell. Orders invalidate the cells they touch after they commit.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>The signal is working the traffic backwards: ten million orders a day is only about a hundred writes a second, but ten page views a session at five percent conversion puts availability reads near twenty thousand a second — so writes can afford to be careful and slow, and reads cannot. What not to build is a call to a travel-time estimator for every depot, or a heavyweight spatial index; the depot table is small enough to hold in memory, so a coarse radius prunes thousands to a handful before any real drive-time question is asked. Nothing forces sharding for capacity here, only for read throughput. The bill is real: stock and orders now scale together in one store, and a cached count can still show an item that just sold out.</p>
+          <p>Work the traffic backwards before choosing anything: 10M orders a day is ~116 writes/s, while ten page views per session at 5% conversion puts availability near 20k reads/s. That 200:1 ratio, not the data volume, buys the cache and the replicas — 30M inventory rows and 3 GB force no sharding, and region partitioning is bought for locality and blast radius instead. The sharper number is that contention is per row rather than per node: a leader at 35 orders/s is idle while a promoted item draws tens of claims a second onto one row family, which is where serializable isolation begins aborting work that is already done. Three bills follow. One writable leader per region owns both ledger and orders, so a failover stops buying there — paid by keeping browsing entirely off the leader, so the outage is partial. Aborts scale with the hot row — paid with bounded jittered replays now, and with row-lock claiming of interchangeable units once the abort rate is measurable. And a replica-served count is stale — paid at checkout, where the transaction is the only authority and a 409 is the honest answer. Under surge the ranking is fixed in advance: browsing sheds, ordering does not.</p>
         </div>
       </div>
     </section>
@@ -129,8 +160,9 @@
           <h3>Non-functional</h3>
           <ul>
             <li><strong>Fast reads</strong> — availability lookups under <strong>100&nbsp;ms</strong>, because they back a search-like browsing experience.</li>
-            <li><strong>Strong consistency on orders</strong> — no two customers ever purchase the same physical unit of inventory.</li>
+            <li><strong>Strong consistency</strong> — no two customers ever purchase the same physical unit of inventory, and a unit is never held by nobody.</li>
             <li><strong>Scale</strong> — up to <strong>10k DCs</strong> and <strong>100k catalog items</strong>, at roughly <strong>10M orders/day</strong>.</li>
+            <li><strong>Burst tolerance</strong> — evening peaks and weather events concentrate several times the mean load on a few neighbourhoods; browsing may degrade, ordering may not.</li>
             <li>Out of scope: privacy/security hardening and disaster recovery.</li>
           </ul>
         </div>
@@ -140,9 +172,53 @@
     <section class="doc-section" id="sizing" aria-labelledby="h-sizing" data-kb-block="sizing">
       <h2 class="doc-h" id="h-sizing">Right-sizing</h2>
       <div class="prose">
-        <p id="sizing-p-1"><strong>Reads are the load.</strong> Start from 10M orders/day. A shopper views on the order of 10 pages — home, category, a few searches — before buying, and only about 5% of browsing sessions convert. Working backwards: 10M orders ÷ ~100k seconds/day ≈ 100 orders/sec; multiply by 10 page views and divide by the 5% conversion rate and availability traffic lands near <strong>20k queries/second</strong>. That number, not the write path, is what the read side must survive.</p>
-        <p id="sizing-p-2"><strong>Writes are modest.</strong> The same 10M orders/day is only ~100 order transactions/second — two orders of magnitude below the reads. Writes can afford to be careful and slow; reads cannot.</p>
-        <p id="sizing-p-3"><strong>Data is small but hot.</strong> An inventory row is a (DC, item, quantity, state) tuple; even at 10k DCs × 100k items the populated set is sparse and fits comfortably in a partitioned relational store. Nothing here forces sharding for capacity — the 20k QPS of reads forces caching and replication for throughput.</p>
+        <p id="sizing-p-1" data-kb-register="basic">The numbers below say three things. Almost nobody is buying compared with the number of people looking, the stock data itself is small, and the traffic is lumpy in both place and time — a few neighbourhoods in a few hours carry most of it. Everything this design spends money on is there to make looking cheap and to keep looking away from the machine that takes orders.</p>
+        <p id="sizing-p-2"><strong>The problem:</strong> 10M orders/day across up to 10k DCs, where the load that decides the architecture is people browsing, not people buying. <strong>The shape:</strong> synchronous request/response on both paths — an availability query is one fan-out answered in one hop, and an order must tell a waiting customer yes or no, so nothing here may be handed to a worker and confirmed later. <strong>The stores:</strong> two that we run — the regional inventory-and-orders store, leader plus replicas, and the availability cache — plus a rented travel-time service, which is capacity bought rather than operated.</p>
+        <p id="sizing-p-3"><strong>Required capabilities:</strong></p>
+        <ul>
+          <li id="sizing-li-1">Durable transactional store with serializable isolation — the reservation, the order and the decrement must commit together or not at all. → NFR: strong consistency; FR: order.</li>
+          <li id="sizing-li-2">Read replicas of that store — availability reads must not land on the node that arbitrates orders. → NFR: fast reads.</li>
+          <li id="sizing-li-3">Read cache with per-key invalidation — the same neighbourhood asks the same question hundreds of times a minute. → NFR: fast reads.</li>
+          <li id="sizing-li-4">Region-partitioned inventory — a location touches only nearby DCs, so a query and a write should each stay inside one partition. → NFR: scale; burst tolerance.</li>
+          <li id="sizing-li-5">In-process copy of the DC table — the prune runs on every availability query and cannot afford a round trip. → NFR: fast reads.</li>
+          <li id="sizing-li-6">Spatial keying over that table — turns "which DCs are near this point" into a cell lookup instead of a scan over 10k rows. → NFR: fast reads.</li>
+          <li id="sizing-li-7">External drive-time estimate — reachability is a road-network question and we do not own a road network. → FR: availability by location.</li>
+          <li id="sizing-li-8">Scheduled reclaim of expired holds — a unit held by an order that stalled must return to sale without a human. → NFR: strong consistency.</li>
+          <li id="sizing-li-9">Admission control at the edge, keyed on source and on region — a surge has to be payable in browsing before it is payable in orders. → NFR: burst tolerance.</li>
+        </ul>
+        <p id="sizing-p-4"><strong>The numbers:</strong></p>
+        <ul>
+          <li id="sizing-li-10">Orders: 10M/day ÷ 86,400&nbsp;s ≈ 116/s mean; ×3 for evening concentration (most of the day's orders land in the dinner and late-evening windows) ≈ <strong>350 order transactions/s at peak</strong>, fleet-wide. → NFR: scale.</li>
+          <li id="sizing-li-11">Row-writes: a five-line order claims 5 inventory rows and inserts 1 order plus 5 order_item rows ≈ 11 row-writes; at peak ≈ <strong>3.9k row-writes/s</strong> across the regional leaders, against the ~10k writes/s a well-tuned relational node sustains. → NFR: scale.</li>
+          <li id="sizing-li-12">Availability reads: 10 page views per session ÷ 5% conversion = 200 page views per order; 116 × 200 ≈ <strong>20k availability queries/s mean</strong>, ~60k/s at the same evening peak. That 200:1 ratio is the whole shape of the design. → NFR: fast reads.</li>
+          <li id="sizing-li-13">Fan-out per read: a city address resolves to <strong>5–15 in-range DCs</strong> (assumed: urban density puts a handful of depots inside an hour's drive), so one query scans one partition for a dozen DC ids — never the 10k-row table. → NFR: fast reads.</li>
+          <li id="sizing-li-14">Inventory rows: 10k DCs × ~3k stocked lines each (assumed: a micro-DC carries a convenience assortment, not the 100k-item catalog) ≈ <strong>30M rows ≈ 3&nbsp;GB</strong> with indexes. The full cross product would be a billion rows and never exists, because a DC stocks what fits in it. → NFR: scale.</li>
+          <li id="sizing-li-15">Cache working set: an answer is keyed by (cell, keyword, page); assume 20k active cells in a busy hour and ~30 query shapes each ≈ 600k entries × ~4&nbsp;KB ≈ <strong>2.4&nbsp;GB hot</strong> — one cache node's memory, with room for the assumption to be wrong several times over. → NFR: fast reads.</li>
+          <li id="sizing-li-16">Hit ratio: 20k reads/s over a 60&nbsp;s TTL is 1.2M requests per window against ~600k keys, concentrated on the busiest cells — budget <strong>~80%</strong>, leaving <strong>~4k queries/s</strong> for two or three replicas per region at the ~2k indexed queries/s a well-provisioned node sustains. Ten points off that ratio doubles replica load, which makes it the dial that sizes the tier. → NFR: fast reads.</li>
+          <li id="sizing-li-17">Drive-time calls: unpruned, every query would ask about 10k DCs — 2×10⁸ calls/s, a rate no vendor sells. Pruned to ~10 candidates and memoized per (cell, 5-minute bucket), it falls to the cells going cold each bucket: 20k ÷ 300&nbsp;s ≈ <strong>70 calls/s</strong>. Per-call pricing makes the prune a contract term rather than an optimisation. → FR: availability by location.</li>
+          <li id="sizing-li-18">Contention is per row, not per node: 350 orders/s over ten regions is ~35/s at a leader and idle by any capacity measure, while a promoted item can draw <strong>tens of claims a second onto one (DC, item) row family</strong>. That number, not the transaction rate, decides the isolation strategy. → NFR: strong consistency.</li>
+          <li id="sizing-li-19">Retention: inventory is bounded by shelves and stays near 3&nbsp;GB, while orders accumulate at ~<strong>10&nbsp;GB/day</strong> in the same store that arbitrates ordering. Ninety days is ~0.9&nbsp;TB; older orders belong in cold storage, or the hot path drags a year of history through its buffer cache. → NFR: scale.</li>
+        </ul>
+        <p id="sizing-p-5"><strong>Verdict per candidate:</strong></p>
+        <ul>
+          <li id="sizing-li-20">Event-driven ordering (accept now, confirm later) — <strong>rejected</strong>: the customer needs a yes or a no while they wait, and the only step that outlives the request is fulfilment, which is out of scope. → FR: order.</li>
+          <li id="sizing-li-21">Synchronous request/response — <strong>adopted</strong>: both endpoints answer in one hop, and an order that queues has turned a "no" into an "unknown". → NFR: fast reads; FR: order.</li>
+          <li id="sizing-li-22">One transactional store holding orders and inventory together — <strong>adopted</strong>: the guarantee is that a reservation and its order commit together, and that is free only inside one transaction. → NFR: strong consistency.</li>
+          <li id="sizing-li-23">Separate best-fit stores plus a distributed lock — <strong>rejected</strong>: it buys a store per concern and pays with lease expiry, crash recovery and lock-ordering deadlocks (dive 1). → NFR: strong consistency.</li>
+          <li id="sizing-li-24">Read replicas — <strong>adopted</strong>: 20k reads/s against the node that arbitrates orders is the one thing this design refuses, and a count seconds old is harmless because the order transaction re-checks it. → NFR: fast reads.</li>
+          <li id="sizing-li-25">Region partitioning — <strong>adopted</strong>: locality is free here, because a location only ever touches nearby DCs; it keeps one city's surge inside one leader. → NFR: scale; burst tolerance.</li>
+          <li id="sizing-li-26">Read cache with a 60&nbsp;s TTL — <strong>adopted</strong>: four reads in five never reach a replica, and the price is a listing that can be a minute out of date. → NFR: fast reads.</li>
+          <li id="sizing-li-27">In-process DC table with spatial cells — <strong>adopted</strong>: arithmetic rather than infrastructure, and the difference between 70 drive-time calls/s and 10⁸. → NFR: fast reads.</li>
+          <li id="sizing-li-28">Dedicated spatial database — <strong>rejected</strong>: 10k rows that change on a weekly clock fit in a process's memory; a spatial engine would be a second store to operate for a table you can hold in your hand. → NFR: fast reads.</li>
+          <li id="sizing-li-29">Hold-expiry sweeper — <strong>adopted</strong>: stalled orders and crashed clients park units that no human will release. → NFR: strong consistency.</li>
+          <li id="sizing-li-30">Row-lock claiming for interchangeable units — <strong>deferred</strong>: serializable isolation is correct today; the trigger is a measured abort rate above a few percent on hot (DC, item) rows (dive 1). → NFR: strong consistency.</li>
+          <li id="sizing-li-31">Message broker between ordering and fulfilment — <strong>deferred</strong>: fulfilment is out of scope, and the constraint it inherits is that the order transaction must never wait on it. → FR: order.</li>
+          <li id="sizing-li-32">Search index over the catalog — <strong>rejected</strong>: catalog search is out of scope, and the availability query filters an in-range item set that is already small. → FR: availability by location.</li>
+          <li id="sizing-li-33">Sharding for capacity — <strong>rejected</strong>: 30M rows and 3&nbsp;GB live on one node; partitioning here is bought for locality and blast radius, not for size. → NFR: scale.</li>
+          <li id="sizing-li-34">Global replication of inventory — <strong>rejected</strong>: a DC's stock interests only the region it can deliver to, so there is nothing to copy across the world. → NFR: scale.</li>
+          <li id="sizing-li-35">Admission control at the edge — <strong>adopted</strong>: browsing is sheddable and ordering is not, and that ranking has to exist before the surge, not during it. → NFR: burst tolerance.</li>
+        </ul>
+        <p id="sizing-p-6"><strong>When this stops being right.</strong> Contention wears out first, and it is not the same thing as load. As promotions concentrate demand, more claims land on the same few (DC, item) rows; under serializable isolation a conflicting transaction is aborted at commit, and an abort is work already paid for, so throughput falls while the leader stays busy — the symptom is slowness, not errors, until the retry budget runs out and customers are refused stock that exists. The signal: serialization-failure rate per region against the order transaction's p99, two lines that move together well before an order is rejected. Exits in adoption order: claim interchangeable units under a row lock so concurrent claimants take different units instead of aborting; give the hottest DCs their own partitions so a promotion's contention stays local; then move to per-(DC, item) counters with an atomic conditional decrement, which surrenders the per-unit ledger the pick path depends on. → NFR: scale.</p>
       </div>
     </section>
 
@@ -152,9 +228,10 @@
         <p id="entities-p-1">Start from the concrete physical nouns and work up to the abstract ones:</p>
         <ul>
           <li id="entities-li-1"><strong>Item</strong> — a <em>type</em> of product ("Cheetos"): what a customer browses and searches for. It carries name and description, not location.</li>
-          <li id="entities-li-2"><strong>Inventory</strong> — a physical instance of an Item sitting at one specific DC. Item is to Inventory as a class is to its instances; effective availability is Inventory summed across in-range DCs.</li>
-          <li id="entities-li-3"><strong>DistributionCenter</strong> — a physical location holding Inventory, with a lat/long used to decide what it can deliver where.</li>
-          <li id="entities-li-4"><strong>Order</strong> — a collection of ordered Inventory plus shipping and billing details, expanded into <code>OrderItems</code> rows.</li>
+          <li id="entities-li-2"><strong>Inventory</strong> — a physical instance of an Item sitting at one specific DC, with the <code>state</code> that makes ordering safe: <code>available</code>, <code>reserved</code>, <code>picked</code>, <code>dispatched</code>, <code>missing</code>. Item is to Inventory as a class is to its instances; effective availability is Inventory summed across in-range DCs.</li>
+          <li id="entities-li-3"><strong>DistributionCenter</strong> — a physical location holding Inventory, with a lat/long, the spatial cell it falls in, and the region it is partitioned into.</li>
+          <li id="entities-li-4"><strong>Order</strong> — a collection of reserved Inventory plus shipping and billing details, expanded into <code>OrderItems</code> rows and keyed by the caller's idempotency key.</li>
+          <li id="entities-li-5"><strong>Reservation</strong> — not a table: it is the <code>order_id</code> and <code>held_until</code> columns written onto an Inventory row inside the order transaction. Keeping the hold on the row rather than beside it is what makes "reserve and record" one atomic act instead of two that can disagree.</li>
         </ul>
       </div>
     </section>
@@ -169,8 +246,10 @@
 <pre><code class="language-http" data-kb-lang="http">GET /availability?lat=40.68&amp;long=-73.97&amp;keyword=chips&amp;page=0
 &rarr; 200 { "items": [ { "itemId": "cheetos", "name": "Cheetos",
                        "quantity": 42 }, … ], "nextPage": 1 }
+  Cache-Control: private, max-age=30
 
 POST /orders
+Idempotency-Key: 8f2c-…                 // a retry returns the first order
 { "location": { "lat": 40.68, "long": -73.97 },
   "items": [ { "itemId": "cheetos", "qty": 1 },
              { "itemId": "cola",    "qty": 2 } ] }
@@ -178,73 +257,91 @@ POST /orders
 &rarr; 409 { "error": "out_of_stock", "itemId": "cola" }   // whole order fails</code></pre>
       </details>
       <div class="prose">
-        <p id="interface-p-2">Availability is paginated because it backs a browsing surface. Ordering is all-or-nothing: if any single line item is unavailable the entire order is rejected with a clear error, which is preferable to shipping an incoherent partial order (a device without its battery).</p>
+        <p id="interface-p-2">Availability is paginated because it backs a browsing surface. Ordering is all-or-nothing: if any single line item is unavailable the entire order is rejected with a clear error, which is preferable to shipping an incoherent partial order (a device without its battery). The quantity in the response is a number the customer may act on but the system does not promise — the order transaction is the only place a claim becomes real.</p>
+        <p id="interface-p-3">Ordering is not naturally safe to retry, so the caller supplies an <a href="../patterns/messaging/idempotency.html">idempotency key</a> and the key is stored on the order row under a uniqueness constraint. A client that times out mid-commit retries and gets the original order back rather than a second set of reservations. Without it the honest failure mode is worse than a double sale: the units are held by an order the customer never learns about, and only the hold expiry releases them.</p>
+        <p id="interface-p-4">The <code>Cache-Control</code> on availability is short and private on purpose. Availability is per-location, so a shared cache keyed by URL would serve one neighbourhood's answer to another, and the 30 seconds is what stops a customer's own device showing stock that the last minute's orders already took.</p>
       </div>
     </section>
 
     <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
       <h2 class="doc-h" id="h-arch">How the system is built</h2>
       <div class="prose">
-        <p id="architecture-p-1">Three services sit in front of one database. The <strong>Availability Service</strong> answers reads; the <strong>Orders Service</strong> takes writes; both call a shared <strong>Nearby Service</strong> to turn a location into the set of DCs that can reach it. An availability read then fans that set of DC ids out against the inventory data and unions the results into a single list — a scatter to many partitions, gathered into one response. Orders and inventory live together in one Postgres database, partitioned by region: the Availability Service reads from replicas (a slightly stale count is fine), while the Orders Service writes to the leader inside a strongly-consistent transaction so no unit is promised twice.</p>
+        <p id="architecture-p-1">Requests enter at two endpoints and take routes that share almost nothing. <code>GET /availability</code> resolves the caller's location to a handful of in-range DCs, then answers from a cache backed by regional read replicas. <code>POST /orders</code> resolves the same set of DCs and then goes to the region's writable leader inside one transaction. The structural decision is that reading and ordering share the set of in-range DCs and nothing else: reads never touch the leader, so browsing load cannot slow ordering, and an order's correctness never depends on how fresh the browsing answer was.</p>
       </div>
       <figure class="diagram">
         <pre class="mermaid">
 flowchart TB
     Client["Customer app"]
-    Client -->|"availability by location"| Avail["Availability Service"]
-    Client -->|"place order"| Orders["Orders Service"]
-    Avail -->|"which DCs reach here?"| Nearby["Nearby Service"]
-    Orders -->|"which DCs reach here?"| Nearby
-    Nearby -->|"prune, then drive-time"| Travel["Travel Time Service"]
-    Avail -->|"lookup, 1-min TTL"| Cache[("Redis cache")]
-    Cache -->|"miss"| Replica[("Postgres read replicas")]
-    Orders -->|"SERIALIZABLE txn"| Leader[("Postgres leader")]
-    Leader -->|"replicate + invalidate"| Replica
+    Client -->|"GET /availability (lat, long)"| Avail["Availability Service · stateless-service"]
+    Client -->|"POST /orders"| Orders["Orders Service · stateless-service"]
+    Avail -->|"which DCs reach this point?"| Nearby["Nearby Service · in-process-cache"]
+    Orders -->|"which DCs reach this point?"| Nearby
+    Nearby -->|"drive time for ~10 pruned DCs"| Travel["Travel Time Service"]:::ext
+    Avail -->|"lookup by cell, 60s TTL"| Cache[("Availability cache · cache-aside")]
+    Cache -->|"miss: scan in-range DCs"| Replica[("Regional read replicas · replication")]
+    Orders -->|"SERIALIZABLE: reserve, insert, commit"| Leader[("Inventory + orders store")]
+    Sweeper["Hold sweeper · sweeper"] -->|"release units past held_until"| Leader
+    Leader -->|"stream changes"| Replica
+    classDef ext stroke-dasharray:4 4;
         </pre>
-        <figcaption>Reads flow through cache to a regional read replica; orders take the leader under a serializable transaction. Both resolve in-range DCs through the shared Nearby Service.</figcaption>
+        <figcaption>Which path does each endpoint take? Availability goes cache → replica and never reaches the leader; an order goes straight to the leader under one transaction. Both resolve in-range DCs through the shared Nearby Service.</figcaption>
       </figure>
+      <div class="prose">
+        <h3>Components &amp; communication</h3>
+        <ul>
+          <li id="architecture-li-1"><strong>Availability Service</strong> — the read entry point, serving <code>GET /availability</code>; asks Nearby for the in-range DC ids, looks the answer up in the cache by (cell, keyword, page), and on a miss scans one inventory partition on a replica and backfills. <a href="../patterns/distributed/routing/stateless-service.html">Stateless</a>, so instances multiply with browsing load.</li>
+          <li id="architecture-li-2"><strong>Orders Service</strong> — the write entry point, serving <code>POST /orders</code>; resolves the same DC set, runs the reservation and the order insert as one serializable transaction against the region's leader, retries a serialization failure a bounded number of times, and answers 201 or 409. Also stateless.</li>
+          <li id="architecture-li-3"><strong>Nearby Service</strong> — turns a lat/long into the DC ids that can reach it inside the hour: a spatial cell lookup over an <a href="../patterns/caching/in-process-cache.html">in-process copy</a> of the DC table, a radius prune, then a drive-time check on the survivors, memoized per cell.</li>
+          <li id="architecture-li-4"><strong>Travel Time Service</strong> — rented, not built: the road-network and congestion estimate that turns distance into an hour. Called only on the pruned candidate set, and only when a cell's memo is cold.</li>
+          <li id="architecture-li-5"><strong>Availability cache</strong> — holds rendered availability answers keyed by cell for 60 seconds, so a neighbourhood's repeat questions cost nothing; the Orders Service invalidates the cells a sold DC serves after its transaction commits.</li>
+          <li id="architecture-li-6"><strong>Inventory + orders store</strong> — the system of record for Inventory, Order and OrderItem, one writable leader per region (~30M rows, ~3&nbsp;GB per Right-sizing), partitioned by region so a query and a claim each stay in one partition.</li>
+          <li id="architecture-li-7"><strong>Regional read replicas</strong> — asynchronous copies that answer the fan-out scans; they carry browsing traffic and are allowed to trail the leader by seconds.</li>
+          <li id="architecture-li-8"><strong>Hold sweeper</strong> — a scheduled job on the leader that returns <code>reserved</code> units whose <code>held_until</code> has passed; the only actor permitted to release a hold (dive 4).</li>
+        </ul>
+        <h3>Where each requirement lands</h3>
+        <ul>
+          <li id="architecture-li-9">Query, by location, the items deliverable within one hour — <code>GET /availability</code> &rarr; Availability Service &rarr; Nearby Service (cell &rarr; pruned candidates &rarr; drive time) &rarr; Availability cache &rarr; Regional read replicas, unioned into one list. <em>→ FR: availability by location.</em></li>
+          <li id="architecture-li-10">Place a single order containing multiple items — <code>POST /orders</code> &rarr; Orders Service &rarr; Nearby Service &rarr; Inventory + orders store under one serializable transaction; every line is reserved or the whole order is refused with a 409. <em>→ FR: order.</em></li>
+        </ul>
+      </div>
     </section>
 
     <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
       <h2 class="doc-h" id="h-deep">Deep dives</h2>
       <div class="prose">
-        <h3 id="deepdives-dive-1">1 · Ordering without selling the same unit twice</h3>
-        <p id="deepdives-p-1">An order must check stock, record the order, and decrement inventory as one indivisible step, or a race lets two customers claim the same last unit.</p>
+        <p id="deepdives-p-1" data-kb-register="basic">Five questions decide this design. Who gets the last carton when two people ask for it at the same moment? Which depots can really reach you inside the hour, once rivers and rush hour are counted? How do you answer twenty thousand lookups a second without going near the machine that takes orders? What happens when the shelf and the database disagree? And what gives way first when a storm doubles the traffic?</p>
+      </div>
+      <div class="prose">
+        <h3 id="deepdives-dive-1">1 · Selling the last unit exactly once <em>→ NFR: strong consistency</em></h3>
+        <p id="deepdives-p-2"><strong>Put the reservation, the order row and the state change in one transaction, and the database decides the race — no application code holds a lock, and no window exists in which stock is promised twice.</strong> The alternatives are worth walking, because each fails somewhere different.</p>
         <ul>
-          <li id="deepdives-li-1"><strong>Two stores plus a distributed lock.</strong> Keep orders and inventory in separate best-fit databases; on each order, take a <a href="../patterns/distributed/coordination/distributed-lock.html">distributed lock</a> over the relevant inventory records, write the order, decrement, release. It buys store independence but the failure modes are nasty: a crash after writing the order but before the decrement leaves stock double-promised and needs a background sweep to detect and reverse, and two orders that grab items in opposite order can <a href="../hazards/deadlock.html">deadlock</a>. Workable, not clean.</li>
-          <li id="deepdives-li-2"><strong>One Postgres transaction (chosen).</strong> Colocate orders and inventory in a single ACID store and do the whole thing as one transaction at <code>SERIALIZABLE</code> isolation. If two orders touch the same unit concurrently, one hits a serialization failure at commit and is rejected — <a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">optimistic concurrency control</a> enforced by the database itself, with no lock-management code to get wrong. The price paid is that inventory and orders now scale together and you give up picking a specialized store per concern; when atomicity is a hard requirement, that is a good trade.</li>
+          <li id="deepdives-li-1"><strong>Naïve — check, then write.</strong> <code>SELECT quantity</code>, decide, then <code>UPDATE</code>. The window between the two statements is a network round trip wide, and two carts that both read "1 left" both write "0 left" — a textbook <a href="../hazards/race-condition.html">race</a> that no amount of retrying detects, because neither transaction ever sees a conflict. Rejected on the first oversell.</li>
+          <li id="deepdives-li-2"><strong>Two stores plus a distributed lock.</strong> Keep orders and inventory in separate best-fit databases; on each order, take a distributed lock over the inventory records, write the order, decrement, release. It buys store independence, and the failure modes are nasty: a crash between the order write and the decrement leaves stock double-promised until a sweep reverses it, a lease that expires mid-transaction hands the same units to a second holder, and two orders grabbing items in opposite order <a href="../hazards/deadlock.html">deadlock</a>. Workable, not clean.</li>
+          <li id="deepdives-li-3"><strong>One serializable transaction (chosen).</strong> Colocate orders and inventory in a single ACID store and do the whole thing at <code>SERIALIZABLE</code> isolation. Each line item claims its units with an <code>UPDATE … WHERE state = 'available'</code> whose row count <em>is</em> the stock check; if a concurrent order claimed the same unit, one of the two aborts at commit — <a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">optimistic concurrency control</a> enforced by the engine, with no lock-management code to get wrong. The price is that inventory and orders now scale together and you give up a specialised store per concern; when atomicity is the requirement, that is a good trade.</li>
         </ul>
+        <p id="deepdives-p-3">Choosing optimism means owning the retry. A serialization failure arrives at <code>COMMIT</code>, after the work is done, and the only correct response is to replay the whole transaction — which is safe precisely because the idempotency key makes a replayed order the same order. Bound the replays (three attempts with <a href="../patterns/distributed/resilience/retry-backoff.html">jittered backoff</a>) and fall back to a 409, because past that point the honest answer is that the item is gone rather than that the system is busy. An unbounded loop turns contention into a <a href="../hazards/retry-storm.html">retry storm</a>, which is how a slow checkout becomes an outage.</p>
+        <p id="deepdives-p-4" data-kb-level="expert">The residual weakness is that aborts scale with contention rather than with load: a leader at 35 orders/s is idle, while a promoted item puts tens of claims a second on the same rows and every abort there is work already paid for. The escape hatch exploits a fact this data model has and a ticketing system does not — units of the same item at the same DC are <em>interchangeable</em>, so two claimants never need the same row. Claiming under <code>SELECT … FOR UPDATE SKIP LOCKED</code> at a weaker isolation level hands each claimant a different free unit: it never blocks and never aborts, at the cost of an explicit lock and the engine's whole-transaction guarantee. Keep it in reserve behind the abort-rate trigger named in Right-sizing, because the simple version is correct and the complicated one is only faster.</p>
       </div>
       <details class="sketch">
         <summary>SQL — the order as one serializable transaction</summary>
 <pre><code class="language-sql" data-kb-lang="sql">BEGIN ISOLATION LEVEL SERIALIZABLE;
 
--- reserve every requested unit atomically; row count must match
-UPDATE inventory SET state = 'ordered'
- WHERE item_id = ANY($1) AND dc_id = ANY($2) AND state = 'available';
--- if fewer rows updated than requested → some item is out of stock
---   → ROLLBACK and return 409 for the whole order
+-- one claim per line item; the row count IS the stock check
+UPDATE inventory
+   SET state = 'reserved', order_id = $order, held_until = now() + interval '2 hours'
+ WHERE id IN (SELECT id FROM inventory
+               WHERE item_id = $item AND dc_id = ANY($in_range_dcs)
+                 AND state = 'available'
+               LIMIT $qty);
+-- fewer rows updated than $qty &rarr; that line is out of stock
+--   &rarr; ROLLBACK and answer 409 for the whole order
 
-INSERT INTO orders (id, location, ...)      VALUES (...);
-INSERT INTO order_items (order_id, item_id) VALUES ...;
+INSERT INTO orders      (id, idempotency_key, location, ...) VALUES (...);
+INSERT INTO order_items (order_id, inventory_id)             VALUES ...;
 
-COMMIT;   -- a concurrent order for the same unit fails to commit here</code></pre>
+COMMIT;   -- a concurrent claim on the same unit aborts here (SQLSTATE 40001):
+          -- replay the whole transaction, bounded attempts, jittered backoff</code></pre>
       </details>
-      <div class="prose">
-        <h3 id="deepdives-dive-2">2 · From straight-line distance to real drive time</h3>
-        <p id="deepdives-p-2">"Close in miles" is not "deliverable in an hour" — a river, a highway with no exit, or rush hour can put a nearby-by-map DC out of reach. The Nearby Service has to reason about drive time, not just distance.</p>
-        <ul>
-          <li id="deepdives-li-3"><strong>SQL distance threshold.</strong> Store DC lat/long, compute distance (Euclidean, or Haversine to respect the Earth's curvature), keep DCs under a threshold. Cheap, but blind to traffic and roads.</li>
-          <li id="deepdives-li-4"><strong>Travel-time service against every DC.</strong> Ask an external travel-time estimator for the drive time from the customer to <em>every</em> DC. Accurate and hopeless at scale — the vast majority of DCs are nowhere near in range, so almost every call is wasted.</li>
-          <li id="deepdives-li-5"><strong>Prune, then estimate (chosen).</strong> Keep the whole DC table in memory and refresh it every 5 minutes — DCs change rarely, so an <a href="../patterns/caching/in-process-cache.html">in-process cache</a> of the table is essentially free. First filter to a coarse candidate set with a fixed radius (~60 miles, the most anyone could plausibly drive in an hour), then call the travel-time service only on that handful for a real drive-time estimate. One cheap spatial pass turns thousands of DCs into the few worth asking about.</li>
-        </ul>
-        <h3 id="deepdives-dive-3">3 · Serving 20k availability queries per second</h3>
-        <p id="deepdives-p-3">The read path has to absorb ~20k QPS against inventory that changes only when an order commits. Two moves, applied together:</p>
-        <ul>
-          <li id="deepdives-li-6"><strong>Cache in front, with a short TTL.</strong> Put Redis before the database: the Availability Service reads the cache first and, on a miss, queries the store and populates it — the <a href="../patterns/caching/cache-aside.html">cache-aside</a> loop. A ~1-minute TTL bounds how stale a count can be, and the Orders Service invalidates affected keys when it writes, so a purchased-out item disappears from availability quickly rather than lingering as a <a href="../hazards/stale-cache.html">stale cache</a> entry that sells phantom stock.</li>
-          <li id="deepdives-li-7"><strong>Read replicas over a partitioned store.</strong> A location only ever touches a small cluster of nearby DCs, so partition inventory by region — the first three digits of the zip code — and a query hits just one or two <a href="../patterns/distributed/routing/sharding.html">partitions</a> instead of the whole table. Serve those reads from Postgres <a href="../patterns/distributed/coordination/replication.html">read replicas</a>, which tolerate slight staleness, while orders keep going to the leader for strong consistency. Replicas and partitions are then sized so no single one becomes a hot spot.</li>
-        </ul>
-      </div>
       <figure class="diagram">
         <pre class="mermaid">
 sequenceDiagram
@@ -252,42 +349,153 @@ sequenceDiagram
     participant A as Order A
     participant B as Order B
     participant O as Orders Service
-    participant DB as Postgres leader
+    participant DB as Inventory + orders store
     A->>O: POST /orders (last unit)
     B->>O: POST /orders (same unit)
     O->>DB: A: BEGIN SERIALIZABLE, reserve unit
     O->>DB: B: BEGIN SERIALIZABLE, reserve unit
     DB-->>O: A: rows match, COMMIT ok
     O-->>A: 201 Created
-    alt B reserved the same unit
+    alt B claimed the same unit
         DB--xO: B: serialization failure at COMMIT
-        O-->>B: 409 out of stock
-    else B reserved a different unit
+        O-->>B: replay once, then 409 out of stock
+    else B claimed a different unit
         DB-->>O: B: COMMIT ok
         O-->>B: 201 Created
     end
         </pre>
-        <figcaption>When two orders race for the last unit, how does the serializable transaction reject exactly one? Whichever commits first wins; the loser fails at COMMIT and gets a 409.</figcaption>
+        <figcaption>When two orders race for the last unit, how does the transaction reject exactly one? Whichever commits first wins; the loser aborts at COMMIT, replays, and gets a 409 only if the unit is really gone.</figcaption>
       </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-2">2 · From straight-line distance to real drive time <em>→ FR: availability by location; NFR: fast reads</em></h3>
+        <p id="deepdives-p-5"><strong>Reachability is a drive-time question, and drive time is expensive to ask, so the design's job is to ask it about ten depots instead of ten thousand.</strong> "Close in miles" is not "deliverable in an hour": a river, a highway with no exit, or rush hour puts a nearby-by-map DC out of reach, and the customer never learns why their order was late.</p>
+        <ul>
+          <li id="deepdives-li-4"><strong>SQL distance threshold.</strong> Store DC lat/long, compute distance (Euclidean, or Haversine to respect the Earth's curvature), keep the DCs under a threshold. Cheap, and blind to traffic and roads — it is the answer that promises the delivery across the river.</li>
+          <li id="deepdives-li-5"><strong>Drive time against every DC.</strong> Ask the travel-time estimator about all 10k DCs per query. Accurate and hopeless: 2×10⁸ calls/s at peak, of which essentially all are about depots in other cities.</li>
+          <li id="deepdives-li-6"><strong>A spatial database.</strong> Put the DCs in an engine with a real spatial index and query a radius. Correct, and a second store to run, replicate and fail over — for 10k rows that change when the company signs a lease.</li>
+          <li id="deepdives-li-7"><strong>Prune, then estimate, then remember (chosen).</strong> Hold the whole DC table in memory, refreshed every 5 minutes, keyed by <a href="../patterns/distributed/routing/geohash.html">geohash</a> cell so a lat/long becomes a cell plus its neighbours rather than a scan. Filter that to a candidate set with a fixed radius (~60 miles, an upper bound on an hour's driving), ask the travel-time service about the handful that survive, and memoize the resulting DC set per (cell, 5-minute bucket). One cheap spatial pass turns thousands of DCs into the few worth asking about, and the memo turns 70 calls a second into the whole bill.</li>
+        </ul>
+        <p id="deepdives-p-6">Two details decide whether this holds. The prune's errors are asymmetric: too loose and you pay for wasted drive-time calls, which shows up on an invoice; too tight and a reachable DC is silently dropped, which shows up as an item the customer never saw and nobody ever counts — so size the radius against the fastest plausible hour, not the typical one. And note which clock sets the memo's TTL: DCs move on a quarterly clock while congestion moves on a five-minute one, so the memo expires on the traffic's schedule. The general version of this locality problem is the <a href="../themes/proximity-search.html">Proximity Search</a> theme.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    Req["Availability or order request"] -->|"lat/long to cell"| Memo["Cell to DC-set memo · 5-min TTL"]
+    subgraph Nearby["Nearby Service · in-process-cache"]
+        Memo
+        Cells["DC table by geohash cell · refreshed every 5 min"]
+        Prune["Radius prune · ~60 miles"]
+    end
+    Memo -->|"memo cold"| Cells
+    Cells -->|"cell + neighbours"| Prune
+    Prune -->|"batch drive time, ~10 candidates"| Travel["Travel Time Service"]:::ext
+    Travel -->|"in-range DC ids, memoized"| Memo
+    classDef ext stroke-dasharray:4 4;
+        </pre>
+        <figcaption>Inside the Nearby Service: a warm cell answers from memory, and a cold one is pruned by radius before a single drive-time call is made — which is what keeps the external bill at ~70 calls/s.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-3">3 · Twenty thousand availability queries a second <em>→ NFR: fast reads; scale</em></h3>
+        <p id="deepdives-p-7"><strong>Every availability query is a fan-out across a dozen DCs, so the only way to hold 100&nbsp;ms is to answer most of them without fanning out at all.</strong> The inventory behind those queries changes only when an order commits — roughly a hundred times a second against twenty thousand reads — so the read path is allowed to work from copies.</p>
+        <ul>
+          <li id="deepdives-li-8"><strong>Cache in front, keyed by cell.</strong> The Availability Service reads the cache first and, on a miss, queries the store and populates it — the <a href="../patterns/caching/cache-aside.html">cache-aside</a> loop, keyed by (cell, keyword, page) rather than by raw lat/long, so two customers on the same block share an entry instead of each minting their own. A 60-second TTL bounds staleness even if every invalidation is lost.</li>
+          <li id="deepdives-li-9"><strong>Read replicas over a partitioned store.</strong> A location only ever touches a small cluster of nearby DCs, so partition inventory by region — the first three digits of the zip code — and a query hits one or two <a href="../patterns/distributed/routing/sharding.html">partitions</a> instead of the whole table. Serve those <a href="../patterns/distributed/coordination/replication.html">replica</a> reads while orders keep going to the leader, and the two loads stop competing for the same buffer cache.</li>
+          <li id="deepdives-li-10"><strong>Rejected — a maintained availability table.</strong> Precomputing a per-cell item list on every write looks attractive until you count the write amplification: one sale touches every cell that DC can serve, so the fan-out the read path was avoiding reappears on the write path, inside the transaction that must stay fast. A materialized view earns its place when reads are expensive and writes are rare; here writes are the scarce, contended resource.</li>
+        </ul>
+        <p id="deepdives-p-8" data-kb-level="advanced">Invalidation is where this design is easiest to get subtly wrong. A sold-out item must leave the list quickly, so the Orders Service deletes the affected keys — a DC serves a few dozen cells, so one sale invalidates a few dozen entries. Do it <em>after</em> the transaction commits, never inside it: an invalidation whose transaction then rolls back has evicted a correct entry, and one sent from inside an uncommitted transaction is a <a href="../hazards/dual-write-inconsistency.html">dual write</a> pretending to be atomic. Losing one to a crash is survivable because the TTL is the floor — a <a href="../hazards/stale-cache.html">stale entry</a> for under a minute, on a path where the order transaction refuses the sale anyway.</p>
+        <p id="deepdives-p-9">The residual is worth stating to customers, not just to interviewers: a listing is an invitation, not a promise. A count served from a replica behind a cache can be seconds old, so an item may appear after its last unit is claimed and the customer meets a 409 at checkout. The design prefers that to the alternative of reserving stock for browsers, which makes a full city look sold out.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Customer app
+    participant A as Availability Service
+    participant N as Nearby Service
+    participant K as Availability cache · cache-aside
+    participant R as Regional read replica
+    C->>A: GET /availability (lat, long, keyword)
+    A->>N: which DCs reach this point?
+    N-->>A: ~10 in-range DC ids
+    A->>K: lookup (cell, keyword, page)
+    alt cache hit
+        K-->>A: item list
+    else cache miss
+        A->>R: scan one partition for those DC ids
+        R-->>A: rows, unioned per item
+        A->>K: backfill, TTL 60 s + jitter
+    end
+    A-->>C: 200 items with quantities
+        </pre>
+        <figcaption>What does one availability query touch? Nearby resolves the DC set, the cache answers four times in five, and only a miss reaches a replica — the leader is never on this path.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-4">4 · When the shelf disagrees with the ledger <em>→ NFR: strong consistency</em></h3>
+        <p id="deepdives-p-10"><strong>A reservation is a promise about a physical object, so the design has to say what happens when the object is not there — and when the person who reserved it never comes back.</strong> Every strong-consistency guarantee above this line is a guarantee about rows; this dive is where those rows are made to agree with a shelf that people walk past all day.</p>
+        <ul>
+          <li id="deepdives-li-11"><strong>Reserve nothing, just decrement a count.</strong> The cheapest model, and it cannot express "this one is gone": the picker has no row to fail, so a unit that walked out of the building is discovered by the next customer whose order cannot be filled, and the count drifts further from the shelf every week. Rejected — a physical fact needs somewhere to be recorded.</li>
+          <li id="deepdives-li-12"><strong>Reserve when the item enters the cart.</strong> It removes the checkout race entirely, and it lets window shoppers hold the last units of a promoted item for an hour, so a full DC advertises itself as empty. Rejected as the default; a short hold on entering checkout is the defensible version.</li>
+          <li id="deepdives-li-13"><strong>Reserve at commit, with an expiry (chosen).</strong> Units move to <code>reserved</code> inside the order transaction carrying a <code>held_until</code>, so an order that never reaches a rider cannot park stock indefinitely. A <a href="../patterns/distributed/coordination/sweeper.html">sweeper</a> is the single actor allowed to return an expired hold to <code>available</code>: one writer for releases means two components can never race to free the same unit, and the sweep is an indexed query on <code>held_until</code>.</li>
+        </ul>
+        <p id="deepdives-p-11">Then the picker walks the aisle and the unit is not there. Shrinkage, misplacement and damage are ordinary in a building people work in, so the exception path belongs in the design rather than in an incident report: the unit is marked <code>missing</code>, an adjustment row records who observed it and when, and the line is re-sourced from another in-range DC or refunded. Re-sourcing is a second reservation under the same rules, which is why the state machine needs no special case for it.</p>
+        <p id="deepdives-p-12">Adjustments let the ledger converge without stopping the building. A full recount takes a DC offline; a rolling count of a few aisles a day writes its corrections into the same adjustment ledger the pickers use, so every correction has one shape and one audit trail whatever produced it. Watch the adjustment rate per DC: a depot whose corrections climb is either losing stock or mis-scanning it, and both are answered on the floor rather than in the schema.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Available: received at the DC
+    Available --> Reserved: order commits, held_until set
+    Reserved --> Available: hold expires — sweeper releases
+    Reserved --> Picked: picker scans the unit
+    Reserved --> Missing: picker cannot find it
+    Picked --> Dispatched: handed to the rider
+    Missing --> [*]: adjustment row — line re-sourced or refunded
+    Dispatched --> [*]: delivered
+        </pre>
+        <figcaption>What can happen to one physical unit? Every path out of Reserved is explicit — released by the sweeper, picked, or written off as missing — so no unit can be held by nobody.</figcaption>
+      </figure>
+      <div class="prose">
+        <h3 id="deepdives-dive-5">5 · The Friday-evening surge <em>→ NFR: burst tolerance</em></h3>
+        <p id="deepdives-p-13"><strong>A surge is not more of the same traffic; it is the same neighbourhoods asking at the same moment, so the design's answer is to decide in advance what it will stop doing.</strong> Four things give way, in a fixed order, and each has a cheap counter-move.</p>
+        <ul>
+          <li id="deepdives-li-14"><strong>The cache expires together.</strong> Entries written during the ramp share a TTL, so the hot cells fall out within a second of each other and every miss becomes a fan-out — a <a href="../hazards/cache-stampede.html">stampede</a> aimed at the replicas. Counter: jitter the TTL, and keep one in-flight fill per key so N concurrent misses become one query.</li>
+          <li id="deepdives-li-15"><strong>The drive-time memo goes cold at the worst moment.</strong> Congestion changes fastest exactly when traffic peaks, so memos expire sooner while the vendor's rate limit is nearest. Counter: serve the last known DC set past its TTL during a surge — a reachability answer a few minutes old degrades better than a timeout.</li>
+          <li id="deepdives-li-16" data-kb-level="expert"><strong>Connections pile up at the leader.</strong> Each new service instance opens its own pool, and a store that gives every connection a process pays memory and scheduler cost for a thousand mostly-idle connections long before it runs out of CPU — <a href="../hazards/connection-pool-exhaustion.html">pool exhaustion</a> that looks like a slow database. Counter: a connection pooler in front of the leader, so a surge queues at a component built to queue.</li>
+          <li id="deepdives-li-17"><strong>Retries turn contention into collapse.</strong> An abort and a client retry are indistinguishable to the leader, so an unbounded loop multiplies the load that caused it. Counter: bounded attempts with jittered backoff, and a 409 that means gone rather than "try again" (dive 1).</li>
+        </ul>
+        <p id="deepdives-p-14">Under all four sits one ranking: browsing is sheddable and ordering is not. Per-source <a href="../patterns/distributed/resilience/rate-limiter.html">rate limits</a> at the edge and a smaller page of results are the first things to spend, because a customer who sees ten items instead of thirty still buys and a customer whose order times out does not. The cost is real — shedding browsing loses sales nobody can count — so the limit belongs on a dial an operator turns, not in a threshold nobody revisits.</p>
+        <p id="deepdives-p-15">Two reflexes are wrong here and worth rejecting out loud. Autoscaling does not answer this surge: the component under pressure is a single writable leader, and adding instances grows the parts that were never the problem, which is exactly why the read path carries all the elasticity. And queueing orders to smooth the peak converts a fast "no" into an indefinite "unknown" — a customer waiting for a confirmation they cannot get is worse off than one holding a rejection they can act on. Both moves generalise in the <a href="../themes/spike-handling.html">Spike Handling</a> theme.</p>
+      </div>
     </section>
 
     <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
       <h2 class="doc-h" id="h-trade">Limitations &amp; trade-offs</h2>
+      <div class="prose">
+        <p id="tradeoffs-p-1"><strong>The biggest flaw, named first: one writable leader per region owns both the inventory ledger and the orders, so every purchase in that region serializes through a single node.</strong> Browsing survives its loss; buying does not, and a promotion that concentrates demand on one item creates contention no amount of read capacity relieves.</p>
+      </div>
       <div class="tradeoffs">
         <div class="col pros">
-          <h3>What it buys</h3>
+          <h3>Strengths</h3>
           <ul>
-            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Availability under 100&nbsp;ms at ~20k QPS, served from cache and regional replicas rather than the write path.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro">No double-selling: one serializable transaction makes concurrent orders for the same unit fail at commit, with no lock-management code.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Drive-time accuracy without drowning the travel-time service — a coarse radius prunes thousands of DCs to a handful.</li>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro"><strong>A unit is sold exactly once.</strong> The reservation, the order and the state change commit together, so no application code holds a lock (see dive 1).</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro"><strong>Browsing never touches the arbiter.</strong> Availability is answered from a cache and regional replicas, so 20k queries/s cost the order path nothing (see dive 3).</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro"><strong>The drive-time bill is set by a prune.</strong> Ten thousand depots become ten candidates before a single external call is made (see dive 2).</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro"><strong>No unit can be held by nobody.</strong> Every reservation carries an expiry and one sweeper is the only actor that releases it (see dive 4).</li>
+            <li id="tradeoffs-pro-5" data-kb-polarity="pro">Contention stays inside a region, so one city's surge cannot slow another city's ordering.</li>
+            <li id="tradeoffs-pro-6" data-kb-polarity="pro">A retried order is the same order — the idempotency key returns the first result instead of reserving a second set of units.</li>
+            <li id="tradeoffs-pro-7" data-kb-polarity="pro">The inventory ledger is small enough to be boring: ~30M rows and ~3&nbsp;GB, with no shard map to maintain.</li>
           </ul>
         </div>
         <div class="col cons">
-          <h3>What it gives up</h3>
+          <h3>Risks</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Colocating orders and inventory in one Postgres couples their scaling and forfeits a best-fit store per concern.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Cached, replica-served counts are slightly stale, so an item can briefly show as available after its last unit is gone.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">All-or-nothing orders reject the whole basket if any one line is out of stock — correct, but blunt.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con"><strong>The regional leader is a single point of failure for buying.</strong> A failover stops ordering in that region while availability keeps answering from replicas.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="expert"><strong>Aborts rise with contention, not with load.</strong> A promoted item concentrates claims on a few rows, and every serialization failure is work already paid for (see dive 1).</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con"><strong>A listing is not a reservation.</strong> A cached, replica-served count can show an item seconds after its last unit is claimed, and the customer finds out at checkout (see dive 3).</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con"><strong>The ledger can disagree with the shelf.</strong> A missing unit is discovered by a human at pick time, and the correction is always after the fact (see dive 4).</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con">Colocating orders and inventory couples their scaling and forfeits a best-fit store per concern.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con">All-or-nothing orders reject the whole basket when one line is gone — coherent, and blunt.</li>
+            <li id="tradeoffs-con-7" data-kb-polarity="con">Reachability depends on a vendor we do not run, and under surge the design serves a stale DC set rather than a fresh answer (see dive 5).</li>
           </ul>
         </div>
       </div>
@@ -296,10 +504,28 @@ sequenceDiagram
     <section class="doc-section" id="levels" aria-labelledby="h-levels" data-kb-block="levels">
       <h2 class="doc-h" id="h-levels">What's expected at each level</h2>
       <div class="prose">
+        <h3>Mid-level</h3>
         <ul>
-          <li id="levels-li-1"><strong>Mid-level</strong> — a working end-to-end design for both routes: clear API and data model, a Nearby step that resolves in-range DCs, and inventory summed across them. Landing on a "good enough" locking story with sound discussion is acceptable even without reaching the best answer.</li>
-          <li id="levels-li-2"><strong>Senior</strong> — moves quickly through the high-level design and spends the time optimizing the two critical paths unprompted: the order-atomicity problem (arguing distributed lock vs. a single serializable transaction) and the read-scaling problem (caching, replicas, region partitioning), with pros and cons articulated.</li>
-          <li id="levels-li-3"><strong>Staff+</strong> — treats read volume and locality partitioning as obvious and goes deep with real-world fluency: serialization-failure handling and retries, cache-invalidation timing on writes, radius-prune before drive-time estimation, and how replicas and partitions are sized to avoid hot spots.</li>
+          <li id="levels-li-1">Asks how many people browse per order before drawing anything.</li>
+          <li id="levels-li-2">Produces a working end-to-end flow for both routes — resolve DCs, union inventory, place an order — with a clear API and data model.</li>
+          <li id="levels-li-3">Recognises that check-then-write oversells, and reaches for some form of locking or transaction.</li>
+          <li id="levels-li-4">Separates a type of product from a physical unit of it in the data model.</li>
+        </ul>
+        <h3>Senior</h3>
+        <ul>
+          <li id="levels-li-5">Argues distributed lock against one serializable transaction on failure modes rather than on taste.</li>
+          <li id="levels-li-6">Sends reads to replicas behind a cache and says what each tier absorbs.</li>
+          <li id="levels-li-7">Prunes by radius before asking anything about drive time, unprompted.</li>
+          <li id="levels-li-8">Partitions by region for locality, and says why the row count does not force sharding.</li>
+          <li id="levels-li-9">Places cache invalidation after the commit and explains what a lost invalidation costs.</li>
+        </ul>
+        <h3>Staff+</h3>
+        <ul>
+          <li id="levels-li-10">Distinguishes contention from load, and states that aborts scale with the hot row rather than with the transaction rate.</li>
+          <li id="levels-li-11">Prices the deferred exits against their triggers: row-lock claiming at a measured abort rate, a broker only when fulfilment comes in scope.</li>
+          <li id="levels-li-12">Raises the reservation lifecycle unprompted — expiry, the single releasing actor, and the picker's missing-unit path.</li>
+          <li id="levels-li-13">Names what gives way first under surge and what the system will stop doing, before being asked.</li>
+          <li id="levels-li-14">Defends the single regional leader as the design's biggest flaw, chosen deliberately, and prices the exit.</li>
         </ul>
       </div>
     </section>
@@ -315,6 +541,12 @@ sequenceDiagram
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="replication"><a href="../patterns/distributed/coordination/replication.html">Replication</a><span class="rel-note">availability reads are served from Postgres read replicas while orders write to the leader for strong consistency</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">inventory is partitioned by region (first three zip digits) so a location query touches only one or two partitions</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="in-process-cache"><a href="../patterns/caching/in-process-cache.html">In-Process Cache</a><span class="rel-note">the Nearby Service holds the whole DC table in memory and refreshes it every five minutes to prune candidates before any drive-time call</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">POST /orders carries an idempotency key so a client that times out mid-commit replays into the same order instead of a second set of reservations</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sweeper"><a href="../patterns/distributed/coordination/sweeper.html">Sweeper</a><span class="rel-note">a scheduled job is the only actor allowed to return units whose held_until has passed, so nothing races to free the same unit</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="geohash"><a href="../patterns/distributed/routing/geohash.html">Geohash</a><span class="rel-note">the in-memory DC table is keyed by cell, so a lat/long becomes a cell lookup instead of a scan over 10k depots</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">Availability, Orders and Nearby hold no per-request state, so browsing capacity is added by adding instances</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="retry-backoff"><a href="../patterns/distributed/resilience/retry-backoff.html">Retry with Backoff</a><span class="rel-note">a serialization abort is replayed a bounded number of times with jittered backoff, then answered 409</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="rate-limiter"><a href="../patterns/distributed/resilience/rate-limiter.html">Rate Limiter</a><span class="rel-note">per-source limits at the edge shed browsing during a surge so the order path never queues</span></div>
         </div>
       </div>
 
