@@ -45,16 +45,18 @@ const legend = families.map((f) =>
 ).join("\n");
 
 /* ---- panel controls ---- */
-/* The five kinds are the built-in groups: a colored chip per kind (swatch matches the
- * node color on the canvas), clickable to show/hide that kind. User-defined query
- * groups extend the same section. */
+/* Kind chips are tag-like FILTER toggles — the glyph mirrors the node's shape on the
+ * canvas (kinds are shape-coded, bands are color-coded). */
+const KIND_GLYPHS = { pattern: "●", hazard: "▲", theme: "■", principle: "◎", design: "◆" };
 const KIND_LABELS = { pattern: "Patterns", hazard: "Hazards", theme: "Themes", principle: "Principles", design: "Case studies" };
 const kindBtns = Object.entries(KIND_LABELS).map(([kind, label]) =>
-  `          <button type="button" class="gbtn kind-btn kind-${kind}" data-kind="${kind}" aria-pressed="true"><span class="swatch" aria-hidden="true"></span>${esc(label)}</button>`,
+  `          <button type="button" class="gbtn kind-btn" data-kind="${kind}" aria-pressed="true"><span class="kshape" aria-hidden="true">${KIND_GLYPHS[kind]}</span>${esc(label)}</button>`,
 ).join("\n");
 
-const bandOptions = BANDS.map((b) =>
-  `            <option value="${b.id}">${esc(b.kind === "elevation" ? `${b.numeral} · ${b.label}` : b.label)}</option>`,
+/* Bands are the built-in GROUPS: each is a color family on the canvas, so its chip
+ * carries the same color and toggles that band's patterns. */
+const bandBtns = BANDS.map((b) =>
+  `          <button type="button" class="gbtn band-btn band-${b.id}" data-band="${b.id}" aria-pressed="true"><span class="swatch" aria-hidden="true"></span>${esc(b.kind === "elevation" ? `${b.numeral} · ${b.label}` : b.label)}</button>`,
 ).join("\n");
 
 const slider = (id, label, min, max, step, value) =>
@@ -110,10 +112,9 @@ const html = `<!doctype html>
         <details class="panel-sec" open>
           <summary>Filters</summary>
           <input class="graph-input" id="graph-search" type="search" placeholder="Search — name, symptom, tag:x, kind:x" aria-label="Filter the graph: free text, tag:x, kind:x, band:x, fav:true; prefix - negates" autocomplete="off" spellcheck="false">
-          <select class="graph-select" id="band-select" aria-label="Filter patterns by band">
-            <option value="">All bands</option>
-${bandOptions}
-          </select>
+          <div class="panel-row" role="group" aria-label="Kinds — click to show or hide">
+${kindBtns}
+          </div>
           <label class="panel-toggle"><input type="checkbox" id="fav-toggle"> ★ Favourites only</label>
           <label class="panel-toggle"><input type="checkbox" id="orphans-toggle"> Hide orphans</label>
         </details>
@@ -125,8 +126,8 @@ ${legend}
         </details>
         <details class="panel-sec" open>
           <summary>Groups</summary>
-          <div class="panel-row" role="group" aria-label="Kinds — click to show or hide">
-${kindBtns}
+          <div class="panel-row" role="group" aria-label="Bands — click to show or hide">
+${bandBtns}
           </div>
           <div id="group-list"></div>
           <button type="button" class="gbtn" id="group-add">+ New group</button>

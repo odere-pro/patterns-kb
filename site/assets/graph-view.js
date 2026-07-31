@@ -94,7 +94,7 @@
     families[DEMO_FAMILY] = false;   // 323 of 638 edges — the main hairball source
     return {
       v: 1,
-      filters: { kinds: { pattern: 1, hazard: 1, theme: 1, principle: 1, design: 1 }, band: "", favs: false, orphans: false },
+      filters: { kinds: { pattern: 1, hazard: 1, theme: 1, principle: 1, design: 1 }, bands: {}, favs: false, orphans: false },
       families: families,            // family -> false when hidden; absent means visible
       groups: [],                    // [{q, color}] — first match wins, color 1..8
       display: { arrows: false, labelZoom: 1.4, nodeScale: 1, edgeScale: 1 },
@@ -507,19 +507,65 @@
   tip.addEventListener("mouseenter", function () { clearTimeout(tipTimer); });
   tip.addEventListener("mouseleave", function () { hideTipSoon(); });
 
-  function showTip(d) {
+  /* The selected card lists every typed relation the node declares, grouped by verb
+   * with the family's color — the per-node answer to the global Links legend. Tags
+   * filter on click; neighbour names walk the selection along the graph. */
+  function relationsHtml(d) {
+    var groups = {};   // verb type -> [neighbour ids], in page order
+    var order = [];
+    (d.relations || []).forEach(function (r) {
+      if (!byId[r.to]) return;
+      if (!groups[r.type]) { groups[r.type] = []; order.push(r.type); }
+      groups[r.type].push(r.to);
+    });
+    if (!order.length) return "";
+    return '<div class="tip-rels">' + order.map(function (type) {
+      var fam = familyOf(type);
+      return '<div class="tip-rel-group">' +
+        '<span class="tip-rel-verb fam-' + fam + '"><span class="swatch" aria-hidden="true"></span>' + esc(REL[type].label) + "</span>" +
+        groups[type].map(function (id) {
+          return '<button type="button" class="tip-rel-to" data-sel="' + esc(id) + '">' + esc(byId[id].name) + "</button>";
+        }).join("") +
+        "</div>";
+    }).join("") + "</div>";
+  }
+
+  function showTip(d, full) {
     clearTimeout(tipTimer);
     tipNode = d.id;
     var m = metaOf(d.id);
+    tip.classList.toggle("full", !!full);
     tip.innerHTML =
       '<span class="tip-name">' + esc(d.name) + "</span>" +
       '<span class="tip-kind">' + esc(d.kind + (d.band ? " · " + d.band : "")) + "</span>" +
       '<span class="tip-essence">' + esc(d.essence || "") + "</span>" +
-      (m.tags.length ? '<span class="tip-tags">' + m.tags.map(function (t) { return "#" + esc(t); }).join(" ") + "</span>" : "") +
+      (m.tags.length ? '<span class="tip-tags">' + m.tags.map(function (t) {
+        return '<button type="button" class="tip-tag" data-tag="' + esc(t) + '">#' + esc(t) + "</button>";
+      }).join(" ") + "</span>" : "") +
+      (full ? relationsHtml(d) : "") +
       '<a href="' + esc(PAGE_PREFIX + d.path) + '">Open page →</a>';
     tip.hidden = false;
     placeTip(d);
   }
+
+  // One delegated listener: neighbour names re-select; tags become a tag: filter.
+  tip.addEventListener("click", function (ev) {
+    var sel = ev.target.closest("[data-sel]");
+    if (sel && byId[sel.dataset.sel]) {
+      selectedId = sel.dataset.sel;
+      render();
+      showTip(byId[selectedId], true);
+      return;
+    }
+    var tag = ev.target.closest("[data-tag]");
+    if (tag) {
+      var inp = document.getElementById("graph-search");
+      if (inp) {
+        inp.value = "tag:" + tag.dataset.tag;
+        inp.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    }
+  });
   function placeTip(d) {
     if (!d) return;
     var t = d3.zoomTransform(svgEl);
