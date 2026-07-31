@@ -31,12 +31,22 @@ const ROOT = process.env.KB_ROOT
 const SITE = join(ROOT, "site");
 
 /* Sizing bands: [min, max] words at the BASIC lens. null = no numeric target yet
- * (a theme's basic page is a framing lead plus tour names, too small to band). */
+ * (a theme's basic page is a framing lead plus tour names, too small to band).
+ *
+ * A conceptual pattern carrying a `production` block gets a wider ceiling, because
+ * that block imposes a floor the band cannot tag away: every .prod-group must render
+ * non-empty at every lens (validate.mjs), so four labelled cards cost 90-170 basic
+ * words of knobs, signals, failure modes and gates before a single word of pedagogy.
+ * Banding such a page at 600 asks for something structurally impossible — it is not a
+ * conceptual page's word budget any more, it is that budget plus a fixed operational
+ * tax, so it sits between the conceptual and implementation bands. Pages WITHOUT the
+ * block keep the tighter 600 ceiling, which is what actually holds authors honest. */
 const IMPLEMENTATION = new Set([
   "distributed", "messaging", "caching", "enterprise", "architecture", "concurrency", "security",
 ]);
 const BANDS_W = {
-  pattern: (band) => (IMPLEMENTATION.has(band) ? [550, 900] : [350, 600]),
+  pattern: (band, hasProduction) =>
+    IMPLEMENTATION.has(band) ? [550, 900] : hasProduction ? [350, 750] : [350, 600],
   hazard: () => [400, 650],
   principle: () => [350, 550],
   design: () => [900, 1500],
@@ -90,7 +100,8 @@ for (const node of Object.values(graph.nodes)) {
 
   const html = readFileSync(join(SITE, node.path), "utf8");
   const words = Object.fromEntries(LEVELS.map((l) => [l, weigh(html, l)]));
-  const target = (BANDS_W[node.kind] ?? (() => null))(node.band);
+  const hasProduction = html.includes('data-kb-block="production"');
+  const target = (BANDS_W[node.kind] ?? (() => null))(node.band, hasProduction);
   const share = words.expert ? words.basic / words.expert : 0;
   const verdict = !target ? "n/a"
     : words.basic < target[0] ? "under"

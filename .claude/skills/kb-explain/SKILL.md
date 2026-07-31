@@ -80,11 +80,18 @@ word counts and the verdict against this table.
 | kind | basic | notes |
 |---|---|---|
 | pattern (implementation bands: distributed, messaging, caching, enterprise, architecture, concurrency, security) | 550–900w (~30–45% of expert) | advanced ≈ 75–85% of expert |
-| pattern (conceptual: gof, functional, testing, ddd, frontend, ml) | 350–600w | |
+| pattern (conceptual: gof, functional, testing, ddd, frontend, ml) | 350–600w, or **350–750w with a `production` block** | see the operational tax below |
 | hazard | 400–650w | |
 | principle | 350–550w | |
 | theme | framing lead + tour step names + decide table core | |
 | design | 900–1,500w — problem, shape of the answer, L1 board, each block's lead | advanced adds numbers/mechanics; expert adds full dives + rubric |
+
+**The operational tax.** A `production` block cannot be tagged out of basic: every one of
+its four cards must render non-empty at every lens, so one knob, one signal, one failure
+mode and one gate — 90–170 words — are mandatory before any pedagogy. That is why a
+conceptual page carrying the block is banded to 750 rather than 600. Do not try to buy the
+difference back by cutting variations, tradeoffs or the sketch; the block is a fixed cost,
+not authored depth. A conceptual page WITHOUT the block keeps the tighter 600 ceiling.
 
 **On a rich page the tag default INVERTS.** Do not ask "is this line sophisticated enough
 to hide?" — ask "does basic still fit its band?" and tag depth downward until it does. A
