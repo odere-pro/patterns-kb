@@ -408,6 +408,7 @@
 
   /* ---------------- render: recompute every class from state ---------------- */
   var st = {};   // id -> {off, dim, lit, selected}
+  var lastVisSig = null;   // signature of the visible subgraph the sim currently holds
   function render() {
     st = {};
     nodes.forEach(function (n) {
@@ -431,6 +432,32 @@
         hasEdge[e.target.id] = 1;
       });
       nodes.forEach(function (n) { if (!st[n.id].off && !hasEdge[n.id]) st[n.id].off = 1; });
+    }
+
+    /* Rebalance on every filter change, like Obsidian: the sim only ever holds the
+     * VISIBLE subgraph, so hidden nodes stop repelling and hidden(-family) edges stop
+     * pulling. Every filter path — kinds, band, favourites, search, orphans, family
+     * toggles — funnels through render(), so one signature check covers them all.
+     * Selection (dim/lit) is not a filter and never perturbs the layout. Hidden nodes
+     * freeze at their last position and rejoin there when a filter is cleared. */
+    var visNodes = nodes.filter(function (n) { return !st[n.id].off; });
+    var visEdges = edges.filter(function (e) {
+      return !famHidden(e.family) && !st[e.source.id].off && !st[e.target.id].off;
+    });
+    var sig = visNodes.map(function (n) { return n.id; }).join(",") + "|" + visEdges.length;
+    if (sig !== lastVisSig) {
+      var firstRender = lastVisSig === null;
+      lastVisSig = sig;
+      sim.nodes(visNodes);
+      sim.force("link").links(visEdges);
+      if (firstRender) {
+        // Init: the constructor pre-settled with every edge; re-settle silently on the
+        // default-visible subgraph so the first paint is already balanced.
+        sim.alpha(0.3);
+        for (var t = 0; t < 150 && sim.alpha() > 0.02; t++) sim.tick();
+      } else {
+        reheat(0.5);
+      }
     }
 
     if (selectedId && byId[selectedId]) {
