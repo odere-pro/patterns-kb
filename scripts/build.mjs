@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, FACETS, chipMatches, folderFor, LEVELS, BLOCK_LEVELS, BUILDER_PRESETS, SITE_URL } from "./lib/model.mjs";
+import { mergedSynonyms, corpusVocabulary, validateExpansions, loadExpansions } from "./lib/expansions.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
  * the kb:generated markers (and any comment an author writes). */
@@ -192,11 +193,10 @@ for (const { root, id } of raw) {
 }
 
 /* ---------------- reading levels ----------------
- * data-kb-level = "visible from this level up". Two provenances, one attribute:
- * BLOCK_LEVELS policy (stamped onto sections by build-pages.mjs) and authored
- * element tags. The node's `levels` map merges the policy IN CODE for blocks the
- * page actually has — build.mjs runs before the stamp, and deriving from the policy
- * keeps graph.json byte-identical whether or not the stamp has landed yet. */
+ * Two authored attributes, two semantics: data-kb-level = "visible from this level
+ * up" (accretion), data-kb-register = "rendered at exactly this lens" (variant).
+ * The whole-block BLOCK_LEVELS policy is retired (empty maps); merging it here is
+ * kept so a future policy would still land in graph.json without a page stamp. */
 for (const { root, id, kind } of raw) {
   const node = nodes[id];
   const levels = {};
@@ -214,11 +214,23 @@ for (const { root, id, kind } of raw) {
   }
   if (Object.keys(levels).length) node.levels = levels;
 
+  const registers = {};
+  for (const el of root.querySelectorAll("[data-kb-register]")) {
+    const reg = el.getAttribute("data-kb-register");
+    if (!LEVELS.includes(reg))
+      fail(`${id}: data-kb-register "${reg}" is not in the closed vocabulary (${LEVELS.join("/")})`);
+    if (el.getAttribute("data-kb-level") != null)
+      fail(`${id}: #${el.getAttribute("id") ?? "?"} carries both data-kb-level and data-kb-register — an element takes one or the other`);
+    const key = el.getAttribute("id");
+    if (key) registers[key] = reg;
+  }
+  if (Object.keys(registers).length) node.registers = registers;
+
   const explain = root.querySelector('[data-kb-block="explain"]');
   if (explain) {
-    const got = explain.querySelectorAll(".explain-item").map((e) => e.getAttribute("data-kb-level"));
+    const got = explain.querySelectorAll(".explain-item").map((e) => e.getAttribute("data-kb-register"));
     if (JSON.stringify(got) !== JSON.stringify(LEVELS))
-      fail(`${id}: explain block must hold exactly one .explain-item per level, in ` +
+      fail(`${id}: explain block must hold exactly one .explain-item per register, in ` +
            `${LEVELS.join(" → ")} order (got: ${got.join(", ") || "none"})`);
     node.hasExplain = true;
   }
@@ -244,8 +256,8 @@ for (const { root, id, kind } of raw) {
 
 /* ---------------- mentions ----------------
  * A page's typed relations are declared and bidirectional, so "what links here" is already
- * on the page for those. But prose links are not: 344 links across the corpus point at
- * another page from inside a sentence, and nothing records them. They are real connections
+ * on the page for those. But prose links are not: hundreds of links across the corpus point
+ * at another page from inside a sentence, and nothing records them. They are real connections
  * — singleton's prose points at factory-method — and they were invisible. Derived, so no
  * one has to maintain them. */
 const byPath = {};
@@ -309,7 +321,9 @@ const out = {
  * the one file an agent should always read first. Kept deliberately small. */
 const catalog = {
   meta: { generator: "scripts/build.mjs", count: Object.keys(nodes).length },
-  synonyms: SYNONYMS,   // projected so the offline hub search scores the same expansions as kb.mjs find
+  // Curated SYNONYMS layered over the machine-generated expansion table (curated wins),
+  // projected so the offline hub search scores the same bridge as kb.mjs find.
+  synonyms: mergedSynonyms(SYNONYMS),
   nodes: Object.values(nodes).map((n) => {
     const e = { id: n.id, name: n.name, kind: n.kind, band: n.band, essence: n.essence, path: n.path };
     if (n.favourite) e.favourite = true;
@@ -348,6 +362,17 @@ if (!process.env.KB_ROOT) {
     for (const c of p.candidates) {
       if (!nodes[c]) fail(`builder preset "${p.id}": candidate "${c}" has no page — fix BUILDER_PRESETS in scripts/lib/model.mjs`);
     }
+  }
+
+  /* The expansion table must stay structurally sound against the live corpus: a target
+   * word nothing contains any more (a rename, a rewrite) is a hard failure; vocabulary
+   * drift since generation only degrades coverage, so it warns. Skipped for the fixture
+   * corpus, whose two pages cannot carry the live vocabulary. */
+  const expansionData = loadExpansions();
+  if (expansionData.meta) {
+    const { errors, drift } = validateExpansions(expansionData, corpusVocabulary(Object.values(nodes)));
+    if (errors.length) fail(`expansion-synonyms.json:\n  ${errors.join("\n  ")}`);
+    if (drift) console.error("WARN: " + drift);
   }
 }
 

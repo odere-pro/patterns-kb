@@ -236,7 +236,7 @@ test("build.mjs rejects a data-kb-level outside the closed vocabulary", () => {
 test("build.mjs rejects an incomplete explain ladder", () => {
   const root = withFixture((r) =>
     edit(r, ALPHA,
-      '<div class="explain-item" id="explain-advanced" data-kb-level="advanced"><h3>Advanced</h3><p>Alpha with architectural teeth for seniors.</p></div>\n',
+      '<div class="explain-item" id="explain-advanced" data-kb-register="advanced"><h3>Advanced</h3><p>Alpha with architectural teeth for seniors.</p></div>\n',
       ""));
   try {
     const r = run("build.mjs", root);
@@ -265,9 +265,10 @@ test("kb.mjs get --level basic prunes above-level elements and blocks", () => {
   }
 });
 
-test("build-pages.mjs stamps policy levels on sections and removes strays", () => {
-  /* variations is "advanced" in the pattern BLOCK_LEVELS policy; description is not
-   * in the policy, so a hand-planted level there must be cleaned off. */
+test("build-pages.mjs cleans section-level stamps under the empty policy", () => {
+  /* BLOCK_LEVELS is retired (empty per kind): every block shows at every lens, so a
+   * hand-planted section level must be cleaned off — and authored ELEMENT levels
+   * survive untouched. */
   const root = built((r) =>
     edit(r, ALPHA, 'id="description" data-kb-block="description">',
       'id="description" data-kb-block="description" data-kb-level="expert">'));
@@ -275,10 +276,52 @@ test("build-pages.mjs stamps policy levels on sections and removes strays", () =
     const r = run("build-pages.mjs", root);
     assert.equal(r.status, 0, r.stderr);
     const html = readFileSync(join(root, ALPHA), "utf8");
-    assert.match(html, /id="variations"[^>]*data-kb-level="advanced"/, "policy stamp lands on variations");
-    assert.doesNotMatch(html, /data-kb-block="description" data-kb-level/, "stray section level is cleaned");
+    assert.doesNotMatch(html, /data-kb-block="[a-z]+"[^>]*data-kb-level/, "no section carries a level stamp");
     assert.match(html, /id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="expert"/,
       "authored element level is untouched");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("register variants show at exactly their lens; both-attrs and empty blocks are rejected", () => {
+  /* A variant group: two adjacent registered paragraphs in description. basic sees
+   * only the basic rung; expert (and the no-lens editor view keeps both). */
+  const root = built((r) =>
+    edit(r, ALPHA, '<section class="doc-section" id="structure" data-kb-block="structure"><h2>Structure</h2><p>',
+      '<section class="doc-section" id="structure" data-kb-block="structure"><h2>Structure</h2>' +
+      '<p data-kb-register="basic">Structure for newcomers.</p>' +
+      '<p data-kb-register="expert">Structure at the margin.</p><p>'));
+  try {
+    const basic = run("kb.mjs", root, "get", "alpha", "--level", "basic");
+    assert.equal(basic.status, 0, basic.stderr);
+    assert.match(basic.stdout, /Structure for newcomers/, "basic rung shows at basic");
+    assert.doesNotMatch(basic.stdout, /Structure at the margin/, "expert rung hidden at basic");
+
+    const expert = run("kb.mjs", root, "get", "alpha", "--level", "expert");
+    assert.match(expert.stdout, /Structure at the margin/, "expert rung shows at expert");
+    assert.doesNotMatch(expert.stdout, /Structure for newcomers/, "basic rung hidden at expert");
+
+    const editor = run("kb.mjs", root, "get", "alpha");
+    assert.match(editor.stdout, /Structure for newcomers[\s\S]*Structure at the margin/,
+      "no --level keeps every rung");
+
+    /* XOR: an element with both attributes fails validate. */
+    edit(root, ALPHA, '<p data-kb-register="basic">Structure for newcomers.</p>',
+      '<p data-kb-register="basic" data-kb-level="basic">Structure for newcomers.</p>');
+    const bad = run("kb.mjs", root, "validate", "--file", join(root, ALPHA));
+    assert.equal(bad.status, 1, "level+register on one element must fail");
+    assert.match(bad.stderr + bad.stdout, /both data-kb-level and data-kb-register/);
+    edit(root, ALPHA, '<p data-kb-register="basic" data-kb-level="basic">Structure for newcomers.</p>',
+      '<p data-kb-register="basic">Structure for newcomers.</p>');
+
+    /* Non-empty at every lens: a block whose only content is one register rung
+     * renders empty at the other two lenses. */
+    edit(root, ALPHA, '<section class="doc-section" id="usage" data-kb-block="usage"><h2>When to use</h2><p>Fixture usage prose.</p></section>',
+      '<section class="doc-section" id="usage" data-kb-block="usage"><h2>When to use</h2><p data-kb-register="expert">Only for experts.</p></section>');
+    const empty = run("kb.mjs", root, "validate", "--file", join(root, ALPHA));
+    assert.equal(empty.status, 1, "a lens-empty block must fail");
+    assert.match(empty.stderr + empty.stdout, /renders empty at the basic lens/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

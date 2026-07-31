@@ -23,7 +23,8 @@
  *   kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
  *   kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   the three-level ladder
  *                                 (all three empty strings removes the block)
- *   kb.mjs level <id> <element-id> <basic|advanced|expert|none>   authored element level
+ *   kb.mjs level <id> <element-id> <basic|advanced|expert|none>      accretion: visible from this level up
+ *   kb.mjs register <id> <element-id> <basic|advanced|expert|none>   variant: rendered at exactly this lens
  *                                 (sections get theirs from BLOCK_LEVELS in lib/model.mjs)
  *   kb.mjs link <from> <verb> <to> [--note "…"] [--note-back "…"]   both sides at once
  *   kb.mjs unlink <a> <b>         drop the edge from both pages, whatever verb each used
@@ -37,6 +38,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, esc, folderFor, band as bandOf } from "./lib/model.mjs";
+import { mergedSynonyms, STOP } from "./lib/expansions.mjs";
 import { validatePage } from "./lib/validate.mjs";
 import { pageSkeleton } from "./lib/template.mjs";
 
@@ -70,14 +72,27 @@ if (LEVEL && !LEVELS.includes(LEVEL)) {
   process.exit(1);
 }
 const visibleAt = (elLevel, lens) => !elLevel || LEVELS.indexOf(elLevel) <= LEVELS.indexOf(lens);
+/* data-kb-register = "rendered at exactly this lens" (variant); an element with no
+ * register is universal. With no lens requested, the editor view keeps every rung. */
+const registerVisible = (elReg, lens) => !elReg || !lens || elReg === lens;
+/** Prune everything a lens would hide — both semantics — under `scope`. */
+function pruneForLens(scope, lens) {
+  if (!lens) return;
+  for (const n of scope.querySelectorAll("[data-kb-level]")) {
+    if (n.getAttribute("data-kb-block")) continue; // section stamps are retired; ignore
+    if (!visibleAt(n.getAttribute("data-kb-level"), lens)) n.remove();
+  }
+  for (const n of scope.querySelectorAll("[data-kb-register]")) {
+    if (!registerVisible(n.getAttribute("data-kb-register"), lens)) n.remove();
+  }
+}
 
 /* ---------------- html -> text ---------------- */
 const NOISE = "script, style, link, .crumb, .docnav, .doc-metarow, .practice";
 const inline = (el) => el.text.replace(/\s+/g, " ").trim();
 
-const STOP = new Set(["the", "and", "for", "are", "but", "not", "you", "all", "any", "can",
-  "with", "that", "this", "from", "into", "when", "what", "why", "how", "does", "has", "have",
-  "its", "his", "her", "their", "them", "they", "was", "were", "will", "would", "should"]);
+/* STOP lives in lib/expansions.mjs now, shared with the vocabulary extractor; the hub
+ * keeps an inline copy in search.js (plain file:// script) pinned by the parity test. */
 
 /* Sentence-level index of a page's visible prose, built on demand. */
 const proseCache = new Map();
@@ -92,11 +107,7 @@ function prose(path, level = null) {
   const root = full.querySelector("main") ?? full;
   for (const n of root.querySelectorAll(NOISE)) n.remove();
   for (const n of root.querySelectorAll("figure.diagram")) n.remove();
-  if (level) {
-    for (const n of root.querySelectorAll("[data-kb-level]")) {
-      if (!visibleAt(n.getAttribute("data-kb-level"), level)) n.remove();
-    }
-  }
+  pruneForLens(root, level);
   const text = root.text.replace(/[ \t]+/g, " ");
   const lines = text.split(/\n|(?<=[.!?])\s+/).map((l) => l.trim()).filter((l) => l.length > 25);
   const hits = new Map();
@@ -192,14 +203,7 @@ function blockText(sec) {
   const clone = parse(sec.toString(), PARSE_OPTS);
   for (const n of clone.querySelectorAll(NOISE)) n.remove();
   for (const h of clone.querySelectorAll("h2")) h.remove();   // the block name is the heading
-  if (LEVEL) {
-    /* Prune elements above the requested level. The section's own (stamped) level is
-     * whole-block visibility — readPage decides that; here only inner elements go. */
-    for (const n of clone.querySelectorAll("[data-kb-level]")) {
-      if (n.getAttribute("data-kb-block")) continue;
-      if (!visibleAt(n.getAttribute("data-kb-level"), LEVEL)) n.remove();
-    }
-  }
+  pruneForLens(clone, LEVEL);
   return render(clone).join("").replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -224,9 +228,11 @@ function readPage(id) {
   const root = parse(readFileSync(join(SITE, node.path), "utf8"), PARSE_OPTS);
   const blocks = {};
   for (const sec of root.querySelectorAll("[data-kb-block]")) {
-    /* A section whose stamped level sits above the requested one is out of scope. */
-    if (LEVEL && !visibleAt(sec.getAttribute("data-kb-level"), LEVEL)) continue;
-    blocks[sec.getAttribute("data-kb-block")] = blockText(sec);
+    /* Every block shows at every lens (the whole-block policy is retired); a block
+     * whose lens-filtered text comes back empty is simply omitted. */
+    const text = blockText(sec);
+    if (LEVEL && !text) continue;
+    blocks[sec.getAttribute("data-kb-block")] = text;
   }
   return { node, root, blocks };
 }
@@ -300,8 +306,10 @@ if (cmd === "get") {
   const terms = [...new Set(q.split(/\s+/).filter((t) => t.length > 2 && !STOP.has(t)))];
   const limit = Number(opt("n") ?? 8);
 
-  // The synonym bridge (SYNONYMS) is the single source in lib/model.mjs — imported above,
-  // and projected into catalog.js so the offline hub search scores the same expansions.
+  // The synonym bridge: curated SYNONYMS (lib/model.mjs) layered over the machine-generated
+  // expansion table (lib/expansions.mjs), curated wins. build.mjs projects the same merge
+  // into catalog.js, so the offline hub search scores the same bridge.
+  const SYN = mergedSynonyms(SYNONYMS);
 
   // Reading all 146 pages costs disk, not context — only the output is charged in
   // tokens. So search the full prose, not just the index, and return the line that
@@ -327,7 +335,7 @@ if (cmd === "get") {
       /* Score the term itself at full weight, then its synonyms at half; a term
        * counts as matched once, on its best variant. */
       let best = 0, bestWhy = null;
-      const variants = [term, ...(SYNONYMS[term] ?? [])];
+      const variants = [term, ...(SYN[term] ?? [])];
       for (let vi = 0; vi < variants.length; vi++) {
         const t = variants[vi];
         const mult = vi === 0 ? 1 : 0.5;
@@ -360,7 +368,7 @@ if (cmd === "get") {
     }
     console.log(`\n${scored.length} match(es). Next: kb.mjs get <id> [--block usage]`);
   }
-} else if (cmd === "set" || cmd === "wild" || cmd === "production" || cmd === "explain" || cmd === "level") {
+} else if (cmd === "set" || cmd === "wild" || cmd === "production" || cmd === "explain" || cmd === "level" || cmd === "register") {
   /* Writing goes through here rather than hand-edited attribute strings: the JSON is
    * validated before it lands, placement is never guessed, and it is idempotent. */
   const graph = load("graph.json");
@@ -418,8 +426,12 @@ if (cmd === "get") {
       if (existing) { writeFileSync(file, root.toString().replace(/ *<section class="doc-section" id="wild"[\s\S]*?<\/section>\n\n/, "")); }
       console.log(`${node.id}: wild removed`);
     } else {
+      /* Optional href: a reference implementation or canonical write-up. The link
+       * must be to the thing itself (repo, docs page) — never invented. */
       const rows = items.map((i) =>
-        `        <div class="wild-item" data-kb-example="${i.id}"><strong>${esc(i.name)}</strong><span>${esc(i.note)}</span></div>`).join("\n");
+        `        <div class="wild-item" data-kb-example="${i.id}">${
+          i.href ? `<strong><a href="${esc(i.href)}">${esc(i.name)}</a></strong>` : `<strong>${esc(i.name)}</strong>`
+        }<span>${esc(i.note)}</span></div>`).join("\n");
       const block = `    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
@@ -507,7 +519,7 @@ ${rows}
     } else {
       if (texts.some((t) => !t.trim())) { console.error("explain needs all three levels — a partial ladder is invalid"); process.exit(1); }
       const items = LEVELS.map((l, i) =>
-        `        <div class="explain-item" id="explain-${l}" data-kb-level="${l}">
+        `        <div class="explain-item" id="explain-${l}" data-kb-register="${l}">
           <h3>${LEVEL_LABELS[l]}</h3>
           <p>${esc(texts[i])}</p>
         </div>`).join("\n");
@@ -534,29 +546,39 @@ ${items}
       console.log(`${node.id}: explain = ${LEVELS.map((l, i) => `${l}:${texts[i].trim().split(/\s+/).length}w`).join(" ")}`);
     }
   } else {
-    /* level — authored element-level reading level. Sections are policy-owned
-     * (BLOCK_LEVELS in lib/model.mjs, stamped by build-pages.mjs) and the explain
-     * ladder's levels are structural, so both are refused here. */
+    /* level | register — the two authored per-element lens attributes.
+     *   level    = min-level accretion: "visible from this level up".
+     *   register = exact-match variant: "rendered at exactly this lens"; adjacent
+     *              registered siblings form one variant group.
+     * An element carries at most ONE of the two (make check enforces the XOR).
+     * Sections and the explain ladder's own items are refused — sections always
+     * show, and the ladder is written whole via kb.mjs explain. */
+    const attr = `data-kb-${cmd}`;                       // data-kb-level | data-kb-register
+    const other = cmd === "level" ? "data-kb-register" : "data-kb-level";
     const [, , target, level] = positional;
-    if (!target || !level) { console.error("usage: kb.mjs level <id> <element-id> <basic|advanced|expert|none>"); process.exit(1); }
+    if (!target || !level) { console.error(`usage: kb.mjs ${cmd} <id> <element-id> <basic|advanced|expert|none>`); process.exit(1); }
     if (level !== "none" && !LEVELS.includes(level)) {
       console.error(`"${level}" is not a level — use ${LEVELS.join("/")} or none`); process.exit(1);
     }
     const el = root.querySelector(`[id="${target}"]`);
     if (!el) { console.error(`${node.id}: no element with id "${target}"`); process.exit(1); }
     if (el.getAttribute("data-kb-block")) {
-      console.error(`"${target}" is a section — block levels come from BLOCK_LEVELS in scripts/lib/model.mjs, not per page`);
+      console.error(`"${target}" is a section — blocks show at every lens; adapt the content inside instead`);
       process.exit(1);
     }
     if (el.closest('[data-kb-block="explain"]')) {
-      console.error(`"${target}" is part of the explain ladder — its levels are structural, edit via kb.mjs explain`);
+      console.error(`"${target}" is part of the explain ladder — its registers are structural, edit via kb.mjs explain`);
       process.exit(1);
     }
-    if (level === "none") el.removeAttribute("data-kb-level");
-    else el.setAttribute("data-kb-level", level);
+    if (level !== "none" && el.getAttribute(other) != null) {
+      console.error(`"${target}" already carries ${other} — an element takes level OR register, never both (use "${other === "data-kb-level" ? "level" : "register"} ${node.id} ${target} none" first)`);
+      process.exit(1);
+    }
+    if (level === "none") el.removeAttribute(attr);
+    else el.setAttribute(attr, level);
     const out = root.toString();
     if (out !== src) writeFileSync(file, out);
-    console.log(`${node.id}: ${target} level=${level}${out === src ? " (unchanged)" : ""}`);
+    console.log(`${node.id}: ${target} ${cmd}=${level}${out === src ? " (unchanged)" : ""}`);
   }
 } else if (cmd === "ls") {
   const band = opt("band"), kind = opt("kind");
@@ -586,7 +608,7 @@ ${items}
       const p = join(dir, name);
       return statSync(p).isDirectory() ? walk(p) : p.endsWith(".html") ? [relative(SITE, p)] : [];
     });
-    for (const d of ["patterns", "hazards", "themes", "principles"]) targets.push(...walk(join(SITE, d)));
+    for (const d of ["patterns", "hazards", "themes", "principles", "designs"]) targets.push(...walk(join(SITE, d)));
   }
 
   const problems = [];
@@ -769,8 +791,7 @@ ${items}
 } else if (cmd === "unlink") {
   /* The inverse of link, and the reason it exists: an edge lives on two pages, so retiring
    * one by hand is two edits in two files plus remembering the rel-group that just went
-   * empty. Verb-agnostic — it removes whatever each side declared, which is also why it
-   * works on a hazard's mitigation block, where link cannot write. */
+   * empty. Verb-agnostic — it removes whatever each side declared, wherever it sits. */
   const [, aId, bId] = positional;
   if (!aId || !bId) { console.error("usage: kb.mjs unlink <a> <b>"); process.exit(1); }
   const graph = load("graph.json");

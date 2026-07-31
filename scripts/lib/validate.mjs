@@ -4,6 +4,7 @@
  * the PostToolUse hook) and `build-pages.mjs` (corpus-wide inside `make check`).
  * Needs no graph.json, so a single page validates in ~50ms.
  */
+import { parse } from "../vendor/node-html-parser.mjs";
 import { BLOCKS, OPTIONAL_BLOCKS, TAGS, RELATION_TYPES, LEVELS, folderFor } from "./model.mjs";
 
 /** Block-vocabulary problems for one page: missing, unknown, out of order. */
@@ -19,6 +20,70 @@ export function blockProblems(present, kind) {
   const ordered = present.filter((b) => want.includes(b));
   if (JSON.stringify(ordered) !== JSON.stringify(want.filter((b) => present.includes(b))))
     problems.push(`blocks out of order: ${present.join(" ")}`);
+  return problems;
+}
+
+/** Lens-mechanics problems for one parsed page: register vocabulary, the
+ *  level-XOR-register rule, ascending variant runs, and the guarantee that no
+ *  block renders empty at any lens (the invariant behind "same structure at
+ *  every level"). Shared by validatePage and the corpus-wide build check. */
+export function lensProblems(root) {
+  const problems = [];
+  const registered = root.querySelectorAll("[data-kb-register]");
+
+  for (const el of registered) {
+    const reg = el.getAttribute("data-kb-register");
+    if (!LEVELS.includes(reg))
+      problems.push(`data-kb-register "${reg}" is not in the closed vocabulary (${LEVELS.join("/")})`);
+    if (el.getAttribute("data-kb-level") != null)
+      problems.push(`#${el.getAttribute("id") ?? "?"} carries both data-kb-level and data-kb-register`);
+    if (el.getAttribute("data-kb-block"))
+      problems.push(`section "${el.getAttribute("data-kb-block")}" carries data-kb-register — registers go on elements, blocks always show`);
+  }
+
+  /* A maximal run of adjacent registered siblings is one variant group: registers
+   * must ascend and not repeat, so each lens picks at most one rung per group. */
+  const parents = [...new Set(registered.map((el) => el.parentNode))];
+  for (const parent of parents) {
+    let run = [];
+    const flush = () => {
+      for (let i = 1; i < run.length; i++) {
+        if (LEVELS.indexOf(run[i]) <= LEVELS.indexOf(run[i - 1]))
+          problems.push(`variant group runs ${run.join(" → ")} — registers must ascend without repeats`);
+      }
+      run = [];
+    };
+    for (const c of parent.childNodes) {
+      if (c.nodeType !== 1) continue;
+      const reg = c.getAttribute?.("data-kb-register");
+      if (reg) run.push(reg);
+      else flush();
+    }
+    flush();
+  }
+
+  /* No block may come back empty at any lens. Clone the section, prune what the
+   * lens would hide (min-level accretion + exact-match registers), drop the
+   * headings, and demand some text survives. */
+  for (const sec of root.querySelectorAll("[data-kb-block]")) {
+    const block = sec.getAttribute("data-kb-block");
+    for (const lens of LEVELS) {
+      const clone = parse(sec.toString(), { comment: true });
+      for (const el of clone.querySelectorAll("[data-kb-level]")) {
+        if (el.getAttribute("data-kb-block")) continue;
+        if (LEVELS.indexOf(el.getAttribute("data-kb-level")) > LEVELS.indexOf(lens)) el.remove();
+      }
+      for (const el of clone.querySelectorAll("[data-kb-register]")) {
+        if (el.getAttribute("data-kb-register") !== lens) el.remove();
+      }
+      for (const h of clone.querySelectorAll("h2, h3")) h.remove();
+      if (!clone.text.trim()) {
+        problems.push(`block "${block}" renders empty at the ${lens} lens`);
+        break; // one report per block is enough
+      }
+    }
+  }
+
   return problems;
 }
 
@@ -80,17 +145,19 @@ export function validatePage(root, relPath) {
     if (!el.getAttribute("data-kb-to")) p(`relation "${verb}" is missing data-kb-to`);
   }
 
-  /* Reading levels: a closed vocabulary, and the explain ladder — when present —
-   * is complete and in ascending order. */
+  /* Reading levels: both lens attributes come from the closed vocabulary, an element
+   * carries at most one of them, variant runs ascend, and no block may render empty
+   * at any lens. */
   for (const el of root.querySelectorAll("[data-kb-level]")) {
     const lv = el.getAttribute("data-kb-level");
     if (!LEVELS.includes(lv)) p(`data-kb-level "${lv}" is not in the closed vocabulary (${LEVELS.join("/")})`);
   }
+  for (const msg of lensProblems(root)) p(msg);
   const explain = root.querySelector('[data-kb-block="explain"]');
   if (explain) {
-    const got = explain.querySelectorAll(".explain-item").map((e) => e.getAttribute("data-kb-level"));
+    const got = explain.querySelectorAll(".explain-item").map((e) => e.getAttribute("data-kb-register"));
     if (JSON.stringify(got) !== JSON.stringify(LEVELS))
-      p(`explain block needs one .explain-item per level, in ${LEVELS.join(" → ")} order`);
+      p(`explain block needs one .explain-item per register, in ${LEVELS.join(" → ")} order`);
   }
 
   /* The sketch's code declares its language (pre is a raw-text element, so the

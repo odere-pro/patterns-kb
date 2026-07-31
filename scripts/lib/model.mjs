@@ -59,27 +59,34 @@ export const OPTIONAL_BLOCKS = {
 };
 
 /* ---- reading levels ----
- * Every page can be read at three depths. `data-kb-level` on an element means
- * "visible from this level up" (min-level progressive disclosure): the expert lens
- * shows everything, the basic lens only what is untagged or tagged basic. An element
- * with NO level is universal — tagging is additive, so an unswept page renders fully
- * at every lens. The vocabulary is CLOSED, like TAGS and the relation verbs. */
+ * Every page reads at three depths — the SAME block skeleton at every lens, with the
+ * content adapted inside the blocks. Two authored attributes, two semantics:
+ *
+ *   data-kb-level    = "visible from this level up" (min-level ACCRETION). Higher
+ *                      lenses see MORE items — extra tradeoffs, operational nuance.
+ *   data-kb-register = "rendered at EXACTLY this lens" (VARIANT). Adjacent siblings
+ *                      carrying registers form one variant group — the same idea,
+ *                      re-explained in the register of each level. The explain
+ *                      ladder is the canonical variant group.
+ *
+ * An element with neither attribute is universal. An element carries at most ONE of
+ * the two (make check enforces the XOR), and no section may render empty at any lens.
+ * The vocabulary is CLOSED, like TAGS and the relation verbs. */
 export const LEVELS = ["basic", "advanced", "expert"];   // ordered, ascending depth
 export const LEVEL_LABELS = { basic: "Basic", advanced: "Advanced", expert: "Expert" };
 /** Rank of a level for comparisons; unknown levels rank as -1. */
 export const levelRank = (l) => LEVELS.indexOf(l);
 
-/* Per-kind block visibility policy: the minimum level at which a block is shown.
- * Unlisted blocks are always visible. build-pages.mjs STAMPS these onto the block
- * sections as data-kb-level (generated, like data-kb-polarity) — the policy lives
- * here, once, and never per page. Finer, per-element levels are AUTHORED with
- * `kb.mjs level` and are never touched by the stamp. */
+/* Per-kind whole-block visibility policy — RETIRED with the 2026-08 register
+ * mechanism: every block is visible at every lens, and depth varies INSIDE blocks
+ * (registers + element levels). The stamping machinery in build-pages.mjs is kept
+ * and self-cleaning, so an empty policy strips any stale section-level stamp. */
 export const BLOCK_LEVELS = {
-  pattern:   { variations: "advanced", production: "expert", fluency: "advanced" },
-  hazard:    {},                                           // hazards stay fully visible
-  theme:     { tradespace: "advanced", siblings: "advanced" },
-  principle: { overreach: "advanced" },
-  design:    { sizing: "advanced", deepdives: "advanced", levels: "expert" },
+  pattern:   {},
+  hazard:    {},
+  theme:     {},
+  principle: {},
+  design:    {},
 };
 
 /* Tags are a CLOSED vocabulary, like the relation verbs. They exist to group and

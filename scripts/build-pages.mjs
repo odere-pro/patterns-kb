@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 import { VOCAB_NS, KB_NAME, BLOCK_LEVELS } from "./lib/model.mjs";
-import { blockProblems } from "./lib/validate.mjs";
+import { blockProblems, lensProblems } from "./lib/validate.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
  * the kb:generated markers (and any comment an author writes). */
@@ -35,7 +35,12 @@ const CHECK = process.argv.includes("--check");
 const graph = JSON.parse(readFileSync(join(SITE, "assets", "graph.json"), "utf8"));
 
 const MARK = "kb:generated — derived from data-kb-*; edit the page, not this";
-/* Which item lists get stable ids, keyed by the block they live in. */
+/* Which elements get stable ids, keyed by the block they live in. `idOf` mints the
+ * id; rows with a natural key (a wild item's example slug, a tour step's member) are
+ * reorder-proof, positional rows (list items, prose paragraphs) renumber on insert.
+ * Every id is a citation anchor AND an address for `kb.mjs level` / `kb.mjs register`
+ * — which is why prose paragraphs are here: per-level variants need addressable
+ * paragraphs in every block, not just list items. */
 const ITEMS = [
   { block: "tradeoffs", sel: ".col.pros li", polarity: "pro" },
   { block: "tradeoffs", sel: ".col.cons li", polarity: "con" },
@@ -46,7 +51,15 @@ const ITEMS = [
   { block: "production", sel: ".prod-signals li", polarity: "signal" },
   { block: "production", sel: ".prod-failures li", polarity: "failure" },
   { block: "production", sel: ".prod-checklist li", polarity: "check" },
+  { block: "wild", sel: ".wild-item", idOf: (el) => keyed("wild", el.getAttribute("data-kb-example")) },
+  { block: "tour", sel: ".tour-step", idOf: (el) => keyed("tour", el.getAttribute("data-kb-member")) },
+  { block: "fluency", sel: ".fluency-item", idOf: (el) => keyed("fluency", el.getAttribute("data-kb-theme")) },
+  { block: "deepdives", sel: ".prose > h3", idOf: (_el, i) => `deepdives-dive-${i + 1}` },
+  { block: "sketch", sel: "details.sketch", idOf: (_el, i) => `sketch-variant-${i + 1}` },
 ];
+const keyed = (block, key) => (key ? `${block}-${key}` : null);
+/* Prose paragraphs in ANY block: <block>-p-N. Applied generically after ITEMS. */
+const PROSE_P = ".prose > p";
 
 /** Path from one page to another, site-relative in, page-relative out. */
 const hop = (fromPath, toPath) => {
@@ -105,29 +118,44 @@ for (const node of Object.values(graph.nodes)) {
   const src = readFileSync(file, "utf8");
   const root = parse(src, PARSE_OPTS);
 
-  /* ---- block vocabulary lint (shared with kb.mjs validate) ---- */
+  /* ---- block vocabulary + lens-mechanics lint (shared with kb.mjs validate) ---- */
   const present = root.querySelectorAll("[data-kb-block]").map((s) => s.getAttribute("data-kb-block"));
   for (const msg of blockProblems(present, node.kind)) problems.push(`${node.id}: ${msg}`);
+  for (const msg of lensProblems(root)) problems.push(`${node.id}: ${msg}`);
 
   /* ---- element-level ids ---- */
-  for (const { block, sel, polarity } of ITEMS) {
+  for (const { block, sel, polarity, idOf } of ITEMS) {
     const sec = root.querySelector(`[data-kb-block="${block}"]`);
     if (!sec) continue;
     sec.querySelectorAll(sel).forEach((el, i) => {
-      el.setAttribute("id", `${block}-${polarity ?? "item"}-${i + 1}`);
+      const id = idOf ? idOf(el, i) : `${block}-${polarity ?? "item"}-${i + 1}`;
+      if (!id) return;
+      el.setAttribute("id", id);
       if (polarity) el.setAttribute("data-kb-polarity", polarity);
       idsStamped++;
     });
   }
 
+  /* ---- prose-paragraph ids: <block>-p-N in every block ----
+   * These make plain paragraphs addressable, which the per-level register variants
+   * need (`kb.mjs register <id> <element-id> <level>`). Positional — inserting a
+   * paragraph renumbers its successors, so re-run this before tagging. */
+  for (const sec of root.querySelectorAll("[data-kb-block]")) {
+    const b = sec.getAttribute("data-kb-block");
+    if (b === "explain") continue; // the ladder's items are the addresses there
+    sec.querySelectorAll(PROSE_P).forEach((el, i) => {
+      el.setAttribute("id", `${b}-p-${i + 1}`);
+      idsStamped++;
+    });
+  }
+
   /* ---- reading-level stamps ----
-   * Section-level data-kb-level is GENERATED from the BLOCK_LEVELS policy — block
-   * visibility is decided once, in lib/model.mjs, never per page. Sections outside
-   * the policy get the attribute removed, so a policy change is self-cleaning. */
+   * Section-level data-kb-level is GENERATED from the BLOCK_LEVELS policy — retired
+   * to an empty policy in 2026-08, so this loop now only CLEANS stale stamps.
+   * Authored data-kb-level / data-kb-register live on finer elements only. */
   const policy = BLOCK_LEVELS[node.kind] ?? {};
   for (const sec of root.querySelectorAll("[data-kb-block]")) {
     const b = sec.getAttribute("data-kb-block");
-    if (b === "explain") continue; // its items carry the levels, not the section
     if (policy[b]) { sec.setAttribute("data-kb-level", policy[b]); levelsStamped++; }
     else if (sec.getAttribute("data-kb-level") != null) sec.removeAttribute("data-kb-level");
   }
@@ -136,10 +164,16 @@ for (const node of Object.values(graph.nodes)) {
   const explainSec = root.querySelector('[data-kb-block="explain"]');
   if (explainSec) {
     explainSec.querySelectorAll(".explain-item").forEach((el) => {
-      const lv = el.getAttribute("data-kb-level");
+      const lv = el.getAttribute("data-kb-register") || el.getAttribute("data-kb-level");
       if (lv) { el.setAttribute("id", `explain-${lv}`); idsStamped++; }
     });
   }
+
+  /* ---- meta description: derived from data-kb-essence ----
+   * The hand-written <meta name="description"> was a fourth restatement of the
+   * essence; deriving it removes one member of the quartet corpus-wide. */
+  const metaEl = root.querySelector('meta[name="description"]');
+  if (metaEl) metaEl.setAttribute("content", `${node.name} — ${node.essence}`);
 
   /* ---- JSON-LD ---- */
   const block = `  <!-- ${MARK} -->\n  <script type="application/ld+json">\n${JSON.stringify(jsonLdFor(node), null, 2)}\n  </script>\n`;
