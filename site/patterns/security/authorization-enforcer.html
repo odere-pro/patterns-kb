@@ -95,7 +95,7 @@
       <div class="prose">
         <p id="description-p-1">An <strong>authorization enforcer</strong> is the single choke point every access decision passes through: given a subject, an action, and a resource, it answers one question — <em>is this allowed?</em> — and the rest of the system defers to that answer instead of deciding for itself. In its most common form, <strong>role-based access control (RBAC)</strong>, the subject's identity is first mapped to one or more <em>roles</em>, and each role carries a fixed set of <em>permissions</em>; the enforcer checks the requested action against the roles held, never against the user directly.</p>
         <p id="description-p-2">The force it resolves is <strong>authorization sprawl</strong>. Left unchecked, "can this user do this?" gets copy-pasted into controllers, services, templates, and background jobs, each with its own slightly different logic. One missed check is a privilege-escalation bug waiting to be found; one inconsistent check is a silent hole nobody notices until an audit or an incident does it for them. Centralizing the decision means there is exactly one place to get it right, one place to test, and one place to update when a role's permissions change.</p>
-        <p id="description-p-3">The enforcer sits at a fixed point in the request path — middleware, a decorator, a policy call before the handler runs — deliberately decoupled from where the role-to-permission mapping actually lives. That mapping can sit in code, in a database table, or behind an external policy service, and swapping the source never touches a call site.</p>
+        <p id="description-p-3" data-kb-level="advanced">The enforcer sits at a fixed point in the request path — middleware, a decorator, a policy call before the handler runs — deliberately decoupled from where the role-to-permission mapping actually lives. That mapping can sit in code, in a database table, or behind an external policy service, and swapping the source never touches a call site.</p>
       </div>
     </section>
 
@@ -104,15 +104,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Getting in the door is one thing; what you may touch once inside is another. In an office, everyone past reception still carries a badge that opens some rooms and not others, and one list decides which. Software does the same: one place holds the rules about who may do what, and every action asks it first.</p>
+          <p>Signing in proves who you are. It does not say whether you may delete the customer list. If every screen and every background job answers that question on its own, the answers drift: one checks the job title, another checks it slightly differently, and a third was written the week nobody remembered to check at all — so an ordinary user finds a button that deletes things. Put the rules in one place instead and make every action ask before it runs. It works like an office badge: everyone past reception carries one, a single list decides which doors it opens, and changing what a job title may open is one edit to that list rather than a visit to every door.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>Given a subject, an action and a resource, one decision point answers whether the access is allowed, and every call site defers to that answer. In role-based form the identity resolves to roles, each role carries a fixed permission set, and the check tests the requested action against the roles held rather than against the user. The enforcer sits at a fixed spot — middleware, a decorator, a policy call before the handler — deliberately decoupled from where the role-to-permission mapping lives: code, a database table, or an external policy service. It runs once identity is established.</p>
+          <p>Role-based control is the common shape of that list: the identity resolves to roles, each role carries a fixed permission set, and the check tests the requested action against the roles held rather than against the user — which is what keeps the policy small enough for a person to read. The models diverge in what a rule may look at. Attribute-based rules read properties of the subject, the resource and the environment, so ownership and time of day become expressible. Relationship-based rules walk a graph — member of, owns, shared with — which is how document sharing works. Externalizing the decision to a policy engine versions and tests policy apart from application code, at the price of a call on the request path.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Reach for it when permissions cluster into a small, stable set of roles and someone will eventually have to answer, on the record, who can do what. The payoff is one place to get right and one policy to read, with permission changes landing everywhere at once rather than per call site. The bill starts with granularity: coarse roles over-grant, and fighting that with a role per edge case collapses back into per-user special-casing no audit can read. Rules that turn on ownership, time or location do not fit the model and need attribute- or relationship-based machinery beside it. And the decision sits on every request, so it is both a hot path and a component whose outage denies everything.</p>
+          <p>Choose it when permissions cluster into a small, stable set of roles and someone will eventually have to answer, on the record, who can do what. Granularity is the first bill. Coarse roles over-grant, and paying that with a role per edge case collapses into per-user special-casing no audit can read — so keep roles coarse and push ownership, time and location rules into attribute- or relationship-based machinery beside the enforcer rather than into more roles. The second bill is that a decision now sits in front of every protected action: caching pays the latency and buys staleness back, because a revoked permission keeps working until the entry expires — size that TTL against how fast you have promised a revocation to take effect, not against the cost of evaluation. The third is availability: deny-by-default means the policy source going down denies everything, which is the right trade and still an outage, so make the fail mode a written decision and keep the decision point close to the caller. Then run the loop: tune the default effect, the cache TTL and the policy refresh interval, watch the denial rate and decision latency at p99, expect a stale policy after a revocation to be the failure nobody reports, and gate the release on proving every mutating path routes through the enforcer.</p>
         </div>
       </div>
     </section>
@@ -122,13 +122,21 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    Req["Request, subject + action + resource"] -->|"enter"| Enf["Authorization Enforcer"]
-    Enf -->|"resolve subject"| Look["Look up subject's role"]
-    Look -->|"role"| Check["Check role against required permission"]
-    Check -->|"allowed"| Allow["Proceed with action"]
-    Check -->|"denied"| Deny["403 Forbidden"]
+    Cl["Caller"]:::ext
+    AE["Authentication enforcer"]:::ext
+    subgraph PDP["One place decides allow or deny"]
+        Enf["Authorization enforcer"]
+        Policy[("Roles and permissions")]
+    end
+    H["Request handler"]
+    Cl --&gt;|"1 request: this action, this resource"| AE
+    AE --&gt;|"2 hand on the verified identity"| Enf
+    Enf --&gt;|"3 which roles, and what may they do?"| Policy
+    Enf --&gt;|"4 not permitted: 403, stops here"| Cl
+    Enf --&gt;|"5 permitted: run the action"| H
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>Every request is resolved to a role before the permission check runs — the handler itself never decides who is allowed to do what.</figcaption>
+        <figcaption>What stops a handler from deciding for itself who may delete a document? Step 3 answers subject, action and resource in one place, so a permission change lands everywhere at once and step 5 hands the handler an action already known to be allowed.</figcaption>
       </figure>
     </section>
 
@@ -139,12 +147,12 @@ flowchart LR
         <dd>Decisions weigh attributes of subject, resource, and environment — department, classification, time of day — instead of a fixed role, at the cost of rules that are harder to audit at a glance.</dd>
         <dt id="variations-item-2">Access Control Lists (ACL)</dt>
         <dd>Permissions attach directly to each resource as a list of subjects allowed to act on it — fine-grained, but unwieldy once resources number in the thousands.</dd>
-        <dt id="variations-item-3">Policy-based / externalized authorization</dt>
-        <dd>Push the decision out to a policy engine (OPA/Rego, Cedar) that evaluates rules against a request — keeps policy versioned and testable independently of application code.</dd>
-        <dt id="variations-item-4">Relationship-Based Access Control (ReBAC)</dt>
-        <dd>Access follows a graph of relationships between subjects and resources — "member of," "owns," "shared with" — the model behind Google Zanzibar and most modern sharing permissions.</dd>
-        <dt id="variations-item-5">Role hierarchy</dt>
-        <dd>Roles inherit permissions from parent roles, so "Admin" gets everything "Editor" gets plus more, without every grant being repeated per role.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Policy-based / externalized authorization</dt>
+        <dd data-kb-level="advanced">Push the decision out to a policy engine (OPA/Rego, Cedar) that evaluates rules against a request — keeps policy versioned and testable independently of application code.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Relationship-Based Access Control (ReBAC)</dt>
+        <dd data-kb-level="advanced">Access follows a graph of relationships between subjects and resources — "member of," "owns," "shared with" — the model behind Google Zanzibar and most modern sharing permissions.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced">Role hierarchy</dt>
+        <dd data-kb-level="advanced">Roles inherit permissions from parent roles, so "Admin" gets everything "Editor" gets plus more, without every grant being repeated per role.</dd>
       </dl>
     </section>
 
@@ -156,8 +164,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Centralizes every access decision in one auditable place instead of scattered checks.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Changing a role's permissions takes effect everywhere at once, with no code redeploy.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Makes "who can do what" answerable by reading one policy, not grepping the codebase.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Decouples the decision itself from where the role-to-permission mapping is stored.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Makes "who can do what" answerable by reading one policy, not grepping the codebase.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Decouples the decision itself from where the role-to-permission mapping is stored.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -166,7 +174,7 @@ flowchart LR
             <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="expert">Role explosion — a role for every edge case — collapses back into per-user special-casing.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Coarse roles either over-grant permissions or force awkward role-splitting to stay precise.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">The enforcer is a single point of failure and a hot path that has to stay fast.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Doesn't capture context-dependent rules — ownership, time, location — without extra machinery.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Doesn't capture context-dependent rules — ownership, time, location — without extra machinery.</li>
           </ul>
         </div>
       </div>
@@ -180,7 +188,7 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Multiple roles need different, well-defined sets of permissions across the system.</li>
             <li id="usage-when-2" data-kb-polarity="when">You need one auditable place to answer "who can do what" for a security or compliance review.</li>
-            <li id="usage-when-3" data-kb-polarity="when">Permissions change often enough that hard-coding a check per call site is unsustainable.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Permissions change often enough that hard-coding a check per call site is unsustainable.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -188,7 +196,7 @@ flowchart LR
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid" data-kb-level="advanced">Rules depend heavily on resource attributes or relationships — reach for ABAC or ReBAC instead.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">There's effectively one role — every authenticated user can do everything — so the check is a no-op.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">Permissions genuinely differ per individual, not per role — a role invented per user isn't RBAC.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Permissions genuinely differ per individual, not per role — a role invented per user isn't RBAC.</li>
           </ul>
         </div>
       </div>
@@ -230,9 +238,9 @@ await documents.delete(docId);</code></pre>
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="open-policy-agent" id="wild-open-policy-agent"><strong>Open Policy Agent</strong><span>A general-purpose policy decision point: applications ask OPA whether an action is allowed and it evaluates Rego policies against the request. Policy and data are distributed as bundles the agent polls on an interval, and every decision can be emitted to a decision log for audit.</span></div>
+        <div class="wild-item" data-kb-example="open-policy-agent" id="wild-open-policy-agent" data-kb-level="advanced"><strong>Open Policy Agent</strong><span>A general-purpose policy decision point: applications ask OPA whether an action is allowed and it evaluates Rego policies against the request. Policy and data are distributed as bundles the agent polls on an interval, and every decision can be emitted to a decision log for audit.</span></div>
         <div class="wild-item" data-kb-example="kubernetes-rbac" id="wild-kubernetes-rbac"><strong>Kubernetes RBAC</strong><span>Role and ClusterRole objects define permissions; RoleBinding and ClusterRoleBinding attach them to subjects. With the RBAC authorization mode enabled, the API server checks every request against the bindings and denies by default — a subject with no binding can do nothing.</span></div>
-        <div class="wild-item" data-kb-example="aws-iam" id="wild-aws-iam"><strong>AWS IAM</strong><span>Every API call is evaluated against attached identity-based and resource-based policies in one central decision point. Access is denied by default, an explicit Deny always overrides an Allow, and the effective decision is the combined result of all applicable policies.</span></div>
+        <div class="wild-item" data-kb-example="aws-iam" id="wild-aws-iam" data-kb-level="expert"><strong>AWS IAM</strong><span>Every API call is evaluated against attached identity-based and resource-based policies in one central decision point. Access is denied by default, an explicit Deny always overrides an Allow, and the effective decision is the combined result of all applicable policies.</span></div>
       </div>
     </section>
 
@@ -243,27 +251,27 @@ await documents.delete(docId);</code></pre>
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Default effect (deny-by-default)</strong> — What happens to a request that matches no rule. Deny-by-default is the safe setting: an unmatched action is refused. Flipping to allow-by-default turns every gap in the policy into an open door.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Decision cache TTL</strong> — How long an allow/deny decision is memoized before re-evaluation. Longer cuts evaluation cost on hot paths but means a revoked permission can still be honored until the entry expires.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Policy / role-data refresh interval</strong> — How often the enforcer pulls updated roles and policy from its source (a bundle server, a database, an external PDP). Sets the ceiling on how long a permission change takes to take effect everywhere.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Deployment topology (local PDP vs remote decision service)</strong> — A colocated sidecar or embedded library keeps decision latency and availability under local control; a central remote service is easier to govern but adds a network hop and a shared dependency to every request.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Decision cache TTL</strong> — How long an allow/deny decision is memoized before re-evaluation. Longer cuts evaluation cost on hot paths but means a revoked permission can still be honored until the entry expires.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Policy / role-data refresh interval</strong> — How often the enforcer pulls updated roles and policy from its source (a bundle server, a database, an external PDP). Sets the ceiling on how long a permission change takes to take effect everywhere.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Deployment topology (local PDP vs remote decision service)</strong> — A colocated sidecar or embedded library keeps decision latency and availability under local control; a central remote service is easier to govern but adds a network hop and a shared dependency to every request.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>403 / denial rate</strong> — A jump after a policy change usually means over-restriction (a needed grant was dropped); an unexpected drop toward zero can mean over-grant or a check being skipped.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Authorization decision latency (p99)</strong> — Time to evaluate a single allow/deny on the request path. It sits in front of every protected action, so tail latency here is user-visible latency everywhere.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Policy / role-data staleness</strong> — Age of the policy and role mapping the enforcer is actually using versus the source of truth. Rising staleness means revocations and new grants are not yet in effect.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Decision cache hit ratio</strong> — Fraction of decisions served from cache versus fully re-evaluated. A falling ratio predicts rising evaluation cost and latency on the hot path.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Authorization decision latency (p99)</strong> — Time to evaluate a single allow/deny on the request path. It sits in front of every protected action, so tail latency here is user-visible latency everywhere.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Policy / role-data staleness</strong> — Age of the policy and role mapping the enforcer is actually using versus the source of truth. Rising staleness means revocations and new grants are not yet in effect.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Decision cache hit ratio</strong> — Fraction of decisions served from cache versus fully re-evaluated. A falling ratio predicts rising evaluation cost and latency on the hot path.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Policy engine unreachable</strong> — The central decision point goes down. Deny-by-default then locks legitimate users out of everything (availability outage); allow-by-default silently grants everything (security breach). Either way the blast radius is every protected action.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Stale policy after a revocation</strong> — A role loses a permission but the enforcer keeps an old cached decision or an un-refreshed policy copy, so the revoked action keeps succeeding until the cache/bundle refreshes.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Over-broad role (privilege creep)</strong> — Coarse or accreted roles grant more than any holder needs; a compromised or mistaken account can then do far more than intended. The failure is invisible until an audit or incident surfaces it.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Slow evaluation on the hot path</strong> — Complex rules or a slow remote PDP add latency to every request; under load the enforcer becomes the bottleneck it was meant to centralize away.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Stale policy after a revocation</strong> — A role loses a permission but the enforcer keeps an old cached decision or an un-refreshed policy copy, so the revoked action keeps succeeding until the cache/bundle refreshes.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Over-broad role (privilege creep)</strong> — Coarse or accreted roles grant more than any holder needs; a compromised or mistaken account can then do far more than intended. The failure is invisible until an audit or incident surfaces it.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Slow evaluation on the hot path</strong> — Complex rules or a slow remote PDP add latency to every request; under load the enforcer becomes the bottleneck it was meant to centralize away.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -271,9 +279,9 @@ await documents.delete(docId);</code></pre>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Confirm the default effect is deny: a request matching no rule is refused, not allowed.</li>
             <li id="production-check-2" data-kb-polarity="check">Verify every mutating path routes through the enforcer — grep for inline permission checks that decide on their own.</li>
-            <li id="production-check-3" data-kb-polarity="check">Test that revoking a permission takes effect within the refresh/cache window you claim, not just eventually.</li>
-            <li id="production-check-4" data-kb-polarity="check">Load-test decision latency on the hot path with the decision cache cold.</li>
-            <li id="production-check-5" data-kb-polarity="check">Decide and document the fail mode when the policy source is unreachable — fail closed unless a route has a stated reason not to.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Test that revoking a permission takes effect within the refresh/cache window you claim, not just eventually.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Load-test decision latency on the hot path with the decision cache cold.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Decide and document the fail mode when the policy source is unreachable — fail closed unless a route has a stated reason not to.</li>
           </ul>
         </div>
       </div>

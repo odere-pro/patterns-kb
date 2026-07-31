@@ -112,7 +112,7 @@
       <div class="prose">
         <p id="description-p-1">An <strong>authentication enforcer</strong> is the single component every incoming request must pass through before it reaches business logic. It inspects whatever credential the caller presents — a password, a bearer token, a signed cookie, a client certificate — confirms it's genuine and unexpired, and attaches a resolved identity to the request so everything downstream can rely on it without checking again.</p>
         <p id="description-p-2">The force it resolves is <strong>scattered authentication</strong>. Without one choke point, every route handler, background job, and internal script ends up rolling its own answer to "is this caller who they claim to be." It only takes one omission — a debug endpoint shipped without the check, an internal API assumed to be trusted, a route added in a hurry — to leave a hole an attacker can walk straight through. Centralizing the check turns "did every developer remember" into "does this one component work," which is something you can test and audit exhaustively instead of hoping for.</p>
-        <p id="description-p-3">It's a <em>lens</em>, not a structural shape: the same idea shows up as framework middleware, a servlet filter, an API gateway policy, or a service-mesh sidecar doing mTLS. Whatever the mechanism, its job stops at identity — confirming <em>who</em> is calling. Deciding what that caller is then allowed to do is a separate concern, handled next in the request pipeline.</p>
+        <p id="description-p-3" data-kb-level="advanced">It's a <em>lens</em>, not a structural shape: the same idea shows up as framework middleware, a servlet filter, an API gateway policy, or a service-mesh sidecar doing mTLS. Whatever the mechanism, its job stops at identity — confirming <em>who</em> is calling. Deciding what that caller is then allowed to do is a separate concern, handled next in the request pipeline.</p>
       </div>
     </section>
 
@@ -121,15 +121,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Before anyone gets in, one guard checks that they are who they say they are — like passport control at an airport, where every arriving traveller goes through the same booth. The check happens once, in one place, and everything past it can trust the answer. Nobody gets waved through because a side door was left open.</p>
+          <p>Every part of your app needs to know who is asking. If each part answers that on its own, the day someone adds a route in a hurry and forgets the check, that route hands data to anyone who asks — and nothing tells you, because it works fine. So make every request walk past the same desk first. The desk looks at the proof the caller brought, decides whether it is real and still valid, and staples the answer to the request. It is passport control at an airport: one booth, every arriving traveller, and everyone past it gets on with their job without asking for papers again. Turn someone away at the booth and they never reach the rest of the building.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>One component sits at a fixed point in the request path — framework middleware, a servlet filter, a gateway policy, a mesh sidecar terminating mTLS — and verifies whatever credential the caller presents: a password, a bearer token, a signed cookie, a client certificate. It confirms the credential is genuine and unexpired, resolves it to a principal, and attaches that to the request so no handler re-checks. Its job stops at identity; the permission decision runs immediately after, and the verification result is usually cached to keep the hop cheap.</p>
+          <p>Wherever that desk sits in the request path, the variants differ in where the verifying actually happens. A signed token is checked locally against the issuer's public key, so the check costs no network call, but a revoked token stays good until it expires. An opaque token or session id needs a lookup against the issuer or the session store, which buys revocation and puts that store on the path of every request. Federation moves the credential check to an external provider entirely and leaves the enforcer validating a signed assertion. All three stop at identity: the permission decision is the next step in the pipeline, not part of this one.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when more than one entry path has to answer the same question about who is calling, and you would rather audit one component than trust every author to remember the check. Its value is exactly that: a guarantee you can test exhaustively rather than a convention you hope held. The bill is a component whose misconfiguration exposes or locks out everything behind it, a verification hop on every request that pushes you toward caching and so toward stale credentials outliving revocation, and a boundary that must be policed — one debug route, or one call waved through as internal and therefore trusted, and the guarantee is gone.</p>
+          <p>Choose it when more than one entry path has to answer the same question about the caller, and you would rather audit one component than trust every author to remember a check — what you buy is a property you can test exhaustively instead of a convention you hope held. Three costs come with it, each with a counter-move. Misconfiguring the gate exposes or locks out everything behind it, so make the failure policy fail-closed and written down rather than whatever the library defaults to. The verification hop lands on every request, which pushes you to cache introspection results and signing keys — and a cache means a revoked credential outlives its revocation, so pay it by shortening credential lifetime rather than by trusting the cache to be fresh. The boundary itself needs policing: one debug route wired outside the chain, or one call waved through as internal and therefore trusted, and the guarantee is gone — which is why a single access point in front of it and a session manager behind it are the usual companions. Then run the loop: tune credential lifetime and cache TTL, watch the 401 rate and the latency the gate adds at p99, expect a signing key you cannot fetch to read as a total outage, and gate the release on a route-table audit proving nothing reaches a handler unverified.</p>
         </div>
       </div>
     </section>
@@ -139,12 +139,23 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    R["Incoming request"] -->|"arrives"| AE{"Authentication Enforcer"}
-    AE -->|"credentials valid"| ID["Attach identity to request context"]
-    ID -->|"pass through"| H["Downstream handler"]
-    AE -->|"missing or invalid"| REJ["401 Unauthorized, stops here"]
+    Cl["Client"]:::ext
+    IdP["Identity provider"]:::ext
+    subgraph Gate["One gate, and it only answers who"]
+        AE["Authentication enforcer"]
+        Store[("Verification keys and sessions")]
+    end
+    Az["Authorization enforcer"]
+    H["Request handler"]
+    Cl --&gt;|"1 request carrying a credential"| AE
+    IdP --&gt;|"2 publish signing keys and user records"| Store
+    AE --&gt;|"3 check the signature, expiry and session"| Store
+    AE --&gt;|"4 no valid credential: 401, stops here"| Cl
+    AE --&gt;|"5 attach the verified identity"| Az
+    Az --&gt;|"6 decide what that identity may do"| H
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>Every request meets the same gate before any handler runs. Valid credentials attach an identity to the request; anything else is rejected before business logic executes.</figcaption>
+        <figcaption>Where does a handler's idea of who the caller is come from? Step 3 verifies the credential in one place and step 5 hands on a resolved identity, so no route inspects a token itself and no route can be shipped without the check.</figcaption>
       </figure>
     </section>
 
@@ -155,12 +166,12 @@ flowchart LR
         <dd>Runs in-process on every request before it reaches a handler — Express middleware, a Servlet <code>Filter</code>, an ASP.NET pipeline stage.</dd>
         <dt id="variations-item-2"><a href="../distributed/routing/api-gateway.html">API Gateway</a></dt>
         <dd>Push the check to the edge: the gateway authenticates once, then forwards a trusted, signed identity to services that never see raw credentials.</dd>
-        <dt id="variations-item-3"><a href="../distributed/coordination/federated-identity.html">Federated Identity</a></dt>
-        <dd>Delegate verification to an external identity provider via OAuth2, OIDC, or SAML — the enforcer's job shifts from checking a password to validating the IdP's signed assertion.</dd>
-        <dt id="variations-item-4">Token-based, stateless verification</dt>
-        <dd>A signed JWT or PASETO is verified locally by signature and expiry, with no round trip to a session store on every request.</dd>
-        <dt id="variations-item-5"><a href="./secure-session-manager.html">Secure Session Manager</a></dt>
-        <dd>Verify credentials once at login, then trust a signed session cookie or handle for subsequent requests instead of re-checking every time.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced"><a href="../distributed/coordination/federated-identity.html">Federated Identity</a></dt>
+        <dd data-kb-level="advanced">Delegate verification to an external identity provider via OAuth2, OIDC, or SAML — the enforcer's job shifts from checking a password to validating the IdP's signed assertion.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Token-based, stateless verification</dt>
+        <dd data-kb-level="advanced">A signed JWT or PASETO is verified locally by signature and expiry, with no round trip to a session store on every request.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced"><a href="./secure-session-manager.html">Secure Session Manager</a></dt>
+        <dd data-kb-level="advanced">Verify credentials once at login, then trust a signed session cookie or handle for subsequent requests instead of re-checking every time.</dd>
       </dl>
     </section>
 
@@ -172,8 +183,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">One auditable choke point instead of a login check copy-pasted into every handler.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Swapping how identity is verified — password, token, mTLS, an external IdP — touches one component, not the whole codebase.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Produces a single, trusted principal object downstream code can rely on without re-checking.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Nothing reaches business logic without passing the same gate — no route can quietly skip it.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Produces a single, trusted principal object downstream code can rely on without re-checking.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Nothing reaches business logic without passing the same gate — no route can quietly skip it.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -181,8 +192,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">A single point of failure: misconfigure or crash it and every request behind it is exposed or locked out.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Adds latency to every request unless verification results are cached sensibly.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Any path that bypasses it — a debug route, a service call assumed "internal and trusted" — breaks the guarantee entirely.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Tempting to fold authorization logic in alongside it, blurring identity with permission.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Any path that bypasses it — a debug route, a service call assumed "internal and trusted" — breaks the guarantee entirely.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Tempting to fold authorization logic in alongside it, blurring identity with permission.</li>
           </ul>
         </div>
       </div>
@@ -196,15 +207,15 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Multiple routes or services all need to answer the same question — is this caller who they claim to be — and you don't want that logic duplicated.</li>
             <li id="usage-when-2" data-kb-polarity="when">You must guarantee nothing on your public surface is reachable without a verified identity, and want one auditable place to prove it.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You expect the verification mechanism to change later — password today, <a href="../distributed/coordination/federated-identity.html">Federated Identity</a> tomorrow — without rewriting every handler.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You expect the verification mechanism to change later — password today, <a href="../distributed/coordination/federated-identity.html">Federated Identity</a> tomorrow — without rewriting every handler.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
-            <li id="usage-avoid-1" data-kb-polarity="avoid">A call never leaves a boundary you already trust and crosses no network hop where identity could be forged.</li>
+            <li id="usage-avoid-1" data-kb-polarity="avoid" data-kb-level="advanced">A call never leaves a boundary you already trust and crosses no network hop where identity could be forged.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">You need to decide what an already-identified caller is allowed to do — that's <a href="./authorization-enforcer.html">Authorization Enforcer (RBAC)</a>, a distinct step from identity.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">Every request already funnels through a <a href="./single-access-point.html">Single Access Point</a> doing its own inline check — a second dedicated component is redundant ceremony.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Every request already funnels through a <a href="./single-access-point.html">Single Access Point</a> doing its own inline check — a second dedicated component is redundant ceremony.</li>
           </ul>
         </div>
       </div>
@@ -248,8 +259,8 @@ function authenticationEnforcer(provider: AuthProvider) {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="spring-security" id="wild-spring-security"><strong>Spring Security</strong><span>Its FilterChainProxy dispatches each request through an ordered SecurityFilterChain; an AuthenticationManager verifies the credential and the resulting Authentication is stored in the SecurityContextHolder (a ThreadLocal by default) so controllers read the principal without re-checking.</span></div>
-        <div class="wild-item" data-kb-example="django-auth-middleware" id="wild-django-auth-middleware"><strong>Django AuthenticationMiddleware</strong><span>Paired with SessionMiddleware, it lazily resolves the session key into request.user on every request via the configured auth backend, so views trust request.user instead of verifying credentials themselves.</span></div>
-        <div class="wild-item" data-kb-example="envoy-ext-authz" id="wild-envoy-ext-authz"><strong>Envoy ext_authz filter</strong><span>An HTTP filter that calls an external authorization service (gRPC or HTTP) for each proxied request and forwards only the verified identity upstream. Its failure_mode_allow flag makes the fail-open/fail-closed choice an explicit configuration decision.</span></div>
+        <div class="wild-item" data-kb-example="django-auth-middleware" id="wild-django-auth-middleware" data-kb-level="advanced"><strong>Django AuthenticationMiddleware</strong><span>Paired with SessionMiddleware, it lazily resolves the session key into request.user on every request via the configured auth backend, so views trust request.user instead of verifying credentials themselves.</span></div>
+        <div class="wild-item" data-kb-example="envoy-ext-authz" id="wild-envoy-ext-authz" data-kb-level="expert"><strong>Envoy ext_authz filter</strong><span>An HTTP filter that calls an external authorization service (gRPC or HTTP) for each proxied request and forwards only the verified identity upstream. Its failure_mode_allow flag makes the fail-open/fail-closed choice an explicit configuration decision.</span></div>
       </div>
     </section>
 
@@ -259,39 +270,39 @@ function authenticationEnforcer(provider: AuthProvider) {
         <div class="prod-group prod-knobs">
           <h3>Tuning knobs</h3>
           <ul>
-            <li id="production-knob-1" data-kb-polarity="knob"><strong>Credential/token lifetime (TTL)</strong> — How long a verified identity stays valid before re-verification is forced. Shorter limits exposure of a stolen token; longer cuts re-auth traffic to the IdP or session store.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Verification-result cache TTL</strong> — Cache introspection results, JWKS keys, or session lookups so every request is not a round trip. Trades staleness (a revoked token still accepted) against latency and load on the identity backend.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Clock-skew leeway</strong> — Tolerance applied when checking token exp/nbf across machines with unsynced clocks. Too tight rejects valid tokens near expiry; too loose extends a token past its intended life.</li>
+            <li id="production-knob-1" data-kb-polarity="knob" data-kb-level="advanced"><strong>Credential/token lifetime (TTL)</strong> — How long a verified identity stays valid before re-verification is forced. Shorter limits exposure of a stolen token; longer cuts re-auth traffic to the IdP or session store.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Verification-result cache TTL</strong> — Cache introspection results, JWKS keys, or session lookups so every request is not a round trip. Trades staleness (a revoked token still accepted) against latency and load on the identity backend.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Clock-skew leeway</strong> — Tolerance applied when checking token exp/nbf across machines with unsynced clocks. Too tight rejects valid tokens near expiry; too loose extends a token past its intended life.</li>
             <li id="production-knob-4" data-kb-polarity="knob"><strong>Failure policy (fail-open vs fail-closed)</strong> — What the enforcer does when the IdP or key endpoint is unreachable. Fail-closed rejects everything (availability hit); fail-open lets traffic through unauthenticated (security hole). Almost always fail closed.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Signing-key rotation / JWKS refresh interval</strong> — How often the enforcer refetches the provider public keys used to verify signatures. Must be short enough to pick up a rotated key before old ones expire, or valid tokens start failing verification.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Signing-key rotation / JWKS refresh interval</strong> — How often the enforcer refetches the provider public keys used to verify signatures. Must be short enough to pick up a rotated key before old ones expire, or valid tokens start failing verification.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>401 / authentication-failure rate</strong> — A spike means an expired key, a broken IdP, or an attack. A rate near zero on a public surface can mean a bypass path is skipping the check.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Added auth latency (p99)</strong> — Per-request time the enforcer adds — signature verify plus any introspection round trip. Watch p99, where cache misses and IdP slowness surface.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Verification cache hit ratio</strong> — Fraction of requests served from the token/session/JWKS cache versus hitting the identity backend. A falling ratio predicts rising IdP load and latency.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>IdP / introspection endpoint error rate and latency</strong> — Health of the upstream the enforcer depends on. Its degradation is what drives the fail-open/fail-closed decision.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Added auth latency (p99)</strong> — Per-request time the enforcer adds — signature verify plus any introspection round trip. Watch p99, where cache misses and IdP slowness surface.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Verification cache hit ratio</strong> — Fraction of requests served from the token/session/JWKS cache versus hitting the identity backend. A falling ratio predicts rising IdP load and latency.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>IdP / introspection endpoint error rate and latency</strong> — Health of the upstream the enforcer depends on. Its degradation is what drives the fail-open/fail-closed decision.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Enforcer down or misconfigured</strong> — The single choke point becomes a single point of failure: a crash or bad config locks every request out (fail-closed) or exposes them (fail-open). Blast radius is the whole surface.</li>
+            <li id="production-failure-1" data-kb-polarity="failure" data-kb-level="advanced"><strong>Enforcer down or misconfigured</strong> — The single choke point becomes a single point of failure: a crash or bad config locks every request out (fail-closed) or exposes them (fail-open). Blast radius is the whole surface.</li>
             <li id="production-failure-2" data-kb-polarity="failure"><strong>Bypass path</strong> — A debug route, health endpoint, or service call assumed internal is wired outside the filter chain and reaches business logic with no verified identity. The guarantee silently breaks for that path only.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Key-fetch / JWKS failure after rotation</strong> — The provider rotates signing keys and the enforcer cannot refresh them (network, cache too long); every otherwise-valid token fails signature verification and 401s surge.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Clock skew rejects valid tokens</strong> — Enforcer host drifts from the token issuer; tokens are seen as expired or not-yet-valid and rejected en masse until NTP or leeway is corrected.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Key-fetch / JWKS failure after rotation</strong> — The provider rotates signing keys and the enforcer cannot refresh them (network, cache too long); every otherwise-valid token fails signature verification and 401s surge.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Clock skew rejects valid tokens</strong> — Enforcer host drifts from the token issuer; tokens are seen as expired or not-yet-valid and rejected en masse until NTP or leeway is corrected.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Audit the route table: prove every reachable endpoint — including debug, health, and internal-to-internal calls — passes through the enforcer.</li>
-            <li id="production-check-2" data-kb-polarity="check">Confirm the failure policy is fail-closed unless a specific route has a documented reason to fail open.</li>
-            <li id="production-check-3" data-kb-polarity="check">Test signing-key rotation end to end: rotate a key and confirm tokens keep verifying without a restart.</li>
-            <li id="production-check-4" data-kb-polarity="check">Measure the per-request latency the enforcer adds under load and confirm it fits the budget with the cache cold.</li>
-            <li id="production-check-5" data-kb-polarity="check">Keep 401 (unauthenticated) distinct from 403 (unauthorized) so identity and permission failures are diagnosable separately.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Confirm the failure policy is fail-closed unless a specific route has a documented reason to fail open.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Test signing-key rotation end to end: rotate a key and confirm tokens keep verifying without a restart.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Measure the per-request latency the enforcer adds under load and confirm it fits the budget with the cache cold.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Keep 401 (unauthenticated) distinct from 403 (unauthorized) so identity and permission failures are diagnosable separately.</li>
           </ul>
         </div>
       </div>

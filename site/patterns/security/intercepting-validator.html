@@ -108,8 +108,8 @@
       <div class="prose">
         <p id="description-p-1">An <strong>intercepting validator</strong> is a checkpoint placed in front of business logic that inspects every incoming request before it is allowed to proceed. Rather than trusting each handler to check its own inputs, the pattern factors validation out into one or more validator objects — often chained, one per concern — that a controller or filter invokes before dispatching to the real work. A request that fails any rule is rejected on the spot, with the offending data never touching domain code.</p>
         <p id="description-p-2">The force it resolves is that <strong>input from outside the trust boundary is never safe to assume</strong>. Form fields, query parameters, headers, uploaded files, and API payloads are all attacker-controlled, and injection, overflow, and malformed-data bugs live in the gap between "the code expects X" and "nothing checked that it got X." Scattering ad hoc checks across every handler is how that gap opens: some paths validate thoroughly, some skip a field, some duplicate a rule that later drifts out of sync.</p>
-        <p id="description-p-3">Intercepting Validator centralizes that responsibility instead of duplicating it. Validation rules live in one place, run against every request through the same choke point, and are testable and auditable independent of the business logic they protect. It is the pattern behind request-level filters, middleware validation stacks, and the validator layer in frameworks like Struts and Java EE's Core Security Patterns catalog.</p>
-        <p id="description-p-4">Its cost is an added layer that every request pays for, and rules that must be kept honest against what the logic downstream actually expects — a validator that's stale or too lax gives a false sense of safety.</p>
+        <p id="description-p-3" data-kb-level="advanced">Intercepting Validator centralizes that responsibility instead of duplicating it. Validation rules live in one place, run against every request through the same choke point, and are testable and auditable independent of the business logic they protect. It is the pattern behind request-level filters, middleware validation stacks, and the validator layer in frameworks like Struts and Java EE's Core Security Patterns catalog.</p>
+        <p id="description-p-4" data-kb-level="advanced">Its cost is an added layer that every request pays for, and rules that must be kept honest against what the logic downstream actually expects — a validator that's stale or too lax gives a false sense of safety.</p>
       </div>
     </section>
 
@@ -118,15 +118,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Anything arriving from outside might be wrong, or deliberately harmful, so it gets checked before it goes anywhere useful. Think of a mailroom that opens and screens every package before it reaches somebody's desk: wrong shape, wrong size, wrong contents, and it never leaves the room. The checks live in the mailroom, not on each desk.</p>
+          <p>Every handler that reads outside input has to remember to check it, and sooner or later one of them forgets. A field nobody bounded arrives ten megabytes long, or an age arrives as the word "yes", and the code behind it either breaks or does something it was never asked to do. Put one checkpoint in front of all of them instead. It is a mailroom that opens and screens every package before it reaches somebody's desk: wrong shape, wrong size, wrong contents, and it never leaves the room. The screening rules live in the mailroom, so no desk has to remember them.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>The checking is factored out of the handlers into validator objects, usually chained one per concern, which a controller or a filter invokes before dispatch. Each rule covers format, length, encoding or allowed values; the first failure rejects the request at the boundary, so the offending payload never reaches domain code, and one place records what was rejected and why. The chain typically sits in the same filter stack as the identity check, running against every endpoint rather than being re-implemented per route.</p>
+          <p>The checking is factored out of the handlers into validator objects, usually chained one per concern, which a controller or a filter invokes before dispatch. Each rule covers format, length, encoding or allowed values; the first failure rejects the request at the boundary, so the offending payload never reaches domain code, and one place records what was rejected and why. Rules come in two mechanical shapes: a programmatic chain of small objects handles conditions a schema cannot express, while declarative rules — annotations, a JSON Schema, a config file — move a rule change out of the code path. Either shape can allow-list known-good values or deny-list known-bad ones, and only the allow-list rejects the input nobody thought to forbid. The chain usually sits in the same filter stack as the identity check, running against every endpoint rather than being re-implemented per route.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when many endpoints share the same untrusted shapes and you want the rejection to happen before anything downstream allocates, parses or trusts. What it buys is the closing of the gap between what the code expects and what nothing verified it received. What it costs: every valid request pays the layer, and the rules are a second specification that drifts — too strict and you reject legitimate traffic that only support ever hears about, too lax and the gate grants a confidence it did not earn. A chain of special cases becomes its own monolith, and passing it is never a substitute for parameterized queries and output encoding further down.</p>
+          <p>Choose it when many endpoints share the same untrusted shapes and you want the rejection to land before anything downstream allocates, parses or trusts; leave the check in the handler when it needs domain state the gate cannot see. The bill has three lines, each with a counter-move. Every valid request pays the layer, so keep the chain cheap and bound any regex that can backtrack — a validation regex with nested quantifiers is a denial-of-service surface pointed at your own CPU. The rules are a second specification that drifts from what the logic behind them expects, so version them with the API contract and test them against the real handler rather than on their own. And the gate grants a confidence it did not earn: parameterized queries and output encoding still belong downstream, because the validator knows what the shape should be and never what the sink will do with it. Then run the loop — tune the size caps and the strictness, watch the rejection rate broken down by rule, expect drift to surface as legitimate traffic failing on one field, and gate the release on server-side enforcement you confirmed by calling the API directly.</p>
         </div>
       </div>
     </section>
@@ -136,12 +136,23 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    Req["Incoming request"] -->|"intercepted"| IV["Intercepting Validator"]
-    IV -.->|"checks against"| Rules["Validation rules"]
-    IV -->|"invalid"| Rej["Reject, 4xx error"]
-    IV -->|"valid, sanitized"| BL["Business logic"]
+    Cl["Client"]:::ext
+    Rules[("Rule set")]
+    subgraph Gate["One choke point every request crosses"]
+        F["Request filter"]
+        V1["Shape and type check"]
+        V2["Size and encoding check"]
+    end
+    BL["Business logic"]
+    Cl --&gt;|"1 request with untrusted fields"| F
+    Rules --&gt;|"2 the rules the chain enforces"| F
+    F --&gt;|"3 run the chain"| V1
+    V1 --&gt;|"4 passed, next concern"| V2
+    V2 --&gt;|"5 first failure: 4xx, nothing dispatched"| Cl
+    V2 --&gt;|"6 every rule passed"| BL
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>Every request is checked against the rule set before it goes anywhere. Invalid input is rejected immediately; only sanitized, valid input ever reaches business logic.</figcaption>
+        <figcaption>Where does a bad field get stopped? At step 5, inside the gate — so step 6 hands business logic only input that every rule has already accepted, and no handler has to remember the check itself.</figcaption>
       </figure>
     </section>
 
@@ -150,10 +161,10 @@ flowchart LR
       <dl class="variations">
         <dt id="variations-item-1">Programmatic validators</dt>
         <dd>Validation rules are written directly in code as a chain of validator objects, each testing one concern — presence, type, length, format — and short-circuiting on the first failure.</dd>
-        <dt id="variations-item-2">Declarative validators</dt>
-        <dd>Rules are expressed as configuration or schema — annotations, a JSON Schema, an XML rule set — so non-code changes can tighten or loosen validation without a redeploy.</dd>
-        <dt id="variations-item-3">Allow-list vs. deny-list</dt>
-        <dd>Validating against a whitelist of known-good shapes catches everything unexpected; a blacklist of known-bad patterns is perpetually one attack behind.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Declarative validators</dt>
+        <dd data-kb-level="advanced">Rules are expressed as configuration or schema — annotations, a JSON Schema, an XML rule set — so non-code changes can tighten or loosen validation without a redeploy.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Allow-list vs. deny-list</dt>
+        <dd data-kb-level="advanced">Validating against a whitelist of known-good shapes catches everything unexpected; a blacklist of known-bad patterns is perpetually one attack behind.</dd>
         <dt id="variations-item-4">Client- and server-paired validation</dt>
         <dd>Client-side checks give fast feedback and cut round trips, but they're trivially bypassed — the server-side interceptor remains the only check that actually enforces the rule.</dd>
       </dl>
@@ -167,17 +178,17 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Centralizes validation logic in one place instead of scattering ad hoc checks across handlers.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Stops malformed or malicious input — injection payloads, oversized fields, bad encodings — before business logic ever sees it.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Reusable across endpoints; a new rule is added once and applies everywhere the chain runs.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Gives a single point to log and audit what was rejected, and why.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Reusable across endpoints; a new rule is added once and applies everywhere the chain runs.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Gives a single point to log and audit what was rejected, and why.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Adds a layer every request pays for, even the vast majority that are already valid.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="expert">Rules can drift out of sync with what business logic actually needs, producing false positives or false negatives.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">An unmanaged chain of special cases becomes its own monolith if rules aren't kept modular.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Passing the gate is not proof of safety further down — it doesn't replace parameterized queries or output encoding.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Rules can drift out of sync with what business logic actually needs, producing false positives or false negatives.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">An unmanaged chain of special cases becomes its own monolith if rules aren't kept modular.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Passing the gate is not proof of safety further down — it doesn't replace parameterized queries or output encoding.</li>
           </ul>
         </div>
       </div>
@@ -191,15 +202,15 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Input arrives from an untrusted source — a public API, a web form, an upload, request headers.</li>
             <li id="usage-when-2" data-kb-polarity="when">Multiple endpoints share the same validation rules and duplicating the checks by hand is error-prone.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You need one enforced choke point for format, size, and encoding rules before anything is dispatched.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You need one enforced choke point for format, size, and encoding rules before anything is dispatched.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The input is already fully trusted and internal, with no crossing of a trust boundary.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">The check needs deep business context that only the domain logic itself can evaluate correctly.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">A neighboring pattern already validates the same request earlier in the pipeline — don't re-check what the <a href="../distributed/routing/gatekeeper.html">Gatekeeper</a> or <a href="../distributed/routing/api-gateway.html">API Gateway</a> already enforced.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">The check needs deep business context that only the domain logic itself can evaluate correctly.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">A neighboring pattern already validates the same request earlier in the pipeline — don't re-check what the <a href="../distributed/routing/gatekeeper.html">Gatekeeper</a> or <a href="../distributed/routing/api-gateway.html">API Gateway</a> already enforced.</li>
           </ul>
         </div>
       </div>
@@ -243,8 +254,8 @@ function handleSignup(raw: unknown) {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="pydantic-fastapi" id="wild-pydantic-fastapi"><strong>Pydantic in FastAPI</strong><span>FastAPI parses each request body into a declared Pydantic model before the endpoint function runs; a mismatch raises a RequestValidationError that returns a 422 with per-field error detail. A model config of extra=forbid turns unknown fields into a rejection.</span></div>
-        <div class="wild-item" data-kb-example="hibernate-validator" id="wild-hibernate-validator"><strong>Hibernate Validator (Bean Validation)</strong><span>The reference implementation of Jakarta Bean Validation. Constraint annotations (@NotNull, @Size, @Pattern) declared on request objects are checked at the controller boundary when the argument is marked @Valid, before the method body executes.</span></div>
-        <div class="wild-item" data-kb-example="express-validator" id="wild-express-validator"><strong>express-validator</strong><span>Built on validator.js, it composes body()/check() validation and sanitization rules into an Express middleware chain that runs ahead of the route handler; accumulated errors are read back with validationResult(req) to reject the request.</span></div>
+        <div class="wild-item" data-kb-example="hibernate-validator" id="wild-hibernate-validator" data-kb-level="advanced"><strong>Hibernate Validator (Bean Validation)</strong><span>The reference implementation of Jakarta Bean Validation. Constraint annotations (@NotNull, @Size, @Pattern) declared on request objects are checked at the controller boundary when the argument is marked @Valid, before the method body executes.</span></div>
+        <div class="wild-item" data-kb-example="express-validator" id="wild-express-validator" data-kb-level="advanced"><strong>express-validator</strong><span>Built on validator.js, it composes body()/check() validation and sanitization rules into an Express middleware chain that runs ahead of the route handler; accumulated errors are read back with validationResult(req) to reject the request.</span></div>
       </div>
     </section>
 
@@ -255,25 +266,25 @@ function handleSignup(raw: unknown) {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Payload and field size limits</strong> — Caps on request body size, field length, array count, and nesting depth, enforced before parsing. Too low rejects legitimate large inputs; absent, an attacker can exhaust memory or CPU with an oversized or deeply nested payload.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Allow-list vs deny-list strictness</strong> — Whether rules accept only known-good shapes or merely reject known-bad patterns. Allow-listing catches everything unexpected; a deny-list is perpetually one attack behind. The choice is the single biggest lever on coverage.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Reject-unknown-fields mode</strong> — Whether a payload carrying fields the schema does not declare is rejected or silently dropped. Strict rejection surfaces client drift and mass-assignment attempts; lenient mode is more forgiving but hides them.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Error-response verbosity</strong> — How much a rejection tells the caller. Detailed field-level errors help legitimate clients but also hand an attacker a map of exactly what the validator expects; terse errors are safer but harder to integrate against.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Allow-list vs deny-list strictness</strong> — Whether rules accept only known-good shapes or merely reject known-bad patterns. Allow-listing catches everything unexpected; a deny-list is perpetually one attack behind. The choice is the single biggest lever on coverage.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Reject-unknown-fields mode</strong> — Whether a payload carrying fields the schema does not declare is rejected or silently dropped. Strict rejection surfaces client drift and mass-assignment attempts; lenient mode is more forgiving but hides them.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Error-response verbosity</strong> — How much a rejection tells the caller. Detailed field-level errors help legitimate clients but also hand an attacker a map of exactly what the validator expects; terse errors are safer but harder to integrate against.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Validation rejection rate</strong> — Share of requests bounced at the gate (the 4xx/422 rate). A sudden spike is either an attack probing inputs or a validator rule that has drifted out of sync with a legitimate client change.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Rejections by rule / field</strong> — Which specific rule or field is doing the rejecting. A single field dominating the rejections points at either a client contract mismatch or a targeted probe.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Added validation latency (p99)</strong> — Per-request time the validator chain adds before dispatch. Watch the tail: complex regexes or large payloads show up here, and a regex under attack shows up as a latency cliff.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Rejections by rule / field</strong> — Which specific rule or field is doing the rejecting. A single field dominating the rejections points at either a client contract mismatch or a targeted probe.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Added validation latency (p99)</strong> — Per-request time the validator chain adds before dispatch. Watch the tail: complex regexes or large payloads show up here, and a regex under attack shows up as a latency cliff.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Rules drift from downstream expectations</strong> — The validator and the business logic disagree about what is valid. Too strict, it false-positives and rejects good traffic; too lax, it false-negatives and passes input the logic cannot actually handle — a false sense of safety.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Deny-list gap lets a payload through</strong> — A blacklist misses a novel encoding or injection variant; malformed input clears the gate and reaches domain code, which assumed it was already checked.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Catastrophic regex backtracking (ReDoS)</strong> — A validation regex with nested quantifiers hits exponential backtracking on a crafted string, pinning a CPU. The validator meant to protect the system becomes the denial-of-service vector.</li>
+            <li id="production-failure-1" data-kb-polarity="failure" data-kb-level="advanced"><strong>Rules drift from downstream expectations</strong> — The validator and the business logic disagree about what is valid. Too strict, it false-positives and rejects good traffic; too lax, it false-negatives and passes input the logic cannot actually handle — a false sense of safety.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Deny-list gap lets a payload through</strong> — A blacklist misses a novel encoding or injection variant; malformed input clears the gate and reaches domain code, which assumed it was already checked.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Catastrophic regex backtracking (ReDoS)</strong> — A validation regex with nested quantifiers hits exponential backtracking on a crafted string, pinning a CPU. The validator meant to protect the system becomes the denial-of-service vector.</li>
             <li id="production-failure-4" data-kb-polarity="failure"><strong>Client-side-only reliance</strong> — Validation is enforced in the browser for UX but not repeated server-side; the check is trivially bypassed by calling the API directly, and the only real enforcement point is missing.</li>
           </ul>
         </div>
@@ -282,9 +293,9 @@ function handleSignup(raw: unknown) {
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Enforce every rule server-side; treat client-side validation as UX only, never as the enforcement point.</li>
             <li id="production-check-2" data-kb-polarity="check">Prefer allow-listing known-good shapes over deny-listing known-bad patterns.</li>
-            <li id="production-check-3" data-kb-polarity="check">Cap payload size, field length, and nesting depth before parsing, not after.</li>
-            <li id="production-check-4" data-kb-polarity="check">Confirm passing the validator does not substitute for parameterized queries and output encoding downstream.</li>
-            <li id="production-check-5" data-kb-polarity="check">Review validation regexes for catastrophic backtracking on adversarial input, or bound their execution.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Cap payload size, field length, and nesting depth before parsing, not after.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Confirm passing the validator does not substitute for parameterized queries and output encoding downstream.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">Review validation regexes for catastrophic backtracking on adversarial input, or bound their execution.</li>
           </ul>
         </div>
       </div>
