@@ -105,15 +105,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Build the part of a computer that keeps folders and files organised, but only in memory — no disk at all. Folders nest as deep as you like, files hold text, and anyone can create, delete, rename, list and move things by naming the full path. It has to stay quick with tens of thousands of entries, and no two things in the same folder may share a name.</p>
+          <p>Store the full address on every file and folder, and one rename breaks thousands of them: rename /home and everything beneath it still claims the old address until you rewrite each entry by hand. Have each entry remember only the folder it sits in, and that same rename touches exactly one thing, because the address is worked out on demand by walking up to the root. Inside a folder, keep the contents in a name-keyed lookup rather than a list: finding one entry among ten thousand takes a single step, and two children can never end up sharing a name.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>Each entry keeps a pointer to its parent and derives its path by walking up, rather than caching a path string: the cached form makes one rename rewrite the stored path of every descendant, while the derived form touches a single node. A folder holds children in a name-to-entry map, not a list — constant lookup at any fan-out, and the keys enforce sibling uniqueness for free. Files and folders share an abstract base, leaf and composite, instead of an interface that would duplicate identity in both. One facade owns path parsing; callers never hold a node.</p>
+          <p>FileSystemEntry is the abstract base — name, parent, getPath() — with Folder the composite holding a private name-to-entry map, and File the leaf holding content. One base gives a folder's children a single type, so every operation treats leaf and branch alike and each subclass overrides only isDirectory(); a bare interface would fix the typing but leave the identity fields duplicated in both classes. FileSystem is the one public door: it owns the root, splits the path, walks it a segment at a time, and raises a named exception per distinct failure — missing parent, name collision, listing a file. Callers pass strings and never hold a node.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>The signal is spotting where the tree can silently corrupt. Keying children by name makes sibling uniqueness unbreakable, but it also means a rename must remove the entry under the old key and re-add it under the new one, or it is stranded. Move must walk up from the destination and refuse if it meets the entry being moved, otherwise a folder becomes its own descendant and a subtree disappears. Parent and child links must change together. Strong answers defer memoized paths, a search index, symlinks and permissions until asked. The concurrency bill lands on move: per-folder locks restore the parallelism a single monitor destroys, but two locks need a fixed acquisition order or two opposing moves deadlock.</p>
+          <p>The signal is spotting where the tree corrupts silently. Keying children by name makes sibling uniqueness unbreakable, but a rename must then remove the entry under the old key and re-add it under the new one, or it is stranded where no lookup reaches it. Move must walk up from the destination and refuse if it meets the entry being moved, otherwise a folder becomes its own descendant and the subtree is orphaned. Parent and child links change together or getPath() lies. Defer memoized paths, a search index, symlinks and permissions until asked — each is an index to keep in sync, not a rewrite. The concurrency bill lands on move: per-folder locks restore the parallelism one global monitor destroys, but two locks need a fixed acquisition order or two opposing moves deadlock.</p>
         </div>
       </div>
     </section>
@@ -172,7 +172,7 @@
     list(path)                -&gt; list[Entry]   # a folder's children; raises if path names a file
     get(path)                 -&gt; Entry         # resolve an absolute path; raises if not found
     rename(path, newName)     -&gt; None          # rename in place; raises on collision
-    move(srcPath, destPath)   -&gt; None          # relocate; raises on cycle or collision</code></pre>
+    move(srcPath, destPath)   -&gt; None          # relocate; raises if it would nest a folder in itself</code></pre>
       </details>
     </section>
 
@@ -252,20 +252,20 @@ classDiagram
     return parentPath + "/" + name</code></pre>
       </details>
       <div class="prose">
-        <h3 id="deepdives-dive-2">2 · How a folder finds a child</h3>
-        <p id="deepdives-p-2">Path resolution is a sequence of by-name child lookups: to reach <code>/home/user/docs</code> you find <code>home</code> in the root, then <code>user</code>, then <code>docs</code>. The collection type inside a folder decides how fast that is.</p>
+        <h3 id="deepdives-dive-2" data-kb-level="advanced">2 · How a folder finds a child</h3>
+        <p id="deepdives-p-2" data-kb-level="advanced">Path resolution is a sequence of by-name child lookups: to reach <code>/home/user/docs</code> you find <code>home</code> in the root, then <code>user</code>, then <code>docs</code>. The collection type inside a folder decides how fast that is.</p>
         <ul>
-          <li id="deepdives-li-3"><strong>A list of children.</strong> <code>getChild(name)</code> is a linear scan. A folder holding 10,000 files is up to 10,000 comparisons per segment, multiplied across every level of every path — it fails the responsiveness bar outright.</li>
-          <li id="deepdives-li-4"><strong>A map from name to entry (chosen).</strong> Lookup is O(1) no matter the fan-out, so a folder with ten children and one with ten thousand resolve equally fast. The map earns a bonus: because its keys are unique, it <em>is</em> the "no two siblings share a name" rule — the data structure enforces the invariant for free, with no extra check.</li>
+          <li id="deepdives-li-3" data-kb-level="advanced"><strong>A list of children.</strong> <code>getChild(name)</code> is a linear scan. A folder holding 10,000 files is up to 10,000 comparisons per segment, multiplied across every level of every path — it fails the responsiveness bar outright.</li>
+          <li id="deepdives-li-4" data-kb-level="advanced"><strong>A map from name to entry (chosen).</strong> Lookup is O(1) no matter the fan-out, so a folder with ten children and one with ten thousand resolve equally fast. The map earns a bonus: because its keys are unique, it <em>is</em> the "no two siblings share a name" rule — the data structure enforces the invariant for free, with no extra check.</li>
         </ul>
-        <h3 id="deepdives-dive-3">3 · One tree, two kinds of node</h3>
-        <p id="deepdives-p-3">File and Folder both have a <code>name</code>, a <code>parent</code>, a <code>getName()</code>, and a <code>getPath()</code>; they differ only in that folders contain children and files don't. A bare interface fixes the typing — it lets <code>children</code> be a <code>Map&lt;String, FileSystemEntry&gt;</code> — but shares no implementation, so each class re-declares the same fields and methods. An <strong>abstract base class</strong> shares both the fields and the behaviour: <code>File</code> is the leaf, <code>Folder</code> the composite, and <code>FileSystemEntry</code> the common base — the <a href="../patterns/gof/structural/composite.html">Composite</a> pattern, reached not by naming it but by noticing the shared identity and the single real difference. Inheritance earns its place here precisely because the usual tests hold: genuine shared behaviour, a stable contract, and an honest is-a. Each subclass overrides only <code>isDirectory()</code>. Pulling the base out is also where <a href="../principles/dry.html">the duplication</a> disappears, and it puts <a href="../principles/separation-of-concerns.html">separation of concerns</a> on a clean footing — identity in the base, containment in Folder, content in File, orchestration in FileSystem, each with a <a href="../principles/single-responsibility.html">single reason to change</a>.</p>
-        <h3 id="deepdives-dive-4">4 · One door, not many</h3>
-        <p id="deepdives-p-4">The tempting shortcut is to make the root Folder public and let callers navigate it. But then every call site re-implements the same work: to create <code>/home/user/docs/report.txt</code> a caller must split the path, walk <code>root → home → user → docs</code>, handle a missing intermediate, and only then create the file — the identical logic copy-pasted across the codebase, and no single entry point to hold the rules. <code>FileSystem</code> is instead a <a href="../patterns/gof/structural/facade.html">facade</a>: it owns the root and all the path parsing, so callers pass a string and never touch the tree. Path handling lives in exactly one place, which is the same DRY win from the other side.</p>
-        <h3 id="deepdives-dive-5">5 · Moving without making a loop</h3>
-        <p id="deepdives-p-5">Move is the one operation that touches two folders, and it can quietly corrupt the tree: moving <code>/home</code> into <code>/home/user/stuff</code> would make <code>/home</code> a descendant of itself. Guard it by walking up from the destination's parent toward the root — if that walk ever reaches the entry being moved, reject the move. Rename hides a subtler bug: because a folder's map is keyed by name, you cannot just call <code>setName()</code> in place, or the entry is left stranded under its old key. Remove it under the old key, rename it, then re-add it under the new one.</p>
+        <h3 id="deepdives-dive-3" data-kb-level="advanced">3 · One tree, two kinds of node</h3>
+        <p id="deepdives-p-3" data-kb-level="advanced">File and Folder both have a <code>name</code>, a <code>parent</code>, a <code>getName()</code>, and a <code>getPath()</code>; they differ only in that folders contain children and files don't. A bare interface fixes the typing — it lets <code>children</code> be a <code>Map&lt;String, FileSystemEntry&gt;</code> — but shares no implementation, so each class re-declares the same fields and methods. An <strong>abstract base class</strong> shares both the fields and the behaviour: <code>File</code> is the leaf, <code>Folder</code> the composite, and <code>FileSystemEntry</code> the common base — the <a href="../patterns/gof/structural/composite.html">Composite</a> pattern, reached not by naming it but by noticing the shared identity and the single real difference. Inheritance earns its place here precisely because the usual tests hold: genuine shared behaviour, a stable contract, and an honest is-a. Each subclass overrides only <code>isDirectory()</code>. Pulling the base out is also where <a href="../principles/dry.html">the duplication</a> disappears, and it puts <a href="../principles/separation-of-concerns.html">separation of concerns</a> on a clean footing — identity in the base, containment in Folder, content in File, orchestration in FileSystem, each with a <a href="../principles/single-responsibility.html">single reason to change</a>.</p>
+        <h3 id="deepdives-dive-4" data-kb-level="advanced">4 · One door, not many</h3>
+        <p id="deepdives-p-4" data-kb-level="advanced">The tempting shortcut is to make the root Folder public and let callers navigate it. But then every call site re-implements the same work: to create <code>/home/user/docs/report.txt</code> a caller must split the path, walk <code>root → home → user → docs</code>, handle a missing intermediate, and only then create the file — the identical logic copy-pasted across the codebase, and no single entry point to hold the rules. <code>FileSystem</code> is instead a <a href="../patterns/gof/structural/facade.html">facade</a>: it owns the root and all the path parsing, so callers pass a string and never touch the tree. Path handling lives in exactly one place, which is the same DRY win from the other side.</p>
+        <h3 id="deepdives-dive-5" data-kb-level="advanced">5 · Moving without making a loop</h3>
+        <p id="deepdives-p-5" data-kb-level="advanced">Move is the one operation that touches two folders, and it can quietly corrupt the tree: moving <code>/home</code> into <code>/home/user/stuff</code> would make <code>/home</code> a descendant of itself. Guard it by walking up from the destination's parent toward the root — if that walk ever reaches the entry being moved, reject the move. Rename hides a subtler bug: because a folder's map is keyed by name, you cannot just call <code>setName()</code> in place, or the entry is left stranded under its old key. Remove it under the old key, rename it, then re-add it under the new one.</p>
       </div>
-      <details class="sketch" id="deepdives-sketch-2">
+      <details class="sketch" id="deepdives-sketch-2" data-kb-level="expert">
         <summary>Pseudocode — the cycle check inside move</summary>
 <pre><code class="language-python" data-kb-lang="python">move(srcPath, destPath):
     entry      = resolveParent(srcPath).getChild(extractName(srcPath))
@@ -280,7 +280,7 @@ classDiagram
 
     # ... collision check at destination, then remove-from-src and add-to-dest ...</code></pre>
       </details>
-      <figure class="diagram" id="deepdives-fig-1">
+      <figure class="diagram" id="deepdives-fig-1" data-kb-level="expert">
         <pre class="mermaid">
 flowchart TB
     Start["move(srcPath, destPath)"] -->|"resolve entry + destParent"| Cyc{"folder moved under itself?"}
@@ -293,10 +293,10 @@ flowchart TB
         <figcaption>What gates a move, and how does it reject a cycle or a name collision?</figcaption>
       </figure>
       <div class="prose">
-        <h3 id="deepdives-dive-6">6 · Making it thread-safe</h3>
-        <p id="deepdives-p-6">As written the design assumes a single thread, and the create path is a classic check-then-act <a href="../hazards/race-condition.html">race</a>: two threads both see a name is free, both add it, and one silently overwrites the other. The pragmatic fix is a <a href="../patterns/concurrency/monitor-object.html">monitor</a> — wrap each public method in <code>synchronized(this)</code>. It is correct and simple, but it serialises unrelated work: two creates in different folders block each other for no reason. Fine-grained locks (one per folder, taken only on the folder being changed) restore that concurrency, but they make move dangerous — it holds two folder locks, and two moves in opposite directions <a href="../hazards/deadlock.html">deadlock</a>. The remedy is lock ordering: always acquire the two folder locks in a fixed order, such as by path string, regardless of which is source and which is destination. Reads are the easy win: <code>get</code> and <code>list</code> mutate nothing, so a <a href="../patterns/concurrency/rw-lock.html">read-write lock</a> lets them run concurrently and reserves exclusivity only for writers.</p>
-        <h3 id="deepdives-dive-7">7 · Adding search later</h3>
-        <p id="deepdives-p-7">Search is out of scope but the obvious next ask, and the base class makes it cheap to bolt on. A plain recursive traversal is O(n) over the whole tree. Trading space for time, a <code>name → entries</code> index on the file system turns find-by-name into O(1), at the cost of keeping it in sync on every create, delete, and rename; a trie over names extends that to prefix search. None of it forces a restructure — it hangs off the existing tree.</p>
+        <h3 id="deepdives-dive-6" data-kb-level="expert">6 · Making it thread-safe</h3>
+        <p id="deepdives-p-6" data-kb-level="expert">As written the design assumes a single thread, and the create path is a classic check-then-act <a href="../hazards/race-condition.html">race</a>: two threads both see a name is free, both add it, and one silently overwrites the other. The pragmatic fix is a <a href="../patterns/concurrency/monitor-object.html">monitor</a> — wrap each public method in <code>synchronized(this)</code>. It is correct and simple, but it serialises unrelated work: two creates in different folders block each other for no reason. Fine-grained locks (one per folder, taken only on the folder being changed) restore that concurrency, but they make move dangerous — it holds two folder locks, and two moves in opposite directions <a href="../hazards/deadlock.html">deadlock</a>. The remedy is lock ordering: always acquire the two folder locks in a fixed order, such as by path string, regardless of which is source and which is destination. Reads are the easy win: <code>get</code> and <code>list</code> mutate nothing, so a <a href="../patterns/concurrency/rw-lock.html">read-write lock</a> lets them run concurrently and reserves exclusivity only for writers.</p>
+        <h3 id="deepdives-dive-7" data-kb-level="expert">7 · Adding search later</h3>
+        <p id="deepdives-p-7" data-kb-level="expert">Search is out of scope but the obvious next ask, and the base class makes it cheap to bolt on. A plain recursive traversal is O(n) over the whole tree. Trading space for time, a <code>name → entries</code> index on the file system turns find-by-name into O(1), at the cost of keeping it in sync on every create, delete, and rename; a trie over names extends that to prefix search. None of it forces a restructure — it hangs off the existing tree.</p>
       </div>
     </section>
 
@@ -308,17 +308,17 @@ flowchart TB
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Parent pointers make rename and move O(1) — no path-rewriting cascade through the subtree.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">The name → entry map gives O(1) child lookup at any fan-out and enforces sibling-name uniqueness for free.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">One shared base ends the duplicated identity code and lets every operation treat files and folders uniformly.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">A single facade owns path parsing, so callers never navigate the tree or hold folder references.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">One shared base ends the duplicated identity code and lets every operation treat files and folders uniformly.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">A single facade owns path parsing, so callers never navigate the tree or hold folder references.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>What it gives up</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con"><code>getPath()</code> recomputes on every call (O(depth)); cheap in practice, but memoizing it adds a cache to invalidate on every move.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Parent and child references are bidirectional — add, remove, and move must update both sides or <code>getPath()</code> silently breaks.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Parent and child references are bidirectional — add, remove, and move must update both sides or <code>getPath()</code> silently breaks.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">The model is single-threaded; safety is bolted on with locks, and move needs multi-lock ordering to avoid deadlock.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">No search without a secondary index; find-by-name is an O(n) tree walk until you pay to maintain one.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">No search without a secondary index; find-by-name is an O(n) tree walk until you pay to maintain one.</li>
           </ul>
         </div>
       </div>
@@ -329,8 +329,8 @@ flowchart TB
       <div class="prose">
         <ul>
           <li id="levels-li-1"><strong>Junior</strong> — models the tree correctly (a FileSystem entry point over File and Folder nodes), gets create, delete, and path parsing working, reaches for a by-name child lookup (a map is ideal, a list is tolerated), and handles the obvious errors — a missing path, a name collision. The shared base class is not expected without a prompt.</li>
-          <li id="levels-li-2"><strong>Mid-level</strong> — separates concerns without being told (FileSystem parses and orchestrates and nothing else), extracts <code>FileSystemEntry</code> after spotting the duplicated name/parent/<code>getPath()</code> code, explains why a parent pointer beats a stored path string, and updates parent pointers correctly on move; may need a nudge toward the cycle check.</li>
-          <li id="levels-li-3"><strong>Senior</strong> — volunteers the parent-pointer trade-off and the cycle check unprompted, raises thread-safety on their own (the check-then-act race, locking two folders for a move, lock ordering for deadlock), and has extensions ready — a name index or trie for search, symlinks or permissions slotting onto the base class without a rewrite.</li>
+          <li id="levels-li-2" data-kb-level="advanced"><strong>Mid-level</strong> — separates concerns without being told (FileSystem parses and orchestrates and nothing else), extracts <code>FileSystemEntry</code> after spotting the duplicated name/parent/<code>getPath()</code> code, explains why a parent pointer beats a stored path string, and updates parent pointers correctly on move; may need a nudge toward the cycle check.</li>
+          <li id="levels-li-3" data-kb-level="expert"><strong>Senior</strong> — volunteers the parent-pointer trade-off and the cycle check unprompted, raises thread-safety on their own (the check-then-act race, locking two folders for a move, lock ordering for deadlock), and has extensions ready — a name index or trie for search, symlinks or permissions slotting onto the base class without a rewrite.</li>
         </ul>
       </div>
     </section>

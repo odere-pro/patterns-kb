@@ -97,7 +97,7 @@
       <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
       <div class="prose">
         <p id="description-p-1">Two people (or up to a hundred, in a group) exchange text and media over their phones and computers. That surface hides two distinct problems that must be solved together: delivering a message <em>in real time</em> to whoever is currently online, and delivering it <em>durably</em> to whoever is not — the recipient whose phone is off, out of signal, or simply closed. The first problem wants speed; the second wants a place to hold the message and a guarantee it is never dropped.</p>
-        <p id="description-p-2">A clean simplification carries the whole design: a 1:1 chat is just a group chat with two participants. Build for the general group case and the direct case falls out for free. The other framing that matters is scale — WhatsApp famously moved billions of messages a day on a small engineering team, leaning on Erlang's <a href="../patterns/concurrency/actor-model.html">actor model</a> to pack a million-plus live connections onto a single host. The design below is the same shape: start with the simplest system that satisfies the requirements, then let the deep dives make it survive real load.</p>
+        <p id="description-p-2" data-kb-level="advanced">A clean simplification carries the whole design: a 1:1 chat is just a group chat with two participants. Build for the general group case and the direct case falls out for free. The other framing that matters is scale — WhatsApp famously moved billions of messages a day on a small engineering team, leaning on Erlang's <a href="../patterns/concurrency/actor-model.html">actor model</a> to pack a million-plus live connections onto a single host. The design below is the same shape: start with the simplest system that satisfies the requirements, then let the deep dives make it survive real load.</p>
       </div>
     </section>
 
@@ -106,15 +106,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Let people send text and pictures to one another, or to a group of up to a hundred, across phones and laptops. Two jobs sit inside that: get the message to someone who is looking at their screen right now, in a fraction of a second, and hold it safely for someone whose phone is off or out of signal — for weeks if need be — without ever losing it.</p>
+          <p>Think of a receptionist taking a note for a colleague. She drops a copy in that colleague's pigeonhole first, then walks over to see whether they are at their desk. If they are, the note is in their hand a second later. If they are not — out to lunch, phone switched off — the copy sits in the pigeonhole until they come back. She tears up the copy only once they have said they got it. That is the whole recipe: write it down first, hand it over live second, and forget it only on confirmation. Everything else in this design is what that recipe costs when the colleague may be any of a billion people.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>The organising simplification is that a two-person chat is a group of two. The pivotal decision is routing across hundreds of socket hosts: a topic per user exceeds what brokers hold, and consistent hashing leaves you owning hot nodes and rebalancing, so servers subscribe through a broker to channels keyed by user — not by chat, since one-to-one chats dominate — with per-chat channels only above a size threshold. Durability comes from writing the inbox before publishing, since the live push is at-most-once. Ordering is by synchronised server receipt time, not reordering.</p>
+          <p>Two decisions carry it. A two-person chat is a group of two, so build only the group case. And the recipient's socket is almost never on the sending host: a broker topic per user breaks brokers long before a million topics, and consistent hashing hands you hot nodes plus a reshuffle every time a host joins or leaves. So each chat server subscribes to pub/sub channels keyed by its own connected users, and a sender publishes to the recipient's channel — keyed by user rather than by chat, because 1:1 traffic dominates. Inboxes are per device, so a phone and a laptop acknowledge independently. Order comes from a clock-synced server receipt stamp rather than from reordering late arrivals.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>The signal is where the numbers actually land: roughly a hundred thousand writes a second, partitioned by user, is unremarkable, and retention rather than history bounds storage, so media is pushed out of the budget entirely onto object storage. What forces the architecture is two hundred million live connections over hundreds of hosts. Strong answers refuse to build strict ordering — buffering and watermarks cost more than users value — and derive presence from the socket rather than writing every heartbeat. Sequence numbers riding the heartbeat close the gap a dropped push leaves. Multi-device fan-out multiplies inbox writes, which is why the device count is capped.</p>
+          <p>Choose this shape when latency is the product and the write rate is ordinary: ~100k writes/sec partitioned by user is a managed key-value store's day job, and 30-day retention rather than full history bounds storage once media moves to object storage. What you are buying is a connection fleet — 200M live sockets over hundreds of hosts — and every bill is drawn on it. The live push is at-most-once, so pay for it with per-chat sequence numbers riding the heartbeat and polling as the last backstop. Strict ordering is refused on purpose: buffering and watermarks cost more than users value, and a synced receipt stamp buys agreement across devices for the price of a message that occasionally pops in above a later one. Derive presence from socket state instead of writing a row per heartbeat, and cap devices per account, because each extra device multiplies inbox writes.</p>
         </div>
       </div>
     </section>
@@ -151,7 +151,7 @@
       <div class="prose">
         <p id="sizing-p-1"><strong>Writes.</strong> Assume ~20 messages per active user per day across 200M active users — roughly 4B messages/day, about <strong>40k messages/sec</strong>. Each message becomes one write to the <code>Message</code> table plus one <code>Inbox</code> write per recipient. Because 1:1 chats dominate, fan-out is small on average; even accounting for groups the total lands near <strong>100k writes/sec</strong>. Partitioned by <code>userId</code>, that is comfortably inside a managed key-value store like DynamoDB.</p>
         <p id="sizing-p-2"><strong>Connections.</strong> Of ~1B users, budget for <strong>~200M connected at once</strong>. A single well-tuned socket host historically carried 1–2M live connections, so the fleet is <strong>hundreds of chat servers</strong> — not one. That number is the source of the central problem: sender and recipient will usually be on different hosts.</p>
-        <p id="sizing-p-3"><strong>Storage.</strong> Messages are small and short-lived (30-day retention), so the durable footprint is bounded by retention, not by history. Media is the heavy part, and it is deliberately pushed out of this budget onto object storage.</p>
+        <p id="sizing-p-3" data-kb-level="advanced"><strong>Storage.</strong> Messages are small and short-lived (30-day retention), so the durable footprint is bounded by retention, not by history. Media is the heavy part, and it is deliberately pushed out of this budget onto object storage.</p>
       </div>
     </section>
 
@@ -161,9 +161,9 @@
         <p id="entities-p-1">A handful of records, most of them thin:</p>
         <ul>
           <li id="entities-li-1"><strong>User</strong> — an account; the unit everything is addressed to.</li>
-          <li id="entities-li-2"><strong>Client</strong> — a single device belonging to a user. One user may have several (phone, laptop, tablet), so delivery targets a client, not just a user.</li>
+          <li id="entities-li-2" data-kb-level="advanced"><strong>Client</strong> — a single device belonging to a user. One user may have several (phone, laptop, tablet), so delivery targets a client, not just a user.</li>
           <li id="entities-li-3"><strong>Chat</strong> — a conversation of 2–100 participants; primary key is the chat id.</li>
-          <li id="entities-li-4"><strong>ChatParticipant</strong> — the membership join. Partition key <code>chatId</code>, sort key <code>participantId</code> lists a chat's members; a global secondary index keyed the other way lists a user's chats.</li>
+          <li id="entities-li-4" data-kb-level="advanced"><strong>ChatParticipant</strong> — the membership join. Partition key <code>chatId</code>, sort key <code>participantId</code> lists a chat's members; a global secondary index keyed the other way lists a user's chats.</li>
           <li id="entities-li-5"><strong>Message</strong> — the payload plus a server-stamped receipt time and a chat sequence number.</li>
           <li id="entities-li-6"><strong>Inbox</strong> — a per-client holding queue of message ids not yet acknowledged by that device.</li>
         </ul>
@@ -188,7 +188,7 @@ chatUpdate  { chatId, participants }              -&gt; "RECEIVED"
 newMessage  { chatId, userId, message, attachments } -&gt; "RECEIVED"</code></pre>
       </details>
       <div class="prose">
-        <p id="interface-p-2">The detail that makes durability work is the <code>ack</code>. Every server-to-client push demands a matching acknowledgement from the client. Until that ack arrives, the server assumes the message has not landed and keeps it. That single rule — deliver, wait for ack, only then forget — is what turns "we sent it" into "they got it."</p>
+        <p id="interface-p-2" data-kb-level="advanced">The detail that makes durability work is the <code>ack</code>. Every server-to-client push demands a matching acknowledgement from the client. Until that ack arrives, the server assumes the message has not landed and keeps it. That single rule — deliver, wait for ack, only then forget — is what turns "we sent it" into "they got it." The cost of it is duplicates: a push whose ack is lost in transit is resent, so a client can be handed the same message twice. That is fine because applying a message is <a href="../patterns/messaging/idempotency.html">idempotent</a> — a client writes it into the chat keyed by message id, and a second copy of an id it already holds is dropped rather than shown twice.</p>
       </div>
     </section>
 
@@ -226,18 +226,18 @@ flowchart LR
       <div class="prose">
         <h3 id="deepdives-dive-1">1 · Routing across hundreds of chat servers</h3>
         <p id="deepdives-p-1">With ~200M live connections spread over hundreds of hosts, sender and recipient rarely share a server, so delivery becomes a routing problem. A per-user Kafka topic is a non-starter — brokers top out around 10–20k topics, not millions. <a href="../patterns/distributed/routing/consistent-hashing.html">Consistent hashing</a> can map each user deterministically to a server, but you then own the hard parts yourself: hot nodes, and redistributing connections every time a host is added or removed. Offloading to pub/sub sidesteps all of it — servers subscribe to their users' channels and the broker handles membership. The partitioning choice is by <strong>user</strong>, not by chat: because 1:1 chats dominate, per-chat channels would create a mountain of near-duplicate channels for little gain, and chats are capped at 100 members anyway. The one exception is the celebrity problem — a rare very-large chat. Above a size threshold (say 25 members) clients also subscribe to a per-chat channel and senders publish there instead, publishing to both briefly during the transition so no server misses the switch.</p>
-        <h3 id="deepdives-dive-2">2 · One user, many devices</h3>
-        <p id="deepdives-p-2">A user reads on a phone and a laptop, and both must stay in sync — so a single per-user inbox is not enough. A <code>Clients</code> table keyed by user id resolves each participant to its active devices; the <code>Inbox</code> becomes <em>per client</em>; and a message fans out to every one of a recipient's clients, each acking independently. The pub/sub layer is untouched — channels are still keyed by <code>userId</code>. To bound the storage and throughput this multiplies, the number of clients per account is capped (around 3).</p>
-        <h3 id="deepdives-dive-3">3 · Detecting a dead socket</h3>
-        <p id="deepdives-p-3">A WebSocket can look open while being functionally dead — a phone that walked into an elevator. TCP keepalives can take minutes to notice, far too slow for chat, and you would otherwise only discover the break when a send times out. The fix is <strong>application-level heartbeats</strong>: the client emits a small liveness ping on an interval, and a missed heartbeat marks the connection dead promptly, independent of the TCP layer.</p>
-        <h3 id="deepdives-dive-4">4 · When pub/sub drops a message</h3>
-        <p id="deepdives-p-4">Redis pub/sub is at-most-once — if no subscriber is listening at the instant of publish, the message is simply gone. Durability for offline recipients is already covered, because the message was written to the <code>Inbox</code> before it was ever published. The remaining gap is a <em>connected</em> client that missed a live push. Three mechanisms layer up: per-chat <strong>sequence numbers</strong> let a client notice a hole and request the missing range; those sequence numbers ride along on the heartbeat, so liveness and gap-detection share one signal; and periodic polling is the final backstop. Production systems run all three at once.</p>
-        <h3 id="deepdives-dive-5">5 · Ordering without a global clock</h3>
-        <p id="deepdives-p-5">Guaranteeing strict send-order delivery would mean buffering and reordering late arrivals — the kind of watermark machinery stream processors like Flink use, and far more complexity than users actually want. Instead, chat servers sync their clocks with NTP and stamp each message with its <em>server-receipt</em> time; every client sorts by that stamp. All devices then agree on an order, at the cost of the occasional message that "pops in" above one that was really sent later — a trade users happily accept for speed.</p>
-        <h3 id="deepdives-dive-6">6 · "Last seen" without hammering the database</h3>
-        <p id="deepdives-p-6">Writing to the database on every heartbeat would be a torrent of writes for a low-value signal. Presence is already knowable for free: a user is online exactly when they hold an active socket and channel subscription. Derive "last seen" from that connection state rather than persisting it, and the feature costs almost nothing.</p>
+        <h3 id="deepdives-dive-2" data-kb-level="advanced">2 · One user, many devices</h3>
+        <p id="deepdives-p-2" data-kb-level="advanced">A user reads on a phone and a laptop, and both must stay in sync — so a single per-user inbox is not enough. A <code>Clients</code> table keyed by user id resolves each participant to its active devices; the <code>Inbox</code> becomes <em>per client</em>; and a message fans out to every one of a recipient's clients, each acking independently. The pub/sub layer is untouched — channels are still keyed by <code>userId</code>. To bound the storage and throughput this multiplies, the number of clients per account is capped (around 3).</p>
+        <h3 id="deepdives-dive-3" data-kb-level="advanced">3 · Detecting a dead socket</h3>
+        <p id="deepdives-p-3" data-kb-level="advanced">A WebSocket can look open while being functionally dead — a phone that walked into an elevator. TCP keepalives can take minutes to notice, far too slow for chat, and you would otherwise only discover the break when a send times out. The fix is <strong>application-level heartbeats</strong>: the client emits a small liveness ping on an interval, and a missed heartbeat marks the connection dead promptly, independent of the TCP layer.</p>
+        <h3 id="deepdives-dive-4" data-kb-level="advanced">4 · When pub/sub drops a message</h3>
+        <p id="deepdives-p-4" data-kb-level="advanced">Redis pub/sub is at-most-once — if no subscriber is listening at the instant of publish, the message is simply gone. Durability for offline recipients is already covered, because the message was written to the <code>Inbox</code> before it was ever published. The remaining gap is a <em>connected</em> client that missed a live push. Three mechanisms layer up: per-chat <strong>sequence numbers</strong> let a client notice a hole and request the missing range; those sequence numbers ride along on the heartbeat, so liveness and gap-detection share one signal; and periodic polling is the final backstop. Production systems run all three at once.</p>
+        <h3 id="deepdives-dive-5" data-kb-level="expert">5 · Ordering without a global clock</h3>
+        <p id="deepdives-p-5" data-kb-level="expert">Guaranteeing strict send-order delivery would mean buffering and reordering late arrivals — the kind of watermark machinery stream processors like Flink use, and far more complexity than users actually want. Instead, chat servers sync their clocks with NTP and stamp each message with its <em>server-receipt</em> time; every client sorts by that stamp. All devices then agree on an order, at the cost of the occasional message that "pops in" above one that was really sent later — a trade users happily accept for speed.</p>
+        <h3 id="deepdives-dive-6" data-kb-level="expert">6 · "Last seen" without hammering the database</h3>
+        <p id="deepdives-p-6" data-kb-level="expert">Writing to the database on every heartbeat would be a torrent of writes for a low-value signal. Presence is already knowable for free: a user is online exactly when they hold an active socket and channel subscription. Derive "last seen" from that connection state rather than persisting it, and the feature costs almost nothing.</p>
       </div>
-      <figure class="diagram" id="deepdives-fig-1">
+      <figure class="diagram" id="deepdives-fig-1" data-kb-level="expert">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -270,16 +270,16 @@ sequenceDiagram
           <h3>What it buys</h3>
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Sub-500&nbsp;ms delivery to online users over persistent sockets, with pub/sub hiding which server holds the recipient.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">No message is ever lost: write-to-inbox-before-publish plus the deliver-then-ack loop guarantees eventual delivery across offline gaps.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Scales to billions by sharding connections across hundreds of hosts; adding servers only changes channel subscriptions, not application logic.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Media stays off the chat and database path, so large binaries never slow message delivery.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">No message is ever lost: write-to-inbox-before-publish plus the deliver-then-ack loop guarantees eventual delivery across offline gaps.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Scales to billions by sharding connections across hundreds of hosts; adding servers only changes channel subscriptions, not application logic.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Media stays off the chat and database path, so large binaries never slow message delivery.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>What it gives up</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Ordering is approximate — server-receipt timestamps, not true send order, so a message can surface above a later one.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Correctness leans on layered detection (heartbeats, sequence gaps, polling) rather than one clean guarantee, because pub/sub is at-most-once.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Correctness leans on layered detection (heartbeats, sequence gaps, polling) rather than one clean guarantee, because pub/sub is at-most-once.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Presence and liveness rest on connection state that is fuzzy on flaky networks; a dead socket looks alive until a heartbeat is missed.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Per-client inboxes multiply storage and throughput by device count, forcing a cap on clients per account.</li>
           </ul>
@@ -292,8 +292,8 @@ sequenceDiagram
       <div class="prose">
         <ul>
           <li id="levels-li-1"><strong>Mid-level</strong> — a clear socket-based API and a working end-to-end design that meets the functional requirements, with the honest observation that a single chat server won't scale and some awareness of where a first scaling attempt is rough.</li>
-          <li id="levels-li-2"><strong>Senior</strong> — moves briskly through the happy path to spend real time on scaling and robustness: argues consistent-hashing versus pub/sub, weighs partition-by-user against partition-by-chat, and can explain the mechanics of a long-lived socket.</li>
-          <li id="levels-li-3"><strong>Staff+</strong> — goes two or three levels deep on failure modes — dead-socket detection, recovering from at-most-once pub/sub, multi-device sync, the celebrity chat — and volunteers regionalization and cell-based architecture as the operational realities behind billions of users.</li>
+          <li id="levels-li-2" data-kb-level="advanced"><strong>Senior</strong> — moves briskly through the happy path to spend real time on scaling and robustness: argues consistent-hashing versus pub/sub, weighs partition-by-user against partition-by-chat, and can explain the mechanics of a long-lived socket.</li>
+          <li id="levels-li-3" data-kb-level="expert"><strong>Staff+</strong> — goes two or three levels deep on failure modes — dead-socket detection, recovering from at-most-once pub/sub, multi-device sync, the celebrity chat — and volunteers regionalization and cell-based architecture as the operational realities behind billions of users.</li>
         </ul>
       </div>
     </section>

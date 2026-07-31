@@ -4,24 +4,6 @@ Follow-ups that were consciously left out of the HTML5-knowledge-layer build. No
 blocks the KB; each is a distinct, self-contained piece of work. Ordered roughly by
 value-to-effort.
 
-## 0. Lens model v2 sweep — cumulative lenses, AWS-short basic, topology walks
-
-**What.** Owner review corrected the lens model: lenses are CUMULATIVE (basic = AWS-short
-untagged core; advanced = basic + system-design depth; expert = everything), the explain
-ladder stacks its rungs, `data-kb-register` is demoted to a rare replacement tool, and
-implementation patterns gain an AWS-style numbered topology-walk diagram (subgraph
-boundary, steps 1..N) with the sequence diagram demoted to advanced. The corpus still
-implements v1. Ready-to-execute plans live in `tmp/plans/levels/` (gitignored —
-regenerate id lists from graph.json if lost): **M0** mechanism flip → **C0** .claude
-assets → **F0** redo the 38 v1-swept pages (outbox first, the exemplar) → **L1–L8** the
-remaining ~235. Sizing bands and the full spec are in that index.
-
-**Small riders from the same overhaul:** reconcile hot-key's "also called a hot partition"
-and cache-stampede's "also called a thundering herd" lines against the new hazard pages;
-give sweeper a theme home (long-running-tasks); fact-check claim-check's SQS 1 MiB claim;
-consider request-coalescing/single-flight and load-shedding pattern pages (several
-mitigation blocks want the edge); a fluency↔tour make-check integrity rule.
-
 ## Add KB pages
 
 - Priority queue - Give latency-sensitive messages a lane that skips the backlog, while bulk or best-effort work waits behind it.

@@ -56,11 +56,6 @@
       "kb:note": "the request queue absorbs 100k-at-once demand spikes while the matcher drains at its own pace and autoscaling adds instances behind it"
     },
     {
-      "@id": "../patterns/concurrency/batching.html#batching",
-      "name": "Batching",
-      "kb:note": "location updates are coalesced over a short interval and bulk-written to cut millions of per-ping database transactions down to a manageable rate"
-    },
-    {
       "@id": "../patterns/distributed/routing/api-gateway.html#api-gateway",
       "name": "API Gateway",
       "kb:note": "a single front door authenticates, rate-limits, and routes every rider and driver call to the correct internal service"
@@ -160,7 +155,7 @@
     <section class="doc-section" id="entities" aria-labelledby="h-entities" data-kb-block="entities">
       <h2 class="doc-h" id="h-entities">Core entities</h2>
       <div class="prose">
-        <p id="entities-p-1">Five entities, each with a clear owner:</p>
+        <p id="entities-p-1">Each entity has one clear owner:</p>
         <ul>
           <li id="entities-li-1"><strong>Rider</strong> — a passenger requesting rides: contact and payment details.</li>
           <li id="entities-li-2"><strong>Driver</strong> — a registered driver: personal and vehicle details, plus an availability status.</li>
@@ -237,7 +232,7 @@ flowchart TB
         <p id="deepdives-p-1">The naïve design fails twice over: 2M writes/sec buries any general-purpose database, and even if it did not, a proximity query over raw latitude/longitude is a full table scan — a B-tree on two independent columns cannot index a 2D neighbourhood, so "who is within 3&nbsp;km" degrades to reading everything.</p>
         <ul>
           <li id="deepdives-li-1"><strong>Batch into a geospatial store.</strong> The first real improvement is to coalesce updates over a short window and <a href="../patterns/concurrency/batching.html">batch</a>-write them, cutting the transaction count sharply, and to store them in a spatial index — a quad-tree, or PostgreSQL with the PostGIS extension. This works, but the batch interval buys throughput at the cost of staleness: the stored position now lags the car, and the matcher can pick a driver who has already moved on.</li>
-          <li id="deepdives-li-2"><strong>Real-time in-memory geo (chosen).</strong> Keep positions in an in-memory store with native geospatial support — Redis. A <a href="../patterns/distributed/routing/geohash.html">geohash</a> encodes each driver's lat/long into a single 52-bit score in a sorted set keyed by <code>driverId</code>; <code>GEOADD</code> upserts a position (each write simply overwrites the last, so data is always current — no batching needed), and <code>GEOSEARCH</code> returns everyone within a radius in milliseconds. Storage stays tiny because stale drivers auto-expire, and durability — the usual worry with an in-memory store — barely bites here: drivers re-report every ~5 seconds, so even a total flush of the store rebuilds current state in seconds. Back it with snapshotting and a replica for failover and the risk is bounded.</li>
+          <li id="deepdives-li-2"><strong>Real-time in-memory geo — this design's answer.</strong> Keep positions in an in-memory store with native geospatial support — Redis. A <a href="../patterns/distributed/routing/geohash.html">geohash</a> encodes each driver's lat/long into a single 52-bit score in a sorted set keyed by <code>driverId</code>; <code>GEOADD</code> upserts a position (each write simply overwrites the last, so data is always current — no batching needed), and <code>GEOSEARCH</code> returns everyone within a radius in milliseconds. Storage stays tiny because stale drivers auto-expire, and durability — the usual worry with an in-memory store — barely bites here: drivers re-report every ~5 seconds, so even a total flush of the store rebuilds current state in seconds. Back it with snapshotting and a replica for failover and the risk is bounded.</li>
         </ul>
         <details class="sketch" id="deepdives-sketch-1">
           <summary>Redis — upsert a position, then search it</summary>
@@ -254,7 +249,7 @@ GEOSEARCH drivers:geo FROMLONLAT &lt;long&gt; &lt;lat&gt; BYRADIUS 3 km ASC COUN
         <ul>
           <li id="deepdives-li-3"><strong>In-memory timers per instance.</strong> Each matcher marks a request "locked" and runs its own local countdown. With many instances there is no shared truth, so two can lock the same driver, and if an instance crashes mid-window the lock is simply lost. A cron to sweep orphaned locks papers over it but adds delay and complexity.</li>
           <li id="deepdives-li-4"><strong>A status column with a timeout.</strong> Move the lock into the database and lean on its transactions so only one instance wins. Better, but the release still depends on an in-memory timeout somewhere — if that process dies, the driver can stay "outstanding" forever.</li>
-          <li id="deepdives-li-5"><strong>Distributed lock with TTL (chosen).</strong> Acquire a <a href="../patterns/distributed/coordination/distributed-lock.html">distributed lock</a> in Redis keyed by <code>driverId</code>, with the TTL set to the 10-second window. Winning the key means no other instance can offer that driver a ride; accept within the window and you release it and mark the ride <code>accepted</code>; stay silent and the key simply expires, freeing the driver with zero bookkeeping. The system now leans on the lock store's availability, but because every lock is short-lived, recovery from a hiccup is cheap.</li>
+          <li id="deepdives-li-5"><strong>Distributed lock with TTL — this design's answer.</strong> Acquire a <a href="../patterns/distributed/coordination/distributed-lock.html">distributed lock</a> in Redis keyed by <code>driverId</code>, with the TTL set to the 10-second window. Winning the key means no other instance can offer that driver a ride; accept within the window and you release it and mark the ride <code>accepted</code>; stay silent and the key simply expires, freeing the driver with zero bookkeeping. The system now leans on the lock store's availability, but because every lock is short-lived, recovery from a hiccup is cheap.</li>
         </ul>
 
         <h3 id="deepdives-dive-3">3 · Not dropping requests when demand spikes</h3>
@@ -330,7 +325,6 @@ stateDiagram-v2
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="workflow-orchestration"><a href="../patterns/distributed/coordination/workflow-orchestration.html">Workflow Orchestration</a><span class="rel-note">the offer-timeout-and-fall-through-to-the-next-driver sequence runs as a durable Temporal workflow whose persisted state survives a matcher crash mid-ride</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="message-queue"><a href="../patterns/messaging/message-queue.html">Message Queue</a><span class="rel-note">ride requests are enqueued and their offset committed only after a successful match, so a surge is buffered and a dead worker's message is re-picked by another instance</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="load-leveling"><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">the request queue absorbs 100k-at-once demand spikes while the matcher drains at its own pace and autoscaling adds instances behind it</span></div>
-          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="batching"><a href="../patterns/concurrency/batching.html">Batching</a><span class="rel-note">location updates are coalesced over a short interval and bulk-written to cut millions of per-ping database transactions down to a manageable rate</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="api-gateway"><a href="../patterns/distributed/routing/api-gateway.html">API Gateway</a><span class="rel-note">a single front door authenticates, rate-limits, and routes every rider and driver call to the correct internal service</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="sharding"><a href="../patterns/distributed/routing/sharding.html">Sharding</a><span class="rel-note">services, queues and stores are partitioned by region so riders reach nearby infrastructure and most proximity searches stay within a single shard</span></div>
         </div>

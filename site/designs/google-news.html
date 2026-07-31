@@ -152,8 +152,8 @@
       <div class="prose">
         <p id="sizing-p-1"><strong>Reads.</strong> 100M DAU refreshing 5&ndash;10 times a day is 0.5&ndash;1B feed requests/day &asymp; <strong>~11,500 req/s</strong> on average. News is bursty, though, and the number that actually sizes the system is the breaking-news peak the brief hands us: <strong>~10M concurrent readers in a single hot region</strong>. Everything hangs off surviving that.</p>
         <p id="sizing-p-2"><strong>Writes.</strong> Across thousands of publishers, even a busy news hour yields only 50&ndash;100 new articles &mdash; a handful of writes per second. Reads outrun writes by roughly a million to one, which is the whole reason the design is built around a read cache rather than a fast database.</p>
-        <p id="sizing-p-3"><strong>Working set.</strong> A reader only ever sees the top of the feed, so what has to be fast is the last <strong>~1,000&ndash;2,000 articles per region</strong>, not the whole archive. As sorted article ids plus light metadata that is a few megabytes per region &mdash; it fits in memory comfortably, no sharding required.</p>
-        <p id="sizing-p-4"><strong>Cache fan-out.</strong> One Redis instance serves on the order of <strong>~100k req/s</strong>. To absorb 10M concurrent readers in a peak region you need roughly <em>10M &divide; 100k &asymp; 100 replicas</em> of that region's feed &mdash; a read-throughput problem, not a storage one, since the data itself is tiny.</p>
+        <p id="sizing-p-3" data-kb-level="advanced"><strong>Working set.</strong> A reader only ever sees the top of the feed, so what has to be fast is the last <strong>~1,000&ndash;2,000 articles per region</strong>, not the whole archive. As sorted article ids plus light metadata that is a few megabytes per region &mdash; it fits in memory comfortably, no sharding required.</p>
+        <p id="sizing-p-4" data-kb-level="advanced"><strong>Cache fan-out.</strong> One Redis instance serves on the order of <strong>~100k req/s</strong>. To absorb 10M concurrent readers in a peak region you need roughly <em>10M &divide; 100k &asymp; 100 replicas</em> of that region's feed &mdash; a read-throughput problem, not a storage one, since the data itself is tiny.</p>
       </div>
     </section>
 
@@ -163,7 +163,7 @@
         <p id="entities-p-1">Three entities carry the whole system:</p>
         <ul>
           <li id="entities-li-1"><strong>Article</strong> — the unit of content: <code>id</code>, <code>title</code>, <code>summary</code>, <code>thumbnail_url</code>, <code>published_at</code>, <code>publisher_id</code>, <code>region</code>, and the canonical <code>url</code> on the publisher's site. Note there is no article <em>body</em> — the aggregator only indexes, it does not host.</li>
-          <li id="entities-li-2"><strong>Publisher</strong> — a content source: <code>id</code>, <code>name</code>, <code>site_url</code>, <code>feed_url</code>, <code>region</code>, and a priority tier that decides how often it is polled.</li>
+          <li id="entities-li-2" data-kb-level="advanced"><strong>Publisher</strong> — a content source: <code>id</code>, <code>name</code>, <code>site_url</code>, <code>feed_url</code>, <code>region</code>, and a priority tier that decides how often it is polled.</li>
           <li id="entities-li-3"><strong>User</strong> — <code>id</code> and <code>region</code>, the latter inferred from IP or set explicitly. Tracked even for anonymous readers, because region alone selects which feed to serve.</li>
         </ul>
       </div>
@@ -189,7 +189,7 @@
 GET /article/{id}   &rarr; 302 Found  Location: https://publisher.example/story</code></pre>
       </details>
       <div class="prose">
-        <p id="interface-p-2">There is deliberately no &ldquo;get one article&rdquo; endpoint — the full story lives on the publisher, and the feed row already carries the URL the browser needs.</p>
+        <p id="interface-p-2" data-kb-level="advanced">There is deliberately no &ldquo;get one article&rdquo; endpoint — the full story lives on the publisher, and the feed row already carries the URL the browser needs.</p>
       </div>
     </section>
 
@@ -198,7 +198,7 @@ GET /article/{id}   &rarr; 302 Found  Location: https://publisher.example/story<
       <div class="prose">
         <p id="architecture-p-1">Split the system along its load asymmetry into an <strong>ingestion side</strong> and a <strong>serving side</strong>, deployed and scaled independently because they have nothing in common: one is write-light, batchy and background; the other is read-heavy, spiky and user-facing.</p>
         <p id="architecture-p-2">The <strong>Data Collection Service</strong> polls each publisher's RSS feed (a lightweight XML-over-HTTP syndication format), extracts and normalises each article, downloads its lead image, and writes two places: article metadata to the <strong>article store</strong>, and a resized thumbnail to <a href="../patterns/distributed/routing/object-storage.html">object storage</a> — the system keeps its <em>own</em> copy rather than hotlinking, so a slow or vanished publisher image never breaks the feed UI. Every write to the store emits a <a href="../patterns/distributed/coordination/change-data-capture.html">change-data-capture</a> event; <strong>Feed Generation Workers</strong> consume those events and splice the new article into each affected region's feed. That regional feed is the heart of the design — a Redis sorted set, ordered by publish time, holding just the recent articles a region needs. It is a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of the store, maintained incrementally, so a read never has to assemble it.</p>
-        <p id="architecture-p-3">On the serving side, the client hits an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> (routing, auth, rate limiting, validation), which forwards to the <strong>Feed Service</strong>. That service does almost nothing: one <code>ZREVRANGE</code> against the region's sorted set and it has the page. Thumbnails are served straight from a <a href="../patterns/distributed/routing/cdn.html">CDN</a> in front of object storage, never touching the application tier.</p>
+        <p id="architecture-p-3">On the serving side, the client hits an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> (routing, auth, rate limiting, validation), which forwards to the <strong>Feed Service</strong>. That service does almost nothing: one read of the newest slice of the region's sorted set and it has the page. Thumbnails are served straight from a <a href="../patterns/distributed/routing/cdn.html">CDN</a> in front of object storage, never touching the application tier.</p>
       </div>
       <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
@@ -214,10 +214,10 @@ flowchart TB
     Pub -->|"poll RSS feed"| Ingest
     Ingest -->|"write article"| DB
     Ingest -->|"store thumbnail"| Obj
-    DB -->|"CDC event"| Workers
-    Workers -->|"ZADD + trim region feed"| Redis
+    DB -->|"change-data-capture event"| Workers
+    Workers -->|"add to region feed, trim to newest"| Redis
     Client -->|"GET /feed"| Feed
-    Feed -->|"ZREVRANGE region set"| Redis
+    Feed -->|"read newest page of region set"| Redis
     Obj -->|"thumbnail bytes via edge"| Client
     classDef ext stroke-dasharray:4 4;
         </pre>
@@ -231,18 +231,18 @@ flowchart TB
         <h3 id="deepdives-dive-1">1 · Keeping pagination stable while the feed grows</h3>
         <p id="deepdives-p-1">Offset pagination (<code>OFFSET (page-1)*limit</code>) is the obvious first move and it quietly breaks. New articles are inserted at the top while a reader scrolls, which shifts every row down: articles they already saw reappear on the next page, and articles in between get skipped entirely. During a busy news hour that drift hits within a single browsing session.</p>
         <ul>
-          <li id="deepdives-li-1"><strong>Timestamp cursor.</strong> Return the <code>published_at</code> of the last row and page with <code>WHERE published_at &lt; cursor ORDER BY published_at DESC</code>. Because the query anchors to a fixed point instead of a moving offset, inserts no longer shift the window. But batch imports produce many articles sharing one timestamp, and a strict <code>&lt;</code> silently skips same-timestamp siblings.</li>
-          <li id="deepdives-li-2"><strong>Composite cursor.</strong> Break the tie by pairing timestamp with id — <code>WHERE (published_at, id) &lt; (cur_ts, cur_id)</code> with a composite index on <code>(published_at, id)</code>. This is the tuple-comparison approach large timelines use; it is correct but adds cursor encoding and a slightly larger index.</li>
+          <li id="deepdives-li-1" data-kb-level="advanced"><strong>Timestamp cursor.</strong> Return the <code>published_at</code> of the last row and page with <code>WHERE published_at &lt; cursor ORDER BY published_at DESC</code>. Because the query anchors to a fixed point instead of a moving offset, inserts no longer shift the window. But batch imports produce many articles sharing one timestamp, and a strict <code>&lt;</code> silently skips same-timestamp siblings.</li>
+          <li id="deepdives-li-2" data-kb-level="advanced"><strong>Composite cursor.</strong> Break the tie by pairing timestamp with id — <code>WHERE (published_at, id) &lt; (cur_ts, cur_id)</code> with a composite index on <code>(published_at, id)</code>. This is the tuple-comparison approach large timelines use; it is correct but adds cursor encoding and a slightly larger index.</li>
           <li id="deepdives-li-3"><strong>Monotonic ids (chosen).</strong> If article ids are time-ordered from birth — ULIDs, or a sequence — the id alone <em>is</em> the ordering. The cursor collapses to <code>WHERE id &lt; cursor_id ORDER BY id DESC</code> against one index: no timestamps, no ties. For chronological data like a news feed this is both the simplest and the fastest, at the cost of committing to the id scheme up front (a real migration if you started with random UUIDs).</li>
         </ul>
-        <h3 id="deepdives-dive-2">2 · Serving a feed page in under 200&nbsp;ms</h3>
-        <p id="deepdives-p-2">At 0.5&ndash;1B feed requests a day, a per-request database query — filter millions of articles by region, sort by time, paginate — will blow the latency budget even with perfect indexing. The fix is to stop querying on read and serve a precomputed feed from memory.</p>
+        <h3 id="deepdives-dive-2" data-kb-level="advanced">2 · Serving a feed page in under 200&nbsp;ms</h3>
+        <p id="deepdives-p-2" data-kb-level="advanced">At 0.5&ndash;1B feed requests a day, a per-request database query — filter millions of articles by region, sort by time, paginate — will blow the latency budget even with perfect indexing. The fix is to stop querying on read and serve a precomputed feed from memory.</p>
         <ul>
-          <li id="deepdives-li-4"><strong>TTL cache-aside.</strong> Cache each region's feed in a Redis sorted set (<code>feed:US</code>) with, say, a 30-minute TTL; on a miss, query the store, populate, return. This is <a href="../patterns/caching/cache-aside.html">cache-aside</a>, and it has two problems. Up to 30 minutes of staleness fights the freshness goal, and — worse — when a hot region's entry expires, every concurrent request misses at once and stampedes the database, a <em>thundering herd</em> that degrades latency for minutes at a time.</li>
-          <li id="deepdives-li-5"><strong>CDC-driven precompute (chosen).</strong> Drop the TTL and keep the feed continuously fresh instead. When ingestion writes an article, a change-data-capture event reaches the Feed Generation Workers, which <code>ZADD</code> it (score = publish time) into every affected regional set and then <code>ZREMRANGEBYRANK</code> to trim back to the recent ~1&ndash;2k — bounding memory without any TTL. Reads become a pure <code>ZREVRANGE</code> in under 5&nbsp;ms, freshness is measured in seconds, and there is no expiry to stampede. The cost is a real pipeline (CDC, a queue, workers) to operate and a rebuild path for when a worker or cache falls over.</li>
+          <li id="deepdives-li-4" data-kb-level="advanced"><strong>TTL cache-aside.</strong> Cache each region's feed in a Redis sorted set (<code>feed:US</code>) with, say, a 30-minute TTL; on a miss, query the store, populate, return. This is <a href="../patterns/caching/cache-aside.html">cache-aside</a>, and it has two problems. Up to 30 minutes of staleness fights the freshness goal, and — worse — when a hot region's entry expires, every concurrent request misses at once and stampedes the database, a <em>thundering herd</em> that degrades latency for minutes at a time.</li>
+          <li id="deepdives-li-5" data-kb-level="advanced"><strong>CDC-driven precompute (chosen).</strong> Drop the TTL and keep the feed continuously fresh instead. When ingestion writes an article, a change-data-capture event reaches the Feed Generation Workers, which <code>ZADD</code> it (score = publish time) into every affected regional set and then <code>ZREMRANGEBYRANK</code> to trim back to the recent ~1&ndash;2k — bounding memory without any TTL. Reads become a pure <code>ZREVRANGE</code> in under 5&nbsp;ms, freshness is measured in seconds, and there is no expiry to stampede. The cost is a real pipeline (CDC, a queue, workers) to operate and a rebuild path for when a worker or cache falls over.</li>
         </ul>
       </div>
-      <details class="sketch" id="deepdives-sketch-1">
+      <details class="sketch" id="deepdives-sketch-1" data-kb-level="advanced">
         <summary>Redis — maintain a regional feed, then read a page</summary>
 <pre><code class="language-python" data-kb-lang="python"># worker, on a CDC "new article" event
 for region in affected_regions(article):
@@ -254,28 +254,28 @@ for region in affected_regions(article):
 ZREVRANGEBYSCORE  "feed:US"  (cursor_id  -inf  LIMIT 0 20</code></pre>
       </details>
       <div class="prose">
-        <h3 id="deepdives-dive-3">3 · Getting breaking news in within 30 minutes</h3>
-        <p id="deepdives-p-3">Baseline polling runs every 3&ndash;6 hours — fine for a magazine, useless for a fast-moving story readers already saw on social media. Freshness is a spectrum of cooperation with the publisher.</p>
+        <h3 id="deepdives-dive-3" data-kb-level="advanced">3 · Getting breaking news in within 30 minutes</h3>
+        <p id="deepdives-p-3" data-kb-level="advanced">Baseline polling runs every 3&ndash;6 hours — fine for a magazine, useless for a fast-moving story readers already saw on social media. Freshness is a spectrum of cooperation with the publisher.</p>
         <ul>
-          <li id="deepdives-li-6"><strong>Tiered polling.</strong> Poll by priority — major outlets every 5&ndash;10 minutes, mid-tier every 30, niche every few hours — and use ETags / <code>Last-Modified</code> to skip unchanged feeds. Cheap and unilateral, but still reactive: even 5-minute polling lags real time, and newer publishers may have no RSS at all.</li>
-          <li id="deepdives-li-7"><strong>Intelligent scraping.</strong> For publishers without a feed, crawl their homepage for new links via known selectors and a fingerprint set of seen URLs, then normalise into the same ingestion pipeline. A fallback, not a primary path — HTML changes break extractors, and it raises legal questions.</li>
-          <li id="deepdives-li-8"><strong>Webhooks + fallback (chosen).</strong> Flip pull to push: cooperating publishers <code>POST /webhooks/article-published</code> the instant they publish, authenticated by a shared secret. Content lands in feeds within ~30 seconds via the same CDC-to-cache path. It needs publisher buy-in, so it can't be rolled out unilaterally — hence the hybrid: webhooks for premium partners, frequent polling for cooperative feeds, scraping for the rest.</li>
+          <li id="deepdives-li-6" data-kb-level="advanced"><strong>Tiered polling.</strong> Poll by priority — major outlets every 5&ndash;10 minutes, mid-tier every 30, niche every few hours — and use ETags / <code>Last-Modified</code> to skip unchanged feeds. Cheap and unilateral, but still reactive: even 5-minute polling lags real time, and newer publishers may have no RSS at all.</li>
+          <li id="deepdives-li-7" data-kb-level="expert"><strong>Intelligent scraping.</strong> For publishers without a feed, crawl their homepage for new links via known selectors and a fingerprint set of seen URLs, then normalise into the same ingestion pipeline. A fallback, not a primary path — HTML changes break extractors, and it raises legal questions.</li>
+          <li id="deepdives-li-8" data-kb-level="advanced"><strong>Webhooks + fallback (chosen).</strong> Flip pull to push: cooperating publishers <code>POST /webhooks/article-published</code> the instant they publish, authenticated by a shared secret. Content lands in feeds within ~30 seconds via the same CDC-to-cache path. It needs publisher buy-in, so it can't be rolled out unilaterally — hence the hybrid: webhooks for premium partners, frequent polling for cooperative feeds, scraping for the rest.</li>
         </ul>
-        <h3 id="deepdives-dive-4">4 · Thumbnails without melting the origin</h3>
-        <p id="deepdives-p-4">Only thumbnails render in-feed (the full story is on the publisher), but at 100M+ readers even thumbnails are a delivery problem.</p>
+        <h3 id="deepdives-dive-4" data-kb-level="expert">4 · Thumbnails without melting the origin</h3>
+        <p id="deepdives-p-4" data-kb-level="expert">Only thumbnails render in-feed (the full story is on the publisher), but at 100M+ readers even thumbnails are a delivery problem.</p>
         <ul>
-          <li id="deepdives-li-9"><strong>Blobs in the database.</strong> Storing 20&ndash;50&nbsp;KB of image bytes per row alongside metadata bloats backups, evicts real query workload from memory, and collapses past a few thousand articles. A textbook example of what object storage exists to prevent — rejected outright.</li>
-          <li id="deepdives-li-10"><strong>S3 with direct links.</strong> Downsize once, upload to object storage, store the URL; browsers load images directly, off the app tier. Better, but distant readers pay latency to a single region and there is one fixed size for every screen.</li>
-          <li id="deepdives-li-11"><strong>Object storage + CDN, multiple sizes (chosen).</strong> Keep object storage as origin, front it with a CDN, and generate a few sizes (mobile / desktop / retina) chosen client-side via <code>srcset</code>. Edge caching gives sub-200&nbsp;ms global loads and cuts origin requests by 90%+, so serving <em>more</em> variants costs <em>less</em> overall.</li>
+          <li id="deepdives-li-9" data-kb-level="expert"><strong>Blobs in the database.</strong> Storing 20&ndash;50&nbsp;KB of image bytes per row alongside metadata bloats backups, evicts real query workload from memory, and collapses past a few thousand articles. A textbook example of what object storage exists to prevent — rejected outright.</li>
+          <li id="deepdives-li-10" data-kb-level="expert"><strong>S3 with direct links.</strong> Downsize once, upload to object storage, store the URL; browsers load images directly, off the app tier. Better, but distant readers pay latency to a single region and there is one fixed size for every screen.</li>
+          <li id="deepdives-li-11" data-kb-level="expert"><strong>Object storage + CDN, multiple sizes (chosen).</strong> Keep object storage as origin, front it with a CDN, and generate a few sizes (mobile / desktop / retina) chosen client-side via <code>srcset</code>. Edge caching gives sub-200&nbsp;ms global loads and cuts origin requests by 90%+, so serving <em>more</em> variants costs <em>less</em> overall.</li>
         </ul>
-        <h3 id="deepdives-dive-5">5 · Surviving a breaking-news spike</h3>
-        <p id="deepdives-p-5">News consumption is inherently regional — Americans want US news, Europeans want EU news — which is the structural gift that makes 10M concurrent tractable. Deploy per region so each cluster handles only its own traffic; a spike in one region leaves the others at baseline. Then walk each tier under peak load:</p>
+        <h3 id="deepdives-dive-5" data-kb-level="advanced">5 · Surviving a breaking-news spike</h3>
+        <p id="deepdives-p-5" data-kb-level="advanced">News consumption is inherently regional — Americans want US news, Europeans want EU news — which is the structural gift that makes 10M concurrent tractable. Deploy per region so each cluster handles only its own traffic; a spike in one region leaves the others at baseline. Then walk each tier under peak load:</p>
         <ul>
-          <li id="deepdives-li-12"><strong>Feed Service.</strong> One app server handles tens of thousands of connections, nowhere near 10M. Because instances are <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>, they scale out horizontally behind a load balancer — <a href="../patterns/distributed/routing/autoscaling.html">auto-scaling</a> groups spin instances up on CPU pressure and back down when the story cools.</li>
-          <li id="deepdives-li-13"><strong>Cache tier.</strong> This is the real scaling target, since it now absorbs essentially all read traffic. A region holds only ~2,000 articles, so a single master fits the whole dataset — no sharding needed. The axis is pure read throughput, solved by <a href="../patterns/distributed/coordination/replication.html">replication</a>: writes hit the master, reads fan out across a fleet of read replicas (~100 in a peak region), and Redis Sentinel promotes a replica if the master dies. Replication lag stays under ~200&nbsp;ms — invisible on a news feed.</li>
-          <li id="deepdives-li-14"><strong>Database.</strong> Never in the read path once the cache is precomputed, so it never sees 10M concurrent reads at all — the cache shields it entirely.</li>
+          <li id="deepdives-li-12" data-kb-level="advanced"><strong>Feed Service.</strong> One app server handles tens of thousands of connections, nowhere near 10M. Because instances are <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>, they scale out horizontally behind a load balancer — <a href="../patterns/distributed/routing/autoscaling.html">auto-scaling</a> groups spin instances up on CPU pressure and back down when the story cools.</li>
+          <li id="deepdives-li-13" data-kb-level="advanced"><strong>Cache tier.</strong> This is the real scaling target, since it now absorbs essentially all read traffic. A region holds only ~2,000 articles, so a single master fits the whole dataset — no sharding needed. The axis is pure read throughput, solved by <a href="../patterns/distributed/coordination/replication.html">replication</a>: writes hit the master, reads fan out across a fleet of read replicas (~100 in a peak region), and Redis Sentinel promotes a replica if the master dies. Replication lag stays under ~200&nbsp;ms — invisible on a news feed.</li>
+          <li id="deepdives-li-14" data-kb-level="advanced"><strong>Database.</strong> Never in the read path once the cache is precomputed, so it never sees 10M concurrent reads at all — the cache shields it entirely.</li>
         </ul>
-        <figure class="diagram" id="deepdives-fig-1">
+        <figure class="diagram" id="deepdives-fig-1" data-kb-level="advanced">
           <pre class="mermaid">
 flowchart TB
     Workers["Feed Generation Workers"] -->|"ZADD + trim, writes only"| Master[("Redis master · region feed")]
@@ -288,11 +288,11 @@ flowchart TB
           </pre>
           <figcaption>How does one region's cache tier absorb ~10M concurrent readers without sharding? Replicate the single master, fan reads across replicas.</figcaption>
         </figure>
-        <h3 id="deepdives-dive-6">6 · Beyond one regional feed — categories and personalisation</h3>
-        <p id="deepdives-p-6">Two common extensions, and in both the tempting answer over-builds:</p>
+        <h3 id="deepdives-dive-6" data-kb-level="expert">6 · Beyond one regional feed — categories and personalisation</h3>
+        <p id="deepdives-p-6" data-kb-level="expert">Two common extensions, and in both the tempting answer over-builds:</p>
         <ul>
-          <li id="deepdives-li-15"><strong>Categories.</strong> Rather than maintain a separate sorted set per category-and-region pair (25 categories &times; 10 regions = 250 caches to invalidate), store full article metadata as the cached member and <em>filter in memory</em>: pull the region's top ~1,000 with one <code>ZREVRANGE</code> and keep the ones tagged <code>sports</code>. Reading 1,000 members plus filtering is ~10&nbsp;ms, each article is still stored once, and the CDC cache is reused unchanged — the straightforward option wins.</li>
-          <li id="deepdives-li-16"><strong>Personalisation.</strong> Scoring thousands of articles against 100M profiles on every request is billions of calculations an hour — hopeless inside 200&nbsp;ms. Per-user feed caches explode memory (1,000 articles &times; 50M active users). The workable answer stores a tiny per-user preference vector and <em>assembles</em> a feed on demand by mixing a handful of existing category caches (e.g. 60% tech + 30% business + 10% trending), boosting trending weight during breaking news. Roughly 100&times; less memory than per-user caches, with an ML model tuning the mix — the heavy ranking itself is left as a black box, out of scope here.</li>
+          <li id="deepdives-li-15" data-kb-level="expert"><strong>Categories.</strong> Rather than maintain a separate sorted set per category-and-region pair (25 categories &times; 10 regions = 250 caches to invalidate), store full article metadata as the cached member and <em>filter in memory</em>: pull the region's top ~1,000 with one <code>ZREVRANGE</code> and keep the ones tagged <code>sports</code>. Reading 1,000 members plus filtering is ~10&nbsp;ms, each article is still stored once, and the CDC cache is reused unchanged — the straightforward option wins.</li>
+          <li id="deepdives-li-16" data-kb-level="expert"><strong>Personalisation.</strong> Scoring thousands of articles against 100M profiles on every request is billions of calculations an hour — hopeless inside 200&nbsp;ms. Per-user feed caches explode memory (1,000 articles &times; 50M active users). The workable answer stores a tiny per-user preference vector and <em>assembles</em> a feed on demand by mixing a handful of existing category caches (e.g. 60% tech + 30% business + 10% trending), boosting trending weight during breaking news. Roughly 100&times; less memory than per-user caches, with an ML model tuning the mix — the heavy ranking itself is left as a black box, out of scope here.</li>
         </ul>
       </div>
     </section>
@@ -306,14 +306,14 @@ flowchart TB
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">A feed page is one in-memory sorted-set read (~5&nbsp;ms), so the 200&nbsp;ms budget holds even at a 10M-concurrent regional peak.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">CDC keeps feeds fresh to within seconds and removes the TTL-expiry stampede that plagues cache-aside.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">Ingestion and serving scale on independent axes — one batchy and write-light, the other spiky and read-heavy.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Regional deployment contains blast radius: a spike in one region never touches another's capacity.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Regional deployment contains blast radius: a spike in one region never touches another's capacity.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>What it gives up</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">The precomputed feed duplicates article data across regional (and category) caches — more memory and a pipeline to keep in sync.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Availability is chosen over consistency: a just-published article is briefly absent, and a replica can trail the master by ~200&nbsp;ms.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Availability is chosen over consistency: a just-published article is briefly absent, and a replica can trail the master by ~200&nbsp;ms.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">CDC, a queue and workers are real operational surface — corruption or a worker crash needs an explicit cache-rebuild path.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Seconds-level freshness depends on publisher cooperation; without webhooks you fall back to polling and its minutes-to-hours lag.</li>
           </ul>
@@ -326,8 +326,8 @@ flowchart TB
       <div class="prose">
         <ul>
           <li id="levels-li-1"><strong>Mid-level</strong> — a working end-to-end flow: a collector polls sources into a store, a feed service returns a region's recent articles, pagination works, and clicks redirect to the publisher. Recognises that reads dominate and that a cache helps.</li>
-          <li id="levels-li-2"><strong>Senior</strong> — drives the read-first framing, replaces offset pagination with cursors unprompted, designs the precomputed feed cache <em>and</em> its freshness mechanism (why TTL isn't enough, why CDC is), and separates ingestion from serving on their different scaling profiles.</li>
-          <li id="levels-li-3"><strong>Staff+</strong> — treats the system as regional from the first minute, volunteers the CDC pipeline with its failure and rebuild story, sizes the Redis replica fleet for a breaking-news spike, and reasons about the freshness ladder, thumbnail delivery, and categories/personalisation as extensions of the same cache rather than rewrites.</li>
+          <li id="levels-li-2" data-kb-level="advanced"><strong>Senior</strong> — drives the read-first framing, replaces offset pagination with cursors unprompted, designs the precomputed feed cache <em>and</em> its freshness mechanism (why TTL isn't enough, why CDC is), and separates ingestion from serving on their different scaling profiles.</li>
+          <li id="levels-li-3" data-kb-level="expert"><strong>Staff+</strong> — treats the system as regional from the first minute, volunteers the CDC pipeline with its failure and rebuild story, sizes the Redis replica fleet for a breaking-news spike, and reasons about the freshness ladder, thumbnail delivery, and categories/personalisation as extensions of the same cache rather than rewrites.</li>
         </ul>
       </div>
     </section>

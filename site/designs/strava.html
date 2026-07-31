@@ -69,6 +69,11 @@
       "@id": "../patterns/distributed/coordination/materialized-view.html#materialized-view",
       "name": "Materialized View",
       "kb:note": "the leaderboard is a precomputed ranking refreshed on a schedule rather than sorted per request"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "chunked, background and retried uploads can all deliver the same points twice, so the server dedupes by activity and point and a re-send never double-counts the route"
     }
   ]
 }
@@ -110,15 +115,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Build an app that records a run or a ride: start it, watch the route and distance tick up second by second, save it, and let friends see how it went. The catch is where people exercise — tunnels, canyons, places with no signal at all — so the recording cannot depend on being connected, and the numbers on the wrist must be right immediately, not after a round trip.</p>
+          <p>Let the phone do the recording and treat the server as a filing cabinet you visit once. The phone reads its own GPS every couple of seconds, adds the new distance to a running total, and keeps the whole trace in its own memory — so the screen never waits for a network that may not be there. Every ten seconds it copies that trace to storage on the device, so a flat battery costs you the last few seconds and nothing more. When the workout ends and a signal comes back, the phone sends the finished trace up in one go: write the whole shopping list at home, then post it once, instead of mailing a letter per item.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>One inversion decides the design: the phone records the whole activity and syncs once at the end, instead of pinging a point every few seconds. That is write-behind moved onto the device — local state answers the live screen instantly, the buffer is checkpointed to on-device storage every ten seconds against a dead battery, and the batched upload must be idempotent because any attempt can be retried. Server-side, route rows dominate, so the store shards on completion date and tiers by age. Live spectating is polled, not pushed. The dominant axis is offline durability, not backend throughput.</p>
+          <p>That is write-behind with the device as the cache. Local state is the source of truth until the activity completes, and the batched flush is the only write the backend sees — some six hundred pings collapsed into one request. Any flush can be retried after a dropped ack or a resumed chunk, so the append is idempotent, deduped by activity and point. Elapsed time comes from a STARTED/PAUSED/RESUMED status log rather than a mutated counter, which makes moving time and total time both fall out of the same rows. The server side stays dull on purpose: one stateless service over a store sharded by completion date and tiered by age.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>The signal is refusing to build a backend the numbers do not justify: ten million activities in flight is a client-side figure, since each lives on a phone and writes once, and recording locally collapses six hundred pings into one request — a hundredfold cut before any scaling work. Push back on websockets for spectators too; updates arrive on a known cadence and a few seconds of lag is fine, so polling with a deliberate five-to-ten-second display delay and interpolation reads smoother. Roughly five hundred and fifty terabytes of route data a year is the real constraint, and the price of client-side truth is ten seconds of points lost when a phone dies.</p>
+          <p>Choose this shape when the client can hold the truth and the read side is small. Ten million activities in flight is a client-side number — each lives on a phone and writes once — so splitting the backend into services would scale nothing that is under pressure. Push back on websockets for spectators as well: updates land on a known cadence and a few seconds of lag costs nothing, so polling with a deliberate five-to-ten-second display offset and interpolation reads smoother for less. The bill arrives in three parts, each with its counter-move. Durability is capped by the ten-second checkpoint — shorten it and you pay battery, or background-sync opportunistically when connectivity appears. Storage, not request rate, is the real constraint at roughly 550 TB of routes a year — time-shard and tier the cold years to object storage. And the hard bugs now sit on the least controllable machine in the stack, which is why the upload must be chunked, resumable and idempotent.</p>
         </div>
       </div>
     </section>
@@ -164,7 +169,7 @@
           <li id="entities-li-1"><strong>User</strong> — the athlete: profile and settings.</li>
           <li id="entities-li-2"><strong>Activity</strong> — one run or ride: <code>type</code> (RUN&nbsp;|&nbsp;RIDE), start and end time, a <code>status</code> log, <code>distance</code>, <code>duration</code>, and its route.</li>
           <li id="entities-li-3"><strong>Route</strong> — the ordered list of GPS points (<code>lat</code>, <code>lon</code>, <code>ts</code>) recorded during the activity. Modelled as its own rows because it <em>is</em> the bulk of the data.</li>
-          <li id="entities-li-4"><strong>Friend</strong> — a connection between two users. The friend graph itself is out of scope, but the edge is needed to scope the "friends' activities" query. It is stored bidirectionally — each friendship is two rows with a composite key on <code>(userId, friendId)</code> — so a lookup by <code>userId</code> finds it whichever direction it was created.</li>
+          <li id="entities-li-4" data-kb-level="advanced"><strong>Friend</strong> — a connection between two users. The friend graph itself is out of scope, but the edge is needed to scope the "friends' activities" query. It is stored bidirectionally — each friendship is two rows with a composite key on <code>(userId, friendId)</code> — so a lookup by <code>userId</code> finds it whichever direction it was created.</li>
         </ul>
       </div>
     </section>
@@ -189,7 +194,7 @@ GET /activities?mode=USER|FRIENDS&page=&pageSize=  &rarr; Partial&lt;Activity&gt
 GET /activities/:id                     &rarr; Activity     # full detail, for the map</code></pre>
       </details>
       <div class="prose">
-        <p id="interface-p-2">The list endpoint returns a thin projection — distance, duration, date per row — so a feed page stays small; the full coordinate array loads only when a single activity is opened for its map. In the offline-first design that follows, the per-point <code>POST&nbsp;/routes</code> mostly disappears into a single batched sync.</p>
+        <p id="interface-p-2" data-kb-level="advanced">The list endpoint returns a thin projection — distance, duration, date per row — so a feed page stays small; the full coordinate array loads only when a single activity is opened for its map. In the offline-first design that follows, the per-point <code>POST&nbsp;/routes</code> mostly disappears into a single batched sync.</p>
       </div>
     </section>
 
@@ -197,7 +202,7 @@ GET /activities/:id                     &rarr; Activity     # full detail, for t
       <h2 class="doc-h" id="h-arch">How the system is built</h2>
       <div class="prose">
         <p id="architecture-p-1">The backend is deliberately plain: one stateless <strong>Activity Service</strong> in front of a relational store. No microservice fan-out — offloading the write path to the phone leaves too little server work to justify it, and there is no read/write skew across paths worth splitting. During a workout the <strong>phone runs the show</strong>. On-device location services (Core Location on iOS, the fused location provider on Android) sample GPS on a fixed cadence — about every 2&nbsp;seconds cycling, every 5&nbsp;running — append each point to an in-memory buffer, and update distance incrementally with the Haversine formula between consecutive points. Nothing leaves the device until the activity is done; when it completes and the phone has a connection, the buffer flushes to the service in one batched upload, which appends the route and metadata to the store. Reads — your own feed and a friend's — are ordinary paginated queries filtered to <code>state = COMPLETE</code>; opening one hands its coordinate array to a map-tiles API to draw the line.</p>
-        <p id="architecture-p-2">Elapsed time hides a subtlety. Subtracting start-from-now keeps counting through pauses, so instead the activity carries a <strong>status log</strong> — <code>STARTED</code>, <code>PAUSED</code>, <code>RESUMED</code>, <code>STOPPED</code> with timestamps — and active time is the sum of the running intervals. Storing the events and deriving the number, rather than mutating a running counter, is <a href="../patterns/architecture/event-sourcing.html">event-sourcing</a> in miniature: it makes "moving time vs. total time" fall out for free and leaves an audit trail of the workout.</p>
+        <p id="architecture-p-2" data-kb-level="advanced">Elapsed time hides a subtlety. Subtracting start-from-now keeps counting through pauses, so instead the activity carries a <strong>status log</strong> — <code>STARTED</code>, <code>PAUSED</code>, <code>RESUMED</code>, <code>STOPPED</code> with timestamps — and active time is the sum of the running intervals. Storing the events and deriving the number, rather than mutating a running counter, is <a href="../patterns/architecture/event-sourcing.html">event-sourcing</a> in miniature: it makes "moving time vs. total time" fall out for free and leaves an audit trail of the workout.</p>
       </div>
       <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
@@ -226,32 +231,32 @@ flowchart TB
         <p id="deepdives-p-1">The unlock is that, as long as nobody is watching live, an activity is a purely local recording that needs the network exactly once — at the end. That removes the network from the critical path entirely and lets live stats come straight off local state, instantly and exactly.</p>
         <ul>
           <li id="deepdives-li-1"><strong>Survive a dead battery.</strong> The buffer lives in memory, but a phone can die mid-run, so it is persisted to on-device storage every ~10&nbsp;seconds (Core&nbsp;Data or Room for the structured trace, a SQLite file once it grows; UserDefaults / SharedPreferences only for tiny key-values). The worst case is losing ~10&nbsp;seconds of points on a crash — a deliberate trade against the battery cost of persisting more often. On reopen or resume, the saved buffer is loaded back before recording continues.</li>
-          <li id="deepdives-li-2"><strong>Sync once, retriably.</strong> On completion with a connection, everything ships at once; very long rides are chunked so a single request stays manageable. An optional background sync opportunistically uploads whenever connectivity appears mid-activity, buying durability without giving up the offline guarantee. Once the server acks, the local copy is dropped. Because any of those uploads can be retried — a dropped ack, a resumed chunk, a background attempt — the append must be <a href="../patterns/messaging/idempotency.html">idempotent</a>: the server dedupes by activity and point so a re-send never double-counts the route.</li>
-          <li id="deepdives-li-3"><strong>It is write-behind, on the client.</strong> Accept the write locally, acknowledge it to the athlete immediately from on-device state, and reconcile with the system of record later — that is <a href="../patterns/caching/write-behind.html">write-behind</a> moved onto the phone. The device is a <a href="../patterns/caching/client-side-cache.html">client-side cache</a> that happens to be the source of truth until sync, and the flush is one <a href="../patterns/concurrency/batching.html">batched</a> upload instead of 600 pings.</li>
+          <li id="deepdives-li-2" data-kb-level="advanced"><strong>Sync once, retriably.</strong> On completion with a connection, everything ships at once; very long rides are chunked so a single request stays manageable. An optional background sync opportunistically uploads whenever connectivity appears mid-activity, buying durability without giving up the offline guarantee. Once the server acks, the local copy is dropped. Because any of those uploads can be retried — a dropped ack, a resumed chunk, a background attempt — the append must be <a href="../patterns/messaging/idempotency.html">idempotent</a>: the server dedupes by activity and point so a re-send never double-counts the route.</li>
+          <li id="deepdives-li-3" data-kb-level="advanced"><strong>It is write-behind, on the client.</strong> Accept the write locally, acknowledge it to the athlete immediately from on-device state, and reconcile with the system of record later — that is <a href="../patterns/caching/write-behind.html">write-behind</a> moved onto the phone. The device is a <a href="../patterns/caching/client-side-cache.html">client-side cache</a> that happens to be the source of truth until sync, and the flush is one <a href="../patterns/concurrency/batching.html">batched</a> upload instead of 600 pings.</li>
         </ul>
-        <h3 id="deepdives-dive-2">2 · Storing 550&nbsp;TB of GPS a year</h3>
-        <p id="deepdives-p-2">Route rows dominate; metadata is negligible. Hundreds of terabytes a year is too much to keep uniformly hot, but the access pattern is forgiving — almost every query is for <em>recent</em> activities.</p>
+        <h3 id="deepdives-dive-2" data-kb-level="advanced">2 · Storing 550&nbsp;TB of GPS a year</h3>
+        <p id="deepdives-p-2" data-kb-level="advanced">Route rows dominate; metadata is negligible. Hundreds of terabytes a year is too much to keep uniformly hot, but the access pattern is forgiving — almost every query is for <em>recent</em> activities.</p>
         <ul>
-          <li id="deepdives-li-4"><strong>Shard by completion time.</strong> Partitioning the store on completion date keeps this-week's runs — yours and your friends' — on a handful of <a href="../patterns/distributed/routing/sharding.html">shards</a>, so the working set stays small even as the archive grows without bound.</li>
-          <li id="deepdives-li-5"><strong>Tier by age.</strong> Hot recent data on fast storage; warm (a few months to a year) on cheaper disk; cold (older than a year) pushed to <a href="../patterns/distributed/routing/object-storage.html">object storage</a> like S3, where a rarely-opened trace costs pennies to keep and is fetched on the rare occasion someone scrolls that far back.</li>
-          <li id="deepdives-li-6"><strong>Don't cache speculatively.</strong> Read throughput is genuinely low — people open a handful of activities, not thousands a second — so a cache earns its keep only if load times degrade. It is deferred, not designed in.</li>
-          <li id="deepdives-li-7"><strong>Keep the service <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>.</strong> With no hot path and no per-request state, the Activity Service just scales horizontally on CPU, memory and network; there is no reason to carve it into independently-scaling pieces.</li>
+          <li id="deepdives-li-4" data-kb-level="advanced"><strong>Shard by completion time.</strong> Partitioning the store on completion date keeps this-week's runs — yours and your friends' — on a handful of <a href="../patterns/distributed/routing/sharding.html">shards</a>, so the working set stays small even as the archive grows without bound.</li>
+          <li id="deepdives-li-5" data-kb-level="advanced"><strong>Tier by age.</strong> Hot recent data on fast storage; warm (a few months to a year) on cheaper disk; cold (older than a year) pushed to <a href="../patterns/distributed/routing/object-storage.html">object storage</a> like S3, where a rarely-opened trace costs pennies to keep and is fetched on the rare occasion someone scrolls that far back.</li>
+          <li id="deepdives-li-6" data-kb-level="expert"><strong>Don't cache speculatively.</strong> Read throughput is genuinely low — people open a handful of activities, not thousands a second — so a cache earns its keep only if load times degrade. It is deferred, not designed in.</li>
+          <li id="deepdives-li-7" data-kb-level="expert"><strong>Keep the service <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>.</strong> With no hot path and no per-request state, the Activity Service just scales horizontally on CPU, memory and network; there is no reason to carve it into independently-scaling pieces.</li>
         </ul>
-        <h3 id="deepdives-dive-3">3 · Letting friends watch live</h3>
-        <p id="deepdives-p-3">The extension is that friends follow an activity as it happens, not just its summary. That reintroduces the very pings the offline design removed: location goes up every 2–5&nbsp;seconds so the server can persist it and fan it out to watchers, while the athlete's own screen still runs off local state.</p>
+        <h3 id="deepdives-dive-3" data-kb-level="advanced">3 · Letting friends watch live</h3>
+        <p id="deepdives-p-3" data-kb-level="advanced">The extension is that friends follow an activity as it happens, not just its summary. That reintroduces the very pings the offline design removed: location goes up every 2–5&nbsp;seconds so the server can persist it and fan it out to watchers, while the athlete's own screen still runs off local state.</p>
         <ul>
-          <li id="deepdives-li-8"><strong>Push is over-engineering here.</strong> The tempting answer is a real-time tier — WebSockets or SSE plus a pub/sub broadcast — but two facts make plain polling the better tool. Updates are <em>predictable</em>: the next one is known to land within 2–5&nbsp;seconds, unlike chat where a message can arrive at any instant. And precision doesn't matter: a few seconds of lag is fine for a spectator. So the watcher's phone simply polls the same endpoint on the same cadence, offset a couple of seconds for latency.</li>
-          <li id="deepdives-li-9"><strong>Smart buffering.</strong> Deliberately display the position one or two intervals behind (5–10&nbsp;seconds) and interpolate between points, turning a jerky sequence of jumps into smooth continuous motion — trading a little real-time accuracy for a live-stream feel and absorbing network jitter for free.</li>
+          <li id="deepdives-li-8" data-kb-level="advanced"><strong>Push is over-engineering here.</strong> The tempting answer is a real-time tier — WebSockets or SSE plus a pub/sub broadcast — but two facts make plain polling the better tool. Updates are <em>predictable</em>: the next one is known to land within 2–5&nbsp;seconds, unlike chat where a message can arrive at any instant. And precision doesn't matter: a few seconds of lag is fine for a spectator. So the watcher's phone simply polls the same endpoint on the same cadence, offset a couple of seconds for latency.</li>
+          <li id="deepdives-li-9" data-kb-level="expert"><strong>Smart buffering.</strong> Deliberately display the position one or two intervals behind (5–10&nbsp;seconds) and interpolate between points, turning a jerky sequence of jumps into smooth continuous motion — trading a little real-time accuracy for a live-stream feel and absorbing network jitter for free.</li>
         </ul>
-        <h3 id="deepdives-dive-4">4 · A leaderboard of top athletes</h3>
-        <p id="deepdives-p-4">Ranking athletes by distance for an activity type, filterable by country, region or city.</p>
+        <h3 id="deepdives-dive-4" data-kb-level="expert">4 · A leaderboard of top athletes</h3>
+        <p id="deepdives-p-4" data-kb-level="expert">Ranking athletes by distance for an activity type, filterable by country, region or city.</p>
         <ul>
-          <li id="deepdives-li-10"><strong>Naïve.</strong> Sort the activities table on every request — fine at toy scale, a full table scan at real scale. Rejected.</li>
-          <li id="deepdives-li-11"><strong>Periodic aggregation.</strong> Precompute the rankings on a schedule into a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> the reads hit directly. A leaderboard that is a few minutes stale is perfectly acceptable, and the read becomes a single indexed lookup.</li>
-          <li id="deepdives-li-12"><strong>Real-time with Redis.</strong> A sorted set keyed by segment and region, updated as activities complete, gives O(log&nbsp;n) rank updates and instant top-N reads — the answer when the board must be genuinely live.</li>
+          <li id="deepdives-li-10" data-kb-level="expert"><strong>Naïve.</strong> Sort the activities table on every request — fine at toy scale, a full table scan at real scale. Rejected.</li>
+          <li id="deepdives-li-11" data-kb-level="expert"><strong>Periodic aggregation.</strong> Precompute the rankings on a schedule into a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> the reads hit directly. A leaderboard that is a few minutes stale is perfectly acceptable, and the read becomes a single indexed lookup.</li>
+          <li id="deepdives-li-12" data-kb-level="expert"><strong>Real-time with Redis.</strong> A sorted set keyed by segment and region, updated as activities complete, gives O(log&nbsp;n) rank updates and instant top-N reads — the answer when the board must be genuinely live.</li>
         </ul>
       </div>
-      <figure class="diagram" id="deepdives-fig-1">
+      <figure class="diagram" id="deepdives-fig-1" data-kb-level="expert">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -294,7 +299,7 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Durability is bounded by the persistence interval — an unexpected shutdown can lose the last ~10 seconds of a route.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Nothing a friend sees is live until the athlete finishes, unless live-sharing is switched on — which re-adds the very pings the design worked to remove.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Polling wastes requests when nothing has changed, and smart buffering means "live" is really a few seconds behind.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Polling wastes requests when nothing has changed, and smart buffering means "live" is really a few seconds behind.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">The client is now complex — buffering, local persistence, resume, chunked retriable upload — moving hard bugs onto the least controllable part of the stack, across many device and OS versions.</li>
           </ul>
         </div>
@@ -306,8 +311,8 @@ sequenceDiagram
       <div class="prose">
         <ul>
           <li id="levels-li-1"><strong>Mid-level</strong> — a working end-to-end flow: create, pause and complete an activity, append GPS points, store a route, then list and open completed activities — plus the realization that the client can record locally rather than streaming every point.</li>
-          <li id="levels-li-2"><strong>Senior</strong> — drives the offline-first framing unprompted, reaches for a status log instead of naïve elapsed time, sizes the ~550&nbsp;TB/year storage and picks time-sharding plus age tiering, and argues polling over WebSockets for live sharing with concrete reasons.</li>
-          <li id="levels-li-3"><strong>Staff+</strong> — treats the client as the primary compute from the first minute, works the durability-vs-battery trade in the buffer, specifies idempotent chunked retriable sync, and volunteers the Redis leaderboard and smart-buffering as operational polish.</li>
+          <li id="levels-li-2" data-kb-level="advanced"><strong>Senior</strong> — drives the offline-first framing unprompted, reaches for a status log instead of naïve elapsed time, sizes the ~550&nbsp;TB/year storage and picks time-sharding plus age tiering, and argues polling over WebSockets for live sharing with concrete reasons.</li>
+          <li id="levels-li-3" data-kb-level="expert"><strong>Staff+</strong> — treats the client as the primary compute from the first minute, works the durability-vs-battery trade in the buffer, specifies idempotent chunked retriable sync, and volunteers the Redis leaderboard and smart-buffering as operational polish.</li>
         </ul>
       </div>
     </section>
@@ -325,6 +330,7 @@ sequenceDiagram
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="object-storage"><a href="../patterns/distributed/routing/object-storage.html">Object Storage</a><span class="rel-note">traces older than a year are tiered off to cheap object storage like S3</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="stateless-service"><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">the single Activity Service holds no per-request state and scales horizontally under load</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">the leaderboard is a precomputed ranking refreshed on a schedule rather than sorted per request</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">chunked, background and retried uploads can all deliver the same points twice, so the server dedupes by activity and point and a re-send never double-counts the route</span></div>
         </div>
       </div>
 
