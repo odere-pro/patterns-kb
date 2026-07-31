@@ -78,6 +78,10 @@ stalls, or costs — and stops. If a risk was taken deliberately, one clause may
 
 ## Wording rules
 
+- **A limit item is bold claim + fact.** It names what the design wins or accepts and
+  stops there. It does not advise the reader and does not give the reason behind the
+  choice — a ledger records decisions, and the reasoning it records already happened in
+  the deep dives and Right-sizing.
 - **State it, don't defend it.** One sentence per item. A risk followed by three
   mitigations is an essay, and the block stops being scannable.
 - **Mitigations are pointers, not paragraphs.** At most a parenthetical — `(see dive 4)`,

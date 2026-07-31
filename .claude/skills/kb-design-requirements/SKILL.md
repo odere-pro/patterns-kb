@@ -37,6 +37,9 @@ rules are yours to enforce.
   named (the external ID-verification provider, a webhook, the dashboard). Solution
   choices may not: no hashing, HMAC, outbox, queue, collector, broker, cache, retry
   policy. Genuine requirement numbers stay (single-use, 48-hour expiry).
+- **No hedging.** No "should", "may", "aims to", "is able to" in an FR sentence — an FR
+  states the capability flatly, because a requirement that hedges cannot be tested
+  against. "The person can request a fresh link", not "the person should be able to".
 
 Worked example — one over-packed FR from `persona-identification` and its atomic form:
 

@@ -168,6 +168,11 @@ requirement.
   `label — evidence` juxtaposition does the work.
 - **Results bold, assumptions in parentheses**, jargon only where it is the exact term —
   and then explained on first use.
+- **The two paragraphs are prose, and the same rules bind them.** In the lead, each
+  labelled sentence stands alone and carries its reason, so the reader can stop after any
+  one of them. In "When this stops being right", write cause then effect in that order,
+  one mechanism per sentence — a sentence carrying two mechanisms hides which one wears
+  out first.
 
 ## Worked example
 

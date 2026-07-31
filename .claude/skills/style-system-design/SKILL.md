@@ -8,7 +8,7 @@ description: Apply the system-design writing style — verdict-first, claim+reas
 **Reader:** someone senior who reads to decide, not to learn. They have three minutes.
 They know the domain vocabulary. Every rule below serves that reader.
 
-## The five rules
+## The rules
 
 ### 1. Verdict first
 
@@ -56,6 +56,17 @@ Confidence markers earn their place. Softeners do not.
 
 Every section closes on a conclusion, including a partial one. An open loop is a defect.
 If something is unresolved, say so explicitly and move on. Do not trail off.
+
+### 6. Recommendations name the reader's situation
+
+A recommendation describes when *they* are in this position, not what the option offers.
+
+> ✅ Use Postgres as the queue when volume stays under a few thousand jobs a day and you
+> already run Postgres.
+> ❌ Postgres provides transactional enqueue and requires no extra infrastructure.
+
+Give the inverse too — the conditions under which the recommendation flips. A
+recommendation with no stated inverse is a preference.
 
 ## Shape
 
@@ -109,6 +120,7 @@ pattern, the `kb-find` skill is the full workflow.
 3. Any term softened that had an exact word?
 4. Any hedge that is not a confidence marker?
 5. Any section that ends without landing?
-6. What can be deleted with no loss?
+6. Does every recommendation name the reader's situation, and its inverse?
+7. What can be deleted with no loss?
 
-Question 6 is the one that does the work. Run it twice.
+Question 7 is the one that does the work. Run it twice.

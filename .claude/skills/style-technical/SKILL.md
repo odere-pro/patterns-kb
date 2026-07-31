@@ -24,6 +24,13 @@ compression. High-level means architecture altitude, not vagueness.
   incomplete; "Chose X, which costs Y" is a decision someone can review.
 - **Stay at the architecture level.** Components, contracts, data flow, consistency
   boundaries. No code unless an interface contract is itself the point.
+- **Motivate a mechanism with its failure branches.** Not "the system must stay
+  consistent" but the branches: "if the write commits and the publish fails, consumers
+  never see the change; if the publish lands and the write rolls back, consumers act on
+  data that does not exist."
+- **Write operational caveats as bold label, directive, reason — one line each.**
+  "**Ordering**: publish in commit order, because out-of-order events break
+  point-in-time replay." A caveat that names no action is trivia.
 
 ## Structure
 

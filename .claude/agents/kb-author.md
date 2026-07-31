@@ -63,14 +63,9 @@ that it exists *and* genuinely exemplifies the pattern. **If in doubt, leave it 
 missing block is fine and expected.
 
 **The `explain` block speaks three registers, and mixing them wastes it.** One short
-paragraph per level, written via `kb.mjs explain`:
-
-- `basic` — a junior's entry point: plain words, an everyday comparison if it helps, no
-  jargon, no pattern names. A smart newcomer should get it on one read.
-- `advanced` — a senior's register: name the mechanism precisely and get to the point;
-  tech and architectural detail belong here.
-- `expert` — a staff register: impact, why and when to choose it, and the tradeoff bill.
-  What does adopting this cost, and what failure mode does the choice buy?
+paragraph per level, written via `kb.mjs explain`: `basic` is a junior's plain-words
+entry point, `advanced` names the mechanism precisely and states its consequence,
+`expert` argues when to choose it and what it costs.
 
 Each rung must stand alone — the basic lens shows only the basic rung. `data-kb-level` on
 finer elements is authored via `kb.mjs level`, sparingly: tag a line only when it genuinely
@@ -78,6 +73,12 @@ serves one audience. Untagged (visible everywhere) is the right default. Section
 levels are stamped from `BLOCK_LEVELS` policy — never set them per page. The full register
 spec, per-lens audit procedure and tagging heuristics live in the **kb-explain** skill
 (`.claude/skills/kb-explain/SKILL.md`) — read it before writing or auditing a ladder.
+
+**The house prose register is [`.claude/rules/tone.md`](../rules/tone.md)** — second
+person, active voice, one concept per sentence, every claim carrying its consequence, no
+hedging stacks and no unpriced adjectives. Read it once before a batch; for a full
+pattern write-up in the AWS Prescriptive Guidance shape, the **style-pattern-doc** skill
+carries the skeleton.
 
 **The `production` block is where a system builder learns to RUN the pattern.** Four labeled
 lists — Tuning knobs, Signals to watch, Failure modes under load, Readiness checklist — written

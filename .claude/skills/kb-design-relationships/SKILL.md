@@ -74,6 +74,10 @@ volume, not a default.
 
 ## Grouping rules
 
+- **The `rel-note` says why the pattern is here, in one clause.** It is the only prose the
+  block carries, and it is what tells the reader where in this design the pattern shows
+  up — the mechanism belongs in `deepdives`, the choice in
+  [kb-design-sizing](../kb-design-sizing/SKILL.md).
 - **Group by concern in *this* design, not by KB taxonomy.** "Vendor resilience" tells the
   reader where to look; "Distributed · resilience" only repeats the URL the link already goes
   to. The band is one click away; the role in this system is not written down anywhere else.
@@ -124,8 +128,8 @@ wrappers, which is what makes it safe to do on a page whose relationships are al
 
 ## What this block is not
 
-- **Not a place to argue.** The `rel-note` says why the pattern is here in one clause; the
-  mechanism belongs in `deepdives`, the choice in [kb-design-sizing](../kb-design-sizing/SKILL.md).
+- **Not a place to argue.** A row records that the design uses the pattern; the mechanism
+  is argued in `deepdives` and the choice in [kb-design-sizing](../kb-design-sizing/SKILL.md).
 - **Not a bibliography.** Only patterns the design actually puts to work. A pattern mentioned
   once in passing does not earn a row.
 - **Not hand-maintainable.** Reconciling what a page links to after an edit is

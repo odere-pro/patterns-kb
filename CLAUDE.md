@@ -61,6 +61,9 @@ edit under `site/` — it takes ~0.8s.
 attributes and will be overwritten.
 
 Full contract, including how to add a page: **[.claude/rules/html5-authoring.md](.claude/rules/html5-authoring.md)**.
+How the prose must read: **[.claude/rules/tone.md](.claude/rules/tone.md)** — the house
+register, distilled from AWS Prescriptive Guidance, Azure Architecture Center and the
+Google Cloud Architecture Framework.
 Each folder under `site/` has its own CLAUDE.md with local rules.
 
 ## Invariants `make check` enforces

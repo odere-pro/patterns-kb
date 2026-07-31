@@ -32,6 +32,11 @@ statement is underspecified — no volumes, no jurisdictions, no data rules — 
 design's shape depends on answers nobody gave. The questions *are* the work: they show
 what a strong candidate asks before drawing boxes.
 
+The light form's paragraph is dense because it is compressed, not because it is run-on:
+three or four sentences, one concept each, opening with the ask rather than with
+scene-setting or history. Address the reader in second person, and let every claim carry
+its consequence — the constraint, then what it costs the design.
+
 ## The interview form contract
 
 Open with one framing paragraph: what the task states, what it omits, and the promise
@@ -59,6 +64,10 @@ Confirm this first: every capacity decision below is priced against it.
 - **No italics.** The arrow and the colon carry the routing tag; `<em>` on top of them is
   noise. `<strong>` on the question stem is fine — the no-formatting rule binds the
   requirements block, not this one.
+- **It reads as a crisp Q&A, not an essay.** Question, answer, tag — nothing connective
+  between entries, because prose that bridges two questions is prose the reader has to
+  parse before finding the next one. Anything that is not a question or its answer
+  belongs in the framing paragraph.
 
 Good interview questions probe: volume and growth, one-shot vs ongoing obligation, what
 data is held and under which rules, store vs pass through, push vs pull for results,

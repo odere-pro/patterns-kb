@@ -57,6 +57,11 @@ work, by name. What does not: restated requirements, table-by-table narration, a
 an entity's own description already says. If a sentence could be deleted without losing
 a claim, delete it.
 
+- **No hedging, no marketing adjectives.** "May potentially be somewhat denormalised"
+  hedges three times to say one thing, and "a robust, scalable schema" prices nothing —
+  state the constraint, the seam or the figure instead. One hedge is a confidence marker
+  and is fine; a stack of them means the claim was never made.
+
 ### 2. Grouped entities
 
 **Group by domain role, not by physical store** — groups should map to the resources the

@@ -56,6 +56,11 @@ it starts a rung lower. Three levels always; never two, never four.
 
 ## Bullet rules
 
+Third person binds the **rubric bullets only** — they describe a candidate's behaviour,
+which is why they read "Separates operation state…" rather than "you separate…". Every
+other block on the page addresses the reader directly, and so does this skill's own
+advisory prose; do not carry third person out of the `<li>`s.
+
 - **Verb-first, third person, one line.** "Separates operation state from business state
   unprompted" — not "should be able to separate…". The reader is matching against a
   behaviour, so lead with the behaviour.

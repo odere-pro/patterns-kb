@@ -172,10 +172,12 @@ node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"
 
 Register rules: `basic` uses plain words and everyday comparison, no jargon, no pattern
 names; `advanced` names the mechanism precisely in one breath; `expert` argues impact,
-selection criteria and the tradeoff bill. `make check` fails an explain block that does not
-hold exactly one `.explain-item` per level in basic → advanced → expert order. The
-`explain` ladder is a different thing from a design's `levels` block (the Mid/Senior/Staff
-interviewer rubric); both may exist on a design page.
+selection criteria and the tradeoff bill. The full spec — per-rung anchors, the per-lens
+audit and tagging heuristics — is the **kb-explain** skill; the house prose register is
+[tone.md](./tone.md). `make check` fails an explain block that does not hold exactly one
+`.explain-item` per level in basic → advanced → expert order. The `explain` ladder is a
+different thing from a design's `levels` block (the Mid/Senior/Staff interviewer rubric);
+both may exist on a design page.
 
 ## Relationships
 

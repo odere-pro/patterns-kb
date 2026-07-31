@@ -16,14 +16,24 @@ output (`kb.mjs get <id> --level …`), never the raw file.
 One short paragraph per rung, written via `kb.mjs explain`. Each rung stands alone — the
 basic lens shows only the basic rung, so no rung may lean on another.
 
+Two register rules bind every rung. **Every claim carries its consequence** — a rung
+that says what the pattern does without saying what that buys or costs is half a rung.
+**No hedging stacks and no unpriced adjectives** — "can be somewhat more resilient" says
+nothing at any level; name the failure it survives.
+
 - **`basic`** — a junior's entry point. Plain words, an everyday comparison if it helps,
   no jargon, no pattern names. A smart newcomer gets it on one read.
   *Anti-example*: "trips open after a failure threshold" — that is jargon smuggled into
   the basic rung; a junior doesn't know what "trips open" means yet.
-- **`advanced`** — a senior's register. Name the mechanism precisely and get to the
-  point; tech and architectural detail belong here. No warm-up sentence, no analogy.
-- **`expert`** — a staff register. Impact, why and when to choose it, and the tradeoff
-  bill: what does adopting this cost, and what failure mode does the choice buy?
+- **`advanced`** — a senior's register, written as an AWS-style *intent*: name the
+  mechanism precisely, then the consequence, in one breath. No warm-up sentence, no
+  analogy. "A stateful proxy counts recent failures and opens, so calls fail fast
+  instead of piling up on a dependency that is already down."
+- **`expert`** — a staff register, written as *applicability plus the bill*: when to
+  choose it over the alternatives, and what adopting it costs. Phrase the choice as the
+  reader's situation ("reach for it when the failure mode is slow-or-flapping rather
+  than cleanly down"), then price it ("the cost is tuning; a mis-tuned breaker flaps or
+  masks recovery").
   *Anti-example*: a third paragraph that just re-explains the mechanism louder.
 
 The corpus exemplar is `circuit-breaker`

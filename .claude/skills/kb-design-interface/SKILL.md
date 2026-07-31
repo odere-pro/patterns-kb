@@ -54,6 +54,11 @@ it, where idempotency lives at each boundary, and any landed decision worth bold
 ("push with replay beats push with poll"). What does not: endpoint-by-endpoint
 narration — the cards do that.
 
+- **No hedging, no marketing adjectives.** "Should generally be idempotent where
+  possible" decides nothing, and "a clean, flexible API" prices nothing — name the status
+  code, the guard or the policy instead. One hedge is a confidence marker and is fine; a
+  stack of them means the decision was never made.
+
 ### 2. Grouped endpoints
 
 **Group by caller/audience, not by resource** — an API surface is per-audience because

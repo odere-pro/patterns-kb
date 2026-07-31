@@ -119,11 +119,13 @@ dives in the requirements block's NFR order unless a dependency argues otherwise
 
 Three moves, in order:
 
-1. **A bold thesis** — why this mechanism satisfies this NFR, one sentence.
-2. **The options argument** — the naïve option with the fact that kills it, the
-   plausible rival with its cost, the chosen option with its residual weakness admitted.
-   A dive with no rejected option is a lecture, not a decision.
-3. **Its own diagram** — zoom or iterate, decided by the rule below.
+1. **Open with a bold thesis** — one sentence on why this mechanism satisfies this NFR,
+   so a reader who stops there still has the answer.
+2. **Argue the options** — the naïve one with the fact that kills it, the plausible rival
+   with its cost, the chosen one with its residual weakness admitted. A dive with no
+   rejected option is a lecture, not a decision.
+3. **Give the dive its own diagram** — zoom or iterate by the rule below; a dive that
+   reuses the L1 board unchanged shows nothing the board did not already show.
 
 ### Zoom or iterate — the diagram decision
 
@@ -164,6 +166,21 @@ This skill owns *what each diagram is for and where it sits*; [diagram-draw](../
 owns *how it is drawn* — the ~8-node/12-edge cap, verb+payload edge labels, `:::ext`
 dashing with no fills, naming the requirement on the board, and the `<figure>` wrapper
 in its `references/site-embedding.md`. Read it before drawing; do not restate it here.
+
+## Wording rules
+
+The lead, the components walk and every dive thesis are prose, and the same four rules
+bind all of them:
+
+- **Second person, active voice.** Address the reader as "you" and open directives with
+  the verb — "Route the read through the cache", not "the read is routed through".
+- **One concept per sentence.** A sentence that needs "and which also" is two sentences,
+  and the second one is the one the reader will miss.
+- **Every claim carries its consequence.** Say what the component does, then what that
+  costs or buys, in the same sentence or the next: a box described without its effect is
+  a box nobody can argue with.
+- **No unpriced adjectives.** "Robust", "scalable", "highly available" assert nothing —
+  replace each with the figure, the mechanism, or the NFR that forces it.
 
 ## Worked example
 

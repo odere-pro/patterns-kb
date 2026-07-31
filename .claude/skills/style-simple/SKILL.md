@@ -11,9 +11,11 @@ pizza shop" unless the analogy genuinely shortens the path.
 
 ## The rules
 
-- **Lead with what it does and why they'd care.** Mechanism comes second. "A circuit
-  breaker stops your service from calling a dependency that keeps failing, so one bad
-  dependency can't drag everything down" — that's the whole opening.
+- **Open with the verb and the payoff — "it does X so that Y".** Mechanism comes second.
+  "A circuit breaker stops your service from calling a dependency that keeps failing, so
+  one bad dependency can't drag everything down" — that's the whole opening. The
+  *so that* half is not optional; without it you have described a behaviour and left the
+  reader to guess why it matters.
 - **One idea per sentence.** If a sentence has "and which also", split it.
 - **Everyday words over jargon** — but when a domain term is unavoidable, keep it, name
   it once, and define it in the same sentence: "a dead-letter queue (a parking lot for
