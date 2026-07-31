@@ -148,45 +148,61 @@ may skip the block entirely; a forced block is how fabrication happens.
 
 ## Reading levels
 
-Every page can be read at three depths — the closed `LEVELS` vocabulary in
-`scripts/lib/model.mjs`: **`basic`** (a junior's plain-language entry point), **`advanced`**
-(a senior's register: professional, to the point, tech and architectural detail),
-**`expert`** (a staff register: impact, why and when to choose, tradeoffs).
-`data-kb-level` on an element means **"visible from this level up"** (min-level progressive
-disclosure); an element with no level is universal and shows at every lens. The site's lens
-toggle (lens.js) and the reader's `--level` flag both honour it:
+Every page reads at three depths — the closed `LEVELS` vocabulary in
+`scripts/lib/model.mjs`: **`basic`** (a junior's quick intro), **`advanced`** (a senior
+who can run an advanced system design), **`expert`** (staff/architect fluency:
+limitations, tradeoffs, deep-dive discussion). **Every block shows at every lens — the
+skeleton never changes; the content adapts inside the blocks.** Rereading at a higher
+lens repeats the idea with more depth. The site's lens toggle (lens.js) and the
+reader's `--level` flag both honour it:
 
 ```
 node scripts/kb.mjs get circuit-breaker --level basic     # the junior's page
 node scripts/kb.mjs find "cache is stale" --level basic   # search only basic-visible prose
 ```
 
-One attribute, two provenances — never confuse them:
+Two authored element attributes, two semantics — never confuse them:
 
-- **Sections** (`<section data-kb-block=…>`) are **stamped** from the per-kind
-  `BLOCK_LEVELS` policy in `scripts/lib/model.mjs` (generated, like `data-kb-polarity`).
-  To change which blocks a level sees, edit the policy and run `make all` — never the page.
-- **Finer elements** (a `li`, a `p`) are **authored**, through the writer:
+- **`data-kb-level`** — *accretion*: "visible from this level up". Higher lenses see
+  MORE — extra tradeoff items, operational nuance. Written with
   `node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>`.
-  Tag sparingly and only where a line genuinely serves one audience — an expert-only
-  operational nuance, an advanced-only mechanism detail. Untagged is the right default.
+- **`data-kb-register`** — *variant*: "rendered at exactly this lens". A maximal run
+  of **adjacent** registered siblings is one variant group — the same idea,
+  re-explained in the register of each level; each lens renders only its own rung.
+  Written with `node scripts/kb.mjs register <id> <element-id> <basic|advanced|expert|none>`.
+  Registers within a group must ascend without repeats; any subset of the three is
+  fine (e.g. a basic rung + one shared tail).
 
-**`explain`** (optional, all kinds) — the three-level ladder block, one short paragraph per
-level, written through the validated writer (which replaces the whole block — re-supply all
-three on edit; three empty strings removes it):
+An element with neither attribute is universal. One element carries at most ONE of the
+two (`make check` enforces the XOR), sections never carry either (blocks always show),
+and **no block may render empty at any lens** — `make check` fails a section whose
+lens-filtered content comes back blank, which is what forces at least one
+basic-visible item into every mandatory list. Element ids are minted by `make all`
+(`<block>-p-N` on prose paragraphs, keyed ids like `wild-envoy`, `tour-<member>`,
+`deepdives-dive-N`) — positional ids renumber when a paragraph is inserted, so re-run
+`make all` before tagging. Figures can be register-tagged too (a simple diagram at
+basic, the failure-state or variant diagram from advanced up) — lens.js re-renders
+mermaid on lens change.
+
+**`explain`** (mandatory, all kinds) — the three-rung ladder, THE canonical variant
+group: one short paragraph per level, each rung standing alone (at advanced only the
+advanced rung renders), written through the validated writer (which replaces the whole
+block — re-supply all three on edit):
 
 ```
 node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"
 ```
 
-Register rules: `basic` uses plain words and everyday comparison, no jargon, no pattern
-names; `advanced` names the mechanism precisely in one breath; `expert` argues impact,
-selection criteria and the tradeoff bill. The full spec — per-rung anchors, the per-lens
-audit and tagging heuristics — is the **kb-explain** skill; the house prose register is
-[tone.md](./tone.md). `make check` fails an explain block that does not hold exactly one
-`.explain-item` per level in basic → advanced → expert order. The `explain` ladder is a
-different thing from a design's `levels` block (the Mid/Senior/Staff interviewer rubric);
-both may exist on a design page.
+Register rules: `basic` tells the failure-first story in plain words — what goes
+wrong without the pattern, then the simple fix — no jargon, no pattern names;
+`advanced` names the mechanism precisely in one breath, variants included; `expert`
+argues selection criteria and the tradeoff bill *and how to pay it* — each major con
+names its counter-move. The full spec — variant-group authoring, the per-lens audit,
+tagging heuristics — is the **kb-explain** skill; the house prose register is
+[tone.md](./tone.md). `make check` fails an explain block that does not hold exactly
+one `.explain-item` per register in basic → advanced → expert order. The `explain`
+ladder is a different thing from a design's `levels` block (the Mid/Senior/Staff
+interviewer rubric); both may exist on a design page.
 
 ## Relationships
 

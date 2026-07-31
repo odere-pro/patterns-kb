@@ -33,7 +33,8 @@ node scripts/kb.mjs wild <id> --items '[{"id":…,"name":…,"note":…}]'
 node scripts/kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
 node scripts/kb.mjs link <from> <verb> <to> --note "…" --note-back "…"
 node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"
-node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>
+node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>      # accretion: from this level up
+node scripts/kb.mjs register <id> <element-id> <basic|advanced|expert|none>   # variant: at exactly this lens
 ```
 
 It validates the JSON before it lands and never guesses placement. Prose inside a block you
@@ -67,11 +68,15 @@ paragraph per level, written via `kb.mjs explain`: `basic` is a junior's plain-w
 entry point, `advanced` names the mechanism precisely and states its consequence,
 `expert` argues when to choose it and what it costs.
 
-Each rung must stand alone — the basic lens shows only the basic rung. `data-kb-level` on
-finer elements is authored via `kb.mjs level`, sparingly: tag a line only when it genuinely
-serves one audience. Untagged (visible everywhere) is the right default. Section-level
-levels are stamped from `BLOCK_LEVELS` policy — never set them per page. The full register
-spec, per-lens audit procedure and tagging heuristics live in the **kb-explain** skill
+Each rung must stand alone — display is exact-match, so each lens renders ONLY its own
+rung. Every block shows at every lens; depth adapts inside blocks via two authored
+element attributes: `data-kb-level` (accretion — extra detail from that level up, via
+`kb.mjs level`) and `data-kb-register` (variant — the same idea re-said for exactly one
+lens, via `kb.mjs register`; adjacent registered siblings form one ascending group).
+One element takes at most one of the two, sections take neither, and no block may
+render empty at any lens — make check enforces all three. Untagged (visible
+everywhere) is the right default. The full register spec, per-lens audit procedure and
+tagging heuristics live in the **kb-explain** skill
 (`.claude/skills/kb-explain/SKILL.md`) — read it before writing or auditing a ladder.
 
 **The house prose register is [`.claude/rules/tone.md`](../rules/tone.md)** — second

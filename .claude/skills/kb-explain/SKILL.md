@@ -1,134 +1,145 @@
 ---
 name: kb-explain
-description: Write or audit a patterns-kb page's three reading levels — the explain ladder (basic/advanced/expert rungs) and the authored data-kb-level tags that slim the lower lenses. Use when someone asks to "write the explain ladder", "rewrite the basic/advanced/expert rungs", "audit this page at the basic lens", "tag a line for a level", "make this page read well for a junior", or says the basic lens still shows jargon or the expert rung is vague. Also the playbook for level-audit sweeps over many pages.
+description: Write or audit a patterns-kb page's three reading levels — the explain ladder (basic/advanced/expert rungs), the data-kb-register variant groups that adapt prose per lens, and the data-kb-level tags that accrete detail for senior lenses. Use when someone asks to "write the explain ladder", "rewrite the basic/advanced/expert rungs", "add a register variant", "audit this page at the basic lens", "tag a line for a level", "make this page read well for a junior", or says the basic lens still shows jargon or the expert rung is vague. Also the playbook for level-audit sweeps over many pages.
 ---
 
 # Authoring the three reading levels
 
-**A page passes this skill when each lens reads as a complete page for its audience —
-not when it has three paragraphs and some tags.** The lens mechanism already exists;
-your job is judgment: write the three rungs in three genuinely different registers, and
-tag the few lines whose *hiding* makes the junior read better. Always judge the lens
-output (`kb.mjs get <id> --level …`), never the raw file.
+**A page passes this skill when each lens reads as the SAME complete page, adapted to
+its audience — same skeleton, different depth.** Every block shows at every lens (make
+check fails a block that renders empty at any of them); what changes between lenses is
+the content inside. Rereading at a higher lens repeats the idea with more depth — that
+repetition-with-deepening is the design, not a flaw. Always judge the lens output
+(`kb.mjs get <id> --level …`), never the raw file.
 
-## The three registers
+## The two mechanisms
 
-One short paragraph per rung, written via `kb.mjs explain`. Each rung stands alone — the
-basic lens shows only the basic rung, so no rung may lean on another.
+| attribute | semantics | writer | use for |
+|---|---|---|---|
+| `data-kb-register` | **variant** — rendered at *exactly* this lens | `kb.mjs register` | the same idea re-explained per level: adapted prose, a simple-vs-full diagram or sketch |
+| `data-kb-level` | **accretion** — visible from this level *up* | `kb.mjs level` | extra detail seniors get: more tradeoff items, operational nuance |
 
-Two register rules bind every rung. **Every claim carries its consequence** — a rung
-that says what the pattern does without saying what that buys or costs is half a rung.
-**No hedging stacks and no unpriced adjectives** — "can be somewhat more resilient" says
-nothing at any level; name the failure it survives.
+An element with neither is universal. One element carries at most ONE of the two (the
+writers and make check both enforce the XOR). Sections carry neither — blocks always
+show.
 
-- **`basic`** — a junior's entry point. Plain words, an everyday comparison if it helps,
-  no jargon, no pattern names. A smart newcomer gets it on one read.
-  *Anti-example*: "trips open after a failure threshold" — that is jargon smuggled into
-  the basic rung; a junior doesn't know what "trips open" means yet.
-- **`advanced`** — a senior's register, written as an AWS-style *intent*: name the
-  mechanism precisely, then the consequence, in one breath. No warm-up sentence, no
-  analogy. "A stateful proxy counts recent failures and opens, so calls fail fast
-  instead of piling up on a dependency that is already down."
-- **`expert`** — a staff register, written as *applicability plus the bill*: when to
-  choose it over the alternatives, and what adopting it costs. Phrase the choice as the
-  reader's situation ("reach for it when the failure mode is slow-or-flapping rather
-  than cleanly down"), then price it ("the cost is tuning; a mis-tuned breaker flaps or
-  masks recovery").
+**Variant groups.** A maximal run of *adjacent* siblings carrying `data-kb-register` is
+one group; registers must ascend without repeats. Any subset works — a lone `basic`
+rung above shared prose reads as "simple lead-in, then the common text"; a full
+basic/advanced/expert triple swaps the whole passage per lens. The explain ladder is
+the canonical group. **The decision rule:** if the lower lens needs the idea *said
+differently*, write a register variant; if it just needs *less*, tag the extras with
+`level`.
+
+## The three registers — what each lens is for
+
+Personas: **basic** = a junior's quick intro; **advanced** = a senior who can run an
+advanced system design; **expert** = staff/architect fluency — limitations, tradeoffs,
+deep-dive discussion. Two rules bind every rung: **every claim carries its
+consequence**, and **no hedging stacks or unpriced adjectives**.
+
+- **`basic` — the failure-first story.** What goes wrong without the pattern, told
+  concretely, then the simple fix. Plain words, an everyday comparison if it helps, no
+  jargon, no pattern names. (The AWS pattern-doc *Motivation* move: enumerate the
+  failure branches — "if the write succeeds but the notification fails, …".)
+  *Anti-example*: "trips open after a failure threshold" — jargon smuggled in.
+- **`advanced` — the precise mechanism, variants included.** Name the mechanism in one
+  breath, then the consequence; where variants differ mechanically, say how. No warm-up
+  sentence, no analogy. "A stateful proxy counts recent failures and opens, so calls
+  fail fast instead of piling up on a dependency that is already down."
+- **`expert` — selection criteria plus the bill, and how to pay it.** When to choose it
+  over the alternatives, what adopting it costs, and the counter-move for each major
+  cost — name the pattern that pays the bill (sync timeouts → circuit breaker; dual
+  writes → outbox/saga). For operational patterns, close on the operating loop: tune →
+  watch → break → gate.
   *Anti-example*: a third paragraph that just re-explains the mechanism louder.
 
-The corpus exemplar is `circuit-breaker`
-(`node scripts/kb.mjs get circuit-breaker --block explain`): basic is the fuse-in-a-house
-comparison; advanced is "a stateful proxy … counts recent failures … opens … half-opens";
-expert opens with *when to choose it* ("failure mode is slow-or-flapping rather than
-cleanly down") and closes with the bill ("the cost is tuning … a mis-tuned breaker flaps
-or masks recovery").
+**Each rung stands alone.** Display is exact-match: at advanced only the advanced rung
+renders, so no rung may lean on another ("as noted above" pointing at a hidden rung is
+a defect).
 
 **Rewrites are all-or-nothing.** `kb.mjs explain` replaces the whole block and requires
-all three flags — to fix one rung you must re-supply the other two verbatim, or you
-destroy them. Read the current ladder first (`get <id> --block explain`), then rewrite.
+all three flags — read the current ladder first (`get <id> --block explain`), then
+rewrite.
 
 ## The per-lens audit procedure
 
-For each page, in this order:
-
 1. `node scripts/kb.mjs get <id> --level basic` — read the OUTPUT as a junior's whole
-   page. Does every visible line earn its place for that reader? An unexplained jargon
-   line in usage or tradeoffs is either a tag candidate (hide it from basic) or evidence
-   the line itself is unclear (a prose problem — flag it, don't fix it here).
-2. `--level advanced` — a senior's page. Is the mechanism fully there? Are the
-   pair-with-another-pattern and operational-nuance lines visible? Nothing patronizing
-   left over?
-3. `--level expert` — the full page. Are the sharp edges present — cluster state,
-   masking, cost bills — and tagged no *lower* than they deserve?
-4. Weak ladder → rewrite via `kb.mjs explain` (all three rungs). Role-specific line →
-   tag via `kb.mjs level`. Then re-read `--level basic`: it must be slimmer AND still
-   coherent — no dangling "as noted above" pointing at a hidden line.
+   page. Every block should be present and compact; unexplained jargon is either a
+   register-variant candidate (say it more simply at basic), a level-tag candidate
+   (hide the extra from basic), or a prose defect (flag it).
+2. `--level advanced` — a senior's page. Mechanism fully there? Variants with their
+   mechanics? Nothing patronizing left over from basic?
+3. `--level expert` — the full page: sharp edges (cluster state, masking, cost bills)
+   present, each major con with its counter-move.
+4. Fix: weak ladder → `kb.mjs explain`; idea needs re-saying → author the variant
+   paragraphs in the HTML, `make all` to mint ids, then `kb.mjs register` each rung;
+   senior-only detail → `kb.mjs level`. Re-read `--level basic`: complete, compact,
+   coherent.
+5. Heuristic (not a gate): the basic read lands around ≤40% of the expert read's word
+   count while still touching every block.
 
-## Tagging heuristics
+## Tagging and variant heuristics
 
-Untagged is the default and the right one for most lines. Semantics are **min-level**:
-`data-kb-level="advanced"` means "visible from advanced up"; a tag never *adds* content,
-it only hides the line from lenses below it.
+Untagged is the default and the right one for most lines.
 
-**The hiding test** — every tag must pass it: *does hiding this line genuinely help the
-lower audience read the page?* "Is this line sophisticated?" is not the test. A line a
-junior can parse and profit from stays untagged, however senior its topic.
+- **The hiding test** (for `level` tags): does hiding this line genuinely help the
+  lower audience read the page? "Is this line sophisticated?" is not the test.
+  `advanced` earns nuance presuming operating experience or a second pattern;
+  `expert` earns distributed-state, fleet-scale, or cost/organizational consequences.
+  Budget: 0–6 tags per page; 0 is legitimate.
+- **The re-saying test** (for `register` variants): would the junior be better served
+  by a *different sentence* than by fewer sentences? Then write the variant. Budget:
+  0–3 variant groups per page beyond the explain ladder; most pages need 0–1.
+  Typical uses: the description lead, a simple-vs-full code sketch
+  (`sketch-variant-N` on `details.sketch`), a solution-only vs failure-state diagram.
+- **Never let a block go lens-empty.** If every item in a list is tagged above basic,
+  make check fails the page — keep at least one basic-visible item in every mandatory
+  list (that floor item is usually the block's plainest, most useful line anyway).
 
-- **`advanced` earns**: nuance that presumes operating experience or knowledge of a
-  second pattern. Corpus exemplars: circuit-breaker `tradeoffs-con-2` ("An open breaker
-  can mask a dependency that's only mildly degraded") and retry-backoff `usage-avoid-3`
-  (pair it with circuit-breaker).
-- **`expert` earns**: distributed-state, fleet-scale, or cost/organizational
-  consequences. Exemplar: circuit-breaker `tradeoffs-con-3` ("Per-instance breakers
-  don't share state; a cluster may trip unevenly").
-- **Budget: 0–6 tags per page. 0 is a legitimate outcome.** Never tag to look thorough —
-  the audit's depth is in the three lens reads, not the tag count.
+### Addressability — what ids exist
 
-### What is taggable — the addressability boundary
+`make all` mints the ids; positional ones renumber when content is inserted, so re-run
+`make all` before tagging.
 
-`kb.mjs level` targets elements by their stable id, and only stamped ITEMS carry one:
+| block | ids |
+|---|---|
+| tradeoffs / usage / variations / production | `tradeoffs-{pro,con}-N`, `usage-{when,avoid}-N`, `variations-item-N`, `production-{knob,signal,failure,check}-N` |
+| any prose block | `<block>-p-N` on each `.prose > p` |
+| wild / tour / fluency | keyed: `wild-<example>`, `tour-<member>`, `fluency-<theme>` (reorder-proof) |
+| deepdives | `deepdives-dive-N` on each `h3` |
+| sketch | `sketch-variant-N` on each `details.sketch` |
 
-| block | ids | worth tagging? |
-|---|---|---|
-| tradeoffs | `tradeoffs-{pro,con}-N` | **yes** — the main surface |
-| usage | `usage-{when,avoid}-N` | **yes** — the other main surface |
-| variations | `variations-item-N` | only an `expert` tag changes anything — the block is already policy-stamped `advanced` |
-| production | `production-{knob,signal,failure,check}-N` | **no** — the block is policy-stamped `expert`; an item tag is a visibility no-op |
-
-Description, structure and sketch prose, wild items, and relationship notes carry **no
-ids** and are honestly out of scope — if a page's basic read is bloated by description
-prose, flag it for a separate kb-edit prose pass rather than reaching for machinery.
-**Principles have no item ids at all**: their per-lens quality is the ladder plus the
-policy-stamped `overreach` block — ladder-only, and that's fine.
-
-Never set a level on a `<section>` (block visibility is `BLOCK_LEVELS` policy in
-`scripts/lib/model.mjs`, stamped by the build) or inside the explain block (its levels
-are structural). The writer refuses both — if it refuses you, you were about to do the
-wrong thing, not fighting a bug.
+Never set a level or register on a `<section>` (blocks always show) or inside the
+explain block (structural — edit via `kb.mjs explain`). The writers refuse both — if
+one refuses you, you were about to do the wrong thing, not fighting a bug.
 
 ## Commands
 
 ```
 node scripts/kb.mjs get <id> --block explain                 # read the current ladder
 node scripts/kb.mjs get <id> --level basic|advanced|expert   # the lens read to judge
-node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   # whole ladder
-node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>   # one tag
+node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"     # whole ladder
+node scripts/kb.mjs register <id> <element-id> <basic|advanced|expert|none>  # variant rung
+node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>     # accretion tag
 node scripts/kb.mjs find "…" --level basic                   # search a lens's prose
 node scripts/kb.mjs ls --json | jq '[.[]|select(.favourite)]'  # the starred set
 ```
 
-Level data goes ONLY through these writers — never hand-edit a `data-kb-*` attribute.
-The post-edit hook runs `make check` (~0.8s) on every site/ edit; a sweep's orchestrator
-runs `make all && make check` once at the end (do not run `make all` per page).
+Lens data goes ONLY through these writers — never hand-edit a `data-kb-*` attribute.
+(Variant *paragraphs* are ordinary prose: write them in the HTML, `make all` mints their
+ids, then tag with `register`.) The post-edit hook runs `make check` (~0.8s) on every
+site/ edit; a sweep's orchestrator runs `make all && make check` once per batch.
 
 ## Self-check (per page)
 
 1. All three lens reads done, judged as pages for their audience — not skimmed as diffs.
-2. Basic output: no unexplained jargon; every visible usage/tradeoffs line parseable by
-   a junior; the basic rung stands alone.
-3. The three rungs do not repeat each other; expert argues impact/when/cost, not the
-   mechanism again.
-4. Every tag names its element id and passes the hiding test in one sentence; total 0–6.
-5. Basic re-read after tagging: slimmer and still coherent, no dangling references.
+2. Basic output: every block present and compact; failure-first story up top; no
+   unexplained jargon; the basic rung stands alone.
+3. The three rungs do not repeat each other; expert argues selection, costs and
+   counter-moves, not the mechanism again.
+4. Every `level` tag passes the hiding test; every `register` group passes the
+   re-saying test, sits on adjacent siblings, ascends without repeats.
+5. No block renders empty at any lens (make check enforces; don't rely on it).
 6. Hook green after every edit; anything untaggable-but-broken reported, not silently
    rewritten.

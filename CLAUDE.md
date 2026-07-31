@@ -35,8 +35,10 @@ not context — and prints the line that matched.
 Cite precisely: every claim has a stable id (`…/circuit-breaker.html#tradeoffs-con-2`).
 
 Scope any read to a **reading level** with `--level basic|advanced|expert` on `get` and
-`find` — `basic` is the junior entry point, `expert` reads everything. `data-kb-level` on an
-element means "visible from this level up"; untagged means always.
+`find` — `basic` is the junior entry point, `expert` the staff one. Every block shows at
+every lens; depth adapts inside blocks. `data-kb-level` on an element means "visible from
+this level up" (accretion); `data-kb-register` means "rendered at exactly this lens"
+(variant groups, like the explain ladder); untagged means always.
 
 ## Writing it
 
@@ -46,13 +48,14 @@ Go through the validated writer, not hand-edited attribute strings:
 node scripts/kb.mjs set <id> --aliases '["breaker","CB"]' --tags '[…]' --solves '[…]'
 node scripts/kb.mjs set <id> --favourite true            # editorial pick: ★ chip + hub filter
 node scripts/kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
-node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   # the 3-level ladder
-node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>   # authored element level
+node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   # the 3-rung ladder
+node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>      # accretion: from this level up
+node scripts/kb.mjs register <id> <element-id> <basic|advanced|expert|none>   # variant: at exactly this lens
 ```
 
-Section-level `data-kb-level` is **stamped** from `BLOCK_LEVELS` in `scripts/lib/model.mjs`
-— change the policy, never the page. Register rules and the per-lens audit procedure for
-the ladder live in the **kb-explain** skill.
+Sections never carry a lens attribute — blocks show at every lens, and `make check`
+fails any block that renders empty at one. Register rules and the per-lens audit
+procedure live in the **kb-explain** skill.
 
 Then `make all` to regenerate, and `make check` to verify. A hook runs `make check` after any
 edit under `site/` — it takes ~0.8s.
