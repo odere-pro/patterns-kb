@@ -414,7 +414,7 @@
     nodes.forEach(function (n) {
       var s = {};
       if (!settings.filters.kinds[n.kind]) s.off = 1;
-      if (settings.filters.band && n.band !== settings.filters.band) s.off = 1;
+      if (n.band && settings.filters.bands[n.band] === false) s.off = 1;
       if (settings.filters.favs && !n.favourite) s.off = 1;
       if (qTest && !qTest(n)) s.off = 1;
       st[n.id] = s;
@@ -578,7 +578,10 @@
   function hideTipSoon() {
     clearTimeout(tipTimer);
     tipTimer = setTimeout(function () {
-      if (tipNode !== selectedId) { tip.hidden = true; tipNode = null; }
+      if (tipNode === selectedId) return;
+      // A hover elsewhere borrowed the tip — give the selected node its card back.
+      if (selectedId && byId[selectedId]) showTip(byId[selectedId], true);
+      else { tip.hidden = true; tipNode = null; }
     }, 180);
   }
   function clearTip() { tip.hidden = true; tipNode = null; }
@@ -601,7 +604,7 @@
   function activate(d) {
     selectedId = selectedId === d.id ? null : d.id;
     render();
-    if (selectedId) showTip(d); else clearTip();
+    if (selectedId) showTip(d, true); else clearTip();
   }
 
   nodeSel
@@ -655,9 +658,15 @@
       render(); save();
     });
   });
-  var bandSelect = on("band-select", "change", function () {
-    settings.filters.band = bandSelect.value;
-    render(); save();
+  // Bands: the built-in color groups — each chip toggles its band's patterns.
+  document.querySelectorAll(".band-btn").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var id = b.dataset.band;
+      if (settings.filters.bands[id] === false) delete settings.filters.bands[id];
+      else settings.filters.bands[id] = false;
+      b.setAttribute("aria-pressed", settings.filters.bands[id] === false ? "false" : "true");
+      render(); save();
+    });
   });
   var favToggle = on("fav-toggle", "change", function () {
     settings.filters.favs = favToggle.checked;
@@ -785,7 +794,9 @@
     document.querySelectorAll(".kind-btn").forEach(function (b) {
       b.setAttribute("aria-pressed", settings.filters.kinds[b.dataset.kind] ? "true" : "false");
     });
-    if (bandSelect) bandSelect.value = settings.filters.band;
+    document.querySelectorAll(".band-btn").forEach(function (b) {
+      b.setAttribute("aria-pressed", settings.filters.bands[b.dataset.band] === false ? "false" : "true");
+    });
     if (favToggle) favToggle.checked = settings.filters.favs;
     if (orphanToggle) orphanToggle.checked = settings.filters.orphans;
     document.querySelectorAll(".legend-btn").forEach(function (b) {
@@ -819,7 +830,7 @@
   render();
   if (selectedId && byId[selectedId]) {
     centerOn(byId[selectedId], 1.6, true);
-    showTip(byId[selectedId]);
+    showTip(byId[selectedId], true);
   } else {
     fit(true);
   }

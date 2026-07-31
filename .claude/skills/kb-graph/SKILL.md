@@ -68,7 +68,7 @@ the `.js`. Tags and aliases are NOT in graphdata — the runtime joins them at l
 1. Console clean; graph appears already settled, drifting gently; drag is springy and
    the node floats free on release (not pinned).
 2. Filters: `cache`, `tag:caching`, `tag:caching -kind:design`, `fav:true`, kind
-   toggles, band select, favourites, orphans (with `demonstrated-by` off, case studies
+   toggles, band chips (the colored Groups row), favourites, orphans (with `demonstrated-by` off, case studies
    vanish). Escape clears the search.
 3. Links: each family toggles its edges; `demonstrated-by` off by default.
 4. Groups: add `tag:caching` → recolor; overlapping second group → first wins; reorder
