@@ -124,7 +124,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>monitor object</strong> bundles a mutual-exclusion lock together with one or more <em>condition variables</em> around a single piece of shared state, so that only one thread can execute any of the object's synchronized methods at a time. Each such method acquires the lock automatically on entry and releases it on exit; a method that finds the state isn't ready yet calls <code>wait()</code> on a condition, which atomically releases the lock and parks the thread, to be woken later by another thread's <code>notify()</code> once the state changes.</p>
         <p id="description-p-2">The forces it resolves are <strong>mutual exclusion</strong> and <strong>condition synchronization</strong> together. A bare lock only buys exclusion — it says nothing about waiting for a specific state, so callers either spin-poll the condition themselves or invent ad-hoc signaling with semaphores scattered across call sites, each one a chance to forget an acquire, mismatch a release, or misuse a counting semaphore as a binary one. The monitor folds both concerns into the object itself: the lock and its condition variables live next to the data they protect, and every caller sees ordinary method calls — <code>put()</code>, <code>take()</code>, <code>enqueue()</code> — with the synchronization hidden behind them.</p>
-        <p id="description-p-3">The idea comes from Hoare and Brinch Hansen's monitors in the 1970s and is usually built into the language rather than left to a library — every object in Java is an implicit monitor via <code>synchronized</code>, <code>wait()</code>, and <code>notify()</code>; C#'s <code>lock</code> and <code>Monitor</code> class work the same way. That built-in-ness is also its cost: nothing stops a synchronized method from calling out to another object's monitor while still holding its own lock, which is exactly how deadlocks and the classic <em>nested monitor problem</em> creep in.</p>
+        <p id="description-p-3" data-kb-level="advanced">The idea comes from Hoare and Brinch Hansen's monitors in the 1970s and is usually built into the language rather than left to a library — every object in Java is an implicit monitor via <code>synchronized</code>, <code>wait()</code>, and <code>notify()</code>; C#'s <code>lock</code> and <code>Monitor</code> class work the same way. That built-in-ness is also its cost: nothing stops a synchronized method from calling out to another object's monitor while still holding its own lock, which is exactly how deadlocks and the classic <em>nested monitor problem</em> creep in.</p>
       </div>
     </section>
 
@@ -133,15 +133,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Put the lock inside the thing being shared, so callers just use ordinary methods and only one of them runs at a time. If the thing isn't ready yet — the box is empty and you asked to take something out — the caller is put to sleep and woken when someone else changes it. Nobody has to remember to lock anything by hand.</p>
+          <p>Two threads add to the same list at the same time and an item goes missing. Put the lock inside the list itself: callers use ordinary methods, and only one caller at a time runs inside them — one key, hanging by the door. If what you asked for is not there yet, because you wanted to take an item and the box is empty, you are put to sleep and woken when someone puts one in, instead of asking over and over.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>One mutual-exclusion lock plus one or more condition variables, encapsulated with the state they protect. Every synchronized method acquires the lock on entry and releases it on exit; a method whose precondition does not hold calls wait, which atomically releases the lock and parks the thread until another thread signals the condition. Java's synchronized, wait and notify and C#'s lock and Monitor class are the built-in forms. Every wait must recheck its condition in a loop, because spurious wakeups are permitted by the model.</p>
+          <p>The mechanism is one mutual-exclusion lock plus one or more condition variables, encapsulated with the state they protect. Every guarded method acquires the lock on entry and releases it on exit, and a method whose precondition does not hold calls wait, which atomically releases the lock and parks the thread until another thread signals that condition. Java's synchronized/wait/notify and C#'s lock/Monitor are the built-in forms; an explicit lock with several named conditions is the library form, and it is the one that can wake not-full and not-empty waiters separately. Every wait re-tests its predicate in a loop, because the model lets a thread return from wait without having been signaled.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when one object genuinely owns the state and callers need both exclusion and wait-until-ready, and the language hands you the primitive for free — a bounded queue or a connection pool is the canonical fit. Its value is that synchronization cannot be bypassed, because there is no way to reach the data except through the guarded methods. The costs: one lock per object serializes methods touching disjoint fields, a single wait set makes notify wake the wrong thread while notifyAll burns wakeups, and calling out to another object's guarded method while holding your own lock is the classic route to deadlock.</p>
+          <p>Choose it when one object genuinely owns the state and callers need exclusion and wait-until-ready together — a bounded queue or a connection pool is the canonical fit — and pass on it when the state can be partitioned per thread or handed to an actor's mailbox instead. What you buy is that synchronization cannot be bypassed, because there is no route to the data except the guarded methods. What you pay, and how to pay it: one lock serializes methods that touch disjoint fields, which a read-write lock or a split into smaller monitors relieves; a single wait set lets notify wake the wrong thread, which named condition variables fix at the price of getting each signal right; and holding your own lock while calling another monitor deadlocks, which only a globally consistent acquisition order prevents. Then run it — watch contention time and parked-waiter count, expect lost and spurious wakeups before you expect starvation, and gate on a while-loop guard around every wait.</p>
         </div>
       </div>
     </section>
@@ -149,6 +149,28 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    T1["Consumer thread"]:::ext
+    T2["Producer thread"]:::ext
+    subgraph Mon["One object owns the lock, the waiting room and the data"]
+        M["Guarded methods: put(), take()"]
+        L[("Lock and condition wait set")]
+        S[("Shared state, the buffer")]
+    end
+    T1 --&gt;|"1 call take()"| M
+    M --&gt;|"2 acquire the lock, or queue behind the holder"| L
+    M --&gt;|"3 nothing to take: release the lock and sleep"| L
+    T2 --&gt;|"4 call put(item)"| M
+    M --&gt;|"5 change the buffer under the lock"| S
+    M --&gt;|"6 wake a sleeper, then release the lock"| L
+    L --&gt;|"7 sleeper reacquires and re-checks the buffer"| M
+    M --&gt;|"8 return the item"| T1
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How do two threads share one buffer without either caller managing a lock? Both enter through the same guarded methods, so step 2 gives exclusion and steps 3 and 6 give "wait until ready" — properties of the object rather than a rule every call site has to remember.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -176,10 +198,10 @@ sequenceDiagram
         <dd>Java's <code>synchronized</code> keyword makes every object a built-in monitor with one implicit lock; <code>java.util.concurrent.locks.Lock</code> plus <code>Condition</code> externalizes the same idea and allows several condition variables per lock.</dd>
         <dt id="variations-item-2">Signal vs. broadcast</dt>
         <dd><code>notify()</code> wakes exactly one waiting thread; <code>notifyAll()</code> wakes them all so each can recheck its own condition — cheaper versus safer when several conditions share one wait set.</dd>
-        <dt id="variations-item-3">Multiple condition variables</dt>
-        <dd>One lock can guard several named conditions — <em>not full</em> and <em>not empty</em> on a bounded buffer — so producers and consumers don't wake the wrong kind of waiter unnecessarily.</dd>
-        <dt id="variations-item-4"><a href="./rw-lock.html">Read-Write Lock</a></dt>
-        <dd>Splits the single exclusive lock into a shared read mode and an exclusive write mode, letting many readers through at once — a finer-grained monitor for read-heavy state.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Multiple condition variables</dt>
+        <dd data-kb-level="advanced">One lock can guard several named conditions — <em>not full</em> and <em>not empty</em> on a bounded buffer — so producers and consumers don't wake the wrong kind of waiter unnecessarily.</dd>
+        <dt id="variations-item-4" data-kb-level="expert"><a href="./rw-lock.html">Read-Write Lock</a></dt>
+        <dd data-kb-level="expert">Splits the single exclusive lock into a shared read mode and an exclusive write mode, letting many readers through at once — a finer-grained monitor for read-heavy state.</dd>
       </dl>
     </section>
 
@@ -191,8 +213,8 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Packages the lock with the state it protects, so synchronization can't be bypassed by reaching the object directly.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Threads block on a precise condition instead of busy-polling or backing off and retrying.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Built into mainstream languages — Java's <code>synchronized</code>/<code>wait</code>/<code>notify</code>, C#'s <code>lock</code>/<code>Monitor</code> — with no library needed.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Simpler to reason about than raw semaphores: no separate counting variable to keep in sync with the data.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Built into mainstream languages — Java's <code>synchronized</code>/<code>wait</code>/<code>notify</code>, C#'s <code>lock</code>/<code>Monitor</code> — with no library needed.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Simpler to reason about than raw semaphores: no separate counting variable to keep in sync with the data.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -200,9 +222,9 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">One lock per object serializes every method, even ones touching disjoint parts of the state.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced"><code>notify()</code> can wake the wrong waiter when several conditions share one wait set; <code>notifyAll()</code> trades that bug for wasted wakeups.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Calling another object's monitor method while holding your own lock invites the nested monitor problem and deadlock.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Confined to one process's address space — doesn't extend across machines or even separate processes.</li>
-            <li id="tradeoffs-con-5" data-kb-polarity="con">Every wait must recheck its condition in a loop, since spurious wakeups are allowed by the model.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Calling another object's monitor method while holding your own lock invites the nested monitor problem and deadlock.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Confined to one process's address space — doesn't extend across machines or even separate processes.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">Every wait must recheck its condition in a loop, since spurious wakeups are allowed by the model.</li>
           </ul>
         </div>
       </div>
@@ -216,15 +238,15 @@ sequenceDiagram
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Multiple threads share mutable state that needs both exclusion and "wait until ready" semantics — a bounded queue, connection pool, or work queue.</li>
             <li id="usage-when-2" data-kb-polarity="when">You want the synchronization to live inside the object, invisible to callers, rather than scattered across every call site.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The language gives you a monitor for free, and the state is naturally owned by one object.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The language gives you a monitor for free, and the state is naturally owned by one object.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The state isn't actually shared or mutable — there's nothing to protect.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Access is overwhelmingly reads with rare writes — a <a href="./rw-lock.html">Read-Write Lock</a> lets readers run concurrently instead of serializing behind one lock.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">You'd rather avoid shared state and locking altogether — the <a href="./actor-model.html">Actor Model</a> replaces both with message passing between isolated actors.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">Access is overwhelmingly reads with rare writes — a <a href="./rw-lock.html">Read-Write Lock</a> lets readers run concurrently instead of serializing behind one lock.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="expert">You'd rather avoid shared state and locking altogether — the <a href="./actor-model.html">Actor Model</a> replaces both with message passing between isolated actors.</li>
           </ul>
         </div>
       </div>
@@ -276,8 +298,8 @@ sequenceDiagram
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="java-synchronized" id="wild-java-synchronized"><strong>Java synchronized / wait / notify</strong><span>Every Java object carries an intrinsic lock and a wait set, making the monitor a language feature rather than a library. wait() releases the lock and suspends; notify()/notifyAll() wake waiters; the guard must be re-tested in a while loop because of spurious wakeups.</span></div>
-        <div class="wild-item" data-kb-example="csharp-monitor" id="wild-csharp-monitor"><strong>C# lock / System.Threading.Monitor</strong><span>The lock keyword compiles to Monitor.Enter/Exit wrapped in try/finally, and Monitor.Wait, Pulse, and PulseAll supply the condition-variable half. A thread must own the monitor before it may Wait or Pulse.</span></div>
-        <div class="wild-item" data-kb-example="python-condition" id="wild-python-condition"><strong>Python threading.Condition</strong><span>Bundles a Lock (or RLock) with wait/notify so a bounded buffer can block until it is not-full or not-empty. wait() releases and later re-acquires the lock, and the docs steer callers to the while-predicate idiom over a bare notify_all().</span></div>
+        <div class="wild-item" data-kb-example="csharp-monitor" id="wild-csharp-monitor" data-kb-level="advanced"><strong>C# lock / System.Threading.Monitor</strong><span>The lock keyword compiles to Monitor.Enter/Exit wrapped in try/finally, and Monitor.Wait, Pulse, and PulseAll supply the condition-variable half. A thread must own the monitor before it may Wait or Pulse.</span></div>
+        <div class="wild-item" data-kb-example="python-condition" id="wild-python-condition" data-kb-level="expert"><strong>Python threading.Condition</strong><span>Bundles a Lock (or RLock) with wait/notify so a bounded buffer can block until it is not-full or not-empty. wait() releases and later re-acquires the lock, and the docs steer callers to the while-predicate idiom over a bare notify_all().</span></div>
       </div>
     </section>
 
@@ -288,31 +310,31 @@ sequenceDiagram
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Signaling policy</strong> — Wake one waiter or all: notify()/signal() versus notifyAll()/signalAll(). Signal-one is cheaper but safe only when every waiter is interchangeable on the same condition; otherwise signal-all avoids lost wakeups.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Wait timeout</strong> — Object.wait(ms) and Condition.await(time) bound how long a thread blocks on a condition, turning an indefinite wait into one that can time out and recover.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Wait timeout</strong> — Object.wait(ms) and Condition.await(time) bound how long a thread blocks on a condition, turning an indefinite wait into one that can time out and recover.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Lock contention</strong> — Time threads spend blocked entering the monitor. High contention turns the guarded section into a serialization bottleneck.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Waiting-thread count</strong> — How many threads are parked on the condition. A queue that never drains points at a missed or too-narrow wakeup.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Waiting-thread count</strong> — How many threads are parked on the condition. A queue that never drains points at a missed or too-narrow wakeup.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Lost wakeup</strong> — Calling notify() instead of notifyAll(), or signaling before the waiter waits, can leave a thread parked forever while work is available.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Spurious wakeup</strong> — A thread can return from wait() without being signaled; testing the guard with if instead of a while loop lets it proceed on a false premise.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Nested-monitor deadlock</strong> — Holding one monitor while waiting on another, in inconsistent order across threads, deadlocks the set.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Spurious wakeup</strong> — A thread can return from wait() without being signaled; testing the guard with if instead of a while loop lets it proceed on a false premise.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Nested-monitor deadlock</strong> — Holding one monitor while waiting on another, in inconsistent order across threads, deadlocks the set.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Always re-check the guard in a while loop around wait(), never a single if.</li>
-            <li id="production-check-2" data-kb-polarity="check">Prefer notifyAll unless every waiter is provably interchangeable on one condition.</li>
-            <li id="production-check-3" data-kb-polarity="check">Acquire multiple monitors in a globally consistent order to avoid deadlock.</li>
-            <li id="production-check-4" data-kb-polarity="check">Keep the guarded critical section short; it serializes every thread that touches the monitor.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Prefer notifyAll unless every waiter is provably interchangeable on one condition.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="expert">Acquire multiple monitors in a globally consistent order to avoid deadlock.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Keep the guarded critical section short; it serializes every thread that touches the monitor.</li>
           </ul>
         </div>
       </div>

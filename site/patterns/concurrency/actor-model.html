@@ -109,7 +109,7 @@
       <div class="prose">
         <p id="description-p-1">An <strong>actor</strong> is the smallest unit of computation in the model: a lightweight process with private state only it can see, a <em>mailbox</em> that queues incoming messages, and a behavior that decides what to do with the next one. On receiving a message an actor can do some combination of three things — send messages to actors it knows about, create new actors, and designate the behavior it uses for the message after this one. Nothing else gets in; actors never read or write another actor's memory.</p>
         <p id="description-p-2">The forces it resolves are shared mutable state and the coordination it demands. Threads-and-locks concurrency works, but every shared variable needs a lock, every lock needs a consistent acquisition order across the whole codebase, and getting either wrong produces a race or a deadlock that only reproduces under load. The actor model removes the shared variable instead of trying to guard it better: state lives inside exactly one actor, mutated only by that actor's own single-threaded processing loop. Concurrency stops being many threads mutating shared memory and becomes many independent sequential programs exchanging asynchronous messages.</p>
-        <p id="description-p-3">Carl Hewitt introduced the model in 1973; Erlang made it a production discipline in telecom switches, adding supervision trees that let a faulty actor crash and restart cleanly instead of being defensively coded against every failure. Because actors interact only through messages, the same program runs unchanged whether its actors sit in one process or are scattered across a cluster — a send already looks like a network call, so distribution costs nothing extra in the programming model.</p>
+        <p id="description-p-3" data-kb-level="advanced">Carl Hewitt introduced the model in 1973; Erlang made it a production discipline in telecom switches, adding supervision trees that let a faulty actor crash and restart cleanly instead of being defensively coded against every failure. Because actors interact only through messages, the same program runs unchanged whether its actors sit in one process or are scattered across a cluster — a send already looks like a network call, so distribution costs nothing extra in the programming model.</p>
       </div>
     </section>
 
@@ -122,11 +122,11 @@
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>An actor is a lightweight process holding private state, a mailbox, and a behaviour. It processes one message at a time on its own single-threaded loop, and in response may send messages, spawn child actors, or swap its behaviour for the next message. No thread ever reaches into another actor's memory, so there is no lock to take. Supervision trees restart a crashed actor from a known state, and because a send is already asynchronous, the same code runs in one process or across a cluster.</p>
+          <p>The unit is a lightweight process, not an OS thread — a runtime multiplexes millions of them over a handful of carrier threads, which is why one actor per entity is affordable where one thread per entity is not. Swapping the behaviour that will handle the next message is how an actor carries a state machine without a state variable anyone else can read. And because no thread reaches into another actor's memory there is no lock to acquire and no acquisition order to keep consistent across a codebase; the serial mailbox gives you the ordering a lock would have given, inside one actor and no wider.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when you are modelling many independent stateful entities — sessions, devices, game objects — whose failures must stay local; its value is structural, replacing lock discipline with an ownership boundary the runtime enforces. Supervision makes crash-and-restart a cheaper recovery story than coding defensively against every failure. The bill is real: message ordering between three parties is still unspecified, so stale-state bugs move to the protocol rather than disappearing; causality spreads across mailboxes and logs instead of a call stack; a slow handler blocks everything queued behind it; and unbounded mailboxes turn overload into an out-of-memory crash unless you design flow control deliberately.</p>
+          <p>Choose it for many independent stateful entities — sessions, devices, game objects — whose failures must stay local. Stateless data-parallel work is cheaper on a thread pool, and an invariant spanning several actors needs a saga, not a mailbox: actors buy isolation, not distributed consistency. Each cost has a counter-move. Order between three parties is unspecified, so make handlers idempotent and version the state they carry rather than trusting arrival order. Causality lives across mailboxes instead of a call stack, so propagate a correlation id from the first message in. A slow handler stalls everything queued behind it, so keep handlers non-blocking and give unavoidable blocking work its own dispatcher. An unbounded mailbox turns overload into an out-of-memory kill, so bound the mailboxes fed by external input and choose the overflow behaviour deliberately. Then run the loop: tune mailbox bounds and restart intensity, watch max mailbox depth and restart rate, expect the first ceiling as one hot actor serialising the whole system, and gate release on a tested timeout for every request-reply.</p>
         </div>
       </div>
     </section>
@@ -136,13 +136,21 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    Sender["Sender actor"] -->|send| Mailbox[("Mailbox queue")]
-    Mailbox -->|"dequeue one"| Loop["Process one message at a time"]
-    Loop -->|send| Other["Other actors"]
-    Loop -->|spawn| New["New actors"]
-    Loop -->|become| Behavior["Next behavior, own state"]
+    S["Sender actor"]
+    subgraph A["One actor — state nothing outside can touch"]
+        MB[("Mailbox")]
+        Loop["Handler, one message at a time"]
+        St[("Its own state")]
+    end
+    Other["Another actor"]
+    Child["A child it spawns"]
+    S --&gt;|"1 send a message"| MB
+    MB --&gt;|"2 hand over the next one, in turn"| Loop
+    Loop --&gt;|"3 read and update"| St
+    Loop --&gt;|"4 send onward"| Other
+    Loop --&gt;|"5 spawn a child, or change what it does next"| Child
         </pre>
-        <figcaption>A message lands in the actor's mailbox and waits its turn. The actor drains the mailbox strictly one message at a time, and handling one may send to other actors, spawn new ones, or change what it does next.</figcaption>
+        <figcaption>How do two units of work avoid scribbling over each other's data? Nothing outside the box reaches the state at step 3 — the only way in is a message dropped in the mailbox at step 1, and step 2 hands those over one at a time, so there is no lock to take.</figcaption>
       </figure>
     </section>
 
@@ -153,14 +161,14 @@ flowchart LR
         <dd>The original formalism — pure message passing, no shared state, every send asynchronous and non-blocking. Every other flavor below specializes this baseline.</dd>
         <dt id="variations-item-2">Erlang/OTP processes</dt>
         <dd>Lightweight BEAM processes with no shared heap, linked into supervision trees that restart a crashed process instead of trying to keep it alive — the "let it crash" philosophy.</dd>
-        <dt id="variations-item-3"><a href="../functional/immutability.html">Immutability</a> of messages</dt>
-        <dd>Messages are copied, not shared, value objects — even two actors in the same process can't alias each other's state through a message, closing the one loophole a naive implementation could leave open.</dd>
-        <dt id="variations-item-4"><a href="../messaging/message-queue.html">Message Queue</a>-backed mailboxes</dt>
-        <dd>Back the mailbox with a durable, external broker instead of an in-memory list, so messages survive an actor restart or a node failure and can be replayed.</dd>
-        <dt id="variations-item-5"><a href="./backpressure.html">Backpressure</a></dt>
-        <dd>Bound the mailbox and block, drop, or signal the sender once it's full, so a slow actor pushes back on load instead of growing its queue until memory runs out.</dd>
-        <dt id="variations-item-6">Virtual actors (Orleans grains)</dt>
-        <dd>The runtime activates an actor on its first message and deactivates it when idle; location is entirely transparent — you address a logical identity and never manage placement or lifecycle yourself.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced"><a href="../functional/immutability.html">Immutability</a> of messages</dt>
+        <dd data-kb-level="advanced">Messages are copied, not shared, value objects — even two actors in the same process can't alias each other's state through a message, closing the one loophole a naive implementation could leave open.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced"><a href="../messaging/message-queue.html">Message Queue</a>-backed mailboxes</dt>
+        <dd data-kb-level="advanced">Back the mailbox with a durable, external broker instead of an in-memory list, so messages survive an actor restart or a node failure and can be replayed.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced"><a href="./backpressure.html">Backpressure</a></dt>
+        <dd data-kb-level="advanced">Bound the mailbox and block, drop, or signal the sender once it's full, so a slow actor pushes back on load instead of growing its queue until memory runs out.</dd>
+        <dt id="variations-item-6" data-kb-level="expert">Virtual actors (Orleans grains)</dt>
+        <dd data-kb-level="expert">The runtime activates an actor on its first message and deactivates it when idle; location is entirely transparent — you address a logical identity and never manage placement or lifecycle yourself.</dd>
       </dl>
     </section>
 
@@ -172,15 +180,15 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">No shared mutable state inside an actor to lock, so classic data races are structurally impossible there.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">The same code runs whether actors sit in one process or across a cluster — a send already is the network boundary.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A crashed actor's damage stays local, so a supervisor can restart it without corrupting anyone else's state.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Scales down to a handful of actors on one core and up to millions of lightweight processes.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">A crashed actor's damage stays local, so a supervisor can restart it without corrupting anyone else's state.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Scales down to a handful of actors on one core and up to millions of lightweight processes.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="advanced">No shared state doesn't mean no race conditions — message order between two actors isn't guaranteed relative to a third, and stale-state bugs just move to the message layer.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Debugging trades a linear call stack for causality scattered across mailboxes and logs, which is harder to step through.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Debugging trades a linear call stack for causality scattered across mailboxes and logs, which is harder to step through.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">A message handler that blocks or runs long stalls every message queued behind it in that actor's mailbox.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Unbounded mailboxes can hide an overload problem until memory runs out — needs deliberate backpressure design.</li>
           </ul>
@@ -196,8 +204,8 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">You need many concurrent units with private state and no safe way to share it.</li>
             <li id="usage-when-2" data-kb-polarity="when">The same logic should run identically on one machine or distributed across many.</li>
-            <li id="usage-when-3" data-kb-polarity="when">Failures must stay isolated — one bad actor shouldn't corrupt or block the rest of the system.</li>
-            <li id="usage-when-4" data-kb-polarity="when">You're modeling many independent, stateful entities with their own lifecycle — sessions, devices, game entities.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Failures must stay isolated — one bad actor shouldn't corrupt or block the rest of the system.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">You're modeling many independent, stateful entities with their own lifecycle — sessions, devices, game entities.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -253,8 +261,8 @@ class Counter extends Actor {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="erlang-otp" id="wild-erlang-otp"><strong>Erlang/OTP</strong><span>BEAM processes are share-nothing actors, and OTP supervision trees restart a crashed one instead of defending against every failure in-line. The supervisor exposes the knobs directly — one_for_one vs. rest_for_one restart strategies and a restart-intensity cap that escalates a crash loop up the tree — and the scheduler preempts processes on a reduction budget, so no single actor can hog a core.</span></div>
-        <div class="wild-item" data-kb-example="akka" id="wild-akka"><strong>Akka</strong><span>Brought Erlang-style actors, supervision, and location transparency to the JVM, with clustering that lets the same actor code span nodes. Dispatchers and mailbox types are swap-in configuration rather than code — the standard operational move is giving blocking work its own dispatcher so it cannot starve the default one — and Cluster Sharding spreads entity actors across nodes while passivating the idle ones.</span></div>
-        <div class="wild-item" data-kb-example="orleans" id="wild-orleans"><strong>Microsoft Orleans</strong><span>Its virtual actors (grains) are activated on first message and deactivated when idle, so placement and lifecycle stay the runtime's problem. A grain processes one request at a time unless explicitly marked reentrant, and the idle-deactivation age is a configurable dial — operators tune how long a silent grain holds memory rather than where it lives.</span></div>
+        <div class="wild-item" data-kb-example="akka" id="wild-akka" data-kb-level="advanced"><strong>Akka</strong><span>Brought Erlang-style actors, supervision, and location transparency to the JVM, with clustering that lets the same actor code span nodes. Dispatchers and mailbox types are swap-in configuration rather than code — the standard operational move is giving blocking work its own dispatcher so it cannot starve the default one — and Cluster Sharding spreads entity actors across nodes while passivating the idle ones.</span></div>
+        <div class="wild-item" data-kb-example="orleans" id="wild-orleans" data-kb-level="expert"><strong>Microsoft Orleans</strong><span>Its virtual actors (grains) are activated on first message and deactivated when idle, so placement and lifecycle stay the runtime's problem. A grain processes one request at a time unless explicitly marked reentrant, and the idle-deactivation age is a configurable dial — operators tune how long a silent grain holds memory rather than where it lives.</span></div>
       </div>
     </section>
 
@@ -265,38 +273,38 @@ class Counter extends Actor {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>mailbox capacity and overflow policy</strong> — most runtimes default to unbounded; bounding forces a choice — block the sender, drop, or signal — and that choice is your backpressure design</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>supervision strategy</strong> — restart just the crashed actor or its whole sibling group, and how many restarts within what window before escalating — the cap is what turns a crash loop into a visible failure instead of an infinite one</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>request-reply timeout</strong> — every ask/call over messages needs an explicit deadline; the runtime's default (or its absence) was not chosen for your workload</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>dispatcher allotment</strong> — how many carrier threads run the actors and how much work one actor does before yielding; blocking work needs its own dispatcher so it cannot starve everyone sharing the default</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>idle passivation age</strong> — in virtual-actor runtimes, how long an idle actor stays in memory before deactivation — too short thrashes activation, too long hoards memory for entities nobody is talking to</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>supervision strategy</strong> — restart just the crashed actor or its whole sibling group, and how many restarts within what window before escalating — the cap is what turns a crash loop into a visible failure instead of an infinite one</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>request-reply timeout</strong> — every ask/call over messages needs an explicit deadline; the runtime's default (or its absence) was not chosen for your workload</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>dispatcher allotment</strong> — how many carrier threads run the actors and how much work one actor does before yielding; blocking work needs its own dispatcher so it cannot starve everyone sharing the default</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>idle passivation age</strong> — in virtual-actor runtimes, how long an idle actor stays in memory before deactivation — too short thrashes activation, too long hoards memory for entities nobody is talking to</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>per-actor mailbox depth</strong> — aggregate throughput hides the one hot mailbox that is the actual bottleneck; watch the max, not the mean</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>message age at dequeue</strong> — time from enqueue to processing — the latency senders actually experience, invisible in handler execution time</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>restart rate</strong> — supervisor restarts should be rare events; a steady rate means a poison message or a dependency that is down</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>dead-letter volume</strong> — messages sent to stopped or nonexistent actors — a rising count usually means lifecycle bugs, not lost mail</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>message age at dequeue</strong> — time from enqueue to processing — the latency senders actually experience, invisible in handler execution time</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>restart rate</strong> — supervisor restarts should be rare events; a steady rate means a poison message or a dependency that is down</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>dead-letter volume</strong> — messages sent to stopped or nonexistent actors — a rising count usually means lifecycle bugs, not lost mail</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>hot-actor serialization</strong> — one actor owns the popular entity and processes strictly one message at a time — the whole system's throughput ceiling becomes that single mailbox</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>poison-message restart storm</strong> — a malformed message crashes the handler, the supervisor restarts the actor, the message or its sender retries — a tight loop that burns CPU and floods logs until the intensity cap trips</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>unbounded mailbox growth</strong> — a slow actor fed by fast producers grows its queue silently; the failure surfaces as an out-of-memory kill far from the actor that caused it</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>blocking on the shared dispatcher</strong> — one handler making a synchronous I/O call parks a carrier thread; enough of them and every actor on that dispatcher stops, not just the guilty one</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>poison-message restart storm</strong> — a malformed message crashes the handler, the supervisor restarts the actor, the message or its sender retries — a tight loop that burns CPU and floods logs until the intensity cap trips</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>unbounded mailbox growth</strong> — a slow actor fed by fast producers grows its queue silently; the failure surfaces as an out-of-memory kill far from the actor that caused it</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>blocking on the shared dispatcher</strong> — one handler making a synchronous I/O call parks a carrier thread; enough of them and every actor on that dispatcher stops, not just the guilty one</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">bound the mailboxes fed by external input, and decide the overflow behavior before load decides it for you</li>
-            <li id="production-check-2" data-kb-polarity="check">keep handlers non-blocking; give unavoidable blocking work its own dispatcher or pool</li>
-            <li id="production-check-3" data-kb-polarity="check">make handlers idempotent or park poison messages aside — restarts and redelivery mean a message can arrive twice</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">keep handlers non-blocking; give unavoidable blocking work its own dispatcher or pool</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">make handlers idempotent or park poison messages aside — restarts and redelivery mean a message can arrive twice</li>
             <li id="production-check-4" data-kb-polarity="check">monitor per-actor mailbox depth and message age, not just aggregate throughput</li>
-            <li id="production-check-5" data-kb-polarity="check">put an explicit timeout on every request-reply interaction and test the timeout path</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">put an explicit timeout on every request-reply interaction and test the timeout path</li>
           </ul>
         </div>
       </div>

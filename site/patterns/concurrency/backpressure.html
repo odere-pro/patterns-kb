@@ -146,7 +146,7 @@
       <div class="prose">
         <p id="description-p-1"><strong>Backpressure</strong> is a feedback signal that travels against the direction of data flow. When a consumer — or any stage in a pipeline — can't keep up, it tells whoever is feeding it, and that upstream stage responds by slowing production, holding items in a bounded buffer, or dropping some of them, rather than pushing data at a rate the receiver can't absorb.</p>
         <p id="description-p-2">The force it resolves is a <strong>speed mismatch</strong> between stages that are otherwise wired together. A producer and a consumer rarely run at exactly the same rate, and the gap between them has to go <em>somewhere</em>. Without backpressure it goes into an ever-growing queue: memory climbs, latency for anything still in the queue balloons, and eventually the process runs out of memory or the whole pipeline falls over — often long after the mismatch actually started, which makes it hard to trace back to its source.</p>
-        <p id="description-p-3">It's a lens rather than one fixed shape: the same idea recurs at every layer of a system — TCP's receive window, HTTP/2 and gRPC flow control, Reactive Streams' <code>request(n)</code> protocol, a bounded channel between goroutines, consumer lag driving a producer's send rate. Whatever the mechanism, the scheme only works end to end — every hop between producer and consumer has to honor the signal, or the one stage that ignores it becomes the new place the queue grows unbounded.</p>
+        <p id="description-p-3" data-kb-level="advanced">It's a lens rather than one fixed shape: the same idea recurs at every layer of a system — TCP's receive window, HTTP/2 and gRPC flow control, Reactive Streams' <code>request(n)</code> protocol, a bounded channel between goroutines, consumer lag driving a producer's send rate. Whatever the mechanism, the scheme only works end to end — every hop between producer and consumer has to honor the signal, or the one stage that ignores it becomes the new place the queue grows unbounded.</p>
       </div>
     </section>
 
@@ -155,15 +155,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>When the person receiving work can't keep up, let them say so, and have the sender slow down instead of piling more on. A queue that only grows will eat all the memory and everything gets slower until it falls over. It is like a checkout line telling the door to stop letting people in for a moment.</p>
+          <p>When the person receiving work cannot keep up, let them say so, and have the sender slow down instead of piling more on. A queue that only grows will eat all the memory and everything gets slower until it falls over. It is like a checkout line telling the door to stop letting people in for a moment.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A feedback signal travelling against the data flow: a saturated consumer tells its upstream to produce more slowly, buffer within a bound, or shed items. The same idea recurs at every layer — TCP's receive window, HTTP/2 and gRPC flow control, Reactive Streams' request(n), a bounded channel between goroutines, consumer lag driving a producer's send rate. It only works end to end: every hop must honour the signal, or the one stage that ignores it becomes the new place the queue grows without limit.</p>
+          <p>Whatever the transport, the pressure has to land in one of three places, and the mechanism is the choice between them. The sender stalls: a blocking write on a bounded buffer, where the bound itself is the signal and no protocol is needed. The sender is rationed: the consumer grants a budget of n items and the producer may never exceed it, which is what carries the signal across a network hop. Or items are dropped — the only option left where the producer is a clock, a sensor or a paying customer you cannot slow down.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the producer is inside your control and the load is sustained rather than bursty — for external clients, rejecting over-quota traffic is the honest answer instead. Its value is that the pipeline's real throughput becomes visible and memory stays bounded, so failure arrives as slowdown rather than an out-of-memory crash hours later. The bill: latency moves upstream, a local hiccup in one stage propagates to every stage before it, and a badly tuned feedback loop can oscillate or deadlock — so the signal needs the same monitoring and tuning discipline you would give any control system.</p>
+          <p>Choose it when the producer is inside your control and the load is sustained rather than bursty; for external clients, rejecting over-quota traffic is the honest answer, and for a short spike a leveling buffer absorbs it more cheaply. What you buy is that failure arrives as slowdown with bounded memory instead of an out-of-memory crash hours after the mismatch started. What it costs, and how to pay: latency moves upstream and becomes the sender's problem, which a request deadline plus a shed policy caps; one stage's hiccup propagates to every stage before it, which per-stream windows contain so a single slow stream cannot stall the others sharing a connection; and a feedback loop tuned badly oscillates or deadlocks, which hysteresis — a low-water mark to resume at, not the same threshold that stopped you — damps. Run it as a control system: tune buffer capacity and overflow policy, watch occupancy and producer wait time, expect the one hop with an unbounded queue to fail first, and gate release on every buffer in the path being bounded.</p>
         </div>
       </div>
     </section>
@@ -171,6 +171,26 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Src["Upstream source"]:::ext
+    P["Producer stage"]
+    subgraph Bnd["Bounded buffer: the limit is the signal"]
+        Q[("Queue of fixed capacity")]
+    end
+    C["Consumer stage"]
+    Src --&gt;|"1 work arrives"| P
+    P --&gt;|"2 hand each item to the buffer"| Q
+    Q --&gt;|"3 consumer takes only what it can process"| C
+    Q --&gt;|"4 full: no free slot for the next item"| P
+    P --&gt;|"5 wait, drop, or pass the signal further back"| Src
+    C --&gt;|"6 a slot frees as work completes"| Q
+    Q --&gt;|"7 producer resumes, at the consumer's pace"| P
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>Where does the speed mismatch between two stages go? Step 4 turns a full buffer into a signal that travels backwards, so the pipeline runs at the pace of step 3 — its slowest stage — instead of growing a queue until the process runs out of memory.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -198,10 +218,10 @@ sequenceDiagram
         <dd>The simplest form: the producer blocks (or waits) once the queue hits capacity, and draining it is itself the signal to resume.</dd>
         <dt id="variations-item-2">Credit / window-based flow control</dt>
         <dd>The receiver advertises how much it can accept — TCP's window, HTTP/2 and gRPC's flow-control credits — and the sender never exceeds that budget.</dd>
-        <dt id="variations-item-3">Reactive pull (<code>request(n)</code>)</dt>
-        <dd>The consumer explicitly asks for a number of items before the producer emits them, inverting push into a demand-driven pull, as in Reactive Streams.</dd>
-        <dt id="variations-item-4">Load shedding as fallback</dt>
-        <dd>When there's no time to wait for the signal to propagate, drop the oldest or newest items instead of blocking — trades completeness for staying alive.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Reactive pull (<code>request(n)</code>)</dt>
+        <dd data-kb-level="advanced">The consumer explicitly asks for a number of items before the producer emits them, inverting push into a demand-driven pull, as in Reactive Streams.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Load shedding as fallback</dt>
+        <dd data-kb-level="advanced">When there's no time to wait for the signal to propagate, drop the oldest or newest items instead of blocking — trades completeness for staying alive.</dd>
       </dl>
     </section>
 
@@ -213,17 +233,17 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Keeps memory bounded — the producer slows instead of a queue growing without limit.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Surfaces the pipeline's real throughput instead of hiding it behind a swelling buffer.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Degrades gracefully under sustained load rather than failing catastrophically later.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Matches the whole pipeline's pace to its slowest stage instead of its fastest.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Degrades gracefully under sustained load rather than failing catastrophically later.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Matches the whole pipeline's pace to its slowest stage instead of its fastest.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Only works if every stage between producer and consumer honors the signal.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="expert">Pushing a slowdown upstream can turn one stage's local hiccup into a system-wide one.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Adds latency — producers now wait or throttle instead of firing and forgetting.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Badly tuned feedback loops can oscillate, stall, or deadlock across stages.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Pushing a slowdown upstream can turn one stage's local hiccup into a system-wide one.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Adds latency — producers now wait or throttle instead of firing and forgetting.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Badly tuned feedback loops can oscillate, stall, or deadlock across stages.</li>
           </ul>
         </div>
       </div>
@@ -237,15 +257,15 @@ sequenceDiagram
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Pipeline stages run at inherently different, variable speeds and the fast one can outrun the slow one.</li>
             <li id="usage-when-2" data-kb-polarity="when">You need bounded memory and predictable behavior under sustained load, not just short bursts.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You control (or can influence) the producer, so it can actually act on a slow-down signal.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You control (or can influence) the producer, so it can actually act on a slow-down signal.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The producer is outside your control, like external clients — reject over-quota traffic with a <a href="../distributed/resilience/rate-limiter.html">Rate Limiter</a> instead of asking it to politely slow down.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">The load is a short, bursty spike you'd rather absorb — a <a href="../distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a> buffer can be simpler.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The consumer itself is the real bottleneck — fix that first instead of engineering flow control around it.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">The load is a short, bursty spike you'd rather absorb — a <a href="../distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a> buffer can be simpler.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="expert">The consumer itself is the real bottleneck — fix that first instead of engineering flow control around it.</li>
           </ul>
         </div>
       </div>
@@ -293,8 +313,8 @@ sequenceDiagram
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="tcp-window" id="wild-tcp-window"><strong>TCP receive window</strong><span>The receiver advertises how many bytes it can still accept; SO_RCVBUF sizes the buffer and window scaling (RFC 7323) lifts the 64 KB ceiling. A full receiver advertises a zero window that pauses the sender until it drains and sends a window update.</span></div>
-        <div class="wild-item" data-kb-example="reactive-streams" id="wild-reactive-streams"><strong>Reactive Streams</strong><span>The request(n) protocol inverts push into demand-driven pull, and a Publisher must never emit more than requested. The interfaces were absorbed into the JDK as java.util.concurrent.Flow in Java 9 and back Project Reactor, RxJava, and Akka Streams.</span></div>
-        <div class="wild-item" data-kb-example="http2-flow-control" id="wild-http2-flow-control"><strong>HTTP/2 and gRPC flow control</strong><span>Per-stream and per-connection WINDOW_UPDATE frames let one slow stream push back without stalling others on the connection. The initial window defaults to 65535 bytes and is tuned via SETTINGS_INITIAL_WINDOW_SIZE; gRPC rides directly on this mechanism.</span></div>
+        <div class="wild-item" data-kb-example="reactive-streams" id="wild-reactive-streams" data-kb-level="advanced"><strong>Reactive Streams</strong><span>The request(n) protocol inverts push into demand-driven pull, and a Publisher must never emit more than requested. The interfaces were absorbed into the JDK as java.util.concurrent.Flow in Java 9 and back Project Reactor, RxJava, and Akka Streams.</span></div>
+        <div class="wild-item" data-kb-example="http2-flow-control" id="wild-http2-flow-control" data-kb-level="expert"><strong>HTTP/2 and gRPC flow control</strong><span>Per-stream and per-connection WINDOW_UPDATE frames let one slow stream push back without stalling others on the connection. The initial window defaults to 65535 bytes and is tuned via SETTINGS_INITIAL_WINDOW_SIZE; gRPC rides directly on this mechanism.</span></div>
       </div>
     </section>
 
@@ -306,8 +326,8 @@ sequenceDiagram
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Buffer capacity</strong> — The bound on each in-flight queue. Smaller engages backpressure sooner and keeps memory low; larger absorbs more burst before the producer must slow.</li>
             <li id="production-knob-2" data-kb-polarity="knob"><strong>Overflow policy</strong> — What a full buffer does: block the producer, drop the oldest, or drop the newest. Reactor onBackpressureBuffer/Drop/Latest and RxJava BackpressureStrategy are named forms of this choice.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Demand batch (request(n))</strong> — In pull-based flow control, how many items the consumer requests at once and the low-water mark at which it asks for more. Larger batches amortize signaling; smaller keep latency tight.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Receive window / socket buffer</strong> — SO_RCVBUF and the HTTP/2 SETTINGS_INITIAL_WINDOW_SIZE cap how many bytes a sender may keep in flight before waiting for a window update.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Demand batch (request(n))</strong> — In pull-based flow control, how many items the consumer requests at once and the low-water mark at which it asks for more. Larger batches amortize signaling; smaller keep latency tight.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Receive window / socket buffer</strong> — SO_RCVBUF and the HTTP/2 SETTINGS_INITIAL_WINDOW_SIZE cap how many bytes a sender may keep in flight before waiting for a window update.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
@@ -315,16 +335,16 @@ sequenceDiagram
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Buffer occupancy</strong> — How full each stage buffer runs. Sustained near-capacity means the consumer is the bottleneck.</li>
             <li id="production-signal-2" data-kb-polarity="signal"><strong>Producer wait time</strong> — Time producers spend blocked or throttled. Rising values mean the slow-down signal is propagating upstream.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Consumer lag</strong> — Backlog between what has been produced and what has been consumed, such as Kafka consumer lag.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Drop rate</strong> — Under a load-shedding policy, items discarded per second: the running cost of staying alive.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Consumer lag</strong> — Backlog between what has been produced and what has been consumed, such as Kafka consumer lag.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Drop rate</strong> — Under a load-shedding policy, items discarded per second: the running cost of staying alive.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>The hop that ignores the signal</strong> — Any stage with an unbounded buffer that does not propagate backpressure becomes the place the queue grows without limit, ending in an out-of-memory crash.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Oscillation or stall</strong> — A badly tuned or laggy feedback loop makes throughput swing between full speed and stalled, or deadlocks when two stages each wait on the other.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Head-of-line blocking</strong> — Without per-stream flow control, one slow consumer sharing a channel stalls every other stream on it.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Oscillation or stall</strong> — A badly tuned or laggy feedback loop makes throughput swing between full speed and stalled, or deadlocks when two stages each wait on the other.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Head-of-line blocking</strong> — Without per-stream flow control, one slow consumer sharing a channel stalls every other stream on it.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -332,8 +352,8 @@ sequenceDiagram
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Bound every buffer in the pipeline; an unbounded queue anywhere defeats the whole scheme.</li>
             <li id="production-check-2" data-kb-polarity="check">Verify the signal propagates end to end; the slowest hop that ignores it is where memory grows.</li>
-            <li id="production-check-3" data-kb-polarity="check">Choose an explicit overflow policy (block, drop-oldest, or drop-newest) for when waiting is unacceptable.</li>
-            <li id="production-check-4" data-kb-polarity="check">Instrument queue depth and producer wait time to see backpressure engage before it becomes an OOM.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Choose an explicit overflow policy (block, drop-oldest, or drop-newest) for when waiting is unacceptable.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Instrument queue depth and producer wait time to see backpressure engage before it becomes an OOM.</li>
           </ul>
         </div>
       </div>
@@ -343,8 +363,8 @@ sequenceDiagram
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="streaming" id="fluency-streaming"><a href="../../themes/streaming.html">Streaming</a><span>Keep a fast producer from drowning a slow consumer</span></div>
-        <div class="fluency-item" data-kb-theme="spike-handling" id="fluency-spike-handling"><a href="../../themes/spike-handling.html">Handling Spikes</a><span>Signal upstream to slow down</span></div>
-        <div class="fluency-item" data-kb-theme="long-running-tasks" id="fluency-long-running-tasks"><a href="../../themes/long-running-tasks.html">Long-Running Tasks</a><span>Slow intake when the queue backs up</span></div>
+        <div class="fluency-item" data-kb-theme="spike-handling" id="fluency-spike-handling" data-kb-level="advanced"><a href="../../themes/spike-handling.html">Handling Spikes</a><span>Signal upstream to slow down</span></div>
+        <div class="fluency-item" data-kb-theme="long-running-tasks" id="fluency-long-running-tasks" data-kb-level="advanced"><a href="../../themes/long-running-tasks.html">Long-Running Tasks</a><span>Slow intake when the queue backs up</span></div>
       </div>
     </section>
 

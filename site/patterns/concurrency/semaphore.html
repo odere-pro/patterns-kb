@@ -92,7 +92,7 @@
       <div class="prose">
         <p id="description-p-1">A semaphore is a counter with two operations and one rule. It is created holding N permits. <code>acquire()</code> takes a permit before a thread proceeds; if the count is already zero it blocks the caller and parks it until a permit appears. <code>release()</code> returns a permit and wakes one waiting thread. Everything else about the pattern follows from those two moves.</p>
         <p id="description-p-2">The force it resolves is scarcity, not correctness: there simply is not enough of some resource for everyone who wants it at the same instant. A downstream API tolerates ten concurrent callers before it sheds load; a box has 500&nbsp;MB of buffer memory to share across worker threads; a pool holds ten database connections against a thousand requests a second. In each case the danger is overrun rather than a data race — issue more than the resource can absorb and it degrades or fails for everyone. The semaphore makes that ceiling explicit and enforces the wait: at the limit, the next caller blocks instead of piling on.</p>
-        <p id="description-p-3">Two shapes recur. In the first, one permit is one slot — N permits cap how many callers may be inside a section at once, whatever the total thread count. In the second, a permit is a unit of a divisible budget — a caller acquires as many permits as it will consume, one per megabyte say, so the sum of all outstanding work can never exceed the total. A semaphore with a single permit degenerates into a plain lock, which is why the two ideas are so often conflated; but where a mutex only asks "is anyone inside?", a semaphore counts "how many, and is there room for one more?" That counting is the whole point. Because a blocked acquire is undone only by a matching release, that release belongs in a <code>finally</code> block or a <code>with</code>/<code>using</code> scope — miss it on an exception and the permit is gone for good, so the ceiling ratchets down until the semaphore is dead at zero.</p>
+        <p id="description-p-3" data-kb-level="advanced">Two shapes recur. In the first, one permit is one slot — N permits cap how many callers may be inside a section at once, whatever the total thread count. In the second, a permit is a unit of a divisible budget — a caller acquires as many permits as it will consume, one per megabyte say, so the sum of all outstanding work can never exceed the total. A semaphore with a single permit degenerates into a plain lock, which is why the two ideas are so often conflated; but where a mutex only asks "is anyone inside?", a semaphore counts "how many, and is there room for one more?" That counting is the whole point. Because a blocked acquire is undone only by a matching release, that release belongs in a <code>finally</code> block or a <code>with</code>/<code>using</code> scope — miss it on an exception and the permit is gone for good, so the ceiling ratchets down until the semaphore is dead at zero.</p>
       </div>
     </section>
 
@@ -105,11 +105,11 @@
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A counter initialised to N permits: acquire takes one and parks the caller when the count is zero, release returns one and wakes a waiter. Two shapes recur — one permit per slot, capping how many callers may be inside a section whatever the thread count, and permits as units of a divisible budget, where a caller takes one per megabyte it will use. It caps concurrency, not ownership: a single-permit instance degenerates into a plain lock, and release belongs in a finally block, because a leaked permit never comes back.</p>
+          <p>The pile of passes is a counter initialised to N: acquire takes one and parks the caller when the count hits zero, release returns one and wakes a waiter. It caps concurrency, not ownership — a permit says there is room, not which connection or buffer you get, and no thread owns the permit it took. N is nearly the whole configuration; the rest is deciding where the acquire and the release sit, and whether the acquire is allowed to wait forever.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the constraint is scarcity rather than a data race — a downstream that sheds load past ten concurrent callers, a fixed memory budget shared by workers — and prefer a lock when the limit is one, or a resource pool when callers need the object rather than just permission. Its value is one honest number you can tune and watch. The bill: an untimed acquire waits forever, so a starved request path shows user timeouts while your error rate stays flat; there is no ownership, so any thread can release a permit it never took and quietly raise the real ceiling.</p>
+          <p>Choose it when the constraint is scarcity rather than a data race — a downstream that sheds load past ten concurrent callers, a fixed memory budget shared by workers. Prefer a lock when the limit is one and you want an owner, and a resource pool when callers need the object rather than permission. The bill has two lines, each with its counter-move: an untimed acquire hangs a request path invisibly, so use a timed try-acquire and turn saturation into a fast rejection; a release missed on an error path ratchets the ceiling down for good, so put every release in a finally block or scope guard and prefer a bounded variant that raises on over-release. Then run the loop — size N from what the resource tolerates, watch permits available and the acquire-wait tail, expect the tail to move long before the mean, and gate the change on a load test that shows the count back at N once traffic stops.</p>
         </div>
       </div>
     </section>
@@ -117,6 +117,27 @@
     <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
       <h2 class="doc-h" id="h-structure">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    T["Caller threads"]
+    subgraph Gate["One count decides how many may be inside"]
+        S["Semaphore"]
+        C[("Permit count")]
+        Q[("Wait queue")]
+    end
+    R["Scarce resource"]:::ext
+    T --&gt;|"1 acquire"| S
+    S --&gt;|"2 a permit is free: take one"| C
+    S --&gt;|"3 none free: park the caller"| Q
+    S --&gt;|"4 permit granted, proceed"| T
+    T --&gt;|"5 use the resource, N at a time"| R
+    T --&gt;|"6 release when done"| S
+    S --&gt;|"7 hand the permit to a waiter"| Q
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does a cap of five stop the sixth caller? Steps 2 and 3 are the whole pattern: the count is positive, so you take one and go, or it is zero, so you wait until step 7 gives you the permit somebody else returned.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 flowchart TB
     A["acquire()"] -->|"request permit"| C{"permits &gt; 0?"}
@@ -137,17 +158,17 @@ flowchart TB
         <dt id="variations-item-1">Counting semaphore</dt>
         <dd>The general form: N permits let up to N threads hold a resource at once. This is the default you reach for when the cap is greater than one — throttling concurrent operations without dedicating a worker per slot.</dd>
 
-        <dt id="variations-item-2">Binary semaphore (N = 1)</dt>
-        <dd>A single permit makes it behave like a lock. The difference from a mutex is ownership: a semaphore records no holder, so any thread may release it — useful for signalling between threads (one waits, another posts), but wrong as a mutual-exclusion lock, where you want the acquirer to be the only releaser.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Binary semaphore (N = 1)</dt>
+        <dd data-kb-level="advanced">A single permit makes it behave like a lock. The difference from a mutex is ownership: a semaphore records no holder, so any thread may release it — useful for signalling between threads (one waits, another posts), but wrong as a mutual-exclusion lock, where you want the acquirer to be the only releaser.</dd>
 
-        <dt id="variations-item-3">Permits as a budget</dt>
-        <dd>Instead of one-permit-per-caller, one permit represents one unit of a divisible resource — a megabyte, a byte of bandwidth, a token. A caller acquires as many permits as it will use and releases exactly that many, so aggregate consumption is bounded even though each operation's size varies.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Permits as a budget</dt>
+        <dd data-kb-level="advanced">Instead of one-permit-per-caller, one permit represents one unit of a divisible resource — a megabyte, a byte of bandwidth, a token. A caller acquires as many permits as it will use and releases exactly that many, so aggregate consumption is bounded even though each operation's size varies.</dd>
 
-        <dt id="variations-item-4">Timed / try-acquire</dt>
-        <dd>Rather than block forever, acquire with a timeout (or a non-blocking attempt) and fail when no permit arrives in time. Essential on request paths: it converts an indefinite hang into a fast, visible rejection the caller can turn into a 503 or a retry.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Timed / try-acquire</dt>
+        <dd data-kb-level="advanced">Rather than block forever, acquire with a timeout (or a non-blocking attempt) and fail when no permit arrives in time. Essential on request paths: it converts an indefinite hang into a fast, visible rejection the caller can turn into a 503 or a retry.</dd>
 
-        <dt id="variations-item-5">Fair vs. barging</dt>
-        <dd>When a permit frees, does the longest-waiting thread get it (FIFO fairness) or may a newly arriving thread barge in ahead of the queue? Barging gives higher throughput; strict fairness prevents a waiter from being starved indefinitely under heavy contention, at some cost in throughput.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Fair vs. barging</dt>
+        <dd data-kb-level="expert">When a permit frees, does the longest-waiting thread get it (FIFO fairness) or may a newly arriving thread barge in ahead of the queue? Barging gives higher throughput; strict fairness prevents a waiter from being starved indefinitely under heavy contention, at some cost in throughput.</dd>
       </dl>
     </section>
 
@@ -159,18 +180,18 @@ flowchart TB
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">One explicit number caps concurrency or consumption — a single dial for how much of a scarce resource is in use at once.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Bounds in-flight work independent of thread count — any thread may hold a permit, so you throttle load without dedicating a worker per unit.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Blocking is OS-efficient — a waiter parks and is woken on release, with no spin-polling or sleep-and-retry.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Permits-as-a-budget generalizes past counts — the same primitive throttles megabytes of memory or bandwidth, not just how many operations run.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Blocking is OS-efficient — a waiter parks and is woken on release, with no spin-polling or sleep-and-retry.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="expert">Permits-as-a-budget generalizes past counts — the same primitive throttles megabytes of memory or bandwidth, not just how many operations run.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">A leaked permit never comes back — miss the release on an exception and the ceiling ratchets down until the semaphore deadlocks at zero.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">A bare acquire blocks forever — on a request path a starved caller waits indefinitely, so users see timeouts while monitoring shows no errors; a timed acquire is needed to fail fast.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">It grants permission, not objects — a semaphore says "there is room" but hands out no connection or buffer; when callers need the actual resource you still need a pool behind it.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">No ownership or reentrancy — unlike a mutex, any thread can release a permit it never took, so a double-release or a wrong initial count silently lifts the real ceiling above the intended one.</li>
-            <li id="tradeoffs-con-5" data-kb-polarity="con">Counting is manual for variable-size budgets — the caller must acquire and release exactly the right number of permits, and an off-by-one in that arithmetic is a slow resource leak.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">A bare acquire blocks forever — on a request path a starved caller waits indefinitely, so users see timeouts while monitoring shows no errors; a timed acquire is needed to fail fast.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">It grants permission, not objects — a semaphore says "there is room" but hands out no connection or buffer; when callers need the actual resource you still need a pool behind it.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">No ownership or reentrancy — unlike a mutex, any thread can release a permit it never took, so a double-release or a wrong initial count silently lifts the real ceiling above the intended one.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Counting is manual for variable-size budgets — the caller must acquire and release exactly the right number of permits, and an off-by-one in that arithmetic is a slow resource leak.</li>
           </ul>
         </div>
       </div>
@@ -183,16 +204,16 @@ flowchart TB
           <h3>Reach for it when</h3>
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">You need to let at most N callers into a section at once — more than one, but still bounded — such as capping concurrent calls to a downstream that sheds load past a threshold.</li>
-            <li id="usage-when-2" data-kb-polarity="when">You're bounding total consumption of a divisible resource — megabytes of buffer, in-flight bytes, disk I/O — where each operation uses a variable amount.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You want to throttle in-flight work without a fixed worker pool — any thread can hold a permit, so the cap rides on top of whatever concurrency you already have.</li>
+            <li id="usage-when-2" data-kb-polarity="when" data-kb-level="advanced">You're bounding total consumption of a divisible resource — megabytes of buffer, in-flight bytes, disk I/O — where each operation uses a variable amount.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You want to throttle in-flight work without a fixed worker pool — any thread can hold a permit, so the cap rides on top of whatever concurrency you already have.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The limit is one and you want plain mutual exclusion — a lock or monitor states that intent more clearly and gives you ownership and reentrancy.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Callers need the actual resource object, not just permission — a connection, a GPU handle — where a blocking-queue resource pool that dispenses the objects fits better.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">You need to wait until a specific state holds, not merely for a free slot — that is condition-variable territory, handled by a monitor object.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">Callers need the actual resource object, not just permission — a connection, a GPU handle — where a blocking-queue resource pool that dispenses the objects fits better.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">You need to wait until a specific state holds, not merely for a free slot — that is condition-variable territory, handled by a monitor object.</li>
           </ul>
         </div>
       </div>
@@ -244,8 +265,8 @@ async function callDownstream(req: Request): Promise&lt;Response&gt; {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="java-semaphore" id="wild-java-semaphore"><strong>Java java.util.concurrent.Semaphore</strong><span>The canonical counting semaphore on the JVM: constructed with a permit count, acquire()/release() move the counter, tryAcquire(timeout, unit) fails instead of blocking forever, and a boolean fairness argument switches wake order from barging to FIFO. acquire(n)/release(n) take several permits at once for the budget idiom, and any thread may release.</span></div>
-        <div class="wild-item" data-kb-example="python-semaphore" id="wild-python-semaphore"><strong>Python threading.Semaphore / asyncio.Semaphore</strong><span>Bound concurrent work in either threaded or async code; both act as context managers (with / async with) so the permit is released even on exception. BoundedSemaphore raises if released more times than acquired, catching the double-release miscount that silently raises the ceiling.</span></div>
-        <div class="wild-item" data-kb-example="go-chan-semaphore" id="wild-go-chan-semaphore"><strong>Go buffered channel as a counting semaphore</strong><span>A buffered channel of capacity N is the idiomatic counting semaphore — send an empty struct to take a slot, receive to release; a full channel blocks the sender until a slot frees. The golang.org/x/sync/semaphore package adds a weighted variant whose Acquire(ctx, n) requests several units at once for the budget idiom.</span></div>
+        <div class="wild-item" data-kb-example="python-semaphore" id="wild-python-semaphore" data-kb-level="advanced"><strong>Python threading.Semaphore / asyncio.Semaphore</strong><span>Bound concurrent work in either threaded or async code; both act as context managers (with / async with) so the permit is released even on exception. BoundedSemaphore raises if released more times than acquired, catching the double-release miscount that silently raises the ceiling.</span></div>
+        <div class="wild-item" data-kb-example="go-chan-semaphore" id="wild-go-chan-semaphore" data-kb-level="advanced"><strong>Go buffered channel as a counting semaphore</strong><span>A buffered channel of capacity N is the idiomatic counting semaphore — send an empty struct to take a slot, receive to release; a full channel blocks the sender until a slot frees. The golang.org/x/sync/semaphore package adds a weighted variant whose Acquire(ctx, n) requests several units at once for the budget idiom.</span></div>
       </div>
     </section>
 
@@ -256,29 +277,29 @@ async function callDownstream(req: Request): Promise&lt;Response&gt; {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>permit count</strong> — the ceiling itself — how many callers may hold a permit at once; size it to what the protected resource absorbs, not to how many threads might ask</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>fairness mode</strong> — FIFO queueing versus barging — fair ordering stops long waiters being overtaken, barging gives higher throughput under contention; java.util.concurrent.Semaphore takes it as a constructor flag</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>acquire timeout</strong> — how long a caller waits before giving up — an untimed acquire waits forever, a timed try-acquire turns a saturated resource into a fast, visible failure the caller can handle</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>permits per operation</strong> — when a permit is a unit of a divisible budget rather than a slot, how many units one operation claims — the unit sets the granularity of the cap and how much it over- or under-counts</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>fairness mode</strong> — FIFO queueing versus barging — fair ordering stops long waiters being overtaken, barging gives higher throughput under contention; java.util.concurrent.Semaphore takes it as a constructor flag</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>acquire timeout</strong> — how long a caller waits before giving up — an untimed acquire waits forever, a timed try-acquire turns a saturated resource into a fast, visible failure the caller can handle</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>permits per operation</strong> — when a permit is a unit of a divisible budget rather than a slot, how many units one operation claims — the unit sets the granularity of the cap and how much it over- or under-counts</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>permits available</strong> — the live count against the initial one — sustained zero means the limit, or the resource behind it, is the bottleneck</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>waiters parked</strong> — how many callers are blocked in acquire right now — a queue that never empties is demand the ceiling is refusing</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>acquire wait time</strong> — the wait before a permit is granted, as a distribution — the tail is what users feel, the mean hides it</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>acquire timeout rate</strong> — how often a timed acquire gives up empty-handed — this is the load the cap is shedding, and it belongs on a dashboard</li>
-            <li id="production-signal-5" data-kb-polarity="signal"><strong>permits available at idle</strong> — once traffic goes quiet the count should return to its initial value; anything lower is a leak, and it only goes one way</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>waiters parked</strong> — how many callers are blocked in acquire right now — a queue that never empties is demand the ceiling is refusing</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>acquire wait time</strong> — the wait before a permit is granted, as a distribution — the tail is what users feel, the mean hides it</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>acquire timeout rate</strong> — how often a timed acquire gives up empty-handed — this is the load the cap is shedding, and it belongs on a dashboard</li>
+            <li id="production-signal-5" data-kb-polarity="signal" data-kb-level="expert"><strong>permits available at idle</strong> — once traffic goes quiet the count should return to its initial value; anything lower is a leak, and it only goes one way</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>permit leak</strong> — a release missed on an exception path ratchets the ceiling down over time until every acquire blocks — it presents as a slow hang, not as an error</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>unbounded queueing</strong> — under saturation an untimed acquire parks callers indefinitely: users see client-side timeouts while the service itself reports no failures at all</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>a ceiling that protects nothing</strong> — set above what the downstream tolerates, the cap admits load that gets shed anyway — the dial looks configured and changes nothing</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>waiter starvation</strong> — with barging, a steady stream of new arrivals can keep earlier waiters parked — mean acquire time stays flat while the tail grows without limit</li>
-            <li id="production-failure-5" data-kb-polarity="failure"><strong>budget arithmetic drift</strong> — in budget mode, claiming fewer permits than an operation consumes lets real usage exceed the budget; releasing fewer than claimed leaks capacity a little at a time</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>unbounded queueing</strong> — under saturation an untimed acquire parks callers indefinitely: users see client-side timeouts while the service itself reports no failures at all</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>a ceiling that protects nothing</strong> — set above what the downstream tolerates, the cap admits load that gets shed anyway — the dial looks configured and changes nothing</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>waiter starvation</strong> — with barging, a steady stream of new arrivals can keep earlier waiters parked — mean acquire time stays flat while the tail grows without limit</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>budget arithmetic drift</strong> — in budget mode, claiming fewer permits than an operation consumes lets real usage exceed the budget; releasing fewer than claimed leaks capacity a little at a time</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -286,10 +307,10 @@ async function callDownstream(req: Request): Promise&lt;Response&gt; {
           <ul>
             <li id="production-check-1" data-kb-polarity="check">every acquire has a matching release in a finally block or scope guard, on every error path as well as the happy one</li>
             <li id="production-check-2" data-kb-polarity="check">acquires on a request path are timed, with a timeout shorter than the caller's own deadline</li>
-            <li id="production-check-3" data-kb-polarity="check">the permit count is derived from what the protected resource tolerates, and that reasoning is recorded next to the number</li>
-            <li id="production-check-4" data-kb-polarity="check">permits available and acquire wait time are exported as metrics, with an alert on sustained saturation</li>
-            <li id="production-check-5" data-kb-polarity="check">behaviour at the limit — queue, reject, or degrade — is decided, tested, and visible to the caller</li>
-            <li id="production-check-6" data-kb-polarity="check">a load test confirms permits available returns to the initial count after the load stops</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">the permit count is derived from what the protected resource tolerates, and that reasoning is recorded next to the number</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">permits available and acquire wait time are exported as metrics, with an alert on sustained saturation</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">behaviour at the limit — queue, reject, or degrade — is decided, tested, and visible to the caller</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">a load test confirms permits available returns to the initial count after the load stops</li>
           </ul>
         </div>
       </div>

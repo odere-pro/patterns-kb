@@ -156,7 +156,7 @@
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when fixed overhead dominates payload cost and throughput matters more than any single item's latency — at low volume you buy latency for a saving that never arrives. The gain is often an order of magnitude, which is why it hides inside almost every high-throughput path. The bill is paid in three places: a tail-latency floor set by the flush timer, memory held for in-flight items, and partial failure — when a group of five hundred writes half-succeeds you need per-item outcome tracking and idempotent retries, and that bookkeeping is usually harder than the batching itself.</p>
+          <p>Choose it when fixed overhead dominates payload cost, and expect an order of magnitude — which is why batching hides inside almost every high-throughput path. At low volume the trade inverts, so make the batch size adaptive rather than fixed if your load spans both regimes. Pay the three costs deliberately: hold the linger timer to a latency budget you can defend, so the size trigger is what fires under load; bound the buffer in bytes and apply backpressure to producers instead of letting memory grow; and track per-item outcomes with idempotent retries, so a group that half-succeeds is repaired rather than reapplied. Then run the loop — set size and linger, watch fill ratio and the latency the wait adds, expect under-fill when traffic is thin and memory pressure when it bursts, and gate the change on a load test at both ends of the arrival-rate range.</p>
         </div>
       </div>
     </section>
@@ -166,12 +166,20 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    I["Items arrive one at a time"] -->|"append"| B["Accumulator buffer"]
-    B -->|"size trigger: N items"| F["Flush"]
-    B -->|"time trigger: max wait"| F
-    F -->|"hand off group"| P["Process one group downstream"]
+    P["Producers"]:::ext
+    subgraph Batcher["One flush pays the fixed cost once"]
+        B[("Accumulator buffer")]
+        T["Trigger: N items or T ms"]
+    end
+    D["Downstream: database, broker, GPU"]:::ext
+    P --&gt;|"1 submit an item"| B
+    B --&gt;|"2 hold it, count items, start the timer"| T
+    T --&gt;|"3 whichever fires first, flush"| B
+    B --&gt;|"4 one call carries the whole group"| D
+    D --&gt;|"5 per-item results back to each caller"| P
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>Items accumulate in a buffer that flushes on whichever trigger fires first — a size threshold or a time limit — handing the whole group to one downstream operation.</figcaption>
+        <figcaption>Why does one trip beat ten? Step 4 pays the round-trip, the fsync or the kernel launch once for the whole group, and step 3 is what stops an item waiting forever for that group to fill.</figcaption>
       </figure>
     </section>
 
@@ -182,10 +190,10 @@ flowchart LR
         <dd>Flush when the buffer reaches N items, or after a maximum wait has elapsed — usually whichever comes first. Size alone stalls forever when items trickle in; a linger timer bounds how long any item can wait.</dd>
         <dt id="variations-item-2">Micro-batching</dt>
         <dd>Form very small groups on a tight timer so latency stays bounded while the fixed cost is still amortized across a handful of items. It is the middle ground between one-at-a-time and large batches, common in stream processing.</dd>
-        <dt id="variations-item-3">Client-side vs. server-side</dt>
-        <dd>The caller groups its own requests and sends them to a bulk endpoint, or the server coalesces incoming requests from many callers before doing the work. Client-side needs no server change; server-side batches across independent clients that cannot cooperate.</dd>
-        <dt id="variations-item-4">Dynamic / adaptive batching</dt>
-        <dd>Grow the batch size as load rises and shrink it when the system is idle, so you amortize hard under pressure but do not add latency when there is nothing to amortize.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Client-side vs. server-side</dt>
+        <dd data-kb-level="advanced">The caller groups its own requests and sends them to a bulk endpoint, or the server coalesces incoming requests from many callers before doing the work. Client-side needs no server change; server-side batches across independent clients that cannot cooperate.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Dynamic / adaptive batching</dt>
+        <dd data-kb-level="advanced">Grow the batch size as load rises and shrink it when the system is idle, so you amortize hard under pressure but do not add latency when there is nothing to amortize.</dd>
       </dl>
     </section>
 
@@ -197,8 +205,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Higher throughput — the fixed per-operation cost is amortized across the whole group.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Fewer round-trips, syscalls, and commits for the same amount of work.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Uses bulk-efficient resources well — DB bulk inserts, GPU kernels, vectorized paths.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Smooths bursty load: spikes fill larger groups instead of overwhelming the downstream.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Uses bulk-efficient resources well — DB bulk inserts, GPU kernels, vectorized paths.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Smooths bursty load: spikes fill larger groups instead of overwhelming the downstream.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -206,7 +214,7 @@ flowchart LR
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Added latency — items wait for the group to fill before anything happens.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Bigger blast radius — a single failed group can affect many items at once.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Costs memory to hold in-flight items until the flush.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Costs memory to hold in-flight items until the flush.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Partial-failure handling is harder — which items in the group succeeded, and which must be retried?</li>
           </ul>
         </div>
@@ -221,16 +229,16 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">The per-item fixed cost dominates — most of the work is overhead, not payload.</li>
             <li id="usage-when-2" data-kb-polarity="when">Throughput matters more than the latency of any single item.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The downstream is far more efficient in bulk (bulk insert, GPU, vectorized ops).</li>
-            <li id="usage-when-4" data-kb-polarity="when">You are rate-limited by request count and want fewer, larger requests.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The downstream is far more efficient in bulk (bulk insert, GPU, vectorized ops).</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">You are rate-limited by request count and want fewer, larger requests.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Each item needs an immediate response on an interactive path.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Items are large or memory-bound and buffering them is costly.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">Strict per-item ordering or isolation is required.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">Items are large or memory-bound and buffering them is costly.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Strict per-item ordering or isolation is required.</li>
             <li id="usage-avoid-4" data-kb-polarity="avoid">Volume is low — you add latency for a saving that never materializes.</li>
           </ul>
         </div>
@@ -276,11 +284,11 @@ flowchart LR
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="jdbc-batch" id="wild-jdbc-batch"><strong>JDBC addBatch/executeBatch</strong><span>Groups many SQL statements into one round-trip to the database; some drivers add rewriteBatchedStatements to collapse repeated inserts into one statement.</span></div>
-        <div class="wild-item" data-kb-example="kafka-producer" id="wild-kafka-producer"><strong>Apache Kafka producer</strong><span>Accumulates records per partition and sends them together; batch.size caps bytes per batch and linger.ms adds a small wait so more records join each send.</span></div>
-        <div class="wild-item" data-kb-example="nagle" id="wild-nagle"><strong>TCP Nagle's algorithm</strong><span>Coalesces small outgoing TCP segments until an ack returns or enough data accumulates, trading latency for fewer packets; TCP_NODELAY turns it off.</span></div>
-        <div class="wild-item" data-kb-example="openai-batch" id="wild-openai-batch"><strong>OpenAI Batch API</strong><span>Submit a file of requests to run asynchronously (within 24h) at lower cost than synchronous calls — trading latency for throughput and price.</span></div>
-        <div class="wild-item" data-kb-example="anthropic-batches" id="wild-anthropic-batches"><strong>Anthropic Message Batches API</strong><span>Send many Messages requests as one asynchronously-processed batch (within 24h) at reduced cost per request.</span></div>
-        <div class="wild-item" data-kb-example="vllm" id="wild-vllm"><strong>vLLM continuous batching</strong><span>An LLM serving engine that adds and evicts requests from the running GPU batch at each decoding step, keeping the batch full instead of waiting for the slowest request to finish.</span></div>
+        <div class="wild-item" data-kb-example="kafka-producer" id="wild-kafka-producer" data-kb-level="advanced"><strong>Apache Kafka producer</strong><span>Accumulates records per partition and sends them together; batch.size caps bytes per batch and linger.ms adds a small wait so more records join each send.</span></div>
+        <div class="wild-item" data-kb-example="nagle" id="wild-nagle" data-kb-level="advanced"><strong>TCP Nagle's algorithm</strong><span>Coalesces small outgoing TCP segments until an ack returns or enough data accumulates, trading latency for fewer packets; TCP_NODELAY turns it off.</span></div>
+        <div class="wild-item" data-kb-example="openai-batch" id="wild-openai-batch" data-kb-level="expert"><strong>OpenAI Batch API</strong><span>Submit a file of requests to run asynchronously (within 24h) at lower cost than synchronous calls — trading latency for throughput and price.</span></div>
+        <div class="wild-item" data-kb-example="anthropic-batches" id="wild-anthropic-batches" data-kb-level="expert"><strong>Anthropic Message Batches API</strong><span>Send many Messages requests as one asynchronously-processed batch (within 24h) at reduced cost per request.</span></div>
+        <div class="wild-item" data-kb-example="vllm" id="wild-vllm" data-kb-level="expert"><strong>vLLM continuous batching</strong><span>An LLM serving engine that adds and evicts requests from the running GPU batch at each decoding step, keeping the batch full instead of waiting for the slowest request to finish.</span></div>
       </div>
     </section>
 
@@ -292,23 +300,23 @@ flowchart LR
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>max batch size</strong> — the item or byte ceiling that forces a flush</li>
             <li id="production-knob-2" data-kb-polarity="knob"><strong>linger / flush interval</strong> — the maximum time an item waits before the group ships, even under-filled</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>buffer bound</strong> — cap on in-flight items or bytes held in memory</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>buffer bound</strong> — cap on in-flight items or bytes held in memory</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>batch fill ratio</strong> — average items per flush — low means linger is dominating and you are paying latency for little gain</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>items waiting / queue depth</strong> — how much work is buffered ahead of the next flush</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>added p99 latency</strong> — the tail latency the wait introduces</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>items waiting / queue depth</strong> — how much work is buffered ahead of the next flush</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>added p99 latency</strong> — the tail latency the wait introduces</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>under-fill at low load</strong> — batches ship half-empty on the linger timer, so you pay latency without the throughput win</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>memory pressure under bursts</strong> — an unbounded buffer grows without limit when producers outrun the flush</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>poison item</strong> — one bad record can fail the whole group unless failures are isolated</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>memory pressure under bursts</strong> — an unbounded buffer grows without limit when producers outrun the flush</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>poison item</strong> — one bad record can fail the whole group unless failures are isolated</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -316,8 +324,8 @@ flowchart LR
           <ul>
             <li id="production-check-1" data-kb-polarity="check">bound the buffer by size or memory, never unbounded</li>
             <li id="production-check-2" data-kb-polarity="check">set linger to a latency budget you can defend</li>
-            <li id="production-check-3" data-kb-polarity="check">handle partial failure: retry survivors, isolate the bad item</li>
-            <li id="production-check-4" data-kb-polarity="check">load-test at both low and high arrival rates</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">handle partial failure: retry survivors, isolate the bad item</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">load-test at both low and high arrival rates</li>
           </ul>
         </div>
       </div>

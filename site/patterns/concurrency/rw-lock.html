@@ -90,7 +90,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>read-write lock</strong> (also called a shared-exclusive lock, or RWLock) is a synchronization primitive with two acquisition modes instead of one. Any number of threads can hold it in <em>read</em> mode at the same time, but the moment a thread requests <em>write</em> mode it must wait for every current reader to release, and while it holds the write lock no other reader or writer can proceed. Readers share with readers; writers exclude everyone.</p>
         <p id="description-p-2">It resolves a shape of contention that a plain mutex handles badly. A mutex treats every critical-section entry identically, so on data that's read far more often than it's written, it serializes threads that never actually conflict — two readers blocking each other even though neither mutates anything. That's parallelism thrown away on hardware built to run many things at once.</p>
-        <p id="description-p-3">The read-write lock buys that parallelism back by tracking readers and writers separately — typically a reader count plus a writer flag — so the acquisition logic can tell "shared, safe to join" from "exclusive, everyone else waits." The cost is a genuinely harder primitive than a mutex: starvation policy, fairness between the two roles, and upgrade semantics all become explicit design decisions instead of being handled for you.</p>
+        <p id="description-p-3" data-kb-level="advanced">The read-write lock buys that parallelism back by tracking readers and writers separately — typically a reader count plus a writer flag — so the acquisition logic can tell "shared, safe to join" from "exclusive, everyone else waits." The cost is a genuinely harder primitive than a mutex: starvation policy, fairness between the two roles, and upgrade semantics all become explicit design decisions instead of being handled for you.</p>
       </div>
     </section>
 
@@ -103,11 +103,11 @@
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A synchronization primitive with two acquisition modes over one reader count and a writer flag: readers share with readers, writers exclude everyone including each other. It converts a mutex's blanket serialization into parallelism proportional to core count on read-dominated structures — caches, config, routing tables. The extra bookkeeping is not free, and three policy questions become explicit design decisions: fairness between the two modes, whether an upgrade from read to write is permitted, and whether acquisition is reentrant.</p>
+          <p>The primitive has two acquisition modes over one reader count and a writer flag: readers share with readers, writers exclude everyone including each other. That converts a mutex's blanket serialization into parallelism proportional to core count on read-dominated structures — caches, config, routing tables. The extra bookkeeping is not free, and three policy questions become explicit design decisions: fairness between the two modes, whether an upgrade from read to write is permitted, and whether acquisition is reentrant.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it only when reads vastly outnumber writes and read critical sections are long enough that serializing them actually costs throughput — measure first, because on short sections or balanced traffic the per-acquisition bookkeeping costs more than the contention it removes, and a copy-on-write snapshot often removes the lock entirely instead. The failure modes are policy rather than code: reader-preference starves writers under constant read traffic while writer-preference starves readers, non-reentrancy deadlocks a recursive caller who assumed otherwise, and an upgrade attempt deadlocks two threads that each hold a read lock and wait for the other to let go.</p>
+          <p>Choose it only when reads vastly outnumber writes and read sections are long enough that serializing them costs measured throughput; on short sections or balanced traffic the per-acquisition bookkeeping costs more than the contention it removes, and a copy-on-write snapshot takes the lock off the read path altogether. The failure modes are policy, and each has a move: reader preference starves writers while writer preference starves readers, which a fair ticket queue bounds at the price of peak read throughput; a recursive caller deadlocks on a non-reentrant lock, which reentrancy fixes at twice the accounting; and two readers that each try to upgrade deadlock on each other, so you release and re-acquire, or downgrade from write to read instead. Then operate on the ratio — tune the preference policy, watch writer wait time against the write fraction, expect starvation long before you expect corruption, and gate release on a measurement showing the plain mutex really was the bottleneck.</p>
         </div>
       </div>
     </section>
@@ -115,6 +115,28 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    R1["Reader thread"]:::ext
+    R2["Reader thread"]:::ext
+    W["Writer thread"]:::ext
+    subgraph Lk["One lock, two modes"]
+        G["Acquisition logic"]
+        C[("Reader count and writer flag")]
+    end
+    D[("Shared data: cache, config, routing table")]
+    R1 --&gt;|"1 ask in read mode"| G
+    G --&gt;|"2 no writer holds it, so count the reader in"| C
+    R2 --&gt;|"3 ask in read mode too, admitted alongside"| G
+    R1 --&gt;|"4 both read at once, neither waits"| D
+    W --&gt;|"5 ask in write mode"| G
+    G --&gt;|"6 wait for the count to reach zero, then raise the flag"| C
+    W --&gt;|"7 change the data with nobody else inside"| D
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>Who is allowed inside at the same time? Steps 1 to 4 let readers share, because looking cannot break an invariant, and steps 5 to 7 make the writer wait for an empty room — so the only threads that take turns are the ones that would genuinely conflict.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -150,10 +172,10 @@ sequenceDiagram
         <dd>Decide who wins when both roles are waiting. Naive reader-preference lets a steady stream of readers starve a writer indefinitely; writer-preference flips the risk onto readers instead.</dd>
         <dt id="variations-item-2">Fair / ticket-queued</dt>
         <dd>Queue read and write requests in arrival order so neither role starves the other, at the cost of extra bookkeeping and slightly lower peak read throughput.</dd>
-        <dt id="variations-item-3">Upgradeable read lock</dt>
-        <dd>Lets a thread already holding a read lock promote to a write lock without releasing it first, closing the gap where another writer could sneak in between release and re-acquire.</dd>
-        <dt id="variations-item-4">Recursive (reentrant) read-write lock</dt>
-        <dd>Allows the same thread to re-acquire a mode it already holds — needed when locked code calls other locked code — but doubles the accounting and can deadlock if reentry rules aren't precise.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Upgradeable read lock</dt>
+        <dd data-kb-level="advanced">Lets a thread already holding a read lock promote to a write lock without releasing it first, closing the gap where another writer could sneak in between release and re-acquire.</dd>
+        <dt id="variations-item-4" data-kb-level="expert">Recursive (reentrant) read-write lock</dt>
+        <dd data-kb-level="expert">Allows the same thread to re-acquire a mode it already holds — needed when locked code calls other locked code — but doubles the accounting and can deadlock if reentry rules aren't precise.</dd>
       </dl>
     </section>
 
@@ -165,17 +187,17 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Concurrent readers scale with core count instead of serializing behind one another.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Writes stay fully exclusive, so invariants hold exactly as they would under a plain mutex.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A natural drop-in for data that's read far more often than it's written — caches, config, routing tables.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Separates read and write contention, making which one is the bottleneck visible and tunable.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">A natural drop-in for data that's read far more often than it's written — caches, config, routing tables.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Separates read and write contention, making which one is the bottleneck visible and tunable.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">More overhead per acquisition than a plain mutex — tracking a reader count and a wait queue costs cycles a simple lock doesn't pay.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Naive implementations starve writers under constant read traffic, or starve readers under writer-preference.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Not reentrant by default; recursive acquisition needs deliberate support and can deadlock if mishandled.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">On workloads where reads and writes are roughly balanced, the bookkeeping outweighs any parallelism gained.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Naive implementations starve writers under constant read traffic, or starve readers under writer-preference.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Not reentrant by default; recursive acquisition needs deliberate support and can deadlock if mishandled.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">On workloads where reads and writes are roughly balanced, the bookkeeping outweighs any parallelism gained.</li>
           </ul>
         </div>
       </div>
@@ -189,15 +211,15 @@ sequenceDiagram
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Reads vastly outnumber writes on the same shared structure.</li>
             <li id="usage-when-2" data-kb-polarity="when">Read operations hold the lock long enough that serializing them under a plain mutex would bottleneck throughput.</li>
-            <li id="usage-when-3" data-kb-polarity="when">Correctness only requires writers see a consistent snapshot, not a specific interleaving with reads.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Correctness only requires writers see a consistent snapshot, not a specific interleaving with reads.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Reads and writes arrive at roughly similar rates — the extra bookkeeping isn't repaid, use a plain mutex.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Critical sections are so short that lock overhead itself dominates, not contention.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">Writes are frequent enough that readers rarely overlap anyway, so there's little concurrency left to win back.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">Critical sections are so short that lock overhead itself dominates, not contention.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="expert">Writes are frequent enough that readers rarely overlap anyway, so there's little concurrency left to win back.</li>
           </ul>
         </div>
       </div>
@@ -247,8 +269,8 @@ try { /* read shared state */ } finally { lock.readUnlock(); }</code></pre>
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="go-sync-rwmutex" id="wild-go-sync-rwmutex"><strong>Go sync.RWMutex</strong><span>Many concurrent RLock holders or one Lock holder, implemented over runtime semaphores. A blocked writer stops new readers from acquiring, which bounds writer starvation but means a goroutine must never recursively RLock while a writer waits, or it deadlocks.</span></div>
-        <div class="wild-item" data-kb-example="java-reentrant-rwlock" id="wild-java-reentrant-rwlock"><strong>java.util.concurrent.locks.ReentrantReadWriteLock</strong><span>Adds reentrancy and an optional fairness flag in the constructor, and supports downgrading from the write lock to the read lock. Upgrading read to write is not supported and deadlocks; readLock() and writeLock() expose the two halves.</span></div>
-        <div class="wild-item" data-kb-example="pthread-rwlock" id="wild-pthread-rwlock"><strong>POSIX pthread_rwlock</strong><span>The pthreads reader-writer primitive: pthread_rwlock_rdlock, wrlock, and unlock. glibc prefers readers by default; PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP via pthread_rwlockattr_setkind_np favors writers. ISO C has no equivalent; C11 threads.h ships only mutexes and condition variables.</span></div>
+        <div class="wild-item" data-kb-example="java-reentrant-rwlock" id="wild-java-reentrant-rwlock" data-kb-level="advanced"><strong>java.util.concurrent.locks.ReentrantReadWriteLock</strong><span>Adds reentrancy and an optional fairness flag in the constructor, and supports downgrading from the write lock to the read lock. Upgrading read to write is not supported and deadlocks; readLock() and writeLock() expose the two halves.</span></div>
+        <div class="wild-item" data-kb-example="pthread-rwlock" id="wild-pthread-rwlock" data-kb-level="expert"><strong>POSIX pthread_rwlock</strong><span>The pthreads reader-writer primitive: pthread_rwlock_rdlock, wrlock, and unlock. glibc prefers readers by default; PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP via pthread_rwlockattr_setkind_np favors writers. ISO C has no equivalent; C11 threads.h ships only mutexes and condition variables.</span></div>
       </div>
     </section>
 
@@ -259,32 +281,32 @@ try { /* read shared state */ } finally { lock.readUnlock(); }</code></pre>
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Fairness / preference policy</strong> — Reader-preference, writer-preference, or fair FIFO ordering. ReentrantReadWriteLock takes a fair boolean; glibc pthread_rwlock defaults to reader preference and switches via pthread_rwlockattr_setkind_np.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Acquire timeout</strong> — A tryLock with a timeout bounds how long a thread waits for the lock instead of blocking indefinitely.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Reentrancy</strong> — Whether a thread may re-acquire a lock it already holds. ReentrantReadWriteLock allows it and supports downgrade (hold write, take read, release write) but not upgrade.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Acquire timeout</strong> — A tryLock with a timeout bounds how long a thread waits for the lock instead of blocking indefinitely.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Reentrancy</strong> — Whether a thread may re-acquire a lock it already holds. ReentrantReadWriteLock allows it and supports downgrade (hold write, take read, release write) but not upgrade.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Read/write ratio</strong> — The fraction of acquisitions that are writes. A read-write lock only pays off when reads dominate and critical sections are non-trivial.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Writer wait time</strong> — How long writers block behind active readers. Growing values mean readers are starving writers.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Lock hold time</strong> — How long critical sections hold the lock and how long threads sit queued behind it.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Writer wait time</strong> — How long writers block behind active readers. Growing values mean readers are starving writers.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="expert"><strong>Lock hold time</strong> — How long critical sections hold the lock and how long threads sit queued behind it.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Writer starvation</strong> — Under reader preference, a steady stream of overlapping readers can keep a writer waiting indefinitely.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Upgrade deadlock</strong> — Two readers that each try to upgrade to the write lock deadlock, since each waits for the other to release its read lock.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Worse than a mutex</strong> — When writes are frequent or critical sections are tiny, the extra bookkeeping of a read-write lock costs more than a plain mutex.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Upgrade deadlock</strong> — Two readers that each try to upgrade to the write lock deadlock, since each waits for the other to release its read lock.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Worse than a mutex</strong> — When writes are frequent or critical sections are tiny, the extra bookkeeping of a read-write lock costs more than a plain mutex.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Measure the read/write ratio first; a plain mutex often wins unless reads clearly dominate.</li>
-            <li id="production-check-2" data-kb-polarity="check">Choose the fairness or preference policy deliberately to bound writer (or reader) starvation.</li>
-            <li id="production-check-3" data-kb-polarity="check">Never upgrade a read lock to a write lock; release and re-acquire, or use a lock that supports it.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Choose the fairness or preference policy deliberately to bound writer (or reader) starvation.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Never upgrade a read lock to a write lock; release and re-acquire, or use a lock that supports it.</li>
             <li id="production-check-4" data-kb-polarity="check">Keep critical sections short; the write lock serializes every thread.</li>
           </ul>
         </div>

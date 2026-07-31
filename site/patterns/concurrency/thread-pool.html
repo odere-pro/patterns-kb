@@ -105,7 +105,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>thread pool</strong> keeps a fixed (or bounded) collection of worker threads alive and a queue of pending tasks in front of them. When work arrives it's placed on the queue; whenever a worker is idle it pulls the next task off, runs it to completion, and loops back for another — it never exits between tasks. Callers get a handle back (often a <a href="./future-promise.html">future or promise</a>) and move on without waiting for the thread to be created.</p>
         <p id="description-p-2">The force it resolves is the <strong>cost and risk of thread creation</strong>. Spinning up an OS thread means allocating a stack, registering it with the scheduler, and paying a real, measurable cost — repeating that for every incoming request ties your concurrency directly to arrival rate, not to what the hardware can actually run in parallel. Under load that means unbounded thread counts, memory pressure from thousands of stacks, and context-switch thrashing that makes everything slower, not faster.</p>
-        <p id="description-p-3">The pool decouples <em>submission</em> from <em>execution</em>. Pool size becomes the one dial that governs real parallelism, and the queue absorbs bursts by making callers wait their turn instead of translating every burst directly into more live threads.</p>
+        <p id="description-p-3" data-kb-level="advanced">The pool decouples <em>submission</em> from <em>execution</em>. Pool size becomes the one dial that governs real parallelism, and the queue absorbs bursts by making callers wait their turn instead of translating every burst directly into more live threads.</p>
       </div>
     </section>
 
@@ -118,11 +118,11 @@
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A bounded set of worker threads is created once and kept alive in front of a task queue; submission returns a handle immediately while an idle worker pulls the next task, runs it to completion and loops. Pool size decouples real parallelism from arrival rate, and the queue absorbs bursts instead of turning each one into more live stacks and context switches. The queue's bound is the other half of the configuration: unbounded, it hides overload; bounded, it forces an explicit rejection policy.</p>
+          <p>Submission hands back a handle immediately, so a caller's latency never includes thread creation and the work is free to start later than the call. The queue's bound is the other half of the configuration: unbounded, it turns overload into silent memory growth and rising time-in-queue; bounded, it forces you to choose a rejection policy — throw, block the submitter, run on the caller's thread, or drop. The variants differ in where work sits: a fixed pool shares one queue, an elastic pool grows toward a cap and retires idle workers, and a work-stealing pool gives each worker its own deque so idle workers steal instead of contending on one queue.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it for many short, similar units of work where per-task thread creation would be measurable and you need a hard ceiling on live threads — not for tasks that block indefinitely, and not where the runtime already offers a cheaper unit such as a coroutine or a virtual thread. Sizing is genuinely hard and workload-specific: too few threads leave cores idle, too many thrash the scheduler, and the right answer differs for CPU-bound and blocking work. The rest of the bill is isolation — one long task starves the queue behind it, and leftover thread-local state can bleed into the next task.</p>
+          <p>Choose it for many short, similar units of work where per-task thread creation is measurable and you want a hard ceiling on live threads. Skip it where the runtime already offers a cheaper unit — a coroutine, a virtual thread, an event loop — or where tasks block indefinitely. The bill is isolation. One slow task holds a worker and starves the queue behind it, so give a noisy tenant or a slow dependency its own pool as a bulkhead instead of a share of the common one, and never let a task block on work it submitted to the same pool, which is the classic self-deadlock. Shared workers also mean shared memory: reset thread-local state and wrap every task in a catch-all so one failure cannot poison the next. Then run the loop — size from the measured wait-to-compute ratio, watch time-in-queue and active workers against pool size, expect saturation to appear as a deep queue with idle CPU, and gate release on a bounded queue with a rejection policy you picked on purpose.</p>
         </div>
       </div>
     </section>
@@ -132,15 +132,21 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    C["Caller"] -->|"submit task"| Q["Task Queue, bounded"]
-    Q -->|"hand to worker"| T1["Worker 1"]
-    Q -->|"hand to worker"| T2["Worker 2"]
-    Q -->|"hand to worker"| T3["Worker N"]
-    T1 -.->|"idle, pull next"| Q
-    T2 -.->|"idle, pull next"| Q
-    T3 -.->|"idle, pull next"| Q
+    C["Caller"]
+    subgraph Pool["The pool — a fixed crew behind one queue"]
+        Q[("Task queue, bounded")]
+        W1["Worker 1"]
+        W2["Workers 2..N"]
+    end
+    H["Handle the caller keeps"]
+    C --&gt;|"1 submit a task"| Q
+    C --&gt;|"2 carry on holding a handle"| H
+    Q --&gt;|"3 a free worker takes the next task"| W1
+    Q --&gt;|"4 the rest wait their turn"| W2
+    W1 --&gt;|"5 result completes the handle"| H
+    W1 -.-&gt;|"6 worker loops back for more"| Q
         </pre>
-        <figcaption>Callers submit and move on. A fixed set of workers pull tasks from the shared queue, run them, and loop back for the next one when idle.</figcaption>
+        <figcaption>What stops a burst of requests from becoming a burst of threads? Step 1 puts the task in the queue instead of on a new thread, and step 6 sends the same worker back for the next one — so the number of live threads stays whatever the pool was sized to.</figcaption>
       </figure>
     </section>
 
@@ -151,10 +157,10 @@ flowchart LR
         <dd>N threads created up front and reused for the life of the process — the simplest and most predictable default, and the one most runtimes ship as their standard executor.</dd>
         <dt id="variations-item-2">Cached / elastic pool</dt>
         <dd>Grows toward a cap as demand rises and retires idle threads after a timeout, trading a hard resource ceiling for lower latency under bursty, uneven load.</dd>
-        <dt id="variations-item-3">Work-stealing pool</dt>
-        <dd>Each worker owns its own task deque and steals from a busy neighbor's when its own is empty, instead of every thread contending on one shared queue — how <code>ForkJoinPool</code>-style runtimes scale many small, unevenly sized tasks.</dd>
-        <dt id="variations-item-4"><a href="../distributed/resilience/bulkhead.html">Bulkhead</a> pools</dt>
-        <dd>One dedicated pool per tenant, endpoint, or workload type instead of a single shared pool, so a caller that saturates its own pool can't starve every other caller's threads too.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Work-stealing pool</dt>
+        <dd data-kb-level="advanced">Each worker owns its own task deque and steals from a busy neighbor's when its own is empty, instead of every thread contending on one shared queue — how <code>ForkJoinPool</code>-style runtimes scale many small, unevenly sized tasks.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced"><a href="../distributed/resilience/bulkhead.html">Bulkhead</a> pools</dt>
+        <dd data-kb-level="advanced">One dedicated pool per tenant, endpoint, or workload type instead of a single shared pool, so a caller that saturates its own pool can't starve every other caller's threads too.</dd>
       </dl>
     </section>
 
@@ -166,8 +172,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Amortizes thread creation cost — threads are built once and reused across many tasks.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Bounds live concurrency to a known number, protecting memory and the scheduler.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The queue absorbs bursts instead of turning every spike into more live threads.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">One number — pool size — is a single, tunable knob for real parallelism.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">The queue absorbs bursts instead of turning every spike into more live threads.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">One number — pool size — is a single, tunable knob for real parallelism.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -190,7 +196,7 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">You have a stream of many short, similar units of work — requests, jobs, callbacks — to run concurrently.</li>
             <li id="usage-when-2" data-kb-polarity="when">Creating a thread per task would be measurably expensive relative to the task itself.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You need a hard, known ceiling on how many threads can be running at once.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You need a hard, known ceiling on how many threads can be running at once.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -198,7 +204,7 @@ flowchart LR
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Tasks block indefinitely or run for a very long time — they'll occupy a worker and starve the rest of the queue.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">The runtime already gives you a cheaper concurrency unit — an event loop, a coroutine, or a lightweight actor — where dedicating an OS thread per unit of work is overkill.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The workload is purely CPU-bound and what you actually want is one thread per core, not a generically sized pool.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The workload is purely CPU-bound and what you actually want is one thread per core, not a generically sized pool.</li>
           </ul>
         </div>
       </div>
@@ -246,8 +252,8 @@ const results = await Promise.all(items.map((i) =&gt; pool.submit(() =&gt; proce
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="java-executorservice" id="wild-java-executorservice"><strong>java.util.concurrent.ExecutorService</strong><span>ThreadPoolExecutor and the Executors factory methods are the canonical fixed, cached, and work-stealing pools on the JVM. ThreadPoolExecutor exposes every knob directly — corePoolSize, maximumPoolSize, keepAliveTime, the BlockingQueue you hand it, and a pluggable RejectedExecutionHandler — which is why careful teams construct it explicitly rather than use Executors.newFixedThreadPool, whose convenience hides an unbounded queue.</span></div>
-        <div class="wild-item" data-kb-example="dotnet-threadpool" id="wild-dotnet-threadpool"><strong>.NET ThreadPool</strong><span>The runtime keeps a managed, self-tuning pool of workers that backs Task.Run and async continuations, so user code rarely creates threads directly. It adjusts worker count with a hill-climbing heuristic and injects threads beyond the minimum only at a deliberately slow rate — so ThreadPool.SetMinThreads is the standard operational fix when bursts of blocking work make requests stall waiting for thread injection.</span></div>
-        <div class="wild-item" data-kb-example="libuv" id="wild-libuv"><strong>libuv</strong><span>Node.js offloads filesystem, DNS lookups, and CPU-heavy crypto such as pbkdf2 to libuv's fixed-size worker pool so blocking calls never stall the event loop. The pool defaults to just 4 threads, sized once at startup via the UV_THREADPOOL_SIZE environment variable — the classic symptom of leaving it alone is fs and dns latency spiking together the moment a fifth blocking call queues.</span></div>
+        <div class="wild-item" data-kb-example="dotnet-threadpool" id="wild-dotnet-threadpool" data-kb-level="advanced"><strong>.NET ThreadPool</strong><span>The runtime keeps a managed, self-tuning pool of workers that backs Task.Run and async continuations, so user code rarely creates threads directly. It adjusts worker count with a hill-climbing heuristic and injects threads beyond the minimum only at a deliberately slow rate — so ThreadPool.SetMinThreads is the standard operational fix when bursts of blocking work make requests stall waiting for thread injection.</span></div>
+        <div class="wild-item" data-kb-example="libuv" id="wild-libuv" data-kb-level="expert"><strong>libuv</strong><span>Node.js offloads filesystem, DNS lookups, and CPU-heavy crypto such as pbkdf2 to libuv's fixed-size worker pool so blocking calls never stall the event loop. The pool defaults to just 4 threads, sized once at startup via the UV_THREADPOOL_SIZE environment variable — the classic symptom of leaving it alone is fs and dns latency spiking together the moment a fifth blocking call queues.</span></div>
       </div>
     </section>
 
@@ -259,36 +265,36 @@ const results = await Promise.all(items.map((i) =&gt; pool.submit(() =&gt; proce
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>pool size</strong> — the real parallelism dial (corePoolSize/maximumPoolSize in JVM terms): near core count for CPU-bound work, larger for IO-bound — derived from the measured wait-to-compute ratio, not guessed</li>
             <li id="production-knob-2" data-kb-polarity="knob"><strong>queue bound</strong> — an unbounded queue converts overload into silent memory growth and latency; a bounded one converts it into visible backpressure the caller must handle</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>rejection policy</strong> — what happens when the queue is full — throw, block the submitter, run on the caller's thread, or drop; each pushes the pain to a different place, and the default was chosen for you</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>idle keep-alive</strong> — how long an elastic pool retains an idle worker before retiring it; too short and every burst re-pays thread creation, too long and the pool never shrinks</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>rejection policy</strong> — what happens when the queue is full — throw, block the submitter, run on the caller's thread, or drop; each pushes the pain to a different place, and the default was chosen for you</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>idle keep-alive</strong> — how long an elastic pool retains an idle worker before retiring it; too short and every burst re-pays thread creation, too long and the pool never shrinks</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>queue depth</strong> — a burst that drains is fine; sustained growth means arrival rate exceeds service rate and latency is compounding</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>time-in-queue</strong> — the wait a task suffers before it even starts — under saturation it dwarfs execution time, and callers feel the sum</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>active workers vs. pool size</strong> — pinned at max for minutes is saturation; near zero with a deep queue means workers are blocked, not busy</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>rejection count</strong> — every rejection is load the pool refused; a count that is always zero may just mean the queue is unbounded</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>time-in-queue</strong> — the wait a task suffers before it even starts — under saturation it dwarfs execution time, and callers feel the sum</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>active workers vs. pool size</strong> — pinned at max for minutes is saturation; near zero with a deep queue means workers are blocked, not busy</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>rejection count</strong> — every rejection is load the pool refused; a count that is always zero may just mean the queue is unbounded</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>pool-induced deadlock</strong> — a task submits sub-tasks to the same pool and blocks waiting for them; once every worker is waiting, nothing can ever run</li>
+            <li id="production-failure-1" data-kb-polarity="failure" data-kb-level="advanced"><strong>pool-induced deadlock</strong> — a task submits sub-tasks to the same pool and blocks waiting for them; once every worker is waiting, nothing can ever run</li>
             <li id="production-failure-2" data-kb-polarity="failure"><strong>blocked-worker starvation</strong> — a few tasks stuck on slow I/O occupy all workers — throughput collapses to zero while the CPU sits idle</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>unbounded-queue creep</strong> — the pool looks healthy while the queue grows for hours; the symptom finally surfaces as memory exhaustion or timeouts far downstream</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>cross-task contamination</strong> — leftover thread-local state or an uncaught exception from one task poisons the worker the next task inherits</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>unbounded-queue creep</strong> — the pool looks healthy while the queue grows for hours; the symptom finally surfaces as memory exhaustion or timeouts far downstream</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>cross-task contamination</strong> — leftover thread-local state or an uncaught exception from one task poisons the worker the next task inherits</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">bound the queue and pick the rejection policy deliberately — the default is a decision either way</li>
-            <li id="production-check-2" data-kb-polarity="check">never block inside a task on work submitted to the same pool; give nested work its own pool or a work-stealing design</li>
-            <li id="production-check-3" data-kb-polarity="check">name every pool so it is identifiable in thread dumps and metrics</li>
-            <li id="production-check-4" data-kb-polarity="check">wrap tasks with a catch-all handler so one failure cannot silently kill or poison a worker</li>
-            <li id="production-check-5" data-kb-polarity="check">reset or avoid thread-local state between tasks — workers are shared, their memory is not private</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">never block inside a task on work submitted to the same pool; give nested work its own pool or a work-stealing design</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">name every pool so it is identifiable in thread dumps and metrics</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">wrap tasks with a catch-all handler so one failure cannot silently kill or poison a worker</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">reset or avoid thread-local state between tasks — workers are shared, their memory is not private</li>
           </ul>
         </div>
       </div>
