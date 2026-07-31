@@ -20,7 +20,7 @@ kb: ## Read the KB without burning context — make kb ARGS='find slow dependenc
 serve: ## Serve site/ locally at http://localhost:8000
 	@cd site && python3 -m http.server 8000
 
-check: ## Verify every generated artifact is in sync, no dangling links, relations match
+check: ## Verify generated artifacts are in sync, no dangling links, diagrams parse, relations match
 	@node scripts/build.mjs --check
 	@node scripts/build-pages.mjs --check
 	@node scripts/build-vocab.mjs --check
@@ -28,6 +28,7 @@ check: ## Verify every generated artifact is in sync, no dangling links, relatio
 	@node scripts/build-graph-page.mjs --check
 	@node scripts/build-claude.mjs --check
 	@node scripts/check-links.mjs
+	@node scripts/check-mermaid.mjs
 	@node scripts/audit-relations.mjs
 
 test: ## Smoke-test the builders/checkers against the fixture corpus (scripts/test/)
@@ -35,6 +36,9 @@ test: ## Smoke-test the builders/checkers against the fixture corpus (scripts/te
 
 relations: ## Cross-check every page's rendered relationships against graph.json
 	@node scripts/audit-relations.mjs
+
+diagrams: ## Parse every mermaid diagram with the vendored engine that renders it
+	@node scripts/check-mermaid.mjs
 
 graph: ## Derive the relationship graph from the pages (site/assets/graph.json)
 	@node scripts/build.mjs
