@@ -28,9 +28,11 @@
   // synonyms half, so "outdated" still reaches a page that only says "stale".
   var SYN = (window.KB_CATALOG && window.KB_CATALOG.synonyms) || {};
 
+  // Same stopword set as kb.mjs (STOP in scripts/lib/expansions.mjs) — parity contract.
   var STOP = { the: 1, and: 1, for: 1, are: 1, but: 1, not: 1, you: 1, all: 1, any: 1,
     can: 1, with: 1, that: 1, this: 1, from: 1, into: 1, when: 1, what: 1, why: 1,
-    how: 1, does: 1, has: 1, have: 1, its: 1, they: 1, was: 1, were: 1, will: 1 };
+    how: 1, does: 1, has: 1, have: 1, its: 1, his: 1, her: 1, their: 1, them: 1,
+    they: 1, was: 1, were: 1, will: 1, would: 1, should: 1 };
 
   // Raw score for one term (or synonym variant) against a node's fields — no multiplier.
   function termScore(n, t, naming, hay, solves, tags) {
@@ -40,7 +42,7 @@
     if (solves.some(function (x) { return x.toLowerCase().indexOf(t) >= 0; })) s += naming ? 5 : 6;
     if (tags.some(function (x) { return x.toLowerCase().indexOf(t) >= 0; })) s += 3;
     if (n.essence.toLowerCase().indexOf(t) >= 0) s += 3;
-    else if (hay.indexOf(t) >= 0) s += 1;
+    else if (hay.indexOf(t) >= 0) s += naming ? 2 : 1;
     return s;
   }
 
@@ -68,7 +70,13 @@
   function matches(q) {
     q = q.trim().toLowerCase();
     if (!q) return null;
-    var terms = q.split(/\s+/).filter(function (t) { return t.length > 2 && !STOP[t]; });
+    // Dedupe terms, mirroring kb.mjs — a repeated word must not score twice.
+    var seen = {};
+    var terms = q.split(/\s+/).filter(function (t) {
+      if (t.length <= 2 || STOP[t] || seen[t]) return false;
+      seen[t] = 1;
+      return true;
+    });
     var naming = terms.length <= 2;
     var raw = {}, max = 0;
     catalog.forEach(function (n) {
