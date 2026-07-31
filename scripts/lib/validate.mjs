@@ -11,8 +11,9 @@ export function blockProblems(present, kind) {
   const want = BLOCKS[kind];
   if (!want) return [`unknown kind "${kind}"`];
   const problems = [];
+  const optional = OPTIONAL_BLOCKS[kind] ?? new Set();
   for (const b of want) {
-    if (!present.includes(b) && !OPTIONAL_BLOCKS.has(b)) problems.push(`missing block "${b}"`);
+    if (!present.includes(b) && !optional.has(b)) problems.push(`missing block "${b}"`);
   }
   for (const b of present) if (!want.includes(b)) problems.push(`unknown block "${b}"`);
   const ordered = present.filter((b) => want.includes(b));

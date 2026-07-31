@@ -14,6 +14,8 @@ const PATTERN_BLOCKS = () => `    <section class="doc-section" id="description" 
       </div>
     </section>
 
+${EXPLAIN_SECTION()}
+
     <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
       <h2 class="doc-h" id="h-structure">How it works</h2>
       <figure class="diagram">
@@ -89,15 +91,43 @@ const PROSE_SECTION = (id, anchor, heading, block) => `    <section class="doc-s
       </div>
     </section>`;
 
+/* The three-level ladder is mandatory on every kind, so the scaffold carries it with
+ * TODO rungs. Same markup `kb.mjs explain` writes — that command replaces the whole
+ * block, so the author can fill it either way. */
+const EXPLAIN_SECTION = () => `    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>TODO — plain words, everyday comparison, no jargon.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>TODO — name the mechanism precisely in one breath.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>TODO — impact, selection criteria, the tradeoff bill.</p>
+        </div>
+      </div>
+    </section>`;
+
+const REL_SECTION = (heading) => `    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">${heading}</h2>
+    </section>`;
+
 const HAZARD_BLOCKS = () => [
   PROSE_SECTION("description", "h-desc", "What it is", "description"),
+  EXPLAIN_SECTION(),
   PROSE_SECTION("causes", "h-causes", "How it happens", "causes"),
   PROSE_SECTION("cost", "h-cost", "What it costs", "cost"),
   PROSE_SECTION("mitigation", "h-mitigation", "Getting out", "mitigation"),
+  REL_SECTION("How it relates"),
 ].join("\n\n");
 
 const THEME_BLOCKS = () => [
-  PROSE_SECTION("framing", "h-framing", "The question", "framing"),
+  PROSE_SECTION("description", "h-desc", "The question", "description"),
+  EXPLAIN_SECTION(),
   PROSE_SECTION("tradespace", "h-tradespace", "The tradespace", "tradespace"),
   `    <section class="doc-section" id="tour" aria-labelledby="h-tour" data-kb-block="tour">
       <h2 class="doc-h" id="h-tour">The tour</h2>
@@ -115,7 +145,8 @@ const THEME_BLOCKS = () => [
  * build-pages stamps citable ids; `relationships` starts empty and is filled by
  * `kb.mjs link <id> demonstrates <pattern>`. */
 const DESIGN_BLOCKS = () => [
-  PROSE_SECTION("problem", "h-problem", "Understanding the problem", "problem"),
+  PROSE_SECTION("description", "h-desc", "Understanding the problem", "description"),
+  EXPLAIN_SECTION(),
   `    <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
       <h2 class="doc-h" id="h-req">Requirements</h2>
       <div class="requirements">
@@ -168,9 +199,7 @@ flowchart TB
       </div>
     </section>`,
   PROSE_SECTION("levels", "h-levels", "What's expected at each level", "levels"),
-  `    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
-      <h2 class="doc-h" id="h-rel">Patterns it demonstrates</h2>
-    </section>`,
+  REL_SECTION("Patterns it demonstrates"),
 ].join("\n\n");
 
 /* A principle is a maxim, not a mechanism: four prose blocks plus the standard (empty)
@@ -178,13 +207,12 @@ flowchart TB
  * every principle has a way of being taken too far, and saying so is what keeps the KB
  * out of dogma. */
 const PRINCIPLE_BLOCKS = () => [
-  PROSE_SECTION("statement", "h-statement", "What it says", "statement"),
+  PROSE_SECTION("description", "h-desc", "What it says", "description"),
+  EXPLAIN_SECTION(),
   PROSE_SECTION("rationale", "h-rationale", "Why it helps", "rationale"),
   PROSE_SECTION("applying", "h-applying", "Applying it", "applying"),
   PROSE_SECTION("overreach", "h-overreach", "Taken too far", "overreach"),
-  `    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
-      <h2 class="doc-h" id="h-rel">How it relates</h2>
-    </section>`,
+  REL_SECTION("How it relates"),
 ].join("\n\n");
 
 export function pageSkeleton({ id, name, kind, band, group, order }) {

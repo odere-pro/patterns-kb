@@ -19,27 +19,44 @@ export const VOCAB_NS = SITE_URL + "vocab.html#";
 export const KB_NAME = "Patterns KB";
 
 /* Blocks each kind of page is expected to carry, in order. The section id doubles as
- * the anchor and the semantic key, so this is both a vocabulary and a lint rule. */
-export const BLOCKS = {
-  pattern:   ["description", "explain", "structure", "variations", "tradeoffs", "usage", "sketch", "wild", "production", "relationships", "fluency"],
-  hazard:    ["description", "explain", "causes", "cost", "mitigation"],
-  theme:     ["framing", "explain", "architecture", "tradespace", "tour", "decide", "siblings"],
-  principle: ["statement", "explain", "rationale", "applying", "overreach", "relationships"],
+ * the anchor and the semantic key, so this is both a vocabulary and a lint rule.
+ *
+ * Every kind extends ONE base skeleton: it opens `description` → `explain` and closes
+ * `relationships`; only the middle is kind-specific. The opener id is `description` on
+ * every kind — the visible heading may still be kind-flavoured ("The question",
+ * "Understanding the problem") but the anchor and the semantic key are shared, so
+ * `kb.mjs get <any-id> --block description` works on all five kinds. */
+const BASE_OPEN  = ["description", "explain"];
+const BASE_CLOSE = ["relationships"];
+const KIND_BLOCKS = {
+  pattern:   ["structure", "variations", "tradeoffs", "usage", "sketch", "wild", "production", "fluency"],
+  hazard:    ["causes", "cost", "mitigation"],
+  theme:     ["architecture", "tradespace", "tour", "decide", "siblings"],
+  principle: ["rationale", "applying", "overreach"],
   /* A design is a worked case study — a whole system broken down the way a strong
    * interview answer would: requirements, a diagram of how it is built, the hard
    * sub-problems argued out, and the patterns it puts to work (via the typed
    * `relationships` block, so `kb.mjs link … demonstrates …` wires both sides). */
-  design:    ["problem", "explain", "requirements", "sizing", "entities", "interface", "architecture", "deepdives", "tradeoffs", "levels", "relationships"],
+  design:    ["requirements", "sizing", "entities", "interface", "architecture", "deepdives", "tradeoffs", "levels"],
 };
-/* Blocks that may legitimately be absent. `fluency` is only on patterns that a theme
- * tours; `wild` and `production` only where honest content exists; `architecture` is
- * only on themes that walk a concrete system (the ML case studies) and carry a diagram
- * of how it is built. On a design, `sizing` (right-sizing: capabilities → numbers →
- * cheapest shape) and `interface` (the API surface) lean system-design and a
- * low-level-design page may skip them, and `levels` (the Mid/Senior/Staff rubric) is
- * optional everywhere; `explain` (the three-level ladder) is optional while the corpus
- * is being swept; the rest are mandatory. */
-export const OPTIONAL_BLOCKS = new Set(["fluency", "wild", "production", "architecture", "sizing", "interface", "levels", "explain"]);
+export const BLOCKS = Object.fromEntries(
+  Object.entries(KIND_BLOCKS).map(([kind, mid]) => [kind, [...BASE_OPEN, ...mid, ...BASE_CLOSE]]),
+);
+/* Blocks that may legitimately be absent, PER KIND. `fluency` is only on patterns that
+ * a theme tours; `wild` and `production` only where honest content exists; theme
+ * `architecture` is only on themes that walk a concrete system (the ML case studies);
+ * a theme's `relationships` is optional because themes join the graph through tour
+ * membership, not typed edges. On a design, `sizing` and `interface` lean
+ * system-design and a low-level-design page may skip them, and `levels` (the
+ * Mid/Senior/Staff rubric) is optional everywhere. `explain` is mandatory on every
+ * kind — the ladder is the per-level explanation the lens shows. */
+export const OPTIONAL_BLOCKS = {
+  pattern:   new Set(["wild", "production", "fluency"]),
+  hazard:    new Set([]),
+  theme:     new Set(["architecture", "relationships"]),
+  principle: new Set([]),
+  design:    new Set(["sizing", "interface", "levels"]),
+};
 
 /* ---- reading levels ----
  * Every page can be read at three depths. `data-kb-level` on an element means
@@ -191,6 +208,12 @@ export const SYNONYMS = {
   duplicate: ["duplication", "dedupe"], config: ["configuration"],
   auth: ["authentication", "authorization"], database: ["db"],
   retry: ["retries", "reattempt"], hang: ["hangs", "block", "stuck"], stuck: ["hang", "block"],
+  intermittent: ["flaky"], skew: ["drift"], diverged: ["drift"],
+  hotspot: ["bottleneck"], chokepoint: ["bottleneck"],
+  rollback: ["undo"], revert: ["undo"], mismatch: ["inconsistent"],
+  starvation: ["exhausted"], starved: ["exhausted"],
+  frozen: ["freeze", "stuck"], unresponsive: ["stuck", "freeze"],
+  redelivery: ["replay", "redelivered"],
 };
 
 export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes", principle: "principles", design: "designs" };

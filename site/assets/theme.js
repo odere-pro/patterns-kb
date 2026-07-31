@@ -37,6 +37,17 @@
     document.dispatchEvent(new CustomEvent("kb-theme-change", { detail: { theme: mode } }));
   }
 
+  /* Legacy-anchor shim: the 2026-08 base-schema migration renamed the opener
+     sections #framing/#statement/#problem to #description. External bookmarks
+     to the old anchors land here; rewrite iff the old target is really gone. */
+  document.addEventListener("DOMContentLoaded", function () {
+    var old = { "#framing": 1, "#statement": 1, "#problem": 1 };
+    if (old[location.hash] && !document.getElementById(location.hash.slice(1)) &&
+        document.getElementById("description")) {
+      location.replace("#description");
+    }
+  });
+
   document.addEventListener("DOMContentLoaded", function () {
     var btn = document.createElement("button");
     btn.type = "button";
