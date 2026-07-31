@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connection-Pool Exhaustion · Patterns</title>
+  <meta name="description" content="Connection-Pool Exhaustion — Every pool slot is held by a slow call, so requests hang instead of failing">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <script src="../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#connection-pool-exhaustion",
+  "identifier": "connection-pool-exhaustion",
+  "name": "Connection-Pool Exhaustion",
+  "description": "Every pool slot is held by a slow call, so requests hang instead of failing",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "hazard",
+  "kb:band": "hazard",
+  "kb:group": "hazard",
+  "kb:mitigated-by": [
+    {
+      "@id": "../patterns/distributed/resilience/timeout-deadline.html#timeout-deadline",
+      "name": "Timeout / Deadline",
+      "kb:note": "Acquire and statement timeouts turn a hang into a visible error"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/bulkhead.html#bulkhead",
+      "name": "Bulkhead",
+      "kb:note": "Per-workload pools stop one slow query starving every path"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/circuit-breaker.html#circuit-breaker",
+      "name": "Circuit Breaker",
+      "kb:note": "Releases slots spent on calls that cannot finish in time"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc hazard">
+  <main class="doc-wrap" data-kb-id="connection-pool-exhaustion" data-kb-kind="hazard" data-kb-band="hazard" data-kb-group="hazard" data-kb-essence="Every pool slot is held by a slow call, so requests hang instead of failing" data-kb-order="18" data-kb-aliases="[&quot;pool exhaustion&quot;]" data-kb-tags="[&quot;resource-management&quot;,&quot;resilience&quot;,&quot;concurrency&quot;,&quot;availability&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#hazards-h">Hazards</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Connection-Pool Exhaustion</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Hazard</p>
+      <h1 class="doc-title">Connection-Pool Exhaustion</h1>
+      <p class="doc-essence">A downstream dependency slows down, so every borrowed connection is held longer, until every slot in the pool is occupied and new requests queue for a connection instead of failing — and a service that is merely slow underneath becomes a service that answers nothing at all.</p>
+      <div class="doc-metarow">
+        <span class="badge">Hazard</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="connection-pool-exhaustion">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1"><strong>Connection-pool exhaustion</strong> is the state where every connection in a pool is checked out and in use, so the next caller has to wait for one to come back. The pool is doing its job — connections are expensive to open, so a fixed set is created once and shared — and the trouble is what happens when the work each borrower does gets slower. How many connections you need is arrival rate multiplied by how long each one is held, so a query that goes from ten milliseconds to one second needs a hundred times the slots to serve the same traffic. The pool runs out long before the database does.</p>
+        <p id="description-p-2">The symptom is the surprising part: requests hang rather than fail. With no limit on how long a caller may wait for a slot, the queue in front of the pool grows without a single error being logged, so nothing upstream sees a failure it could react to. CPU is low, memory is fine, the process is alive and answering nothing. The evidence lives in places you have to go looking for — waiters and wait time on the pool, threads all parked on the same acquire call — which is why this failure is usually diagnosed by elimination.</p>
+        <p id="description-p-3">It is not the same failure as a <a href="./resource-leak.html">resource leak</a>, though it looks identical from outside. A leak is a connection that is never given back, usually on an error path, so capacity falls permanently and never recovers. Exhaustion is every connection legitimately in use at once: stop the traffic and the pool comes back. That difference is the diagnosis — watch whether utilization returns to baseline when load stops.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+          <h3>Basic</h3>
+          <p>Opening a database connection is slow, so your service opens a handful once and lends them out — a request borrows one, does its query, and gives it back. Now the database gets slower. Every request holds its connection for longer, so the handful runs out, and the next request has to stand in line waiting for one. If nothing limits that wait, the line just grows: your service stops answering, but it never reports an error, so from outside it looks alive and simply mute. Two habits prevent it. Never wait forever for anything — put a time limit on getting a connection and on the query itself — and give the connection back as soon as the query is done, instead of holding it while you do other work.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+          <h3>Advanced</h3>
+          <p>Required concurrency is arrival rate times holding time, so a dependency that slows from ten milliseconds to one second needs a hundred times the slots at unchanged traffic — the pool saturates without any load increase. The saturation becomes a hang rather than an error when the wait for a slot is unbounded: the queue in front of the pool grows silently, no error rate moves, and no breaker upstream can react. Bound every wait (acquire timeout, statement timeout, request deadline), shorten holding time by scoping the checkout to the unit of work and never spanning an external call, and partition the pool per workload so a slow report cannot starve the login path. Watch for the double-borrow, where a request holding one connection waits for a second and the pool deadlocks under concurrency.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+          <h3>Expert</h3>
+          <p>The pool is admission control, not a buffer: its size is the maximum concurrency you have chosen to impose on a shared dependency, and every slot is also a session the database pays for. That is why the intuitive fix backfires — enlarging the pool moves the queue onto the server, where it degrades every other client, and past a point extra concurrency costs throughput because work contends instead of executing. Derive the size from what the dependency can serve concurrently, verify it under a latency-injection test rather than a traffic test, and refuse the excess quickly: a visible rejection costs one retry, an invisible wait costs the service. Around it, timeouts convert overload into signal, a breaker frees the slots being spent on calls that cannot finish in time, and per-workload pools bound the blast radius to one call path. Operate on waiters, wait time and checkout duration — checkout duration is what separates a latency shift from a rate shift — and treat utilization that never returns to baseline after load stops as a leak, which no amount of sizing will fix.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="causes" aria-labelledby="h-causes" data-kb-block="causes">
+      <h2 class="doc-h" id="h-causes">How it happens</h2>
+      <div class="prose">
+        <p id="causes-p-1" data-kb-register="basic">Nothing has to break for this to happen. Traffic stays the same and something downstream simply gets slower, so each request keeps its connection a little longer than it used to. Borrowed slots pile up, the last free one is taken, and everyone who arrives after that stands in line. Six ordinary conditions get you there.</p>
+        <p id="causes-p-2" data-kb-register="advanced">The governing relation is concurrency equals arrival rate times holding time, so the pool saturates when downstream latency rises even though the offered rate has not moved. What turns saturation into a hang is the absence of a bound on the wait: with no acquire timeout the queue in front of the pool is unbounded, and overload is converted into latency rather than into errors. Six conditions supply either the extra holding time or the missing bound.</p>
+        <p id="causes-p-3" data-kb-register="expert">The design mistake underneath is treating the pool as a buffer when it is really an admission control device. Its size is the maximum concurrency you have decided to send downstream, and every slot is a live session that the database is also paying for — so raising it to make waiting stop moves the queue from your process to the shared server, where it is harder to see and everyone's problem. The six conditions below are how that decision goes unmade.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart LR
+    D["Downstream query slows"] -->|"each call holds its slot longer"| H["Checked-out connections rise to the cap"]
+    H -->|"no slot free"| W["New requests queue for the pool"]
+    W -->|"no acquire timeout"| Q["Threads park; requests hang instead of erroring"]
+        </pre>
+        <figcaption>Slow, not broken: an unbounded wait for a slot turns one sluggish dependency into a service that answers nothing.</figcaption>
+      </figure>
+      <div class="prose">
+        <ul>
+          <li id="causes-li-1">Downstream latency rising: at the same traffic, a query that takes ten times longer needs ten times the slots, so a slow dependency exhausts the pool without any change in load.</li>
+          <li id="causes-li-2">No timeout on acquiring a connection: the caller waits indefinitely for a slot, which is what converts overload into a hang instead of a fast, visible error.</li>
+          <li id="causes-li-3">No statement or transaction timeout: a query blocked on a lock or a table scan holds its connection until the database decides to end it, and until then the slot is gone.</li>
+          <li id="causes-li-4">Holding a slot across work that does not need it — an external API call, a file write, user think-time inside a transaction — which multiplies holding time for no benefit.</li>
+          <li id="causes-li-5">Nested acquisition: a request holding one connection asks for a second, so with enough concurrent requests every slot is held by someone waiting for a slot and the pool deadlocks.</li>
+          <li id="causes-li-6">A size chosen by default rather than by measurement, with no relation to how many workers can be in flight or how much concurrency the database can actually serve.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="cost" aria-labelledby="h-cost" data-kb-block="cost">
+      <h2 class="doc-h" id="h-cost">What it costs</h2>
+      <div class="prose">
+        <ul>
+          <li id="cost-li-1"><strong>Requests hang instead of failing.</strong> No error is returned, so no breaker trips, no retry budget is spent and no alert on error rate fires — the failure is invisible to every mechanism you built to catch failures.</li>
+          <li id="cost-li-2"><strong>The stall propagates upstream.</strong> Callers waiting on your unanswered response hold their own threads and connections, so one slow query can occupy resources several services away from it.</li>
+          <li id="cost-li-3"><strong>The outage is total, not proportional.</strong> Endpoints that never touch the slow query fail as well, because they draw from the same pool — a report page can take down the login path.</li>
+          <li id="cost-li-4"><strong>Health checks report the wrong thing.</strong> A check that does not use the pool says the instance is fine while it serves nothing; a check that does use it fails, and the instance is evicted just as its peers are getting the redistributed load.</li>
+          <li id="cost-li-5"><strong>Diagnosis is slow at the worst time.</strong> CPU, memory and error rate all look healthy, so the answer only appears in pool metrics or a thread dump — evidence many teams first collect during the incident.</li>
+        </ul>
+        <p id="cost-p-1" data-kb-level="expert">Sizing is where this gets expensive, because the intuitive fix is the wrong one. Every connection is memory and a session on the database, which is the scarcer, shared resource, so enlarging the pool to stop the waiting hands the same queue to the server where it slows every other client too — past a point, more concurrency buys less throughput, since the work spends its time contending rather than executing. Treat the pool size as the concurrency limit you are willing to impose on a shared dependency, derive it from what that dependency can serve rather than from your request rate, and let the excess be refused quickly. A rejection you can see costs a retry; a wait you cannot see costs the whole service.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
+      <h2 class="doc-h" id="h-mitigation">Getting out</h2>
+      <div class="prose">
+        <p id="mitigation-p-1">Put a bound on every wait. A timeout on acquiring a connection, a timeout on the statement, a deadline on the request as a whole — each one turns an invisible hang into a fast error that your alerts, your breakers and your callers can all act on. Choose the acquire timeout deliberately: it is how long you are willing to let a caller queue before you would rather refuse them.</p>
+        <p id="mitigation-p-2">Then hold each slot for as little time as possible. Take the connection inside the unit of work and give it back immediately after, never across an external call, a file write or anything waiting on a person. Split the pool by workload so a slow analytical query cannot consume the slots the login path needs, and fix the double-borrow: a request that holds one connection while asking for another will deadlock the pool under enough concurrency.</p>
+        <p id="mitigation-p-3" data-kb-level="expert">Size it from the downstream's real concurrency limit, not from your request rate, and confirm it with a load test that pushes latency up rather than traffic. Watch the two numbers that show this failure early — waiters on the pool and time spent waiting for a slot — alongside checkout duration, which tells you whether holding time or arrival rate is what moved. When a dependency is slow rather than broken, a breaker in front of it releases the slots your service is spending on calls that will not finish in time. And if pool utilization does not fall back after traffic stops, stop tuning the size: what you have is a leak, not exhaustion.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Mitigated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="timeout-deadline"><a href="../patterns/distributed/resilience/timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">Acquire and statement timeouts turn a hang into a visible error</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="bulkhead"><a href="../patterns/distributed/resilience/bulkhead.html">Bulkhead</a><span class="rel-note">Per-workload pools stop one slow query starving every path</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="circuit-breaker"><a href="../patterns/distributed/resilience/circuit-breaker.html">Circuit Breaker</a><span class="rel-note">Releases slots spent on calls that cannot finish in time</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#hazards-h">← Hazards</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#hazards-h">Hazards →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

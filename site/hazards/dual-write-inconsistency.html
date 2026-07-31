@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dual-Write Inconsistency · Patterns</title>
+  <meta name="description" content="Dual-Write Inconsistency — Two systems updated by two calls, and one of them does not land">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <script src="../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#dual-write-inconsistency",
+  "identifier": "dual-write-inconsistency",
+  "name": "Dual-Write Inconsistency",
+  "description": "Two systems updated by two calls, and one of them does not land",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "hazard",
+  "kb:band": "hazard",
+  "kb:group": "hazard",
+  "kb:mitigated-by": [
+    {
+      "@id": "../patterns/distributed/coordination/outbox.html#outbox",
+      "name": "Outbox",
+      "kb:note": "State and event commit together; a relay delivers afterwards"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/change-data-capture.html#change-data-capture",
+      "name": "Change Data Capture",
+      "kb:note": "Derive the event from the commit log, never write twice"
+    },
+    {
+      "@id": "../patterns/architecture/event-sourcing.html#event-sourcing",
+      "name": "Event Sourcing",
+      "kb:note": "One append is both state and event, so nothing diverges"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "At-least-once relays duplicate; idempotent consumers make repeats harmless"
+    },
+    {
+      "@id": "../patterns/distributed/coordination/saga.html#saga",
+      "name": "Saga",
+      "kb:note": "Compensating steps repair a sequence no transaction could cover"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc hazard">
+  <main class="doc-wrap" data-kb-id="dual-write-inconsistency" data-kb-kind="hazard" data-kb-band="hazard" data-kb-group="hazard" data-kb-essence="Two systems updated by two calls, and one of them does not land" data-kb-order="12" data-kb-aliases="[&quot;dual write&quot;,&quot;dual-write problem&quot;]" data-kb-tags="[&quot;consistency&quot;,&quot;transactions&quot;,&quot;messaging&quot;,&quot;event-driven&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#hazards-h">Hazards</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Dual-Write Inconsistency</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Hazard</p>
+      <h1 class="doc-title">Dual-Write Inconsistency</h1>
+      <p class="doc-essence">One logical change applied to two systems by two separate calls, with no transaction spanning them — so a crash, an error or a race in the gap between the calls leaves the two holding different versions of the same fact, and neither of them reports an error.</p>
+      <div class="doc-metarow">
+        <span class="badge">Hazard</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="dual-write-inconsistency">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1">A <strong>dual write</strong> is one change applied to two systems through two independent calls: the database and the message broker, the database and the cache, the database and the search index. Each call has its own transaction and its own failure modes, and nothing joins them, so the pair has no atomicity. The code reads as one operation and behaves as two.</p>
+        <p id="description-p-2">Enumerate the branches and the hazard is obvious. If the row commits and the publish fails, the downstream service never learns about a change that really happened. If the publish succeeds and the transaction rolls back, downstream acts on something that never happened. If the process dies between the two, you get the first case with no error recorded anywhere. And if two writers race, both calls can succeed while arriving at the second system in the opposite order — leaving it permanently holding the older value.</p>
+        <p id="description-p-3">You recognize it as drift rather than as failure. A record created yesterday is missing from the search index, a cached price stays wrong until something evicts it, a downstream count no longer matches the source and nobody can say when it stopped. The error budget looks fine, because both calls returned successfully most of the time and the one that did not was retried by a client that had already moved on.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+          <h3>Basic</h3>
+          <p>You save the order to the database, then send a message telling the warehouse to ship it. Those are two separate steps, and the space between them is where things go wrong: if the save works and the message never sends, the customer is charged and nothing ever ships — and no error appears anywhere, because the part that failed was already forgotten. Nobody notices until someone asks why an order from last Tuesday was never picked. The way out is to stop doing two steps: write the message into the same database, in the same save, as a row that says 'this still needs sending', and let a separate worker send it and tick it off. One save, then a delivery that can be retried until it works.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+          <h3>Advanced</h3>
+          <p>Two writes to two systems with no transaction spanning them gives four outcomes, two of which are inconsistent, plus a race that corrupts ordering even when both succeed: concurrent updates can serialize one way in the database and arrive at the destination in the other order. The fix is to reduce it to a single write and derive the second. The transactional outbox stores the event in the same database transaction as the state change and a relay publishes it afterwards; change data capture skips the table and tails the store's commit log, so the event is a projection of a committed fact; event sourcing removes the second write entirely by making the log the state. All three deliver at-least-once, so consumers need idempotency — a processed-message key or a naturally repeatable update — and messages need to be keyed by entity so per-record order survives parallel delivery.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+          <h3>Expert</h3>
+          <p>Pick by which system owns the truth and what you are allowed to change. The outbox is the default: it works with any store, the relay is yours to operate, and it costs a table, a background process and the duplicate deliveries you neutralise with idempotency keys. Change data capture removes that table and the application code with it, but binds consumers to the store's physical schema and publishes every change including the ones nobody meant to expose — so it fits replication and index maintenance better than it fits a public domain event. Event sourcing dissolves the problem instead of managing it, at the price of rebuilding the model around a log plus projections, with replay and versioning as permanent obligations. Two-phase commit is the remaining option and the one to justify carefully, since it makes availability the product of both participants and holds locks through the coordinator's failure window. Where the second system is a third party, none of these apply: persist the intent, retry under an idempotency key, and fund a reconciliation sweep forever. Whatever you choose, the operating loop is the same — watch relay lag and undelivered rows, alarm on the oldest unsent record rather than the average, and reconcile counts between source and destination on a schedule, because this failure is invisible to every error-rate dashboard you own.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="causes" aria-labelledby="h-causes" data-kb-block="causes">
+      <h2 class="doc-h" id="h-causes">How it happens</h2>
+      <div class="prose">
+        <p id="causes-p-1" data-kb-register="basic">It happens because the two updates do not share a save button. Saving the order and telling the warehouse are two separate calls to two separate systems, and there is no undo that reaches across both — so if the second one fails after the first has already been stored, the first one stays. The code looks completely reasonable, works every time you run it by hand, and only misbehaves when something interrupts it halfway.</p>
+        <p id="causes-p-2" data-kb-register="advanced">No transaction spans a database and a broker, so the second call is committed independently of the first and each ordinary failure lands inside the gap between them. Timeouts, broker unavailability and process death all produce the same result: a durable change nobody was told about. Concurrency adds a second route to the same damage, since two writers can serialize one way in the database and the other way at the destination.</p>
+        <p id="causes-p-3" data-kb-register="expert">Read it as the cheapest correct-looking design, which is why experienced teams still ship it. Two sequential calls are the shortest path from a working feature to a working feature: they pass review, pass integration tests, and fail only under partial failures that tests do not generate. The reflex fix — wrap the second call in a retry — closes the smallest branch and opens a larger one, because a retried publish over a committed row now risks duplicates on a consumer that was never made idempotent.</p>
+      </div>
+      <figure class="diagram">
+        <pre class="mermaid">
+flowchart TB
+    A["One request changes one thing"] --> B["Write 1: commit the row"]
+    B --> C["Write 2: publish the event"]
+    C -->|"both succeed"| OK["The two systems agree"]
+    C -->|"broker error, timeout or crash"| L["Row committed, event never sent"]
+    L --> D["Downstream never learns — drift, and no error anywhere"]
+        </pre>
+        <figcaption>Where the change gets lost: the second write has its own failure modes, and nothing rolls back the first when it hits one.</figcaption>
+      </figure>
+      <div class="prose">
+        <ul>
+          <li id="causes-li-1">Two calls, no shared transaction: the broker, cache or index commits separately from the database, so a failure on the second leaves the first with nothing to roll back to.</li>
+          <li id="causes-li-2">A crash in the gap: the process dies after the commit and before the publish, and no record survives to say the message was ever owed.</li>
+          <li id="causes-li-3">A timeout that is not a failure: the publish times out and gets retried, but the original had already been accepted — so one side sees the change once and the other twice.</li>
+          <li id="causes-li-4">Concurrent writers: two updates to the same entity commit in one order and arrive at the second system in the other, so the destination settles on the value the source has already replaced.</li>
+          <li id="causes-li-5" data-kb-level="advanced">Order lost in transit: updates for one entity are spread across partitions or delivered by parallel workers, so per-entity ordering is not preserved even when every message arrives.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="cost" aria-labelledby="h-cost" data-kb-block="cost">
+      <h2 class="doc-h" id="h-cost">What it costs</h2>
+      <div class="prose">
+        <ul>
+          <li id="cost-li-1"><strong>The divergence is permanent until something else overwrites it.</strong> A missed index update or a stale cache entry does not heal on its own, so one lost message in a million becomes a growing population of wrong records.</li>
+          <li id="cost-li-2"><strong>Downstream acts on a fiction, or fails to act at all.</strong> A published-but-rolled-back event ships an order that does not exist; a committed-but-unpublished one charges a customer nothing ever ships to.</li>
+          <li id="cost-li-3"><strong>Nothing alerts.</strong> Both calls returned success on almost every request, so error rates, latency and saturation all read normal — the discovery path is a customer complaint or a quarterly reconciliation.</li>
+          <li id="cost-li-4"><strong>Every incident becomes a forensic exercise.</strong> Establishing what happened means comparing the two systems record by record and reconstructing which half landed, which is work per affected row rather than per bug.</li>
+          <li id="cost-li-5"><strong>The obvious remedy makes it worse.</strong> Retrying the second call without idempotency on the consumer converts lost updates into duplicate ones, so the failure mode changes shape instead of going away.</li>
+          <li id="cost-li-6"><strong>It compounds with every pair you add.</strong> A database with a broker, a cache and an index is three dual writes, each with its own drift and its own reconciliation job to build and to run forever.</li>
+        </ul>
+        <p id="cost-p-1" data-kb-level="expert">The bill lands as trust rather than as downtime, and that makes it hard to fund. Nobody can put a number on how much of the data is wrong, so the reconciliation job becomes a permanent operational line item and the answer to "can we rely on this feed?" becomes "mostly". Analytics built on the downstream copy inherit the drift silently, and the eventual repair costs more than the outbox would have, because by then the corrective work includes backfilling everything that went missing since the first day.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
+      <h2 class="doc-h" id="h-mitigation">Getting out</h2>
+      <div class="prose">
+        <p id="mitigation-p-1">Make it one write. Whatever changes the state and whatever announces the change must land in the same atomic unit: store the outgoing message in a table in the same transaction as the row it describes, and let a separate relay read that table and deliver it. Now there is a single commit that either happens or does not, and delivery is a retryable background job rather than a step that can be lost. If you cannot add a table, derive the message instead — tail the store's change log and publish from it, so the event is a projection of a committed fact and not a second write at all.</p>
+        <p id="mitigation-p-2">Then design for at-least-once, because every one of those relays can deliver twice. Give each message a stable identifier and have consumers record what they have processed, or shape the update so that applying it twice is the same as applying it once. For caches and search indexes, prefer invalidating over writing through: a lost invalidation costs a cache miss, while a lost write-through costs permanent staleness. And key messages by entity so that all updates to one record travel the same route in order, which is the ordering guarantee you actually need — global ordering almost never is.</p>
+        <p id="mitigation-p-3" data-kb-level="expert">Where the second system is genuinely outside your reach — a payment provider, a partner API — you cannot collapse the two writes, so make the pair recoverable instead. Persist the intent before you call, retry with an idempotency key the provider honours, and run a reconciliation sweep that compares both sides and repairs what drifted; that sweep is a permanent component, not a migration script. Distributed transactions are the other exit and rarely the right one: two-phase commit buys atomicity by making your availability the product of both participants' availability, and a coordinator failure leaves locks held until someone intervenes. Whichever route you take, instrument the drift directly — relay lag, undelivered rows, periodic count or checksum comparison between source and destination — because this failure never announces itself as an error, and an unmeasured invariant is one you are not actually holding.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Mitigated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="outbox"><a href="../patterns/distributed/coordination/outbox.html">Outbox</a><span class="rel-note">State and event commit together; a relay delivers afterwards</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="change-data-capture"><a href="../patterns/distributed/coordination/change-data-capture.html">Change Data Capture</a><span class="rel-note">Derive the event from the commit log, never write twice</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="event-sourcing"><a href="../patterns/architecture/event-sourcing.html">Event Sourcing</a><span class="rel-note">One append is both state and event, so nothing diverges</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="idempotency"><a href="../patterns/messaging/idempotency.html">Idempotency</a><span class="rel-note">At-least-once relays duplicate; idempotent consumers make repeats harmless</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="saga"><a href="../patterns/distributed/coordination/saga.html">Saga</a><span class="rel-note">Compensating steps repair a sequence no transaction could cover</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#hazards-h">← Hazards</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#hazards-h">Hazards →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>
