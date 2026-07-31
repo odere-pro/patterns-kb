@@ -55,11 +55,42 @@
       state[id] = cb.checked;
       persist();
       if (tgt) tgt.classList.toggle("is-done", cb.checked);
+      paintToggle();
       render();
     });
   });
 
   render();
+
+  /* Floating Practiced control — content pages only. Joins the fixed control
+     cluster (theme toggle, lens group) so marking a page read doesn't require
+     scrolling back to the metarow checkbox. Same store, same page checkbox —
+     the button just proxies input.practice-box, which stays the source of
+     truth for the change event. */
+  var pageBox = document.querySelector("input.practice-box[data-id]");
+  var toggle = null;
+
+  function paintToggle() {
+    if (!toggle || !pageBox) return;
+    var on = pageBox.checked;
+    toggle.setAttribute("aria-pressed", on ? "true" : "false");
+    var label = on ? "Practiced — click to unmark" : "Mark practiced";
+    toggle.setAttribute("aria-label", label);
+    toggle.title = label;
+  }
+
+  if (pageBox) {
+    toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "practice-toggle";
+    toggle.textContent = "✓";
+    toggle.addEventListener("click", function () {
+      pageBox.checked = !pageBox.checked;
+      pageBox.dispatchEvent(new Event("change"));
+    });
+    paintToggle();
+    document.body.appendChild(toggle);
+  }
 
   var reset = document.getElementById("reset-btn");
   if (reset) {
@@ -71,6 +102,7 @@
         var tgt = doneTarget(cb);
         if (tgt) tgt.classList.remove("is-done");
       });
+      paintToggle();
       render();
     });
   }
