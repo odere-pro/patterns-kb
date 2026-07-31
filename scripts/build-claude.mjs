@@ -53,11 +53,13 @@ its location.
 Read a page with \`node ${up(dir)}scripts/kb.mjs get <id>\` — never open the .html to read it
 (that costs ~3.6k tokens of markup for ~1.2k of prose).
 
-Reading levels: every block shows at every lens; depth varies INSIDE blocks. The
-mandatory \`explain\` ladder is a variant group — each lens renders only its own rung.
-Two authored element attributes: \`data-kb-level\` (accretion — visible from this level
-up, via \`kb.mjs level\`) and \`data-kb-register\` (variant — rendered at exactly that
-lens, via \`kb.mjs register\`); one element carries at most one of them.
+Reading levels are CUMULATIVE: basic is a short whole page, advanced is basic plus
+system-design depth, expert is both plus the deep dives. Every block shows at every lens;
+depth varies INSIDE blocks. The mandatory \`explain\` ladder stacks — at advanced you read
+the basic and advanced rungs together. \`data-kb-level\` (visible from this level up, via
+\`kb.mjs level\`) is the mechanism and untagged content is the basic core;
+\`data-kb-register\` (rendered at exactly that lens, via \`kb.mjs register\`) is a rare
+replacement tool. One element carries at most one of them.
 
 See the root CLAUDE.md for the data contract before editing anything here.
 `;

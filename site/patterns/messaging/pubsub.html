@@ -186,24 +186,24 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1" data-kb-register="basic">When an order is placed, four other things have to happen: charge the card, reserve stock, send the receipt, update the analytics. Call each one directly and the order service now knows all four addresses, waits for all four to answer, and fails when any one of them is down. The fifth thing someone wants next month means editing and redeploying the order service again. <strong>Publish-subscribe</strong> takes the announcement instead: the order service says "an order was placed" to a named channel and moves on, and whoever cares signs up to that channel in advance and gets every announcement from then on.</p>
+        <p id="description-p-1">When an order is placed, four other things have to happen: charge the card, reserve stock, send the receipt, update the analytics. Call each one directly and the order service now knows all four addresses, waits for all four to answer, and fails when any one of them is down. The fifth thing someone wants next month means editing and redeploying the order service again. <strong>Publish-subscribe</strong> takes the announcement instead: the order service says "an order was placed" to a named channel and moves on, and whoever cares signs up to that channel in advance and gets every announcement from then on.</p>
         <p id="description-p-2" data-kb-level="advanced">Publishers emit to a named <em>topic</em> rather than to a receiver; subscribers register interest in that topic; a broker, bus or channel abstraction in between handles matching and delivery, and neither side holds a reference to the other. That breaks the three couplings a direct call always carries at once: <em>space</em> — no receiver addresses; <em>time</em> — no need for both sides to be up together; <em>synchronization</em> — no blocking on however long delivery and processing take.</p>
-        <p id="description-p-3">Dropping all three ties at once — no addresses to hold, no shared uptime, no waiting for an answer — is what makes this the default wiring for event-driven systems. A service that emits <code>order.placed</code> never has to know whether zero, one, or ten downstream services care, and adding an eleventh needs no change to the publisher at all. The cost is that "who consumes this, and why" moves out of code and into topic names, schemas, and runtime configuration — a fan-out a compiler can no longer see.</p>
+        <p id="description-p-3" data-kb-level="advanced">Dropping all three ties at once — no addresses to hold, no shared uptime, no waiting for an answer — is what makes this the default wiring for event-driven systems. A service that emits <code>order.placed</code> never has to know whether zero, one, or ten downstream services care, and adding an eleventh needs no change to the publisher at all. The cost is that "who consumes this, and why" moves out of code and into topic names, schemas, and runtime configuration — a fan-out a compiler can no longer see.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Your checkout code ends with a list of five calls: charge the card, reserve the stock, email a receipt, update analytics, tell the warehouse. So when analytics is down, checkout is down — over a step no customer would have missed. And when a sixth team wants in, they have to file a ticket against your code. Turn it around: say what happened, once, to a named channel — "an order was placed" — and move on. Anyone who cares signs up to that channel ahead of time and gets every announcement from then on. You never learn who they are, and a newcomer can start listening tomorrow without you being told. Nothing comes back this way, though, so it only fits the steps where you do not need an answer.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Producers emit to a named topic instead of to a recipient, consumers register interest in that topic, and a broker in between does the matching and the delivery; neither side holds a reference to the other, so coupling in space, time and synchronization goes in one move. The variants are all about how much the broker does for you. Topic-based subscriptions match on a channel name, while content-based ones evaluate a predicate over the message body — more expressive, and more broker CPU per published message. A durable subscription remembers its position and replays what it missed while it was down; an ephemeral one sees only what is published while it is connected and drops the rest without telling anyone. Put several consumers behind one subscription and the topic still broadcasts once per group while a single member of each group handles each message, which is broadcast and load-sharing in the same topology.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>Choose it when the consumer set is unknown or still growing and the producer must not change as it grows — the eleventh consumer costs the producer nothing, which neither a direct call nor a router can match. The bill has four lines, each with a counter-move. Publishing is not atomic with the database write that justified it, so a crash between the two either loses the event or announces one that never happened: commit both in one transaction with an outbox and relay from there. At-least-once redelivery double-applies every handler that is not idempotent, so deduplicate on the receiving side with an inbox. A message that fails on every attempt blocks or spins forever, so give each subscription a dead-letter channel with an attempt limit and alert on its depth. And the wiring leaves the code — no compiler sees the fan-out and a request is traced across processes rather than stepped through — which you pay for in versioned topic schemas and a written record of who consumes what. Then run the loop: tune retention and acknowledgement deadlines, watch per-subscription lag, expect a stalled durable subscriber to pin the retention floor and fill the disk first, and gate the release on idempotent subscribers and a retention window longer than your worst tolerable outage.</p>
         </div>
@@ -212,15 +212,29 @@
 
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
-      <figure class="diagram">
+      <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    Pub["Publisher"] -->|publish| Topic["Broker, topic"]
-    Topic -->|deliver| SubA["Subscriber A"]
-    Topic -->|deliver| SubB["Subscriber B"]
-    Topic -->|deliver| SubC["Subscriber C"]
+    Pub["Order Service"]
+    subgraph Brk["Broker — neither side holds a reference to the other"]
+        Topic[("order.placed topic")]
+        SubP[("Payments subscription")]
+        SubS[("Stock subscription")]
+        SubA[("Analytics subscription")]
+    end
+    Pay["Payments Service"]:::ext
+    Stock["Stock Service"]:::ext
+    Anl["Analytics Service"]:::ext
+    Pub --&gt;|"1 publish order.placed"| Topic
+    Topic --&gt;|"2 one copy per subscription"| SubP
+    Topic --&gt;|"2"| SubS
+    Topic --&gt;|"2"| SubA
+    SubP --&gt;|"3 deliver, then ack"| Pay
+    SubS --&gt;|"3"| Stock
+    SubA --&gt;|"3"| Anl
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>The publisher addresses only the topic — the broker fans each message out to every current subscriber, and neither side holds a reference to the other.</figcaption>
+        <figcaption>How does one announcement reach services the publisher has never heard of? Step 1 addresses the topic and nothing else; each subscription holds its own copy, so a fourth subscriber joins at step 2 without step 1 changing.</figcaption>
       </figure>
     </section>
 
@@ -231,8 +245,8 @@ flowchart LR
         <dd>Subscribe to a named channel, or subscribe with a predicate over message content and let the broker filter — content-based is more expressive but costs the broker more to evaluate.</dd>
         <dt id="variations-item-2" data-kb-level="advanced">Broker-mediated vs. broker-less</dt>
         <dd data-kb-level="advanced">A central broker matches and routes messages, or publishers and subscribers discover each other directly over multicast — broker-less removes a hop but pushes discovery and fan-out onto every node.</dd>
-        <dt id="variations-item-3">Durable vs. ephemeral subscriptions</dt>
-        <dd>A durable subscription is remembered and replayed from where a subscriber left off, even after downtime; an ephemeral one only sees messages published while it's connected.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Durable vs. ephemeral subscriptions</dt>
+        <dd data-kb-level="advanced">A durable subscription is remembered and replayed from where a subscriber left off, even after downtime; an ephemeral one only sees messages published while it's connected.</dd>
         <dt id="variations-item-4" data-kb-level="advanced"><a href="./competing-consumers.html">Competing Consumers</a> groups</dt>
         <dd data-kb-level="advanced">Group subscribers so the topic still broadcasts once per group, but only one member within a group handles each message — broadcast and load-sharing at the same time.</dd>
       </dl>
@@ -245,8 +259,8 @@ flowchart LR
           <h3>Pros</h3>
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Publishers and subscribers are decoupled in space, time, and synchronization — neither needs the other to exist, run, or respond.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro">New subscribers attach without any change to the publisher or its deploy.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Broadcast to an unknown or changing number of listeners is a first-class operation, not a loop over a hard-coded list.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">New subscribers attach without any change to the publisher or its deploy.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Broadcast to an unknown or changing number of listeners is a first-class operation, not a loop over a hard-coded list.</li>
             <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">A broker can buffer, batch, and smooth bursts that would otherwise overload a direct caller.</li>
           </ul>
         </div>
@@ -321,7 +335,7 @@ bus.publish("order.placed", "order-42");</code></pre>
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="kafka" id="wild-kafka"><strong>Apache Kafka</strong><span>Publishers append to a partitioned topic; each consumer group tracks its own offset, so groups read independently and can replay. Retention is bounded by retention.ms or retention.bytes, and ordering holds within a partition, not across the topic.</span></div>
-        <div class="wild-item" data-kb-example="mqtt" id="wild-mqtt"><strong>MQTT</strong><span>A lightweight pub/sub protocol for IoT: subscribers match topic filters with the + and # wildcards, three QoS levels trade delivery guarantee for overhead, and a retained message gives a new subscriber the last value on a topic immediately.</span></div>
+        <div class="wild-item" data-kb-example="mqtt" id="wild-mqtt" data-kb-level="advanced"><strong>MQTT</strong><span>A lightweight pub/sub protocol for IoT: subscribers match topic filters with the + and # wildcards, three QoS levels trade delivery guarantee for overhead, and a retained message gives a new subscriber the last value on a topic immediately.</span></div>
         <div class="wild-item" data-kb-example="gcp-pubsub" id="wild-gcp-pubsub" data-kb-level="advanced"><strong>Google Cloud Pub/Sub</strong><span>Publishers write to a topic and each subscription gets an independent copy of the stream; a per-message ackDeadline governs redelivery, unacked messages are retained up to the configured window, and a dead-letter topic catches messages that exceed a max delivery attempts.</span></div>
         <div class="wild-item" data-kb-example="sns" id="wild-sns" data-kb-level="advanced"><strong>Amazon SNS</strong><span>A fully managed pub/sub service: publish to a topic and SNS pushes each message to every subscription — SQS queues, Lambda functions, HTTP/S endpoints, email; per-subscription filter policies match message attributes so a subscriber only receives matching messages, and undeliverable messages go to a redrive dead-letter queue. Standard topics take unlimited messages per second with best-effort ordering and deduplication; FIFO topics trade that throughput for strict ordering and deduplication, at up to 300 messages or 10 MB per second per topic.</span></div>
         <div class="wild-item" data-kb-example="eventbridge" id="wild-eventbridge" data-kb-level="expert"><strong>Amazon EventBridge</strong><span>The routing-heavy end of the same idea: producers put events on a bus and subscribers are rules rather than subscriptions, matching on the content of the event and fanning each match out to its own targets. It buys content-based routing and filtering across producers that speak different shapes, at the cost of the wiring living in rule definitions rather than in either side's code.</span></div>
@@ -335,7 +349,7 @@ bus.publish("order.placed", "order-42");</code></pre>
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Subscription durability</strong> — Whether the broker remembers a subscriber position across disconnects (durable) or delivers only while connected (ephemeral).</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Retention window</strong> — How long the broker keeps published messages available for replay or a late subscriber before discarding them.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Retention window</strong> — How long the broker keeps published messages available for replay or a late subscriber before discarding them.</li>
             <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Message time-to-live</strong> — The age past which an undelivered message is discarded rather than held for a lagging consumer.</li>
             <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Acknowledgement deadline</strong> — How long a subscriber has to ack a delivered message before the broker redelivers it.</li>
             <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Per-subscription concurrency / consumer-group size</strong> — How many consumers share one subscription to spread its load.</li>
@@ -346,7 +360,7 @@ bus.publish("order.placed", "order-42");</code></pre>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Per-subscription backlog / consumer lag</strong> — Messages published but not yet consumed by a given subscription; the core saturation signal per consumer.</li>
             <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Oldest unacknowledged message age</strong> — How long the slowest subscription has fallen behind the head of the topic.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Redelivery / negative-ack rate</strong> — Messages redelivered after a missed or negative ack, signaling failing or slow handlers.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Redelivery / negative-ack rate</strong> — Messages redelivered after a missed or negative ack, signaling failing or slow handlers.</li>
             <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Broker storage for retained messages</strong> — Disk used by the retention window; a stuck durable subscription pins it and it grows.</li>
           </ul>
         </div>
@@ -356,7 +370,7 @@ bus.publish("order.placed", "order-42");</code></pre>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Slow or offline subscriber pins retention</strong> — A durable subscription that stops consuming holds the retention floor; the broker cannot discard messages and disk fills.</li>
             <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Fan-out amplification</strong> — One published message multiplies into a delivery per subscription; a publish burst hits every subscriber at once.</li>
             <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Retention expiry data loss</strong> — A subscriber down longer than the retention window permanently loses the messages published while it was gone.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Silent drop to an absent ephemeral subscriber</strong> — A message published while nothing is listening on a non-durable subscription is discarded, and the publisher gets no signal that anything was missed.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Silent drop to an absent ephemeral subscriber</strong> — A message published while nothing is listening on a non-durable subscription is discarded, and the publisher gets no signal that anything was missed.</li>
             <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="advanced"><strong>Duplicate or reordered delivery</strong> — At-least-once redelivery double-applies non-idempotent handlers, and ordering is not preserved across partitions.</li>
           </ul>
         </div>
@@ -442,7 +456,7 @@ bus.publish("order.placed", "order-42");</code></pre>
         </div>
       </div>
 
-<figure class="diagram">
+<figure class="diagram" id="relationships-fig-1">
         <pre class="mermaid">
 flowchart LR
     PS["Publish-Subscribe"]

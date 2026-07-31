@@ -95,8 +95,8 @@
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
         <p id="description-p-1">Pessimistic locking takes the pessimistic bet — it assumes two transactions <em>will</em> collide, so it grabs an explicit lock on the rows it is about to touch before doing anything with them. In SQL that is <code>SELECT … FOR UPDATE</code> inside a transaction: every row the select returns is locked until you commit or roll back, and any other transaction that asks for those same rows — to update them, or to select them for update — blocks and waits its turn.</p>
-        <p id="description-p-2">The force it resolves is the lost-update race: the gap between reading a value and writing it back. You read a row, decide something in application code, then write — and a second transaction slips in between your read and your write, so one of the two updates silently clobbers the other. A conditional write closes that gap when the safety rule is a simple predicate the database can evaluate inside the statement (<code>WHERE available_seats &gt; 0</code>). But once the decision is real application logic — <em>find four contiguous open seats</em>, <em>pick the cheapest unit still in stock</em> — there is no single <code>WHERE</code> clause that expresses it, and you have to hold the rows still while you think. Pessimistic locking holds them still.</p>
-        <p id="description-p-3">Its defining choice is prevention over detection. Optimistic concurrency control makes the opposite bet: let everyone proceed, catch the collision at write time, and retry the loser — cheaper when conflicts are rare, but it thrashes when they are common. Pessimistic locking pays the lock cost on every transaction, collision or not, and in return never retries and never surprises anyone with a clobbered write. Reach for it when contention is genuinely high; stay optimistic when it is not.</p>
+        <p id="description-p-2" data-kb-level="advanced">The force it resolves is the lost-update race: the gap between reading a value and writing it back. You read a row, decide something in application code, then write — and a second transaction slips in between your read and your write, so one of the two updates silently clobbers the other. A conditional write closes that gap when the safety rule is a simple predicate the database can evaluate inside the statement (<code>WHERE available_seats &gt; 0</code>). But once the decision is real application logic — <em>find four contiguous open seats</em>, <em>pick the cheapest unit still in stock</em> — there is no single <code>WHERE</code> clause that expresses it, and you have to hold the rows still while you think. Pessimistic locking holds them still.</p>
+        <p id="description-p-3" data-kb-level="expert">Its defining choice is prevention over detection. Optimistic concurrency control makes the opposite bet: let everyone proceed, catch the collision at write time, and retry the loser — cheaper when conflicts are rare, but it thrashes when they are common. Pessimistic locking pays the lock cost on every transaction, collision or not, and in return never retries and never surprises anyone with a clobbered write. Reach for it when contention is genuinely high; stay optimistic when it is not.</p>
       </div>
     </section>
 
@@ -121,6 +121,25 @@
     <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
       <h2 class="doc-h" id="h-structure">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    A["Txn A"]
+    B["Txn B"]
+    subgraph Held["Exclusive lock — held until COMMIT"]
+        LM["Lock manager"]
+        Seat[("Seats row A15")]
+    end
+    A --&gt;|"1 SELECT … FOR UPDATE"| LM
+    LM --&gt;|"2 grant lock, return row"| A
+    B --&gt;|"3 SELECT … FOR UPDATE, same row"| LM
+    LM --&gt;|"4 queue B behind A"| B
+    A --&gt;|"5 decide, UPDATE, COMMIT"| Seat
+    Seat --&gt;|"6 release lock"| LM
+    LM --&gt;|"7 grant to B, post-commit row"| B
+        </pre>
+        <figcaption>What stops two transactions deciding on the same row at once? Txn A holds the row from its locking read to COMMIT, so Txn B waits and then reads the value A wrote rather than the one A saw.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -148,12 +167,12 @@ sequenceDiagram
       <dl class="variations">
         <dt id="variations-item-1">Exclusive vs. shared locks</dt>
         <dd><code>FOR UPDATE</code> takes an exclusive lock — no other transaction may read-for-update or write the row. <code>FOR SHARE</code> (MySQL's <code>LOCK IN SHARE MODE</code>) takes a shared lock: others may also read-for-share, but writers still block. Use shared when you only need a row to stay stable while you read related data, exclusive when you intend to write it.</dd>
-        <dt id="variations-item-2">Claim-and-skip for work queues</dt>
-        <dd><code>SELECT … FOR UPDATE SKIP LOCKED</code> steps over rows another transaction has already locked instead of waiting, so N workers each grab a different unclaimed row. This is the standard way to pull jobs off a database-backed queue without two workers claiming the same job.</dd>
-        <dt id="variations-item-3">Wait, fail fast, or time out</dt>
-        <dd>By default the lock request waits (up to a lock-wait timeout). <code>NOWAIT</code> fails immediately if the row is already locked, letting the caller back off rather than queue. Picking one is a policy choice: queue behind contention, or shed it.</dd>
-        <dt id="variations-item-4">Lock granularity and scope</dt>
-        <dd>Row-level is the default and the finest. A broad <code>SELECT</code> — or a missing index that forces a scan — can lock far more rows than you intended, and some engines escalate to page or table locks under pressure. Lock the narrowest set that makes the decision safe, and no more.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Claim-and-skip for work queues</dt>
+        <dd data-kb-level="advanced"><code>SELECT … FOR UPDATE SKIP LOCKED</code> steps over rows another transaction has already locked instead of waiting, so N workers each grab a different unclaimed row. This is the standard way to pull jobs off a database-backed queue without two workers claiming the same job.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Wait, fail fast, or time out</dt>
+        <dd data-kb-level="advanced">By default the lock request waits (up to a lock-wait timeout). <code>NOWAIT</code> fails immediately if the row is already locked, letting the caller back off rather than queue. Picking one is a policy choice: queue behind contention, or shed it.</dd>
+        <dt id="variations-item-4" data-kb-level="expert">Lock granularity and scope</dt>
+        <dd data-kb-level="expert">Row-level is the default and the finest. A broad <code>SELECT</code> — or a missing index that forces a scan — can lock far more rows than you intended, and some engines escalate to page or table locks under pressure. Lock the narrowest set that makes the decision safe, and no more.</dd>
       </dl>
     </section>
 
@@ -165,8 +184,8 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Prevents lost updates outright — no retry loop, no clobbered writes; the winner is whoever acquires the lock, decided deterministically.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Handles arbitrary read-decide-write logic that no single conditional <code>WHERE</code> clause could express.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Predictable under high contention — where optimistic retries would thrash, a lock queue simply serializes the work.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Uses the database's own battle-tested locking and deadlock detection — no new infrastructure to run.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Predictable under high contention — where optimistic retries would thrash, a lock queue simply serializes the work.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Uses the database's own battle-tested locking and deadlock detection — no new infrastructure to run.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -174,9 +193,9 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">The lock is held for the whole transaction, so a long or slow one — an external API call mid-transaction — stalls everyone queued behind it.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Reduced concurrency: contending writers are serialized, and every transaction pays the lock cost even when it would never have collided.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Deadlock risk when transactions acquire locks in inconsistent order; the database aborts one side and the app must catch and retry it.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Deadlock risk when transactions acquire locks in inconsistent order; the database aborts one side and the app must catch and retry it.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Lock-wait timeouts surface as errors the caller must handle, and a forgotten <code>COMMIT</code> on a held connection can block others indefinitely.</li>
-            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">Does not span connections, services, or time — it lives and dies with one transaction, so it is not a distributed lock.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Does not span connections, services, or time — it lives and dies with one transaction, so it is not a distributed lock.</li>
           </ul>
         </div>
       </div>
@@ -190,8 +209,8 @@ sequenceDiagram
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Collisions on the same rows are frequent, so optimistic retries would just thrash.</li>
             <li id="usage-when-2" data-kb-polarity="when">The decision between reading and writing is real application logic, not a predicate the database can check inside the <code>UPDATE</code>.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You must guarantee exactly one transaction mutates a record at a time — balances, inventory, seat selection.</li>
-            <li id="usage-when-4" data-kb-polarity="when">The whole operation fits inside a single, short database transaction.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You must guarantee exactly one transaction mutates a record at a time — balances, inventory, seat selection.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">The whole operation fits inside a single, short database transaction.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -199,8 +218,8 @@ sequenceDiagram
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Contention is low — optimistic concurrency or a plain conditional write is cheaper and never blocks.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">The safety rule is a single <code>WHERE</code> predicate — one conditional <code>UPDATE</code> already closes the gap.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The critical section must span more than one transaction, wait on a human, or cross services — reach for a distributed lock or a saga instead.</li>
-            <li id="usage-avoid-4" data-kb-polarity="avoid">The transaction would hold the lock across slow I/O such as a payment gateway or third-party call.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The critical section must span more than one transaction, wait on a human, or cross services — reach for a distributed lock or a saga instead.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid" data-kb-level="advanced">The transaction would hold the lock across slow I/O such as a payment gateway or third-party call.</li>
           </ul>
         </div>
       </div>
@@ -243,8 +262,8 @@ async function reserveSeat(db: Client, seatId: string, userId: string) {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="postgresql" id="wild-postgresql"><strong>PostgreSQL</strong><span>Row-level locking reads: SELECT … FOR UPDATE (and FOR SHARE) lock the returned rows until the transaction ends. FOR UPDATE SKIP LOCKED, added in 9.5, lets many workers each claim a distinct unlocked row; NOWAIT fails fast instead of waiting on a held lock.</span></div>
-        <div class="wild-item" data-kb-example="mysql-innodb" id="wild-mysql-innodb"><strong>MySQL / InnoDB</strong><span>Locking reads via FOR UPDATE and LOCK IN SHARE MODE (spelled FOR SHARE since 8.0, which also added SKIP LOCKED and NOWAIT). InnoDB holds the row locks to the end of the transaction and detects deadlocks, rolling one transaction back with an error the app must retry.</span></div>
-        <div class="wild-item" data-kb-example="skip-locked-queues" id="wild-skip-locked-queues"><strong>Database-backed job queues</strong><span>Postgres-backed queue libraries such as graphile-worker build a work queue on an ordinary table and claim the next job with SELECT … FOR UPDATE SKIP LOCKED, so concurrent pollers each atomically grab a different row and no two workers run the same task.</span></div>
+        <div class="wild-item" data-kb-example="mysql-innodb" id="wild-mysql-innodb" data-kb-level="advanced"><strong>MySQL / InnoDB</strong><span>Locking reads via FOR UPDATE and LOCK IN SHARE MODE (spelled FOR SHARE since 8.0, which also added SKIP LOCKED and NOWAIT). InnoDB holds the row locks to the end of the transaction and detects deadlocks, rolling one transaction back with an error the app must retry.</span></div>
+        <div class="wild-item" data-kb-example="skip-locked-queues" id="wild-skip-locked-queues" data-kb-level="expert"><strong>Database-backed job queues</strong><span>Postgres-backed queue libraries such as graphile-worker build a work queue on an ordinary table and claim the next job with SELECT … FOR UPDATE SKIP LOCKED, so concurrent pollers each atomically grab a different row and no two workers run the same task.</span></div>
       </div>
     </section>
 
@@ -255,30 +274,30 @@ async function reserveSeat(db: Client, seatId: string, userId: string) {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Lock wait timeout</strong> — How long a blocked statement queues before it gives up and errors — PostgreSQL `lock_timeout`, MySQL/InnoDB `innodb_lock_wait_timeout`. Set too long, waiters pile up holding connections; too short, ordinary queuing surfaces as spurious failures the caller must retry.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Wait policy per statement</strong> — Whether a locking read queues (the default), fails immediately with `NOWAIT`, or steps over locked rows with `SKIP LOCKED`. This is a per-call-site decision, not a server setting: queue behind contention, shed it, or route around it.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Lock mode and scope</strong> — `FOR UPDATE` (exclusive) versus `FOR SHARE`, and how many rows the WHERE clause plus its index actually lock. The plan decides the scope, not the intent — in InnoDB a locking statement with no usable index locks every row it examines, not just the ones it returns.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Transaction boundary timeouts</strong> — Caps on how long a transaction can hold what it has taken — PostgreSQL `statement_timeout` for a single statement and `idle_in_transaction_session_timeout` for a session sitting idle inside an open transaction while still holding its locks.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Deadlock detection and retry policy</strong> — PostgreSQL `deadlock_timeout` sets how long a waiter blocks before deadlock detection runs; InnoDB's `innodb_deadlock_detect` can turn detection off so waits end at the lock timeout instead. Alongside it sits the application's own dial: attempt count, backoff and jitter after an abort.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Wait policy per statement</strong> — Whether a locking read queues (the default), fails immediately with `NOWAIT`, or steps over locked rows with `SKIP LOCKED`. This is a per-call-site decision, not a server setting: queue behind contention, shed it, or route around it.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Lock mode and scope</strong> — `FOR UPDATE` (exclusive) versus `FOR SHARE`, and how many rows the WHERE clause plus its index actually lock. The plan decides the scope, not the intent — in InnoDB a locking statement with no usable index locks every row it examines, not just the ones it returns.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Transaction boundary timeouts</strong> — Caps on how long a transaction can hold what it has taken — PostgreSQL `statement_timeout` for a single statement and `idle_in_transaction_session_timeout` for a session sitting idle inside an open transaction while still holding its locks.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Deadlock detection and retry policy</strong> — PostgreSQL `deadlock_timeout` sets how long a waiter blocks before deadlock detection runs; InnoDB's `innodb_deadlock_detect` can turn detection off so waits end at the lock timeout instead. Alongside it sits the application's own dial: attempt count, backoff and jitter after an abort.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Lock wait time</strong> — How long transactions spend blocked before acquiring. PostgreSQL shows it as sessions with `wait_event_type = 'Lock'` in `pg_stat_activity` and ungranted rows in `pg_locks`. A rising figure is the first sign the contended rows have become the bottleneck.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Deadlock rate</strong> — Deadlocks detected per interval — PostgreSQL keeps a per-database counter in `pg_stat_database.deadlocks`. Steady state should sit near zero; any sustained trend means two code paths take the same rows in different orders.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Abort rate by error code</strong> — The share of transactions ending in a lock-wait timeout or deadlock rather than a commit (MySQL 1205 and 1213; PostgreSQL SQLSTATE 40P01, and 55P03 from `NOWAIT`). Track it as a proportion of attempts — the absolute count moves with traffic and hides the trend.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Lock hold time (p95/p99)</strong> — How long a locking transaction runs from acquisition to commit. On a single contended row this is the throughput ceiling — roughly one transaction per hold time — so watch the tail, where a few slow transactions set the queue length for everyone.</li>
-            <li id="production-signal-5" data-kb-polarity="signal"><strong>Connection pool wait time</strong> — A blocked transaction keeps its connection while it waits, so lock contention on a handful of rows shows up as pool saturation and queuing for unrelated traffic that never touches those rows.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Deadlock rate</strong> — Deadlocks detected per interval — PostgreSQL keeps a per-database counter in `pg_stat_database.deadlocks`. Steady state should sit near zero; any sustained trend means two code paths take the same rows in different orders.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Abort rate by error code</strong> — The share of transactions ending in a lock-wait timeout or deadlock rather than a commit (MySQL 1205 and 1213; PostgreSQL SQLSTATE 40P01, and 55P03 from `NOWAIT`). Track it as a proportion of attempts — the absolute count moves with traffic and hides the trend.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Lock hold time (p95/p99)</strong> — How long a locking transaction runs from acquisition to commit. On a single contended row this is the throughput ceiling — roughly one transaction per hold time — so watch the tail, where a few slow transactions set the queue length for everyone.</li>
+            <li id="production-signal-5" data-kb-polarity="signal" data-kb-level="expert"><strong>Connection pool wait time</strong> — A blocked transaction keeps its connection while it waits, so lock contention on a handful of rows shows up as pool saturation and queuing for unrelated traffic that never touches those rows.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Convoy on a hot row</strong> — Every transaction touching the same row serializes, so throughput on it caps at one per hold time no matter how many workers you add. Extra concurrency past that point only lengthens the queue and the latency tail.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Lock held across slow I/O</strong> — A payment call or third-party request inside the transaction stretches hold time from milliseconds to seconds. The queue behind it then grows faster than it drains, and waiters start failing on lock-wait timeouts far from the transaction that caused it.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Deadlock storm from inconsistent ordering</strong> — Two paths that take the same pair of rows in opposite order deadlock rarely at low volume and constantly at high. The engine aborts one side, the application retries, and the retries add load exactly when the system is already saturated.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Lock scope wider than intended</strong> — A locking read that cannot use an index locks everything it scans. Under InnoDB's REPEATABLE READ, gap locks additionally block inserts into the scanned range, so unrelated writes stall on a lock nobody meant to take.</li>
-            <li id="production-failure-5" data-kb-polarity="failure"><strong>Idle in transaction</strong> — A worker that opens a transaction and then stalls — a crash between statements, a forgotten COMMIT — holds its locks until something kills the session. In PostgreSQL a long-lived transaction also holds back cleanup of dead rows, so the damage outlives the blocked callers.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Lock held across slow I/O</strong> — A payment call or third-party request inside the transaction stretches hold time from milliseconds to seconds. The queue behind it then grows faster than it drains, and waiters start failing on lock-wait timeouts far from the transaction that caused it.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Deadlock storm from inconsistent ordering</strong> — Two paths that take the same pair of rows in opposite order deadlock rarely at low volume and constantly at high. The engine aborts one side, the application retries, and the retries add load exactly when the system is already saturated.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Lock scope wider than intended</strong> — A locking read that cannot use an index locks everything it scans. Under InnoDB's REPEATABLE READ, gap locks additionally block inserts into the scanned range, so unrelated writes stall on a lock nobody meant to take.</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Idle in transaction</strong> — A worker that opens a transaction and then stalls — a crash between statements, a forgotten COMMIT — holds its locks until something kills the session. In PostgreSQL a long-lived transaction also holds back cleanup of dead rows, so the damage outlives the blocked callers.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -286,11 +305,11 @@ async function reserveSeat(db: Client, seatId: string, userId: string) {
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Keep the transaction short and free of external network calls — nothing that can hang belongs between the lock and the COMMIT.</li>
             <li id="production-check-2" data-kb-polarity="check">Always set an explicit lock wait timeout so no caller blocks indefinitely, and pair it with a statement timeout and an idle-in-transaction timeout.</li>
-            <li id="production-check-3" data-kb-polarity="check">Acquire multiple locks in one deterministic order everywhere in the codebase — sorting by primary key before locking is the practical cure for deadlocks.</li>
-            <li id="production-check-4" data-kb-polarity="check">Treat deadlock and lock-timeout errors as expected outcomes: catch them, retry with capped jittered backoff, and fail with a clear error rather than looping forever.</li>
-            <li id="production-check-5" data-kb-polarity="check">Read the query plan of every locking SELECT and confirm an index narrows it to the rows you meant to lock.</li>
-            <li id="production-check-6" data-kb-polarity="check">Choose the wait policy per call site — queue by default, NOWAIT to shed load, SKIP LOCKED for claim-one-row queue work.</li>
-            <li id="production-check-7" data-kb-polarity="check">Load-test at the contention you actually expect, and size the connection pool knowing that blocked transactions occupy connections while they wait.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Acquire multiple locks in one deterministic order everywhere in the codebase — sorting by primary key before locking is the practical cure for deadlocks.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Treat deadlock and lock-timeout errors as expected outcomes: catch them, retry with capped jittered backoff, and fail with a clear error rather than looping forever.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Read the query plan of every locking SELECT and confirm an index narrows it to the rows you meant to lock.</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Choose the wait policy per call site — queue by default, NOWAIT to shed load, SKIP LOCKED for claim-one-row queue work.</li>
+            <li id="production-check-7" data-kb-polarity="check" data-kb-level="expert">Load-test at the contention you actually expect, and size the connection pool knowing that blocked transactions occupy connections while they wait.</li>
           </ul>
         </div>
       </div>

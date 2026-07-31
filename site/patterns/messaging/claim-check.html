@@ -101,7 +101,7 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1" data-kb-register="basic">A customer uploads a 30 MB scan of their passport, and you put it on the queue. The broker rejects it outright, or it accepts it and now every message behind it moves slower, because the channel was built for thousands of small notes and you just posted a suitcase through it. Four of the five services listening only wanted to know that a document arrived — none of them ever opens the file. A <strong>claim check</strong> separates the two: store the file once somewhere built for files, and put only its address on the queue. Whoever actually needs the bytes goes and gets them.</p>
+        <p id="description-p-1">A customer uploads a 30 MB scan of their passport, and you put it on the queue. The broker rejects it outright, or it accepts it and now every message behind it moves slower, because the channel was built for thousands of small notes and you just posted a suitcase through it. Four of the five services listening only wanted to know that a document arrived — none of them ever opens the file. A <strong>claim check</strong> separates the two: store the file once somewhere built for files, and put only its address on the queue. Whoever actually needs the bytes goes and gets them.</p>
         <p id="description-p-2" data-kb-level="advanced">The producer writes the payload to durable shared storage, waits for that write to confirm, then publishes a message carrying only a key or a presigned URL. The consumer that genuinely needs the bytes redeems the reference against the store; the rest route on the metadata and never touch it. That keeps traffic inside the broker's practical limits — Kafka defaults to a 1&nbsp;MB message cap, SQS to 256&nbsp;KB — and it lets storage and messaging scale on their own terms, the bulk data sitting wherever it is cheapest to hold.</p>
         <p id="description-p-3">The name comes from the same idea as a coat check or an airport baggage tag: you hand over the bulky item once, get back a small ticket, and only redeem the ticket for the item when you actually need it back.</p>
       </div>
@@ -128,6 +128,26 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Prod["Upload service"]
+    Store[("Object store")]
+    subgraph Ref["Reference only — the payload never crosses here"]
+        Q[("Message queue")]
+        Router["Metadata-only consumer"]:::ext
+    end
+    Scan["Scanning consumer"]:::ext
+    Prod --&gt;|"1 put the 30 MB scan"| Store
+    Store --&gt;|"2 write confirmed, key returned"| Prod
+    Prod --&gt;|"3 publish the key alone"| Q
+    Q --&gt;|"4 deliver"| Router
+    Q --&gt;|"4 deliver"| Scan
+    Scan --&gt;|"5 redeem the key for the bytes"| Store
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does a 30 MB scan reach the one consumer that needs it without crossing the queue? Step 2 confirms the write before step 3 publishes, so the key on the queue always resolves at step 5.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -173,7 +193,7 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Keeps the message channel fast by capping what actually crosses it to a small reference.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Consumers that don't care about the payload never pay to move, deserialize, or buffer it.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Storage and messaging scale independently — cheap object storage for bulk data, a lean broker.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Storage and messaging scale independently — cheap object storage for bulk data, a lean broker.</li>
             <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">The payload can be inspected, versioned, or reprocessed in the store without replaying the message.</li>
             <li id="tradeoffs-pro-5" data-kb-polarity="pro" data-kb-level="advanced">Sensitive payloads never enter the broker — the store's own access controls guard them, and queue-monitoring tooling only ever sees the reference.</li>
           </ul>
@@ -184,7 +204,7 @@ sequenceDiagram
             <li id="tradeoffs-con-1" data-kb-polarity="con">Adds a network round trip and a second system — the store — that must be up for the message to be useful.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Two writes, store then queue, aren't atomic — a crash between them leaves an orphaned object or a phantom reference. Write to the store first, and put the publish behind an <a href="../distributed/coordination/outbox.html">outbox</a> when the pair genuinely has to hold.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">Someone has to garbage-collect stored payloads once every claim check is redeemed or expires — a lifecycle rule on the bucket, not a promise to remember.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Debugging is harder: the message body only tells you where to look, not what happened.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Debugging is harder: the message body only tells you where to look, not what happened.</li>
             <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">Retention becomes a correctness setting rather than a cost setting: sweep the object before the slowest consumer or a replay gets to it, and the reference redeems nothing.</li>
             <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">The store is now on the critical path. Its outage no longer loses messages — it stalls every consumer that needs a body, which is a different incident and needs its own runbook.</li>
           </ul>
@@ -200,7 +220,7 @@ sequenceDiagram
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">A payload routinely exceeds the broker's practical or hard message-size limit.</li>
             <li id="usage-when-2" data-kb-polarity="when">Most consumers only need to route or filter on metadata, not the full body.</li>
-            <li id="usage-when-3" data-kb-polarity="when">Storage and message-channel throughput need to scale independently.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Storage and message-channel throughput need to scale independently.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -208,7 +228,7 @@ sequenceDiagram
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Payloads are consistently small enough to fit the channel without strain — the extra store round trip only adds latency.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">The store write and the message publish must be atomic — pair with an outbox instead of send-and-hope.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">Only one consumer ever exists and it always needs the full payload immediately — just send it inline.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Only one consumer ever exists and it always needs the full payload immediately — just send it inline.</li>
           </ul>
         </div>
       </div>
@@ -216,7 +236,7 @@ sequenceDiagram
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+      <details class="sketch" id="sketch-variant-1">
         <summary>TypeScript — store the bytes, send the address</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">// Producer: the file goes to storage first, and only its key goes on the queue.
 async function submit(photo: Buffer) {
@@ -282,7 +302,7 @@ async function runVerify(
         <div class="prod-group prod-knobs">
           <h3>Tuning knobs</h3>
           <ul>
-            <li id="production-knob-1" data-kb-polarity="knob"><strong>Offload size threshold</strong> — The payload size above which the body goes to the store and only a reference is sent, versus sending it inline (SQS Extended Client payloadSizeThreshold, or an always-offload flag).</li>
+            <li id="production-knob-1" data-kb-polarity="knob" data-kb-level="advanced"><strong>Offload size threshold</strong> — The payload size above which the body goes to the store and only a reference is sent, versus sending it inline (SQS Extended Client payloadSizeThreshold, or an always-offload flag).</li>
             <li id="production-knob-2" data-kb-polarity="knob"><strong>Store retention / TTL</strong> — How long a stored payload lives before a lifecycle rule reclaims it (object-store lifecycle expiration).</li>
             <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Reference expiry</strong> — When the claim check is a time-boxed presigned URL, the validity window of that URL before it stops resolving.</li>
             <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Store durability / class</strong> — Which storage tier holds the payload — the durability and read-latency trade for the bytes taken off the channel.</li>
@@ -291,7 +311,7 @@ async function runVerify(
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
-            <li id="production-signal-1" data-kb-polarity="signal"><strong>Store fetch latency</strong> — The added round trip a consumer spends redeeming the reference — pure overhead on every message whose body is actually needed.</li>
+            <li id="production-signal-1" data-kb-polarity="signal" data-kb-level="advanced"><strong>Store fetch latency</strong> — The added round trip a consumer spends redeeming the reference — pure overhead on every message whose body is actually needed.</li>
             <li id="production-signal-2" data-kb-polarity="signal"><strong>Fetch error rate</strong> — References that resolve to a missing or unavailable object — phantom references and premature cleanup both surface here first.</li>
             <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Orphaned object growth</strong> — Stored payloads no message points at — a rising floor of storage nothing will ever redeem or delete.</li>
             <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Offload ratio</strong> — Fraction of messages sent by reference versus inline; it confirms the threshold is diverting the payloads you meant it to.</li>
@@ -302,7 +322,7 @@ async function runVerify(
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Phantom reference</strong> — Publishing the message before the store write commits, or crashing between the two, leaves consumers holding a reference to data the store does not have.</li>
             <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Orphaned payload</strong> — The store write succeeds but the publish fails, so the object sits in storage with no claim check that will ever redeem or delete it.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Store outage blocks consumers</strong> — The reference is valid but the store is down, so a message that crossed the channel fine is useless until the store recovers — consumers stall rather than fail.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Store outage blocks consumers</strong> — The reference is valid but the store is down, so a message that crossed the channel fine is useless until the store recovers — consumers stall rather than fail.</li>
             <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Premature expiry</strong> — A retention window shorter than a slow consumer or a replay needs sweeps the payload before it is redeemed, and the redelivery finds nothing.</li>
             <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Redemption stampede</strong> — A fan-out means every subscriber redeems the same reference at once, so one published message becomes N concurrent reads of one object.</li>
           </ul>

@@ -89,8 +89,8 @@
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
         <p id="description-p-1">A <strong>token bucket</strong> is a rate-limiting algorithm. Picture a bucket that holds up to <em>C</em> tokens and is topped up at a steady rate of <em>r</em> tokens per second, never past its capacity. Every request must take one token before it may proceed; if the bucket is empty, the request is refused (or made to wait). Because the bucket can be full, a caller who has been quiet may spend a whole bucketful at once — but once it drains, they are paced to the refill rate.</p>
-        <p id="description-p-2">The force it resolves is <strong>bursty traffic against a finite budget</strong>. You want to protect a service from being swamped, and to share it fairly among callers, without punishing the normal, spiky shape of real traffic. A naïve fixed-window counter is unfair at the edges — it can let <em>2×</em> the intended rate through across a window boundary — while a strict constant-rate limiter rejects legitimate bursts. The token bucket separates two concerns cleanly: <em>capacity</em> governs how big a burst you tolerate, and <em>refill rate</em> governs the long-run average.</p>
-        <p id="description-p-3">Its cousin, the <em>leaky bucket</em>, drains at a constant rate and so smooths output completely; the token bucket instead permits bursts up to its size. The same two-dial idea — a burst allowance plus a steady rate — is why it is the algorithm most API rate limiters actually run.</p>
+        <p id="description-p-2" data-kb-level="advanced">The force it resolves is <strong>bursty traffic against a finite budget</strong>. You want to protect a service from being swamped, and to share it fairly among callers, without punishing the normal, spiky shape of real traffic. A naïve fixed-window counter is unfair at the edges — it can let <em>2×</em> the intended rate through across a window boundary — while a strict constant-rate limiter rejects legitimate bursts. The token bucket separates two concerns cleanly: <em>capacity</em> governs how big a burst you tolerate, and <em>refill rate</em> governs the long-run average.</p>
+        <p id="description-p-3" data-kb-level="expert">Its cousin, the <em>leaky bucket</em>, drains at a constant rate and so smooths output completely; the token bucket instead permits bursts up to its size. The same two-dial idea — a burst allowance plus a steady rate — is why it is the algorithm most API rate limiters actually run.</p>
       </div>
     </section>
 
@@ -117,13 +117,41 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    R["Refiller: +r tokens/sec"] -->|"top up to capacity C"| B[("Bucket, capacity C")]
-    Q["Incoming request"] -->|"arrives"| G{"Token available?"}
-    B -->|"current level"| G
-    G -->|"yes"| A["Consume 1 token, allow"]
-    G -->|"no"| D["Reject / throttle"]
+    Caller["Caller"]
+    L["Limiter"]
+    subgraph Bkt["One bucket per caller"]
+        Tokens[("Token count + last-refill time")]
+    end
+    Svc["Protected service"]:::ext
+    Caller --&gt;|"1 request"| L
+    L --&gt;|"2 add elapsed x r tokens, capped at C"| Tokens
+    L --&gt;|"3 spend one token"| Tokens
+    L --&gt;|"4 forward the request"| Svc
+    Svc --&gt;|"5 response"| Caller
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>Tokens accrue at rate r up to capacity C; each request spends one. An empty bucket sheds or delays the request until a token accrues.</figcaption>
+        <figcaption>How does a caller who has been quiet get to spend a burst without ever beating the average? Step 2 tops the bucket up from the clock and stops at C, so the burst is bounded by the bucket and the long run by the refill rate.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Caller
+    participant L as Limiter
+    participant B as Bucket
+    participant S as Service
+    C-&gt;&gt;L: request
+    L-&gt;&gt;B: add elapsed x r tokens, clamp to capacity C
+    alt at least one token
+        L-&gt;&gt;B: subtract the request's cost
+        L-&gt;&gt;S: forward
+        S--&gt;&gt;C: 200
+    else bucket empty
+        L--xC: 429 with Retry-After
+        Note over L,B: the caller is paced to r until tokens accrue again
+    end
+        </pre>
+        <figcaption>What happens when the bucket runs dry? The limiter refuses the request and tells the caller when to come back, so the burst allowance and the sustained rate stay separate promises.</figcaption>
       </figure>
     </section>
 
@@ -132,14 +160,14 @@ flowchart LR
       <dl class="variations">
         <dt id="variations-item-1">Token bucket vs. leaky bucket</dt>
         <dd>Both bound a rate. The token bucket <em>permits bursts</em> up to its capacity; the leaky bucket drains at a strictly constant rate and so admits no bursts at all. Reach for leaky when you need perfectly smooth output; for token when a burst is acceptable and desirable.</dd>
-        <dt id="variations-item-2">Lazy (on-demand) refill</dt>
-        <dd>Instead of a background timer dripping tokens in, store a <code>lastRefill</code> timestamp and, on each request, add <code>elapsed × rate</code> tokens (capped at capacity). No thread, no scheduler — the standard implementation.</dd>
-        <dt id="variations-item-3">Distributed / shared bucket</dt>
-        <dd>Keep the token count in a shared store so a whole cluster enforces one global rate rather than one rate per replica. Correctness then rests on an atomic check-and-decrement (for example a Redis Lua script).</dd>
-        <dt id="variations-item-4">Weighted / cost-based tokens</dt>
-        <dd>Let an expensive request cost more than one token — by payload size, query complexity, or price tier — so the limit tracks real work rather than raw request count.</dd>
-        <dt id="variations-item-5">Hierarchical buckets</dt>
-        <dd>Layer buckets: a per-user bucket plus a global bucket, and a request must draw a token from every level it passes through. This bounds any single caller and the aggregate at once.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Lazy (on-demand) refill</dt>
+        <dd data-kb-level="advanced">Instead of a background timer dripping tokens in, store a <code>lastRefill</code> timestamp and, on each request, add <code>elapsed × rate</code> tokens (capped at capacity). No thread, no scheduler — the standard implementation.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Distributed / shared bucket</dt>
+        <dd data-kb-level="advanced">Keep the token count in a shared store so a whole cluster enforces one global rate rather than one rate per replica. Correctness then rests on an atomic check-and-decrement (for example a Redis Lua script).</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Weighted / cost-based tokens</dt>
+        <dd data-kb-level="advanced">Let an expensive request cost more than one token — by payload size, query complexity, or price tier — so the limit tracks real work rather than raw request count.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Hierarchical buckets</dt>
+        <dd data-kb-level="expert">Layer buckets: a per-user bucket plus a global bucket, and a request must draw a token from every level it passes through. This bounds any single caller and the aggregate at once.</dd>
       </dl>
     </section>
 
@@ -152,14 +180,14 @@ flowchart LR
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Allows bursts up to capacity while bounding the long-run average rate — two independent dials.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Cheap and O(1): each bucket is just a token count plus a last-refill timestamp.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Lazy refill needs no background timer or scheduler thread.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Fairer than a fixed-window counter, which lets a double burst slip across the window boundary.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Fairer than a fixed-window counter, which lets a double burst slip across the window boundary.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Per-instance buckets don't share state; N replicas allow up to N× the intended global rate.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">A global limit needs an atomic shared store, adding a dependency and per-call latency.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="advanced">Per-instance buckets don't share state; N replicas allow up to N× the intended global rate.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="expert">A global limit needs an atomic shared store, adding a dependency and per-call latency.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">A large capacity still lets a big burst through that can overwhelm a fragile downstream.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Choosing capacity and rate is real tuning; wrong values throttle honest traffic or leak too much.</li>
           </ul>
@@ -175,8 +203,8 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">You must cap the average request rate but want to tolerate short, natural bursts.</li>
             <li id="usage-when-2" data-kb-polarity="when">You're building an API limiter keyed per user, per API key, per tenant, or per IP.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You want to shape offered load to a downstream's real capacity.</li>
-            <li id="usage-when-4" data-kb-polarity="when">A fixed-window counter is too coarse or unfair at its window edges.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You want to shape offered load to a downstream's real capacity.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">A fixed-window counter is too coarse or unfair at its window edges.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -184,8 +212,8 @@ flowchart LR
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">You need a strictly constant output rate with no bursts — a <a href="./load-leveling.html">queue</a> or leaky bucket fits better.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">A single-node process with no contention needs no rate governance at all.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="expert">The limit must be exact and global but you cannot afford an atomic shared store — rethink the requirement.</li>
-            <li id="usage-avoid-4" data-kb-polarity="avoid">You actually want to <em>buffer</em> excess work rather than shed it.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The limit must be exact and global but you cannot afford an atomic shared store — rethink the requirement.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid" data-kb-level="advanced">You actually want to <em>buffer</em> excess work rather than shed it.</li>
           </ul>
         </div>
       </div>
@@ -234,9 +262,9 @@ if (!bucket.tryConsume()) throw new Error("429 Too Many Requests");</code></pre>
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="envoy" id="wild-envoy"><strong>Envoy</strong><span>Its local rate-limit filter is configured with a literal <code>token_bucket</code> block — <code>max_tokens</code> (capacity), <code>tokens_per_fill</code>, and <code>fill_interval</code> — spending a token per matching request.</span></div>
-        <div class="wild-item" data-kb-example="go-x-time-rate" id="wild-go-x-time-rate"><strong>Go <code>golang.org/x/time/rate</code></strong><span>The standard <code>rate.Limiter</code> is a token bucket: <code>NewLimiter(r, b)</code> sets the refill rate <em>r</em> and burst size <em>b</em>, exposed through <code>Allow</code>, <code>Wait</code>, and <code>Reserve</code>.</span></div>
-        <div class="wild-item" data-kb-example="guava-ratelimiter" id="wild-guava-ratelimiter"><strong>Guava <code>RateLimiter</code></strong><span>Hands out permits at a fixed rate and lets unused permits accumulate up to a small burst (<code>SmoothBursty</code>) — token-bucket behaviour under the hood.</span></div>
+        <div class="wild-item" data-kb-example="envoy" id="wild-envoy" data-kb-level="advanced"><strong>Envoy</strong><span>Its local rate-limit filter is configured with a literal <code>token_bucket</code> block — <code>max_tokens</code> (capacity), <code>tokens_per_fill</code>, and <code>fill_interval</code> — spending a token per matching request.</span></div>
+        <div class="wild-item" data-kb-example="go-x-time-rate" id="wild-go-x-time-rate" data-kb-level="advanced"><strong>Go <code>golang.org/x/time/rate</code></strong><span>The standard <code>rate.Limiter</code> is a token bucket: <code>NewLimiter(r, b)</code> sets the refill rate <em>r</em> and burst size <em>b</em>, exposed through <code>Allow</code>, <code>Wait</code>, and <code>Reserve</code>.</span></div>
+        <div class="wild-item" data-kb-example="guava-ratelimiter" id="wild-guava-ratelimiter" data-kb-level="expert"><strong>Guava <code>RateLimiter</code></strong><span>Hands out permits at a fixed rate and lets unused permits accumulate up to a small burst (<code>SmoothBursty</code>) — token-bucket behaviour under the hood.</span></div>
         <div class="wild-item" data-kb-example="aws-api-gateway" id="wild-aws-api-gateway"><strong>AWS API Gateway</strong><span>Request throttling uses the token bucket algorithm, with a steady-state <code>rateLimit</code> (refill) and a <code>burstLimit</code> (bucket capacity) per stage or route.</span></div>
       </div>
     </section>
@@ -248,28 +276,28 @@ if (!bucket.tryConsume()) throw new Error("429 Too Many Requests");</code></pre>
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Bucket capacity (burst size)</strong> — The maximum number of tokens, and so the largest instantaneous burst you permit (max_tokens, burstLimit, the burst <code>b</code>).</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Refill rate</strong> — Tokens added per unit time; this is the enforced steady-state average rate (tokens_per_fill / fill_interval, rateLimit, the rate <code>r</code>).</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Token cost per request</strong> — Whether every request costs one token or expensive ones cost more, weighting the limit by real work rather than raw count.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Bucket key granularity</strong> — Whether buckets are keyed per IP, per API key, per tenant, or global — this sets how many buckets exist and what each one caps.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>On-empty behaviour</strong> — Reject immediately (shed load, e.g. HTTP 429) or block and wait for a token (throttle) when the bucket is empty.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Refill rate</strong> — Tokens added per unit time; this is the enforced steady-state average rate (tokens_per_fill / fill_interval, rateLimit, the rate <code>r</code>).</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Token cost per request</strong> — Whether every request costs one token or expensive ones cost more, weighting the limit by real work rather than raw count.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Bucket key granularity</strong> — Whether buckets are keyed per IP, per API key, per tenant, or global — this sets how many buckets exist and what each one caps.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>On-empty behaviour</strong> — Reject immediately (shed load, e.g. HTTP 429) or block and wait for a token (throttle) when the bucket is empty.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Throttle / rejection rate</strong> — The fraction of requests denied for lack of a token (e.g. the 429 count) — a limit that is biting hard.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Available tokens / fill level</strong> — How full buckets are; buckets that sit persistently empty mean the configured rate is below offered load.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Offered rate vs. configured rate</strong> — Incoming request rate measured against the refill rate, to see how close callers run to the cap.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Token-store latency and errors</strong> — For a shared bucket, the added latency per check and the error rate of the atomic store.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Available tokens / fill level</strong> — How full buckets are; buckets that sit persistently empty mean the configured rate is below offered load.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="expert"><strong>Offered rate vs. configured rate</strong> — Incoming request rate measured against the refill rate, to see how close callers run to the cap.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Token-store latency and errors</strong> — For a shared bucket, the added latency per check and the error rate of the atomic store.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Per-instance divergence</strong> — Replicas each holding a local bucket collectively admit up to N× the intended global rate.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Shared-store hot key</strong> — A single key backing a global bucket becomes a contention and latency hotspot at high request volume.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Oversized burst</strong> — A capacity set too high lets a burst through that overwhelms a fragile downstream even though the average is within budget.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Clock skew on lazy refill</strong> — A coarse or non-monotonic clock distorts the elapsed-time calculation, leaking too many or too few tokens.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Shared-store hot key</strong> — A single key backing a global bucket becomes a contention and latency hotspot at high request volume.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Oversized burst</strong> — A capacity set too high lets a burst through that overwhelms a fragile downstream even though the average is within budget.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Clock skew on lazy refill</strong> — A coarse or non-monotonic clock distorts the elapsed-time calculation, leaking too many or too few tokens.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -277,9 +305,9 @@ if (!bucket.tryConsume()) throw new Error("429 Too Many Requests");</code></pre>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Decide global vs. per-instance; if global, hold bucket state in an atomic shared store (e.g. a Redis check-and-decrement script).</li>
             <li id="production-check-2" data-kb-polarity="check">Set capacity and refill rate from the downstream's measured capacity, not from a guess.</li>
-            <li id="production-check-3" data-kb-polarity="check">Return 429 with a Retry-After (or equivalent) so clients back off instead of retrying instantly.</li>
-            <li id="production-check-4" data-kb-polarity="check">Emit throttle-rate and rejection metrics with alerts on sustained shedding.</li>
-            <li id="production-check-5" data-kb-polarity="check">Choose the bucket key deliberately and bound the number of buckets so memory stays finite.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Return 429 with a Retry-After (or equivalent) so clients back off instead of retrying instantly.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Emit throttle-rate and rejection metrics with alerts on sustained shedding.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">Choose the bucket key deliberately and bound the number of buckets so memory stays finite.</li>
           </ul>
         </div>
       </div>

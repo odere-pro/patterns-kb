@@ -186,25 +186,25 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1" data-kb-register="basic">A marketing email goes out and ten minutes' worth of traffic arrives in one. The work itself has a ceiling that does not move — a database that writes so fast, a vendor that allows so many calls a second — so the burst piles up inside your service instead: threads block, connections run out, and it falls over under a volume it could have finished comfortably if it had been spread across the hour. <strong>Queue-based load leveling</strong> puts a waiting line in between. Requests are written down and answered later, and the workers take the next one whenever they are free.</p>
+        <p id="description-p-1">A marketing email goes out and ten minutes' worth of traffic arrives in one. The work itself has a ceiling that does not move — a database that writes so fast, a vendor that allows so many calls a second — so the burst piles up inside your service instead: threads block, connections run out, and it falls over under a volume it could have finished comfortably if it had been spread across the hour. <strong>Queue-based load leveling</strong> puts a waiting line in between. Requests are written down and answered later, and the workers take the next one whenever they are free.</p>
         <p id="description-p-2" data-kb-level="advanced">The mechanism is a durable queue between producers and consumers, so arrival rate and processing rate stop being the same number. A producer commits a message and returns without waiting for a consumer to be ready; consumers dequeue at whatever rate they can sustain, however unevenly the work arrived. The queue changes <em>when</em> work happens and never how much of it there is — throughput still belongs to the consumer.</p>
-        <p id="description-p-3">What that buys is a managed backlog instead of an uncontrolled pile-up. Nothing is lost, because the request sits durably in the queue; nothing is immediate either, because the caller now gets a receipt rather than a result. That is the right trade for work nobody is waiting on synchronously, and the wrong one for work somebody is.</p>
-        <p id="description-p-4">It is the standard shape of an ingestion path. Order processing, webhook receivers, image and video pipelines and log ingestion all put a broker in front of the thing that actually does the work, for exactly this reason.</p>
+        <p id="description-p-3" data-kb-level="advanced">What that buys is a managed backlog instead of an uncontrolled pile-up. Nothing is lost, because the request sits durably in the queue; nothing is immediate either, because the caller now gets a receipt rather than a result. That is the right trade for work nobody is waiting on synchronously, and the wrong one for work somebody is.</p>
+        <p id="description-p-4" data-kb-level="advanced">It is the standard shape of an ingestion path. Order processing, webhook receivers, image and video pipelines and log ingestion all put a broker in front of the thing that actually does the work, for exactly this reason.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Work arrives in bursts — a mailshot goes out, a batch job starts — but the thing that actually does the work goes at one steady speed. Aim the burst straight at it and it does not go faster; it jams, and requests that would have been fine start failing too. So put a waiting line in between. Whoever needs something writes it on the list and gets on with their day, and the workers take the next item whenever they are free. Nothing is thrown away and nothing is rushed, but everyone waits their turn — which only works for jobs where a receipt now and an answer shortly is good enough.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>A durable queue between producers and consumers separates arrival rate from processing rate: the producer commits a message and returns, and consumers drain at a pace they can sustain. The queue adds no throughput — it moves work in time, and the consumer's ceiling is still the ceiling. It need not be a broker: a task table claimed by competing workers with SELECT … FOR UPDATE SKIP LOCKED is the same shape, and a delayed run_after column lets recurring work be scheduled off the live peak. Consumers scale by count, the backlog is the signal that says how many are needed, and a bounded depth is what stops the buffer itself becoming the outage.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>Choose it when arrivals are spiky, the consumer ceiling is fixed by something you do not own — a rate-limited vendor, a write-bound database — and the caller can accept a receipt now and a result later. The bill has four parts. The API turns asynchronous, so every caller needs a route to the outcome: a status endpoint, a callback, or a record it can poll. The queue becomes a stateful critical dependency with its own durability and capacity plan. At-least-once redelivery makes consumer idempotency mandatory rather than advisable. And parallel consumers finish out of order, so sequence-sensitive work needs a partition key, which then caps how far you can parallelize. Against sustained overload the queue buys nothing — a backlog only postpones the failure — so bound the depth and shed above it with a rate limiter, or refuse upstream with backpressure. Then run the loop: tune the depth bound and the consumer count, watch the age of the oldest message rather than depth alone, find whether the broker or the consumer gives out first, and gate the release on a drill that fills the queue to its bound and drains it.</p>
         </div>
@@ -213,7 +213,27 @@
 
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
-      <figure class="diagram">
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Prod["Producer — API or webhook receiver"]
+    subgraph Buf["Bounded queue — arrivals decoupled from processing"]
+        Q[("Durable queue")]
+    end
+    Shed["Refused with a retry hint"]
+    Worker["Consumer workers"]
+    Sink[("Rate-limited vendor or write-bound store")]:::ext
+    DLQ[("Dead-letter queue")]
+    Prod --&gt;|"1 enqueue, return a receipt"| Q
+    Q --&gt;|"2 full at the bound, refuse"| Shed
+    Worker --&gt;|"3 dequeue at a sustainable pace"| Q
+    Worker --&gt;|"4 do the work"| Sink
+    Worker --&gt;|"5 deliveries exhausted"| DLQ
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does ten minutes of traffic arriving in one reach a consumer whose ceiling does not move? The queue holds the work until a worker is free, and only a full queue turns anyone away.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -242,14 +262,14 @@ sequenceDiagram
       <dl class="variations">
         <dt id="variations-item-1">Bounded queue</dt>
         <dd>Cap the queue's depth and reject or redirect once full, so an unbounded backlog can't itself become the outage.</dd>
-        <dt id="variations-item-2"><a href="../../messaging/competing-consumers.html">Competing Consumers</a></dt>
-        <dd>Run several consumer instances draining the same queue in parallel, raising throughput without changing the producer side at all.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced"><a href="../../messaging/competing-consumers.html">Competing Consumers</a></dt>
+        <dd data-kb-level="advanced">Run several consumer instances draining the same queue in parallel, raising throughput without changing the producer side at all.</dd>
         <dt id="variations-item-3" data-kb-level="advanced"><a href="../routing/autoscaling.html">Autoscaling</a></dt>
         <dd data-kb-level="advanced">Scale the number of consumers to queue depth, so the backlog itself is the signal that drives added capacity.</dd>
         <dt id="variations-item-4" data-kb-level="advanced">Priority queue</dt>
         <dd data-kb-level="advanced">Give latency-sensitive messages a lane that skips the backlog, while bulk or best-effort work waits behind it.</dd>
-        <dt id="variations-item-5">Dead-letter queue</dt>
-        <dd>Move a message aside after it fails processing repeatedly, so one poison message can't block everything behind it.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced">Dead-letter queue</dt>
+        <dd data-kb-level="advanced">Move a message aside after it fails processing repeatedly, so one poison message can't block everything behind it.</dd>
       </dl>
     </section>
 
@@ -261,8 +281,8 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Smooths bursty, unpredictable traffic into a steady load the consumer can actually sustain.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Producers and consumers scale, deploy, and fail independently — the queue is the only coupling.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A durable queue survives a consumer outage; work waits instead of being dropped.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Simple to reason about — one component, the queue, does all of the leveling.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">A durable queue survives a consumer outage; work waits instead of being dropped.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Simple to reason about — one component, the queue, does all of the leveling.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -286,7 +306,7 @@ sequenceDiagram
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Arrival rate spikes far above the average, while consumer capacity is comparatively fixed.</li>
             <li id="usage-when-2" data-kb-polarity="when">The work can be processed asynchronously — the caller doesn't need the result inline.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You'd rather buffer legitimate traffic through a spike than shed or reject it.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You'd rather buffer legitimate traffic through a spike than shed or reject it.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -347,7 +367,7 @@ async function idWorker(queue: LevelingQueue, permitsPerSecond: number) {
       <div class="wild-list">
         <div class="wild-item" data-kb-example="amazon-sqs" id="wild-amazon-sqs"><strong>Amazon SQS</strong><span>The canonical buffer in front of workers: producers enqueue and return while consumers drain at their own rate. A VisibilityTimeout hides an in-flight message during processing, and a redrive policy with maxReceiveCount routes repeat failures to a dead-letter queue; standard queues are at-least-once, so consumers must be idempotent.</span></div>
         <div class="wild-item" data-kb-example="kafka" id="wild-kafka" data-kb-level="advanced"><strong>Apache Kafka</strong><span>A durable, replayable partitioned log absorbs ingestion bursts while a consumer group reads at its own pace. Offsets track progress and enable replay, retention (by time or size) bounds how long messages persist, and consumer lag — log-end offset minus committed offset — is the backlog measure.</span></div>
-        <div class="wild-item" data-kb-example="celery" id="wild-celery"><strong>Celery</strong><span>A Python web request hands a task to a broker (Redis or RabbitMQ) and responds immediately; worker processes pick it up later. Workers prefetch tasks by a configurable multiplier, acks_late redelivers a task if the worker crashes mid-run, and time limits bound how long any one task may run.</span></div>
+        <div class="wild-item" data-kb-example="celery" id="wild-celery" data-kb-level="advanced"><strong>Celery</strong><span>A Python web request hands a task to a broker (Redis or RabbitMQ) and responds immediately; worker processes pick it up later. Workers prefetch tasks by a configurable multiplier, acks_late redelivers a task if the worker crashes mid-run, and time limits bound how long any one task may run.</span></div>
       </div>
     </section>
 
@@ -358,10 +378,10 @@ async function idWorker(queue: LevelingQueue, permitsPerSecond: number) {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Queue depth bound</strong> — The backlog after which the producer sheds or redirects, so the buffer cannot itself become the outage.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Consumer concurrency</strong> — How many consumers drain the queue in parallel — the only dial on this page that changes sustained throughput.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Visibility / ack timeout</strong> — How long a dequeued message stays hidden from other consumers before it is redelivered (SQS VisibilityTimeout, ack deadline).</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Consumer concurrency</strong> — How many consumers drain the queue in parallel — the only dial on this page that changes sustained throughput.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Visibility / ack timeout</strong> — How long a dequeued message stays hidden from other consumers before it is redelivered (SQS VisibilityTimeout, ack deadline).</li>
             <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Batch / prefetch size</strong> — How many messages a consumer takes per fetch (SQS max messages, Kafka max.poll.records, Celery prefetch multiplier). Bigger batches raise throughput and put more work at risk on a crash.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Dead-letter policy</strong> — How many failed deliveries a message gets before it is moved aside (maxReceiveCount, redrive), so one poison message cannot hold up the queue behind it.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Dead-letter policy</strong> — How many failed deliveries a message gets before it is moved aside (maxReceiveCount, redrive), so one poison message cannot hold up the queue behind it.</li>
             <li id="production-knob-6" data-kb-polarity="knob" data-kb-level="advanced"><strong>Retention and storage</strong> — How long the broker keeps a message and how much it will hold — the real limit on how long consumers may be down before work is lost.</li>
           </ul>
         </div>
@@ -369,19 +389,19 @@ async function idWorker(queue: LevelingQueue, permitsPerSecond: number) {
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Backlog depth</strong> — Messages waiting, per queue. Rising depth means consumers are behind arrivals right now.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Age of oldest message</strong> — How long the head of the queue has waited (ApproximateAgeOfOldestMessage, consumer lag in time). This, not depth, is the latency a caller feels.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Enqueue rate against dequeue rate</strong> — Sustained divergence is overload the buffer is only postponing.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Dead-letter depth</strong> — Messages that exhausted their deliveries. A rising count is a poison message or a broken consumer path, never routine.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Age of oldest message</strong> — How long the head of the queue has waited (ApproximateAgeOfOldestMessage, consumer lag in time). This, not depth, is the latency a caller feels.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Enqueue rate against dequeue rate</strong> — Sustained divergence is overload the buffer is only postponing.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Dead-letter depth</strong> — Messages that exhausted their deliveries. A rising count is a poison message or a broken consumer path, never routine.</li>
             <li id="production-signal-5" data-kb-polarity="signal" data-kb-level="advanced"><strong>Redelivery rate</strong> — How often messages come back for another attempt — the load consumers are re-doing, and the pressure on their idempotency.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Backlog only delays the failure</strong> — Under sustained overload an unbounded queue grows, adds latency to everything behind it, and can exhaust broker storage instead of preventing the outage.</li>
+            <li id="production-failure-1" data-kb-polarity="failure" data-kb-level="advanced"><strong>Backlog only delays the failure</strong> — Under sustained overload an unbounded queue grows, adds latency to everything behind it, and can exhaust broker storage instead of preventing the outage.</li>
             <li id="production-failure-2" data-kb-polarity="failure"><strong>Redelivery double-processing</strong> — A failed or timed-out ack redelivers, so a consumer that is not idempotent does the same work twice — a second charge, a second email.</li>
             <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Visibility timeout mistuned</strong> — Set below real processing time it hands a live message to a second consumer; set far above it, a crashed consumer leaves its message untouched for that whole window.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Poison message with no dead-letter</strong> — A message that always fails retries forever and, on an ordered partition, blocks everything behind it.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Poison message with no dead-letter</strong> — A message that always fails retries forever and, on an ordered partition, blocks everything behind it.</li>
             <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Recovery slower than the outage</strong> — A backlog built over an hour needs consumer headroom above arrival rate to clear. At exactly arrival rate it never drains, and the queue stays full long after the spike has passed.</li>
           </ul>
         </div>
@@ -389,12 +409,12 @@ async function idWorker(queue: LevelingQueue, permitsPerSecond: number) {
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Consumers were tested by delivering the same message twice on purpose, and the second delivery changed nothing</li>
-            <li id="production-check-2" data-kb-polarity="check">The full-queue path has an answer a caller can act on — a rejection with a retry hint, not a timeout</li>
-            <li id="production-check-3" data-kb-polarity="check">Alerts fire on the age of the oldest message as well as depth; depth alone is normal at peak and fatal when consumers are stopped</li>
-            <li id="production-check-4" data-kb-polarity="check">The dead-letter queue has an owner and a route back into processing, so parked messages are read rather than counted</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">The full-queue path has an answer a caller can act on — a rejection with a retry hint, not a timeout</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Alerts fire on the age of the oldest message as well as depth; depth alone is normal at peak and fatal when consumers are stopped</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">The dead-letter queue has an owner and a route back into processing, so parked messages are read rather than counted</li>
             <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Broker retention and storage were sized for the longest consumer outage the team is prepared to survive</li>
             <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">A drill filled the queue to its bound and drained it, and the drain rate cleared the backlog inside the time the business expects</li>
-            <li id="production-check-7" data-kb-polarity="check">Every caller has a documented route to the outcome — a status record, a callback or a poll — because the API is no longer synchronous</li>
+            <li id="production-check-7" data-kb-polarity="check" data-kb-level="advanced">Every caller has a documented route to the outcome — a status record, a callback or a poll — because the API is no longer synchronous</li>
           </ul>
         </div>
       </div>
@@ -404,8 +424,8 @@ async function idWorker(queue: LevelingQueue, permitsPerSecond: number) {
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="spike-handling" id="fluency-spike-handling"><a href="../../../themes/spike-handling.html">Handling Spikes</a><span>Absorb the burst in a queue, so consumers meet it at their own pace instead of falling over in it.</span></div>
-        <div class="fluency-item" data-kb-theme="scaling-writes" id="fluency-scaling-writes"><a href="../../../themes/scaling-writes.html">Scaling Writes</a><span>Buffer write bursts in a queue to smooth load, so the store sees a steady rate rather than a spike.</span></div>
-        <div class="fluency-item" data-kb-theme="long-running-tasks" id="fluency-long-running-tasks"><a href="../../../themes/long-running-tasks.html">Long-Running Tasks</a><span>Absorb bursts so workers aren't overwhelmed — what grows under pressure is the backlog, not the failure count.</span></div>
+        <div class="fluency-item" data-kb-theme="scaling-writes" id="fluency-scaling-writes" data-kb-level="advanced"><a href="../../../themes/scaling-writes.html">Scaling Writes</a><span>Buffer write bursts in a queue to smooth load, so the store sees a steady rate rather than a spike.</span></div>
+        <div class="fluency-item" data-kb-theme="long-running-tasks" id="fluency-long-running-tasks" data-kb-level="advanced"><a href="../../../themes/long-running-tasks.html">Long-Running Tasks</a><span>Absorb bursts so workers aren't overwhelmed — what grows under pressure is the backlog, not the failure count.</span></div>
       </div>
     </section>
 
@@ -467,7 +487,7 @@ async function idWorker(queue: LevelingQueue, permitsPerSecond: number) {
         </div>
       </div>
 
-<figure class="diagram">
+<figure class="diagram" id="relationships-fig-1">
         <pre class="mermaid">
 flowchart LR
     LL["Queue-Based Load Leveling"]

@@ -171,9 +171,9 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1" data-kb-register="basic">One caller's script gets stuck in a loop and sends a thousand requests a second. Nothing about that request is illegal, so your service tries to serve every one of them, and the database behind it — shared with everybody else — spends the night on that one caller. Every other customer sees a slow site for a bug that was never theirs. A <strong>rate limiter</strong> counts what each caller sends and turns away the excess, so the cost of one runaway client stays with that client.</p>
+        <p id="description-p-1">One caller's script gets stuck in a loop and sends a thousand requests a second. Nothing about that request is illegal, so your service tries to serve every one of them, and the database behind it — shared with everybody else — spends the night on that one caller. Every other customer sees a slow site for a bug that was never theirs. A <strong>rate limiter</strong> counts what each caller sends and turns away the excess, so the cost of one runaway client stays with that client.</p>
         <p id="description-p-2" data-kb-level="advanced">The mechanism is a counter per key — API key, user, IP, route — checked against an allowance per unit of time. Anything over the ceiling is refused, conventionally with an HTTP <code>429 Too Many Requests</code> and a <code>Retry-After</code> header that tells the caller when the allowance returns. The limiter runs where the traffic converges, usually the gateway, and the same algorithms run backwards on the outbound side, metering your own calls to stay under a quota somebody else enforces.</p>
-        <p id="description-p-3">It's deliberately a <em>shedding</em> strategy, not an absorbing one — the excess is dropped, not queued. That's what separates it from <a href="./load-leveling.html">Queue-Based Load Leveling</a>, which buffers the overflow instead of rejecting it, and from <a href="../../concurrency/backpressure.html">Backpressure</a>, which asks the upstream caller to slow down cooperatively rather than refusing it outright.</p>
+        <p id="description-p-3" data-kb-level="advanced">It's deliberately a <em>shedding</em> strategy, not an absorbing one — the excess is dropped, not queued. That's what separates it from <a href="./load-leveling.html">Queue-Based Load Leveling</a>, which buffers the overflow instead of rejecting it, and from <a href="../../concurrency/backpressure.html">Backpressure</a>, which asks the upstream caller to slow down cooperatively rather than refusing it outright.</p>
       </div>
     </section>
 
@@ -200,6 +200,25 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
+    Client["Caller"]:::ext
+    subgraph GW["Gateway — where the traffic converges"]
+        Lim["Limiter: allowance per key"]
+    end
+    Counters[("Counter store, one key per caller")]
+    Svc["Your service"]
+    DB[("Shared database")]
+    Client --&gt;|"1 request, carrying its key"| Lim
+    Lim --&gt;|"2 spend the key's allowance"| Counters
+    Lim --&gt;|"3 inside the allowance, forward"| Svc
+    Lim --&gt;|"4 over it, 429 + Retry-After"| Client
+    Svc --&gt;|"5 bounded load"| DB
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does one runaway caller stop spending everybody else's capacity? The gateway counts per key and refuses the excess before it ever reaches the shared database.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+flowchart LR
     Req["Request arrives"] -->|"check quota"| Bucket{"Token available?"}
     Bucket -->|"yes"| Allow["Consume token, forward request"]
     Bucket -->|"no"| Deny["Reject, 429 plus Retry-After"]
@@ -216,14 +235,14 @@ flowchart LR
         <dd>Tokens accumulate at a fixed rate up to a cap; each request spends one, so bursts up to the bucket size are allowed as long as tokens remain.</dd>
         <dt id="variations-item-2">Leaky Bucket</dt>
         <dd>Requests queue and drain at a constant rate instead of bursting through — it smooths traffic into a steady outflow rather than admitting spikes.</dd>
-        <dt id="variations-item-3">Fixed window counter</dt>
-        <dd>Count requests per key inside a whole-second or whole-minute window. Simple, but a burst straddling the window boundary can momentarily double the intended rate.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Fixed window counter</dt>
+        <dd data-kb-level="advanced">Count requests per key inside a whole-second or whole-minute window. Simple, but a burst straddling the window boundary can momentarily double the intended rate.</dd>
         <dt id="variations-item-4" data-kb-level="advanced">Sliding window (log or counter)</dt>
         <dd data-kb-level="advanced">Weight the current and previous window by elapsed time, or keep a rolling log of timestamps, to smooth out the boundary problem at some extra memory cost.</dd>
         <dt id="variations-item-5" data-kb-level="advanced">Distributed rate limiting</dt>
         <dd data-kb-level="advanced">Back the counter with a shared store — Redis, Memcached — so the limit holds across a fleet of instances instead of resetting per process.</dd>
-        <dt id="variations-item-6">Client-side limiting</dt>
-        <dd>Hold the counter in the caller and meter your own outgoing requests to fit under a ceiling someone else enforces — a paid API's quota, a scrape target's tolerance. The algorithms are identical; what changes is that the overflow waits instead of being refused, because the work still has to go through eventually.</dd>
+        <dt id="variations-item-6" data-kb-level="advanced">Client-side limiting</dt>
+        <dd data-kb-level="advanced">Hold the counter in the caller and meter your own outgoing requests to fit under a ceiling someone else enforces — a paid API's quota, a scrape target's tolerance. The algorithms are identical; what changes is that the overflow waits instead of being refused, because the work still has to go through eventually.</dd>
       </dl>
     </section>
 
@@ -235,8 +254,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Protects shared capacity from being monopolized by one noisy or abusive client.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Keeps load on downstream systems and databases predictable and bounded.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Cheap to implement and reason about — a counter, a clock, and a key.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Gives callers an explicit, machine-readable signal to back off instead of silent failure.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Cheap to implement and reason about — a counter, a clock, and a key.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Gives callers an explicit, machine-readable signal to back off instead of silent failure.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -260,7 +279,7 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">A shared resource — an API, a database, a downstream service — must survive noisy or abusive clients.</li>
             <li id="usage-when-2" data-kb-polarity="when">You need to enforce a fair-use policy or a paid-tier quota.</li>
-            <li id="usage-when-3" data-kb-polarity="when">Predictable load matters more than accepting every request that arrives.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Predictable load matters more than accepting every request that arrives.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -327,7 +346,7 @@ if (!limiterFor(`resend:${flowId}`, 3, 3 / 3600).tryConsume()) {
       <div class="wild-list">
         <div class="wild-item" data-kb-example="nginx" id="wild-nginx"><strong>NGINX</strong><span>The limit_req module applies a leaky bucket per key defined by limit_req_zone (commonly client IP): the burst parameter sets how many excess requests may queue, nodelay serves them immediately up to that burst, and limit_req_status sets the rejection code (503 by default).</span></div>
         <div class="wild-item" data-kb-example="envoy" id="wild-envoy" data-kb-level="advanced"><strong>Envoy</strong><span>A local token-bucket filter enforces per-route limits in-process, while the global rate-limit service — a gRPC endpoint (the reference implementation is backed by Redis) — evaluates request descriptors so a limit holds across the fleet at the edge or between services.</span></div>
-        <div class="wild-item" data-kb-example="stripe-api" id="wild-stripe-api"><strong>Stripe API</strong><span>Caps requests per second per account and answers over-rate callers with HTTP 429 Too Many Requests, documenting exponential backoff as the client's expected response.</span></div>
+        <div class="wild-item" data-kb-example="stripe-api" id="wild-stripe-api" data-kb-level="advanced"><strong>Stripe API</strong><span>Caps requests per second per account and answers over-rate callers with HTTP 429 Too Many Requests, documenting exponential backoff as the client's expected response.</span></div>
       </div>
     </section>
 
@@ -338,10 +357,10 @@ if (!limiterFor(`resend:${flowId}`, 3, 3 / 3600).tryConsume()) {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Rate and window</strong> — The requests per unit of time each key is allowed — the ceiling itself.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Burst capacity</strong> — How much unused allowance a caller may spend at once (token-bucket capacity, NGINX burst). Size it from real traffic, not from the sustained rate.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Key dimension</strong> — What the count is attributed to — API key, authenticated user, IP, route, or a pair of them. IP alone is shared behind NAT and cheap to rotate.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Algorithm</strong> — Token bucket to admit bursts, leaky bucket to smooth them away, sliding window to close the fixed-window boundary gap.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Reject behaviour</strong> — What an over-rate caller gets: a status code, a Retry-After header, or a delay instead of a refusal.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Burst capacity</strong> — How much unused allowance a caller may spend at once (token-bucket capacity, NGINX burst). Size it from real traffic, not from the sustained rate.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Key dimension</strong> — What the count is attributed to — API key, authenticated user, IP, route, or a pair of them. IP alone is shared behind NAT and cheap to rotate.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Algorithm</strong> — Token bucket to admit bursts, leaky bucket to smooth them away, sliding window to close the fixed-window boundary gap.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Reject behaviour</strong> — What an over-rate caller gets: a status code, a Retry-After header, or a delay instead of a refusal.</li>
             <li id="production-knob-6" data-kb-polarity="knob" data-kb-level="advanced"><strong>Counter placement</strong> — In-process counters, or a shared store every replica reads. The first is free and enforces per replica; the second enforces fleet-wide and joins the request path.</li>
           </ul>
         </div>
@@ -349,7 +368,7 @@ if (!limiterFor(`resend:${flowId}`, 3, 3 / 3600).tryConsume()) {
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Throttle rate per key and route</strong> — The share of requests refused. One key dominating means an abusive caller; every key throttling means the cap is too low.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Utilization against the limit</strong> — How close each key runs to its ceiling — the headroom that tells you whether a tier is priced right before anyone complains.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Utilization against the limit</strong> — How close each key runs to its ceiling — the headroom that tells you whether a tier is priced right before anyone complains.</li>
             <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Counter-store latency and availability</strong> — With a shared store the limiter inherits its p99 and its uptime on every request.</li>
             <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Return traffic after a rejection</strong> — How much refused traffic comes straight back. A client ignoring Retry-After turns a cap into a busier loop, not a quieter one.</li>
             <li id="production-signal-5" data-kb-polarity="signal" data-kb-level="expert"><strong>Key cardinality</strong> — How many distinct keys hold counters. A sudden jump is key rotation or a fan-out designed to slip under a per-key cap.</li>
@@ -358,8 +377,8 @@ if (!limiterFor(`resend:${flowId}`, 3, 3 / 3600).tryConsume()) {
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Fixed-window boundary burst</strong> — A burst straddling the window edge admits up to twice the intended rate in a short span, which is exactly when it hurts.</li>
-            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Per-instance undercount</strong> — Without a shared store each replica counts alone, so the fleet-wide limit is the configured one multiplied by the replica count.</li>
+            <li id="production-failure-1" data-kb-polarity="failure" data-kb-level="advanced"><strong>Fixed-window boundary burst</strong> — A burst straddling the window edge admits up to twice the intended rate in a short span, which is exactly when it hurts.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Per-instance undercount</strong> — Without a shared store each replica counts alone, so the fleet-wide limit is the configured one multiplied by the replica count.</li>
             <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Counter store unreachable</strong> — The limiter has to choose in the moment between admitting everything and refusing everything, and whichever it does was decided by whoever wrote the default.</li>
             <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Clock skew across instances</strong> — Windows keyed to wall-clock time drift apart on hosts with unsynchronized clocks, so resets land at different moments and the effective rate wobbles.</li>
             <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Rejection is not free</strong> — At flood scale, identifying the caller and answering the 429 is itself work. A limiter alone does not survive a volumetric attack; the cheap refusals have to happen further out, at the connection or the edge.</li>
@@ -371,7 +390,7 @@ if (!limiterFor(`resend:${flowId}`, 3, 3 / 3600).tryConsume()) {
             <li id="production-check-1" data-kb-polarity="check">A caller cannot buy a fresh allowance by rotating IPs, sessions or keys — the dimension counted against is one they cannot cheaply change</li>
             <li id="production-check-2" data-kb-polarity="check">What a throttled caller sees was agreed with whoever owns the API contract: the status, the headers, and whether a client is expected to retry</li>
             <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">The behaviour when the counter store is unreachable was chosen deliberately and exercised with the store switched off</li>
-            <li id="production-check-4" data-kb-polarity="check">A load test drove a burst across the window boundary and the admitted rate matched the intended one</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">A load test drove a burst across the window boundary and the admitted rate matched the intended one</li>
             <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Throttle counts are exported per key and per route, so one abusive caller is distinguishable from a cap set too low for everybody</li>
             <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Callers that must never be throttled — health checks, the control plane, payment callbacks — run on an exempt path or their own allowance</li>
           </ul>
@@ -382,9 +401,9 @@ if (!limiterFor(`resend:${flowId}`, 3, 3 / 3600).tryConsume()) {
     <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
-        <div class="fluency-item" data-kb-theme="system-design-interview" id="fluency-system-design-interview"><a href="../../../themes/system-design-interview.html">System Design Interview</a><span>Protect the system from overload by refusing what exceeds a rate it can actually serve.</span></div>
+        <div class="fluency-item" data-kb-theme="system-design-interview" id="fluency-system-design-interview" data-kb-level="advanced"><a href="../../../themes/system-design-interview.html">System Design Interview</a><span>Protect the system from overload by refusing what exceeds a rate it can actually serve.</span></div>
         <div class="fluency-item" data-kb-theme="spike-handling" id="fluency-spike-handling"><a href="../../../themes/spike-handling.html">Handling Spikes</a><span>Shed load above a safe rate, so the traffic that is admitted still gets served properly.</span></div>
-        <div class="fluency-item" data-kb-theme="api-design" id="fluency-api-design"><a href="../../../themes/api-design.html">API Design</a><span>Cap what any one caller can consume so the boundary stays fair</span></div>
+        <div class="fluency-item" data-kb-theme="api-design" id="fluency-api-design" data-kb-level="advanced"><a href="../../../themes/api-design.html">API Design</a><span>Cap what any one caller can consume so the boundary stays fair</span></div>
       </div>
     </section>
 

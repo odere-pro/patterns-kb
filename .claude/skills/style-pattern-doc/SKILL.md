@@ -102,6 +102,16 @@ Walk it incrementally rather than presenting the finished design:
 Every diagram and snippet answers one question. Cut any that illustrates something the
 prose already settled.
 
+**The numbered architecture walk is mandatory.** Before any sequence or timing detail, the
+implementation section carries one `flowchart` showing how the happy path crosses the
+components: component nodes plus data stores, the boundary that makes the pattern work
+drawn as a `subgraph` (for the outbox: "One atomic transaction" around the state table and
+the outbox table), edge labels numbered `1..N` in the order the steps happen, ≤9 nodes. It
+is the diagram the reader reconstructs the design from, and the one AWS puts first. The
+sequence diagram — ordering, retries, failure branches — comes after it, for the reader who
+already has the board. A write-up that opens with a sequence diagram, or with no diagram at
+all, is not finished. Recipe: the **diagram-draw** skill.
+
 ## Mapping onto KB blocks
 
 The KB's block vocabulary already holds this skeleton — use the blocks, don't invent

@@ -117,35 +117,54 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1" data-kb-register="basic">A message arrives saying the customer has paid. You have two things to do about it — the work it asks for, and telling the sender you have taken it — and a crash between them decides which way you are wrong. Say you have taken it first, then crash, and the message is gone with nothing done. Do the work first, then crash, and the message comes back and the work happens twice: a second shipment, a second refund. So write down that you have seen this message in the very same save as the work it asks for, and only then tell the sender. When a copy turns up later, the note is already there and you skip it.</p>
+        <p id="description-p-1">A message arrives saying the customer has paid. You have two things to do about it — the work it asks for, and telling the sender you have taken it — and a crash between them decides which way you are wrong. Say you have taken it first, then crash, and the message is gone with nothing done. Do the work first, then crash, and the message comes back and the work happens twice: a second shipment, a second refund. So write down that you have seen this message in the very same save as the work it asks for, and only then tell the sender. When a copy turns up later, the note is already there and you skip it.</p>
         <p id="description-p-2" data-kb-level="advanced">The <strong>inbox</strong> pattern adds a table to a service's own database that holds messages received from a broker, waiting to be processed. When the service receives a message, it writes both the message row and the business row that applies the message's effects — inside the same local ACID transaction. Only after commit does it acknowledge the message back to the broker, on the same delivery it is holding — nothing acknowledges later on its behalf.</p>
         <p id="description-p-3" data-kb-level="advanced">If the service crashes before commit, it never acknowledges, and the broker simply redelivers: that redelivery, met by the inbox's record of already-handled ids, is what ensures no message is lost or applied twice. The only background job the pattern itself needs is one that ages out old inbox rows once their deduplication window has passed.</p>
         <p id="description-p-4" data-kb-level="advanced">It resolves the <strong>dual-write problem from the receiving side</strong>. A service's database and its message broker are two different systems with no shared transaction between them. Receive and process the message, then acknowledge, and a crash between the two leaves the broker believing the message was lost — it redelivers, but the service has no record that it already processed it, leading to duplication. Acknowledge and then process, and a crash or a processing failure leaves the service with orphaned messages that no one knows about. There's no way to make "read from the broker" and "write to the database" atomic across two resource managers without something like distributed two-phase commit, which most message brokers don't support and most teams don't want to run.</p>
-        <p id="description-p-5">The receipt becomes a second local write, and the database transaction already makes those two atomic — that is the whole trick. The handler still has to be safe to run twice, since a broker that promises delivery at least once will sometimes deliver the same message again, but that safety is a small local concern rather than a distributed coordination problem. What the pattern buys is that the concern stays local.</p>
+        <p id="description-p-5" data-kb-level="advanced">The receipt becomes a second local write, and the database transaction already makes those two atomic — that is the whole trick. The handler still has to be safe to run twice, since a broker that promises delivery at least once will sometimes deliver the same message again, but that safety is a small local concern rather than a distributed coordination problem. What the pattern buys is that the concern stays local.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Keep a note of every message you have already dealt with, and write that note in the same save as the work the message asked for. Then, last of all, tell the sender you have it. Interrupted before the save, nothing was recorded and the sender simply sends again. Interrupted after it, the sender still sends again — but now you find your own note and do nothing the second time. It is signing for a parcel once it is inside the house rather than on the doorstep: the courier who comes back sees the parcel is already in, and leaves.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Keep a dedup table in the service's own database: the received message's id and the business effect it triggers commit in one local ACID transaction, and only then does the handler acknowledge the delivery it is holding. Crash before the commit and nothing is acknowledged, so the broker redelivers, the recorded id collides on a unique index, and the effect lands exactly once. Key on the sender's id — flow, step, provider request id — rather than one minted on receipt, because a duplicate racing the first write has no record of ours to collide with otherwise. Processing then splits two ways: synchronous applies the effect inside the delivery and keeps the visibility window under pressure, while deferred writes the row, acknowledges, and lets a background job apply it — lower timeout risk, one more poll to operate.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the receive side has a dual write to close and the sender promises only at-least-once — the real prize is that arrival order stops mattering, since whichever copy commits first wins and the loser rolls back whole. A broker's own deduplication window narrows the job without removing it: it drops a resend of the same message, not a redelivery after your process died between applying the effect and acknowledging. The bill, with its counter-moves. This is deduplication and not exactly-once, so every handler carries an idempotency contract — stage the duplicate in a test rather than discovering the contract in production. The key must be the sender's, because one minted at receipt cannot catch a duplicate that arrives before the first write commits. The table grows for as long as the dedup window, so schedule cleanup and index the unprocessed predicate; the lag shows up as a slow poll long before it shows up as disk. Then run the loop — tune the visibility window above handler latency plus jitter, watch redelivery rate and backlog depth, expect slow handlers to expire the window and redeliver into their own queue, and gate release on a handler proven idempotent under a staged duplicate.</p>
+          <p>Choose it when the receive side has a dual write to close and the sender promises only at-least-once — the real prize is that arrival order stops mattering, since whichever copy commits first wins and the loser rolls back whole. A broker's own deduplication window narrows the job without removing it: it drops a resend of the same message, not a redelivery after your process died between applying the effect and acknowledging. The bill, with its counter-moves. This is deduplication and not exactly-once, so every handler carries an idempotency contract — stage the duplicate in a test rather than discovering the contract in production. Keying on the sender means inheriting its key space and any flaw in it, so reject at the boundary a key that repeats with a different body: dropping a distinct message is the one failure here that raises no error anywhere. The table grows for as long as the dedup window, so schedule cleanup and index the unprocessed predicate; the lag shows up as a slow poll long before it shows up as disk. Then run the loop — tune the visibility window above handler latency plus jitter, watch redelivery rate and backlog depth, expect slow handlers to expire the window and redeliver into their own queue, and gate release on a handler proven idempotent under a staged duplicate.</p>
         </div>
       </div>
     </section>
 
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
-      <figure class="diagram">
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Broker[("Broker")]:::ext
+    Svc["Consumer service"]
+    subgraph Tx["One atomic transaction"]
+        Inbox[("Inbox table")]
+        Orders[("Orders table")]
+    end
+    Cleanup["Cleanup job"]
+    Broker --&gt;|"1 deliver"| Svc
+    Svc --&gt;|"2 record message id"| Inbox
+    Svc --&gt;|"3 apply the effect"| Orders
+    Svc --&gt;|"4 ack, only after commit"| Broker
+    Cleanup --&gt;|"5 age out old rows"| Inbox
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does a message the broker may deliver twice land its effect once? Steps 2 and 3 commit together or not at all, and the acknowledgement in step 4 only goes out after they do.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -194,7 +213,7 @@ sequenceDiagram
             <li id="tradeoffs-pro-1" data-kb-polarity="pro" data-kb-level="advanced">Solves the dual-write problem from the receiving side with a single local ACID transaction — no distributed transaction coordinator needed.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Guarantees at-least-once reception: a message is never lost because the service crashed between receipt and acknowledgement.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">A redelivered message is recognised by its recorded id and skipped, so its effects land once even while the broker keeps retrying.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Works with any relational database and any broker; it's a pattern, not a product.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Works with any relational database and any broker; it's a pattern, not a product.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -234,7 +253,7 @@ sequenceDiagram
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+      <details class="sketch" id="sketch-variant-1">
         <summary>TypeScript — the note and the work in one save, then the ack</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">// inbox has a unique index on the sender's message id.
 async function onMessage(msg: Message) {
@@ -299,7 +318,7 @@ async function cleanupInbox(db: Db, retentionDays: number) {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="masstransit" id="wild-masstransit"><strong>MassTransit</strong><span>The .NET messaging library ships the inbox as part of its transactional outbox: one AddEntityFrameworkOutbox call installs both sides, and received MessageIds land in an InboxState table so a message the broker redelivers inside the duplicate-detection window is recognised as already handled instead of being run again.</span></div>
-        <div class="wild-item" data-kb-example="sqs-fifo" id="wild-sqs-fifo"><strong>Amazon SQS FIFO queues</strong><span>Deduplication moved to the broker rather than the receiver: a send is dropped if the same message deduplication id arrives within the five-minute deduplication interval, supplied explicitly or derived by SQS as a SHA-256 hash of the message body. It covers a publisher that retried its send; it does not cover a redelivery after the receiver died between applying the effect and acknowledging, which is what the inbox table exists for.</span></div>
+        <div class="wild-item" data-kb-example="sqs-fifo" id="wild-sqs-fifo" data-kb-level="advanced"><strong>Amazon SQS FIFO queues</strong><span>Deduplication moved to the broker rather than the receiver: a send is dropped if the same message deduplication id arrives within the five-minute deduplication interval, supplied explicitly or derived by SQS as a SHA-256 hash of the message body. It covers a publisher that retried its send; it does not cover a redelivery after the receiver died between applying the effect and acknowledging, which is what the inbox table exists for.</span></div>
         <div class="wild-item" data-kb-example="temporal" id="wild-temporal" data-kb-level="advanced"><strong>Temporal</strong><span>The workflow engine records an activity result exactly once in the workflow event history and retries the activity when a worker fails — but execution itself is at-least-once, and Temporal advises writing activities to be idempotent rather than promising any deduplication of runs.</span></div>
       </div>
     </section>
@@ -310,7 +329,7 @@ async function cleanupInbox(db: Db, retentionDays: number) {
         <div class="prod-group prod-knobs">
           <h3>Tuning knobs</h3>
           <ul>
-            <li id="production-knob-1" data-kb-polarity="knob"><strong>Handler timeout</strong> — For synchronous processing, how long the broker waits before timing out and redelivering. Longer reduces redelivery pressure but risks losing the connection; shorter is safer but may cause false timeouts on slow processing. Deferred processing sidesteps this entirely.</li>
+            <li id="production-knob-1" data-kb-polarity="knob" data-kb-level="advanced"><strong>Handler timeout</strong> — For synchronous processing, how long the broker waits before timing out and redelivering. Longer reduces redelivery pressure but risks losing the connection; shorter is safer but may cause false timeouts on slow processing. Deferred processing sidesteps this entirely.</li>
             <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Broker visibility window</strong> — How long the broker hides a received message before auto-redelivering if not acknowledged. Must be longer than handler latency + ack latency. Shorter windows create thrashing; longer windows tolerate brief outages.</li>
             <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Processor poll interval</strong> — For deferred processing, how often the background job scans for unprocessed rows. Shorter cuts end-to-end latency but raises steady read load; CDC sidesteps polling entirely.</li>
             <li id="production-knob-4" data-kb-polarity="knob"><strong>Dedup retention window</strong> — How long a processed row is kept before a job deletes or archives it, which is exactly how late a duplicate can arrive and still be caught. Set it from the broker's maximum redelivery age, not from a round number of days.</li>
@@ -320,7 +339,7 @@ async function cleanupInbox(db: Db, retentionDays: number) {
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Inbox backlog depth</strong> — Count of rows with processed = false. Steady growth means the processor is not keeping up or handlers are failing.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Processing latency</strong> — Time between message arrival and processed = true. The end-to-end latency; dominated by handler latency and the processor poll interval.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Processing latency</strong> — Time between message arrival and processed = true. The end-to-end latency; dominated by handler latency and the processor poll interval.</li>
             <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Handler error rate</strong> — Failed processing attempts per interval. Rising errors stall the inbox and leave messages unacknowledged.</li>
             <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Broker redelivery rate</strong> — Messages the broker redelivered due to unacknowledged or visibility window timeout. High redelivery creates duplicate-detection pressure on the inbox and its handlers.</li>
           </ul>
@@ -331,7 +350,7 @@ async function cleanupInbox(db: Db, retentionDays: number) {
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Handler timeout cascade</strong> — Slow processing → visibility window expires → broker redelivers → duplicate processing pressure → handler slower → more timeouts. Deferred processing breaks this cycle.</li>
             <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Inbox backlog starvation</strong> — Handler failures or a rejecting downstream service stall processing: in synchronous mode messages stay unacknowledged and broker redelivery pressure mounts; in deferred mode unprocessed rows pile up in the table.</li>
             <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Idempotency key collision</strong> — Two different messages carry the same id, from a sender's key-generation flaw or clock skew, and the second is dropped in silence — the one failure mode of this pattern that raises no error anywhere.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Table bloat stalls polling</strong> — Cleanup lags and the poll query scans millions of processed rows, driving its own latency up and worsening the backlog it was meant to drain.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Table bloat stalls polling</strong> — Cleanup lags and the poll query scans millions of processed rows, driving its own latency up and worsening the backlog it was meant to drain.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -339,7 +358,7 @@ async function cleanupInbox(db: Db, retentionDays: number) {
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Handlers are demonstrably idempotent — same message id produces same result, no matter how many times delivered</li>
             <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">A partial index on processed = false keeps the processor's poll query fast as the table grows</li>
-            <li id="production-check-3" data-kb-polarity="check">The cleanup job is itself monitored — a silently dead one looks exactly like a healthy one until the poll slows down</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">The cleanup job is itself monitored — a silently dead one looks exactly like a healthy one until the poll slows down</li>
             <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">A handler that overruns the window has been exercised — the redelivery it causes lands on the dedup key rather than on a second effect</li>
             <li id="production-check-5" data-kb-polarity="check">Inbox backlog depth and processing latency are monitored with alerts on sustained growth or degradation</li>
             <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">The dedup key is the sender's, and something at the boundary rejects a message whose key repeats with a different body</li>
@@ -390,7 +409,7 @@ async function cleanupInbox(db: Db, retentionDays: number) {
         </div>
       </div>
 
-<figure class="diagram">
+<figure class="diagram" id="relationships-fig-1">
         <pre class="mermaid">
 flowchart LR
     IB["Inbox"]

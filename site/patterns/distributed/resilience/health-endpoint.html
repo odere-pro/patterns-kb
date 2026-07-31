@@ -94,7 +94,7 @@
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
         <p id="description-p-1">A <strong>health endpoint</strong> is a route a service exposes purely so machines can ask it a question: are you working? It answers cheaply and fast — a bare 200 for the simplest cut, or a small JSON body breaking down the state of the caches, queues, and downstream connections the service actually depends on. Nothing about the response is meant for a human eyeball first; it's built to be polled every few seconds by something that will act on the answer immediately.</p>
-        <p id="description-p-2">The force it resolves is that an orchestrator or load balancer sitting outside a process has no way to see inside it. A socket accepting a TCP connection tells you the port is open, not that a request behind it will succeed — a process can keep listening long after its database pool is exhausted, its disk is full, or a background worker has wedged. Without an honest signal from the service itself, the infrastructure around it is left inferring health from proxies — uptime, CPU, whether the last deploy finished — none of which correlate reliably with whether a request sent right now will actually complete.</p>
+        <p id="description-p-2" data-kb-level="advanced">The force it resolves is that an orchestrator or load balancer sitting outside a process has no way to see inside it. A socket accepting a TCP connection tells you the port is open, not that a request behind it will succeed — a process can keep listening long after its database pool is exhausted, its disk is full, or a background worker has wedged. Without an honest signal from the service itself, the infrastructure around it is left inferring health from proxies — uptime, CPU, whether the last deploy finished — none of which correlate reliably with whether a request sent right now will actually complete.</p>
         <p id="description-p-3">The pattern usually splits into two questions asked for different reasons. <em>Liveness</em> asks whether the process itself is still functioning, and a failure there means restart it. <em>Readiness</em> asks whether it should currently receive traffic, and a failure there means route around it without touching the process at all — an instance warming a cache or briefly starved of a downstream connection is very much alive, just not ready. Conflating the two turns a transient dependency hiccup into an unnecessary restart storm.</p>
       </div>
     </section>
@@ -120,6 +120,29 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Orch["Orchestrator"]:::ext
+    LB["Load balancer"]:::ext
+    Client["Client traffic"]:::ext
+    subgraph Inst["One service instance"]
+        Live["/healthz — liveness"]
+        Ready["/readyz — readiness"]
+        App["Request handler"]
+    end
+    DB[("Database")]:::ext
+    Orch --&gt;|"1 poll liveness"| Live
+    Live --&gt;|"2 answer 200, process alive"| Orch
+    LB --&gt;|"3 poll readiness"| Ready
+    Ready --&gt;|"4 ping under a timeout"| DB
+    Ready --&gt;|"5 answer 200, take traffic"| LB
+    Client --&gt;|"6 request"| LB
+    LB --&gt;|"7 route to a ready instance"| App
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How do two machines outside the process decide what to do with it? The orchestrator polls liveness and learns whether to restart; the load balancer polls readiness and learns whether to send the next request here.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -147,12 +170,12 @@ sequenceDiagram
       <dl class="variations">
         <dt id="variations-item-1">Liveness vs. readiness probes</dt>
         <dd>Two separate routes with different consequences — a failed liveness check restarts the process, a failed readiness check just pulls it out of rotation.</dd>
-        <dt id="variations-item-2">Shallow vs. deep checks</dt>
-        <dd>A shallow check confirms the process can respond at all; a deep check also pings its own dependencies. Deep checks catch more, but can themselves cascade if every instance hammers the same downstream at once.</dd>
-        <dt id="variations-item-3">Startup probe / grace period</dt>
-        <dd>A separate, more lenient check during boot so a slow-starting instance isn't killed by liveness before it has finished warming up.</dd>
-        <dt id="variations-item-4">Aggregated dependency health</dt>
-        <dd>The response body lists each dependency's status individually, so on-call engineers get a diagnosis, not just a single pass/fail bit.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Shallow vs. deep checks</dt>
+        <dd data-kb-level="advanced">A shallow check confirms the process can respond at all; a deep check also pings its own dependencies. Deep checks catch more, but can themselves cascade if every instance hammers the same downstream at once.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Startup probe / grace period</dt>
+        <dd data-kb-level="advanced">A separate, more lenient check during boot so a slow-starting instance isn't killed by liveness before it has finished warming up.</dd>
+        <dt id="variations-item-4" data-kb-level="expert">Aggregated dependency health</dt>
+        <dd data-kb-level="expert">The response body lists each dependency's status individually, so on-call engineers get a diagnosis, not just a single pass/fail bit.</dd>
       </dl>
     </section>
 
@@ -164,8 +187,8 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Gives orchestrators and load balancers a real signal instead of guessing from an open socket.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Cheap and fast enough to poll every few seconds without meaningful load.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Separating liveness from readiness lets each control loop react the right way — restart vs. reroute.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Doubles as an operational tool — curl it during an incident and see what the orchestrator sees.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Separating liveness from readiness lets each control loop react the right way — restart vs. reroute.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="expert">Doubles as an operational tool — curl it during an incident and see what the orchestrator sees.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -173,8 +196,8 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="expert">A deep check that pings every dependency can itself become a cascading failure under load.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">False positives: the process responds fine while a critical path it doesn't check is silently broken.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">False negatives: one blip on a nonessential dependency trips readiness and yanks a healthy instance out.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Another endpoint to secure — unauthenticated deep checks can leak internal topology to anyone who asks.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">False negatives: one blip on a nonessential dependency trips readiness and yanks a healthy instance out.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Another endpoint to secure — unauthenticated deep checks can leak internal topology to anyone who asks.</li>
           </ul>
         </div>
       </div>
@@ -188,7 +211,7 @@ sequenceDiagram
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Something external — a load balancer, orchestrator, or deploy pipeline — needs to know if an instance can take traffic.</li>
             <li id="usage-when-2" data-kb-polarity="when">You run behind a container platform that expects liveness and readiness probes to manage restarts and rollout.</li>
-            <li id="usage-when-3" data-kb-polarity="when">On-call engineers need one fast, standard place to check an instance's status during an incident.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">On-call engineers need one fast, standard place to check an instance's status during an incident.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -233,8 +256,8 @@ app.get("/readyz", async (_req, res) =&gt; {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="kubernetes" id="wild-kubernetes"><strong>Kubernetes</strong><span>Liveness, readiness, and startup probes (httpGet, tcpSocket, exec, or grpc) drive different actions — a failed liveness restarts the container, a failed readiness pulls it from the Service endpoints — each tuned by periodSeconds, timeoutSeconds, and failure/success thresholds.</span></div>
-        <div class="wild-item" data-kb-example="spring-boot-actuator" id="wild-spring-boot-actuator"><strong>Spring Boot Actuator</strong><span>Exposes /actuator/health, aggregating per-dependency HealthIndicator beans into one status, with separate liveness and readiness groups that map onto Kubernetes probes and a show-details toggle for the breakdown.</span></div>
-        <div class="wild-item" data-kb-example="aws-elb" id="wild-aws-elb"><strong>AWS Elastic Load Balancing</strong><span>Target groups poll a configured health-check path on an interval and, after a set number of consecutive failures, mark the target unhealthy and stop routing to it — restoring it once it passes the healthy threshold again.</span></div>
+        <div class="wild-item" data-kb-example="spring-boot-actuator" id="wild-spring-boot-actuator" data-kb-level="advanced"><strong>Spring Boot Actuator</strong><span>Exposes /actuator/health, aggregating per-dependency HealthIndicator beans into one status, with separate liveness and readiness groups that map onto Kubernetes probes and a show-details toggle for the breakdown.</span></div>
+        <div class="wild-item" data-kb-example="aws-elb" id="wild-aws-elb" data-kb-level="expert"><strong>AWS Elastic Load Balancing</strong><span>Target groups poll a configured health-check path on an interval and, after a set number of consecutive failures, mark the target unhealthy and stop routing to it — restoring it once it passes the healthy threshold again.</span></div>
       </div>
     </section>
 
@@ -245,27 +268,27 @@ app.get("/readyz", async (_req, res) =&gt; {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Probe period</strong> — How often the endpoint is polled (periodSeconds) — frequent enough to react, sparse enough not to load the service.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Failure and success thresholds</strong> — Consecutive failures before an instance is acted on and successes before it is restored (failureThreshold, successThreshold) — the anti-flap dials.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Probe timeout</strong> — A hard bound on the check itself (timeoutSeconds) so a slow dependency can never make the health check hang.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Startup grace</strong> — An initial delay or dedicated startup probe (initialDelaySeconds, startupProbe) so a slow-booting instance is not killed before it has warmed up.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Check depth</strong> — Shallow (the process can respond at all) versus deep (it also pings its own dependencies) — depth catches more but risks cascading.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Failure and success thresholds</strong> — Consecutive failures before an instance is acted on and successes before it is restored (failureThreshold, successThreshold) — the anti-flap dials.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Probe timeout</strong> — A hard bound on the check itself (timeoutSeconds) so a slow dependency can never make the health check hang.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Startup grace</strong> — An initial delay or dedicated startup probe (initialDelaySeconds, startupProbe) so a slow-booting instance is not killed before it has warmed up.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Check depth</strong> — Shallow (the process can respond at all) versus deep (it also pings its own dependencies) — depth catches more but risks cascading.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Probe failure rate</strong> — Fraction of health checks failing per instance — the raw signal the orchestrator and load balancer act on.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Health check latency</strong> — How long the endpoint takes to answer; a deep check that is slowing is a leading indicator of dependency trouble.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Restart / eviction churn</strong> — Restarts driven by liveness failures and instances pulled from rotation by readiness — spikes reveal misconfigured thresholds.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Health check latency</strong> — How long the endpoint takes to answer; a deep check that is slowing is a leading indicator of dependency trouble.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="expert"><strong>Restart / eviction churn</strong> — Restarts driven by liveness failures and instances pulled from rotation by readiness — spikes reveal misconfigured thresholds.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Deep-check cascade</strong> — A check that pings a shared downstream, run by every instance at once, amplifies load and can fail the whole fleet together.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Liveness restart storm</strong> — Liveness set to fail on a transient dependency blip restarts healthy processes instead of just rerouting — the job readiness should have done.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Unbounded check hangs</strong> — A dependency call in the endpoint with no timeout makes the probe itself hang, turning the health check into another failure point.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Correlated readiness flip</strong> — Readiness tied to a non-critical shared dependency flips the entire fleet out of rotation on one blip, removing all capacity at once.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Liveness restart storm</strong> — Liveness set to fail on a transient dependency blip restarts healthy processes instead of just rerouting — the job readiness should have done.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Unbounded check hangs</strong> — A dependency call in the endpoint with no timeout makes the probe itself hang, turning the health check into another failure point.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Correlated readiness flip</strong> — Readiness tied to a non-critical shared dependency flips the entire fleet out of rotation on one blip, removing all capacity at once.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -273,9 +296,9 @@ app.get("/readyz", async (_req, res) =&gt; {
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Separate liveness from readiness so a dependency hiccup reroutes rather than restarts.</li>
             <li id="production-check-2" data-kb-polarity="check">Bound every dependency call inside the endpoint with its own timeout.</li>
-            <li id="production-check-3" data-kb-polarity="check">Set thresholds and period so a single blip does not yank an instance out.</li>
-            <li id="production-check-4" data-kb-polarity="check">Give slow-starting instances a startup probe or initial delay.</li>
-            <li id="production-check-5" data-kb-polarity="check">Keep readiness off non-critical dependencies that could evict the whole fleet at once.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Set thresholds and period so a single blip does not yank an instance out.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Give slow-starting instances a startup probe or initial delay.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">Keep readiness off non-critical dependencies that could evict the whole fleet at once.</li>
           </ul>
         </div>
       </div>

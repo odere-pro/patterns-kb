@@ -120,12 +120,15 @@ function render(el, out = []) {
     const cls = c.getAttribute?.("class") ?? "";
 
     if (tag === "figure" && cls.includes("diagram")) {
-      if (WITH_DIAGRAMS) {
-        const src = c.querySelector("pre.mermaid")?.text.trim();
-        const cap = c.querySelector("figcaption")?.text.trim();
-        if (src) out.push(`\n\`\`\`mermaid\n${src}\n\`\`\`\n`);
-        if (cap) out.push(`_${cap}_\n`);
-      }
+      /* The mermaid source is noise by default, but the caption is not: it is a full
+       * sentence naming the question the diagram answers. Since a pattern's `structure`
+       * is now a topology walk plus a sequence diagram and often carries no prose at
+       * all, dropping both left the block rendering completely empty — and the reader
+       * is the only way anyone is supposed to read these pages. Captions always. */
+      const src = c.querySelector("pre.mermaid")?.text.trim();
+      const cap = c.querySelector("figcaption")?.text.trim();
+      if (WITH_DIAGRAMS && src) out.push(`\n\`\`\`mermaid\n${src}\n\`\`\`\n`);
+      if (cap) out.push(`\n_${cap}_\n`);
       continue;
     }
     // Name + note rows — relations, theme tie-ins, real-world examples. They share a

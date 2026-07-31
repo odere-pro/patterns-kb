@@ -66,22 +66,42 @@ export function lensProblems(root) {
     flush();
   }
 
-  /* No block may come back empty at any lens. Clone the section, prune what the
-   * lens would hide (min-level accretion + exact-match registers), drop the
+  /* Nothing labelled may render as a label with nothing under it. Clone, prune what
+   * the lens would hide (min-level accretion + exact-match registers), drop the
    * headings, and demand some text survives. The basic lens is the one that bites:
-   * it is what forces at least one untagged item into every mandatory list. */
+   * it is what forces at least one untagged item into every list.
+   *
+   * Two granularities, because a block-level test alone is too coarse. `production`
+   * renders four independently labelled cards, and tagging every knob, signal and
+   * failure mode to advanced — which the sizing bands actively push authors to do —
+   * leaves three headings standing over nothing while the block as a whole still
+   * passes on its surviving checklist items. A reader at basic then meets "Tuning
+   * knobs" with no knobs under it: an empty promise the whole-block test cannot see. */
+  const emptyAtLens = (el, lens) => {
+    const clone = parse(el.toString(), { comment: true });
+    pruneForLens(clone, lens);
+    for (const h of clone.querySelectorAll("h2, h3")) h.remove();
+    return !clone.text.trim();
+  };
+
   for (const sec of root.querySelectorAll("[data-kb-block]")) {
     const block = sec.getAttribute("data-kb-block");
     /* relationships renders link cards written by kb.mjs link — a freshly scaffolded
      * page legitimately has none yet, and its content is never lens-tagged. */
     if (block === "relationships") continue;
     for (const lens of LEVELS) {
-      const clone = parse(sec.toString(), { comment: true });
-      pruneForLens(clone, lens);
-      for (const h of clone.querySelectorAll("h2, h3")) h.remove();
-      if (!clone.text.trim()) {
+      if (emptyAtLens(sec, lens)) {
         problems.push(`block "${block}" renders empty at the ${lens} lens`);
         break; // one report per block is enough
+      }
+    }
+    for (const group of sec.querySelectorAll(".prod-group")) {
+      const label = group.querySelector("h3")?.text.trim() ?? "?";
+      for (const lens of LEVELS) {
+        if (emptyAtLens(group, lens)) {
+          problems.push(`"${label}" in block "${block}" renders as a heading with nothing under it at the ${lens} lens`);
+          break;
+        }
       }
     }
   }

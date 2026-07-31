@@ -64,6 +64,14 @@ function weigh(html, lens) {
   const root = full.querySelector("main") ?? full;
   for (const n of root.querySelectorAll(NOISE)) n.remove();
   for (const n of root.querySelectorAll("figure.diagram")) n.remove();  // mermaid source is not prose
+  /* The typed-relations block is an index of neighbours, not reading matter, and it is
+   * the one block no lens can touch: rel rows carry no lens attributes and get no minted
+   * ids, so the same words land at basic, advanced and expert alike. Counting them
+   * measures how many neighbours a page has, not how much a reader must read — and
+   * because the cost is fixed while basic is the smallest lens, it falls hardest exactly
+   * where the band is tightest (on pubsub: 267w, 32% of basic but 11% of expert). Left
+   * in, it pushes authors to cut usage and production items to pay for a link list. */
+  for (const n of root.querySelectorAll('[data-kb-block="relationships"]')) n.remove();
   pruneForLens(root, lens);
   return root.text.split(/\s+/).filter(Boolean).length;
 }

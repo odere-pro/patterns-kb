@@ -135,9 +135,9 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1" data-kb-register="basic">Someone uploads a 40 MB video. Keep it in your database and every backup, every restore and every query that never touches that video gets slower, because the bytes sit in the same pages the rest of your data has to move past. Send the bytes to a store built for exactly this instead: hand it a whole file, get back a short key, present the key later and get the whole file back. Your database keeps the key — a few dozen characters — and stays small and quick.</p>
+        <p id="description-p-1">Someone uploads a 40 MB video. Keep it in your database and every backup, every restore and every query that never touches that video gets slower, because the bytes sit in the same pages the rest of your data has to move past. Send the bytes to a store built for exactly this instead: hand it a whole file, get back a short key, present the key later and get the whole file back. Your database keeps the key — a few dozen characters — and stays small and quick.</p>
         <p id="description-p-2" data-kb-level="advanced"><strong>Object storage</strong> keeps data as opaque <em>objects</em> — a blob of bytes, a bundle of metadata, and a unique key — in a flat namespace, retrieved by key over an HTTP API rather than by a filesystem path or a database row. Each object is written and read whole: you don't append to one or edit part of it, you replace it. It is purpose-built to hold large, unstructured binary data — images, video, backups, logs, static assets, ML datasets — cheaply and at effectively unbounded scale.</p>
-        <p id="description-p-3">The force it resolves is a mismatch of jobs. A relational or document database is built for many small, structured, frequently updated records with rich queries and transactions. Push large binary blobs into it and everything suffers: rows bloat, backups balloon, the buffer cache thrashes, and every query slows for data it never touches. Object storage takes the blobs out of that hot path — the database keeps only a small reference (a key or URL), and the bytes live in a store designed for exactly this: durable, cheap per gigabyte, horizontally scalable, and directly addressable over HTTP.</p>
+        <p id="description-p-3" data-kb-level="advanced">The force it resolves is a mismatch of jobs. A relational or document database is built for many small, structured, frequently updated records with rich queries and transactions. Push large binary blobs into it and everything suffers: rows bloat, backups balloon, the buffer cache thrashes, and every query slows for data it never touches. Object storage takes the blobs out of that hot path — the database keeps only a small reference (a key or URL), and the bytes live in a store designed for exactly this: durable, cheap per gigabyte, horizontally scalable, and directly addressable over HTTP.</p>
         <p id="description-p-4" data-kb-level="advanced">Objects live in <em>buckets</em> (containers), each object named by a key, with per-object authorization on an HTTP interface. Because an object is reachable by URL, it pairs naturally with a <a href="./cdn.html">CDN</a> in front to cache it at the edge, and with a <a href="./valet-key.html">Valet Key</a> — a short-lived pre-signed URL — so a client can upload or download the bytes directly without routing them through your servers. The price of that simplicity is a narrow interface: no in-place edits, no filesystem semantics, and consistency that varies by store — the flagship clouds are now strongly consistent even for overwrites and listings, but a portable design cannot assume that of every S3-compatible store.</p>
       </div>
     </section>
@@ -163,6 +163,26 @@
     <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
       <h2 class="doc-h" id="h-structure">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Client["Browser"]
+    subgraph Own["Your servers — keys only, never bytes"]
+        App["App server"]
+        DB[("Database")]
+    end
+    Bucket[("Object store bucket")]:::ext
+    CDN["CDN edge cache"]:::ext
+    Client --&gt;|"1 ask to upload"| App
+    App --&gt;|"2 store the key"| DB
+    App --&gt;|"3 hand back a signed URL"| Client
+    Client --&gt;|"4 put the bytes"| Bucket
+    Client --&gt;|"5 read later"| CDN
+    CDN --&gt;|"6 fetch on a miss"| Bucket
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does a 40 MB upload get in and out without passing through your database or your app servers? Only the key crosses into your systems, at step 2; the bytes travel between the browser and the bucket.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 flowchart LR
     App["App server"] -->|"1 · write blob → key"| OS["Object store (bucket)"]
@@ -241,7 +261,7 @@ flowchart LR
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+      <details class="sketch" id="sketch-variant-1">
         <summary>TypeScript — the bytes go to the store, the key goes in the row</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">// Upload: the file goes to the store, the database only learns its key.
 const key = `avatars/${userId}.jpg`;
@@ -295,7 +315,7 @@ async function idPhotoUrl(flowId: string, store: ObjectStore, db: Db): Promise&l
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Storage class / tier</strong> — Per-object hot, infrequent-access, or archive tier, set directly or by lifecycle rule. Colder classes cost less per gigabyte and more per read, so choose from how often an object is actually fetched rather than from how old it is.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Lifecycle rules</strong> — The age or prefix conditions that move objects to a colder class or delete them outright. They are what keeps the bill tracking what you serve instead of everything you have ever kept.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Lifecycle rules</strong> — The age or prefix conditions that move objects to a colder class or delete them outright. They are what keeps the bill tracking what you serve instead of everything you have ever kept.</li>
             <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Multipart threshold &amp; part size</strong> — Above what size an upload splits, and how large each part is. Smaller parts make a dropped connection cheap to retry and cost more requests; larger parts do the reverse.</li>
             <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Versioning</strong> — Whether a write keeps the previous version of a key, or objects are locked write-once. A bad overwrite becomes recoverable, and every superseded version keeps billing until a lifecycle rule clears it.</li>
             <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Bucket policy &amp; encryption</strong> — Public-access block, IAM and bucket policy, and server-side encryption at rest. This is the surface where one permissive statement turns a private bucket into a public one.</li>
@@ -304,8 +324,8 @@ async function idPhotoUrl(flowId: string, store: ObjectStore, db: Db): Promise&l
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
-            <li id="production-signal-1" data-kb-polarity="signal"><strong>Request rate &amp; error mix</strong> — 4xx/5xx trend, especially 403 denials that signal a policy or key problem.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>First-byte latency by tier</strong> — Cold-tier reads are far slower than hot, and an archived object cannot be read at all until it is restored. A rising cold share is a tiering rule that went further than the access pattern justified.</li>
+            <li id="production-signal-1" data-kb-polarity="signal" data-kb-level="advanced"><strong>Request rate &amp; error mix</strong> — 4xx/5xx trend, especially 403 denials that signal a policy or key problem.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>First-byte latency by tier</strong> — Cold-tier reads are far slower than hot, and an archived object cannot be read at all until it is restored. A rising cold share is a tiering rule that went further than the access pattern justified.</li>
             <li id="production-signal-3" data-kb-polarity="signal"><strong>Egress bandwidth &amp; cost</strong> — The line item that surprises teams serving without a CDN.</li>
             <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Objects &amp; bytes stored</strong> — Count and total size, per bucket and per prefix. Growth that outruns traffic is either a lifecycle rule that never fired or reconciliation nobody wrote.</li>
             <li id="production-signal-5" data-kb-polarity="signal" data-kb-level="expert"><strong>Replication lag</strong> — Time for a write to reach another region, where replication is enabled. It bounds how stale a cross-region read can be, which is what a failover plan is really promising.</li>
@@ -315,7 +335,7 @@ async function idPhotoUrl(flowId: string, store: ObjectStore, db: Db): Promise&l
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure" data-kb-level="advanced"><strong>Hot-prefix throttling</strong> — Requests concentrated on one key prefix get rate-limited.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Egress cost blowout</strong> — Serving large objects straight to users instead of through a CDN.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Egress cost blowout</strong> — Serving large objects straight to users instead of through a CDN.</li>
             <li id="production-failure-3" data-kb-polarity="failure"><strong>Public-bucket exposure</strong> — A misconfigured policy leaks private data.</li>
             <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Stale read after overwrite</strong> — The major clouds now read an overwrite back immediately, and their listings are strongly consistent too — the caveat survives in cross-region replicas read before replication catches up, and in S3-compatible stores that still settle writes or listings asynchronously.</li>
             <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="advanced"><strong>Cold-tier retrieval spike</strong> — Objects aged into archive must be restored before they can be read.</li>

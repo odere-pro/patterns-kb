@@ -35,10 +35,11 @@ not context — and prints the line that matched.
 Cite precisely: every claim has a stable id (`…/circuit-breaker.html#tradeoffs-con-2`).
 
 Scope any read to a **reading level** with `--level basic|advanced|expert` on `get` and
-`find` — `basic` is the junior entry point, `expert` the staff one. Every block shows at
-every lens; depth adapts inside blocks. `data-kb-level` on an element means "visible from
-this level up" (accretion); `data-kb-register` means "rendered at exactly this lens"
-(variant groups, like the explain ladder); untagged means always.
+`find`. The lenses are **cumulative**: `basic` is a short, AWS-doc-style whole page,
+`advanced` is basic plus system-design depth, `expert` is both plus the deep dives. Every
+block shows at every lens; depth adapts inside blocks. `data-kb-level` on an element means
+"visible from this level up" and is the mechanism; untagged means it is part of the basic
+core. `data-kb-register` ("rendered at exactly this lens") is a rare replacement tool.
 
 ## Writing it
 
@@ -48,14 +49,14 @@ Go through the validated writer, not hand-edited attribute strings:
 node scripts/kb.mjs set <id> --aliases '["breaker","CB"]' --tags '[…]' --solves '[…]'
 node scripts/kb.mjs set <id> --favourite true            # editorial pick: ★ chip + hub filter
 node scripts/kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
-node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   # the 3-rung ladder
-node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>      # accretion: from this level up
-node scripts/kb.mjs register <id> <element-id> <basic|advanced|expert|none>   # variant: at exactly this lens
+node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   # the 3-rung ladder, stacked
+node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>      # from this level up — the default tool
+node scripts/kb.mjs register <id> <element-id> <basic|advanced|expert|none>   # rare: replaces the lower version
 ```
 
 Sections never carry a lens attribute — blocks show at every lens, and `make check`
-fails any block that renders empty at one. Register rules and the per-lens audit
-procedure live in the **kb-explain** skill.
+fails any block that renders empty at one. The sizing bands per kind, the stacking rule
+and the per-lens audit procedure live in the **kb-explain** skill.
 
 Then `make all` to regenerate, and `make check` to verify. A hook runs `make check` after any
 edit under `site/` — it takes ~0.8s.

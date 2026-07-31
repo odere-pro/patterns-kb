@@ -53,7 +53,14 @@ const ITEMS = [
   { block: "production", sel: ".prod-checklist li", polarity: "check" },
   { block: "wild", sel: ".wild-item", idOf: (el) => keyed("wild", el.getAttribute("data-kb-example")) },
   { block: "tour", sel: ".tour-step", idOf: (el) => keyed("tour", el.getAttribute("data-kb-member")) },
+  /* A tour step's own paragraph, addressed apart from the step: a theme's basic lens
+   * keeps the step NAMES and drops the role prose, and tagging `tour-<member>` would
+   * take the name with it. */
+  { block: "tour", sel: ".tour-step p", idOf: (_el, i) => `tour-p-${i + 1}` },
   { block: "fluency", sel: ".fluency-item", idOf: (el) => keyed("fluency", el.getAttribute("data-kb-theme")) },
+  /* siblings reuses the fluency-item markup but carries no data-kb-theme, so the keyed
+   * scheme mints nothing for it; these are positional. */
+  { block: "siblings", sel: ".fluency-item", idOf: (_el, i) => `siblings-item-${i + 1}` },
   { block: "deepdives", sel: ".prose > h3", idOf: (_el, i) => `deepdives-dive-${i + 1}` },
   { block: "sketch", sel: "details.sketch", idOf: (_el, i) => `sketch-variant-${i + 1}` },
 ];
@@ -151,11 +158,12 @@ for (const node of Object.values(graph.nodes)) {
     }
   }
 
-  /* ---- prose ids: <block>-p-N on paragraphs, <block>-li-N on plain list items ----
+  /* ---- prose ids: <block>-p-N on paragraphs, <block>-li-N on plain list items,
+   *      <block>-fig-N on diagrams ----
    * These make prose addressable, which per-level register variants and accretion
    * tags need (`kb.mjs register|level <id> <element-id> <level>`). Plain-list ids
    * cover the kinds whose content lives in .prose lists (hazard causes/cost,
-   * principle applying, theme siblings…) — the ITEMS table above wins for its own
+   * principle applying…) — the ITEMS table above wins for its own
    * blocks because those lists are not inside .prose. Positional — inserting an
    * element renumbers its successors, so re-run this before tagging. */
   for (const sec of root.querySelectorAll("[data-kb-block]")) {
@@ -167,6 +175,13 @@ for (const node of Object.values(graph.nodes)) {
     });
     sec.querySelectorAll(".prose li").forEach((el, i) => {
       el.setAttribute("id", `${b}-li-${i + 1}`);
+      idsStamped++;
+    });
+    /* Figures are lens-tagged like any other element — an implementation pattern's
+     * structure opens with the basic-visible topology walk and follows it with the
+     * sequence diagram at advanced — so they need addresses too. */
+    sec.querySelectorAll("figure.diagram").forEach((el, i) => {
+      el.setAttribute("id", `${b}-fig-${i + 1}`);
       idsStamped++;
     });
   }

@@ -1,6 +1,6 @@
 ---
 name: diagram-draw
-description: Draw small, readable mermaid diagrams for system design, component design, and user flows — one question per diagram, zoom by levels instead of growing one huge picture. Use when someone asks to "draw a diagram", "diagram this architecture", "add a mermaid diagram", "visualize this flow", "show the sequence", "draw the state machine", "sketch the user flow", "zoom into this component", wants a diagram that explains a complex solution quickly, or is writing the architecture or deepdives block of a site design page.
+description: Draw small, readable mermaid diagrams for system design, component design, and user flows — one question per diagram, zoom by levels instead of growing one huge picture. Use when someone asks to "draw a diagram", "diagram this architecture", "add a mermaid diagram", "visualize this flow", "show the sequence", "draw the state machine", "sketch the user flow", "zoom into this component", "draw the numbered topology walk for this pattern", wants a diagram that explains a complex solution quickly, or is writing the architecture or deepdives block of a site design page.
 ---
 
 # Drawing diagrams that survive silence
@@ -57,6 +57,49 @@ This matches the site convention: distributed designs lead with a `flowchart`, l
 katas with a `classDiagram` ([site/designs/CLAUDE.md](../../../site/designs/CLAUDE.md)).
 Exact syntax and v11 gotchas: [references/syntax.md](references/syntax.md) — read it
 before writing a type you have not drawn recently.
+
+## The topology walk — the first diagram of any mechanism
+
+When the subject is a mechanism (a pattern, a service, a pipeline), the first diagram is
+always the same shape, and it answers one question: **how does the happy path cross the
+components?** It is what AWS Prescriptive Guidance puts at the top of a pattern page, and
+what a reader reconstructs the design from.
+
+The recipe:
+
+1. **Nodes are components and data stores.** Rectangles for services you build, `[( )]`
+   cylinders for tables, queues and topics — the label disambiguates ("Outbox table",
+   "Order events topic"). ≤9 nodes, no exceptions; past that, zoom instead.
+2. **The boundary is a `subgraph`.** Draw the thing that makes the mechanism work as an
+   enclosure — "One atomic transaction" wrapping the state table and the outbox table,
+   "One bulkhead" wrapping a pool and its workers. If the pattern has no boundary worth
+   drawing, you are drawing a flow, not a topology.
+3. **Number the edges in happy-path order**: `-->|"1 write order"|`, `2`, `3`… through the
+   last step. The numbers are the walk; the prose below the diagram reads as the same
+   numbered steps.
+4. **Happy path only.** Retries, timeouts and failure branches belong in the sequence
+   diagram that follows, not on this board.
+
+```mermaid
+flowchart LR
+  Svc["Order Service"]
+  subgraph Tx["One atomic transaction"]
+    Orders[("Orders table")]
+    Outbox[("Outbox table")]
+  end
+  Relay["Relay"]
+  Broker[("Broker")]:::ext
+  Consumer["Shipping Service"]
+  Svc -->|"1 update order"| Orders
+  Svc -->|"2 insert event"| Outbox
+  Relay -->|"3 read unsent"| Outbox
+  Relay -->|"4 publish"| Broker
+  Broker -->|"5 deliver"| Consumer
+  classDef ext stroke-dasharray:4 4
+```
+
+On KB pattern pages this diagram opens the `structure` block and stays untagged (every
+lens sees it); the sequence diagram after it carries `data-kb-level="advanced"`.
 
 ## The altitude ladder
 

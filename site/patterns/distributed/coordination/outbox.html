@@ -136,25 +136,25 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1" data-kb-register="basic">Placing an order means two things happen: your service saves it, and the shipping service is told. Those are two different systems, so either can fail on its own. The save works and the message never goes out, and nobody ships an order the customer has already paid for. The message goes out and the save is undone, and someone packs a box for an order that does not exist. So write the message into your own database, in the very same save as the order, and let a small helper process pick it up afterwards and deliver it, retrying until it lands.</p>
+        <p id="description-p-1">Placing an order means two things happen: your service saves it, and the shipping service is told. Those are two different systems, so either can fail on its own. The save works and the message never goes out, and nobody ships an order the customer has already paid for. The message goes out and the save is undone, and someone packs a box for an order that does not exist. So write the message into your own database, in the very same save as the order, and let a small helper process pick it up afterwards and deliver it, retrying until it lands.</p>
         <p id="description-p-2" data-kb-level="advanced">The <strong>outbox</strong> pattern adds a table to a service's own database that holds messages waiting to be published. When the service changes state, it writes both the business row and an outbox row — the event describing that change — inside the same local ACID transaction. A separate process then reads the outbox and delivers each message to a broker, marking it published once it's safely on its way.</p>
         <p id="description-p-3" data-kb-level="advanced">It resolves the <strong>dual-write problem</strong>. A service's database and its message broker are two different systems with no shared transaction between them. Publish before committing and a rolled-back write leaves the world believing something happened that never did. Commit and then publish, and a crash or a broker outage between the two silently drops the event, with the database looking perfectly consistent and no error anywhere. There's no way to make "write to the database" and "send to the broker" atomic across two resource managers without something like distributed two-phase commit, which most message brokers don't support and most teams don't want to run.</p>
-        <p id="description-p-4">The publish becomes a second local write, and the database transaction already makes those two atomic — that is the whole trick. The genuinely hard part — getting the message across the network exactly when it should go — is pushed onto a relay that can retry indefinitely against a table, rather than a request handler that gets one shot before the client hangs up.</p>
+        <p id="description-p-4" data-kb-level="advanced">The publish becomes a second local write, and the database transaction already makes those two atomic — that is the whole trick. The genuinely hard part — getting the message across the network exactly when it should go — is pushed onto a relay that can retry indefinitely against a table, rather than a request handler that gets one shot before the client hangs up.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Write the message into your own database, in the same save as the thing the message is about. One save either happens or it does not, so you can never end up with the change recorded and nobody told about it. Then let a small helper read the saved messages and send them on, trying each again until it lands. It is an out-tray on your desk: writing the letter and dropping it in the tray is a single act, and the post running late is a different problem from the letter never existing. The price is that a letter occasionally goes out twice, so whoever receives it has to notice the copy.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Turn the publish into a second local write: the business row and an event row commit in one ACID transaction, and a relay drains the still-unpublished rows to a broker or an HTTP endpoint, marking each one as it goes. The relay only ever sees committed rows, so a rolled-back transaction publishes nothing, and scanning in timestamp and sequence order delivers events in the order the service wrote them. The two relay mechanics differ in cost: polling is a few lines and pays a poll interval of latency plus steady read load on the table, while a log-tailing connector reads the write-ahead log instead and removes both, at the price of running change-data-capture infrastructure. Either way a row must be claimed exclusively — SELECT … FOR UPDATE SKIP LOCKED, or a single-owner lease — or two relays publish it twice.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>Reach for it when a lost notification is a correctness bug rather than an annoyance: the retryable unit becomes a durable row instead of one shot inside a request handler, and recovery is just draining what is unpublished. It closes the dual write inside one service — a process that must also change another service's data needs a saga on top, not a bigger outbox. The bill comes with its counter-moves. Delivery is at-least-once and never exactly-once, because a relay that dies between publishing and marking republishes by design, so every consumer owes deduplication on a message id you commit with the row. The table sits on the hot write path and grows forever, so schedule cleanup and index the unpublished predicate, or the poll degrades into a scan of dead rows. Ordering holds only as wide as the key the scan and the broker's group are scoped to, so choose the aggregate key deliberately rather than inheriting it. Then run the loop — tune poll interval and batch size, watch backlog depth and publish lag, expect the relay to be what falls behind a write burst first, and gate the release on exactly one owner per row.</p>
         </div>
@@ -163,7 +163,28 @@
 
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
-      <figure class="diagram">
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Svc["Order Service"]
+    subgraph Tx["One atomic transaction"]
+        Orders[("Orders table")]
+        Outbox[("Outbox table")]
+    end
+    Relay["Relay"]
+    Broker[("Broker")]:::ext
+    Consumer["Shipping Service"]:::ext
+    Svc --&gt;|"1 write order"| Orders
+    Svc --&gt;|"2 insert event"| Outbox
+    Relay --&gt;|"3 read unpublished"| Outbox
+    Relay --&gt;|"4 publish"| Broker
+    Broker --&gt;|"5 deliver"| Consumer
+    Relay --&gt;|"6 mark published"| Outbox
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does the order's event reach another service without a distributed transaction? Steps 1 and 2 commit together or not at all; the relay picks up from there, and marks the row only once the broker has taken it — which is why a crash between 4 and 6 delivers twice.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -210,7 +231,7 @@ sequenceDiagram
             <li id="tradeoffs-pro-1" data-kb-polarity="pro" data-kb-level="advanced">Solves the dual-write problem with a single local ACID transaction — no distributed transaction coordinator needed.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Guarantees at-least-once delivery: an event is never lost because the broker happened to be down at commit time.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">Recovery is just retrying unpublished rows — no special failure-handling logic in the request path.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Works with any relational database and any broker; it's a pattern, not a product.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Works with any relational database and any broker; it's a pattern, not a product.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -219,7 +240,7 @@ sequenceDiagram
             <li id="tradeoffs-con-1" data-kb-polarity="con">Adds a table, a relay process, and one more moving part to deploy and monitor.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Delivers at-least-once, not exactly-once — consumers must dedupe or tolerate replays.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Polling relays add publish latency and steady read load — shorten the interval only as far as the table can carry it, or move to log tailing and accept operating the connector.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">The outbox table grows unbounded without its own archiving or cleanup job.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">The outbox table grows unbounded without its own archiving or cleanup job.</li>
             <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Ordering survives only as wide as the key the relay scans and the broker groups by: one global stream serialises aggregates that have nothing to do with each other, and a per-row key drops the sequence you wanted — choose the aggregate key deliberately and pay for it in per-key throughput.</li>
           </ul>
         </div>
@@ -234,7 +255,7 @@ sequenceDiagram
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">A service must update its own data and reliably announce that change to other services or a broker.</li>
             <li id="usage-when-2" data-kb-polarity="when">You need at-least-once delivery that survives a crash or a broker outage right after commit.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The database and the message broker are separate systems with no shared transaction between them.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The database and the message broker are separate systems with no shared transaction between them.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -242,7 +263,7 @@ sequenceDiagram
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Nothing outside the service's own transaction needs to know about the change.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">An occasional missed notification is acceptable and the extra table and relay aren't worth running.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">Delivery volume and stakes are low enough that a direct, synchronous call is simpler and fast enough.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Delivery volume and stakes are low enough that a direct, synchronous call is simpler and fast enough.</li>
           </ul>
         </div>
       </div>
@@ -250,7 +271,7 @@ sequenceDiagram
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+      <details class="sketch" id="sketch-variant-1">
         <summary>TypeScript — the order and the message about it, in one commit</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">// One transaction, two rows: the change, and the message announcing it.
 await db.transaction(async (tx) =&gt; {
@@ -306,7 +327,7 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="debezium" id="wild-debezium" data-kb-level="advanced"><strong>Debezium</strong><span>Its Outbox Event Router SMT (io.debezium.transforms.outbox.EventRouter) tails the database WAL/binlog and expands each outbox insert into a broker message, routing on the aggregatetype column and using aggregateid as the Kafka key so per-aggregate ordering is preserved — no polling, near-zero added latency.</span></div>
-        <div class="wild-item" data-kb-example="dynamodb-streams" id="wild-dynamodb-streams"><strong>Amazon DynamoDB Streams</strong><span>AWS documents this as the change-data-capture route to the same guarantee: enable streams on the table and the item-level change carries the event itself, so there is no second table to keep in step. The stream records those changes as a time-ordered sequence, and a Lambda function polls it and forwards each new record to an SQS queue for the consuming service.</span></div>
+        <div class="wild-item" data-kb-example="dynamodb-streams" id="wild-dynamodb-streams" data-kb-level="advanced"><strong>Amazon DynamoDB Streams</strong><span>AWS documents this as the change-data-capture route to the same guarantee: enable streams on the table and the item-level change carries the event itself, so there is no second table to keep in step. The stream records those changes as a time-ordered sequence, and a Lambda function polls it and forwards each new record to an SQS queue for the consuming service.</span></div>
         <div class="wild-item" data-kb-example="masstransit" id="wild-masstransit"><strong>MassTransit</strong><span>The .NET messaging library ships a transactional outbox: AddEntityFrameworkOutbox persists messages in an OutboxMessage table inside the same EF Core SaveChanges as the business write, and a delivery service sweeps and publishes them, with duplicate-detection to guard replays.</span></div>
       </div>
     </section>
@@ -320,7 +341,7 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Relay poll interval</strong> — For a polling relay, how often it scans for unpublished rows. Shorter cuts publish latency but raises steady read load on the outbox table; log-tailing (CDC) sidesteps the tradeoff entirely.</li>
             <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Fetch batch size</strong> — Rows drained per relay iteration (the LIMIT in the poll query). Larger batches amortize round-trips but hold locks longer and enlarge the replay window on a mid-batch crash.</li>
             <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="expert"><strong>Ordering and dedup keys on the published message</strong> — The key the broker orders within (SQS FIFO MessageGroupId, a Kafka partition key) and the key it dedupes on (SQS FIFO MessageDeduplicationId, deduplicated over a 5-minute interval). Scope the group too coarsely and unrelated aggregates serialize behind each other; too finely and the per-aggregate ordering you wanted is gone.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Cleanup / retention cadence</strong> — How aggressively a job deletes or archives already-published rows, which sets the steady-state size of the table the relay polls. Keep whatever window your replay and audit stories actually need, and no more.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Cleanup / retention cadence</strong> — How aggressively a job deletes or archives already-published rows, which sets the steady-state size of the table the relay polls. Keep whatever window your replay and audit stories actually need, and no more.</li>
             <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Delivery retry / backoff</strong> — How the relay retries a row the broker rejected before moving on, and how long it backs off, so a broker blip does not spin the relay hot.</li>
           </ul>
         </div>
@@ -328,7 +349,7 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Outbox backlog depth</strong> — Count of rows with published = false. Steady growth means the relay is not keeping up with write volume.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Publish lag</strong> — Time between a row insert and its mark-published. The end-to-end latency other services see; dominated by poll interval for a polling relay.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Publish lag</strong> — Time between a row insert and its mark-published. The end-to-end latency other services see; dominated by poll interval for a polling relay.</li>
             <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Outbox table size / dead-row count</strong> — Total rows and un-vacuumed published rows. Rising size signals the cleanup job is behind and poll scans are getting more expensive.</li>
             <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Broker delivery error rate</strong> — Failed publishes per interval. A sustained rise is what precedes an exploding backlog.</li>
           </ul>
@@ -336,7 +357,7 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Relay falls behind</strong> — Write bursts outrun the relay and backlog grows without bound; downstream services see ever-later events. Scale the relay or shard the outbox by aggregate.</li>
+            <li id="production-failure-1" data-kb-polarity="failure" data-kb-level="advanced"><strong>Relay falls behind</strong> — Write bursts outrun the relay and backlog grows without bound; downstream services see ever-later events. Scale the relay or shard the outbox by aggregate.</li>
             <li id="production-failure-2" data-kb-polarity="failure"><strong>Duplicate delivery</strong> — The relay crashes after publishing but before marking the row published; on restart it republishes. At-least-once is inherent — consumers must dedupe.</li>
             <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Table bloat stalls polling</strong> — Cleanup lags and the poll query scans millions of published rows, driving its own latency up and worsening the backlog it was meant to drain.</li>
             <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Concurrent relays double-publish</strong> — Scaled out for throughput, two relay instances select the same unpublished rows in the same window and both deliver them, so the duplicate rate rises exactly when volume does.</li>
@@ -347,10 +368,10 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
           <ul>
             <li id="production-check-1" data-kb-polarity="check">A partial index on published = false keeps the poll query fast as the table grows</li>
             <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">The relay scans in timestamp and sequence order, so events reach the broker in the order the service wrote them</li>
-            <li id="production-check-3" data-kb-polarity="check">The cleanup job is itself monitored — a silently dead one looks exactly like a healthy one until the poll slows down</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">The cleanup job is itself monitored — a silently dead one looks exactly like a healthy one until the poll slows down</li>
             <li id="production-check-4" data-kb-polarity="check">Consumers dedupe on message id — the pattern is at-least-once, never exactly-once</li>
             <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">Only one relay can claim a given row (SKIP LOCKED, lease, or single instance)</li>
-            <li id="production-check-6" data-kb-polarity="check">Backlog depth and publish lag are monitored with an alert on sustained growth</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="advanced">Backlog depth and publish lag are monitored with an alert on sustained growth</li>
           </ul>
         </div>
       </div>
@@ -413,7 +434,7 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
         </div>
       </div>
 
-<figure class="diagram">
+<figure class="diagram" id="relationships-fig-1">
         <pre class="mermaid">
 flowchart LR
     OB["Outbox"]

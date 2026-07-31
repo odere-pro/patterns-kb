@@ -93,9 +93,9 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1" data-kb-register="basic">Someone debugging a broken login writes <code>console.log(request)</code>. The request object holds the password the user just typed, their session token and their address, and all of it is now a line of text in a log aggregator that far more people can read than the database it came from. Nobody did anything malicious and nothing crashed. Meanwhile the record you actually needed — who signed in, who changed a permission, who read whose data — is not there, because logging was never anybody's job in particular. A <strong>secure logger</strong> takes both problems away from the call site: one component decides what gets written down and what gets masked first.</p>
+        <p id="description-p-1">Someone debugging a broken login writes <code>console.log(request)</code>. The request object holds the password the user just typed, their session token and their address, and all of it is now a line of text in a log aggregator that far more people can read than the database it came from. Nobody did anything malicious and nothing crashed. Meanwhile the record you actually needed — who signed in, who changed a permission, who read whose data — is not there, because logging was never anybody's job in particular. A <strong>secure logger</strong> takes both problems away from the call site: one component decides what gets written down and what gets masked first.</p>
         <p id="description-p-2" data-kb-level="advanced">Every security-relevant event travels one path before it reaches a sink. Rather than each call site formatting its own line, code hands the logger a structured event — actor, action, target, metadata — and the logger applies a sensitivity policy, masks or tokenizes anything that must not leave the process in the clear, and only then writes to an append-only, access-controlled store. The exposure this closes is asymmetric: a log aggregator is usually protected far less carefully than the system it collects from, so a secret copied there verbatim is a breach that needs no attacker skill at all.</p>
-        <p id="description-p-3">Secure Logger is one of the classic J2EE-era security patterns, catalogued alongside <a href="./intercepting-validator.html">Intercepting Validator</a> and <a href="./single-access-point.html">Single Access Point</a>. Its job is narrow on purpose: centralize the one place where "does this field get written down" is decided, so that decision doesn't depend on every engineer remembering it at every call site.</p>
+        <p id="description-p-3" data-kb-level="advanced">Secure Logger is one of the classic J2EE-era security patterns, catalogued alongside <a href="./intercepting-validator.html">Intercepting Validator</a> and <a href="./single-access-point.html">Single Access Point</a>. Its job is narrow on purpose: centralize the one place where "does this field get written down" is decided, so that decision doesn't depend on every engineer remembering it at every call site.</p>
       </div>
     </section>
 
@@ -122,6 +122,24 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
+    App["Application code"]
+    subgraph Gate["One chokepoint — nothing reaches a sink unmasked"]
+        SLog["Secure logger"]
+        Pol[("Sensitivity policy")]
+    end
+    Store[("Append-only audit store")]
+    Agg["Log aggregator"]:::ext
+    App --&gt;|"1 structured event: actor, action, target"| SLog
+    SLog --&gt;|"2 look up each field"| Pol
+    SLog --&gt;|"3 mask or tokenize, then append"| Store
+    Store --&gt;|"4 ship onward"| Agg
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does a password typed into a login form stay out of the log aggregator? Every record reaches a sink through step 3, so masking is decided once instead of at every call site.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+flowchart LR
     EV["Raw event, request, or exception"] -->|"emitted"| SL["Secure Logger"]
     SL -->|"inspect field"| CK{"Sensitive field?"}
     CK -->|"yes"| RD["Mask or redact"]
@@ -137,8 +155,8 @@ flowchart LR
     <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
-        <dt id="variations-item-1"><a href="../messaging/wire-tap.html">Wire Tap</a></dt>
-        <dd>Intercept an existing message flow with a non-invasive tap and route a copy into the secure logger, instead of instrumenting every call site by hand.</dd>
+        <dt id="variations-item-1" data-kb-level="advanced"><a href="../messaging/wire-tap.html">Wire Tap</a></dt>
+        <dd data-kb-level="advanced">Intercept an existing message flow with a non-invasive tap and route a copy into the secure logger, instead of instrumenting every call site by hand.</dd>
         <dt id="variations-item-2">Allowlist vs. denylist redaction</dt>
         <dd>Denylist known-sensitive keys like password or token and mask anything matching, or allowlist only fields explicitly cleared for logging. Allowlists survive schema drift better but need active upkeep as fields are added.</dd>
         <dt id="variations-item-3" data-kb-level="advanced">Tokenization and hashing</dt>
@@ -156,7 +174,7 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Centralizes masking and redaction in one place instead of trusting every call site to remember it.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Produces an audit trail auditors and incident responders can actually trust for non-repudiation.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Makes it safe to ship logs to lower-trust systems — SIEMs, third-party aggregators, support tools.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Makes it safe to ship logs to lower-trust systems — SIEMs, third-party aggregators, support tools.</li>
             <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Tamper-evident variants turn the log itself into forensic evidence, not just a debugging aid.</li>
           </ul>
         </div>
@@ -164,8 +182,8 @@ flowchart LR
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Adds latency and CPU to the logging hot path — scanning and redacting nested objects isn't free.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">A denylist can't catch what it doesn't know about; a new field carrying a raw secret slips through silently — an allowlist inverts that, so an unknown field defaults to masked and you pay in upkeep instead of in breaches.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Over-aggressive redaction can strip the very detail an investigation needed, trading audit value for false safety.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">A denylist can't catch what it doesn't know about; a new field carrying a raw secret slips through silently — an allowlist inverts that, so an unknown field defaults to masked and you pay in upkeep instead of in breaches.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Over-aggressive redaction can strip the very detail an investigation needed, trading audit value for false safety.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Only as strong as its adoption — one stray <code>console.log</code> bypasses it entirely, which makes this a lint rule and a review habit rather than a design you can install once.</li>
             <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">An asynchronous sink buys the hot-path latency back and pays in records dropped under backpressure, exactly when an incident is producing them — so put security events on a durable path even where debug logs stay buffered.</li>
             <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="advanced">Redaction alone leaves the inbound direction open: values from another trust zone can carry carriage returns, line feeds, or delimiters that forge log entries, so the same chokepoint must also neutralize control characters it did not generate — structured (e.g. JSON-lines) output closes the door structurally.</li>
@@ -182,14 +200,14 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">You log security-relevant events — authentication, authorization decisions, admin actions, data access.</li>
             <li id="usage-when-2" data-kb-polarity="when">Requests or domain objects carry passwords, tokens, session IDs, or PII that must never land in a general-purpose log store.</li>
-            <li id="usage-when-3" data-kb-polarity="when">Compliance requires a tamper-evident, access-controlled audit trail — PCI-DSS, HIPAA, SOC 2, GDPR.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Compliance requires a tamper-evident, access-controlled audit trail — PCI-DSS, HIPAA, SOC 2, GDPR.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Nothing sensitive ever flows through the log path — plain structured logging is enough and redaction is dead weight.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Logs are purely local debug output that never leaves the developer's machine.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">Logs are purely local debug output that never leaves the developer's machine.</li>
             <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">You already write to a single, encrypted, access-controlled store — field-level redaction may be belt-and-braces.</li>
           </ul>
         </div>
@@ -198,7 +216,7 @@ flowchart LR
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+      <details class="sketch" id="sketch-variant-1">
         <summary>TypeScript — one door, and it masks on the way through</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">const SENSITIVE = new Set(["password", "token", "ssn", "dateofbirth"]);
 
@@ -277,8 +295,8 @@ logger.audit({
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Redaction ruleset (allowlist vs denylist field paths)</strong> — The set of field paths masked before a record is written — a denylist names what to hide, an allowlist names what may be shown.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Event selection / audit level</strong> — Which events are captured as security audit records rather than ordinary debug logs, which sets both what an investigation can reconstruct and how much store you pay for.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Retention period</strong> — How long audit records are kept before expiry, usually set by a compliance regime (PCI-DSS, HIPAA, SOC 2) rather than by you.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Event selection / audit level</strong> — Which events are captured as security audit records rather than ordinary debug logs, which sets both what an investigation can reconstruct and how much store you pay for.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Retention period</strong> — How long audit records are kept before expiry, usually set by a compliance regime (PCI-DSS, HIPAA, SOC 2) rather than by you.</li>
             <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Sink write mode (sync vs async buffering)</strong> — Whether records are written synchronously or buffered and flushed asynchronously — the hot-path latency of the logger against the durability of the trail.</li>
             <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Integrity mechanism</strong> — Whether entries are hash-chained or signed so a later edit or deletion is detectable, and how often the chain is anchored.</li>
           </ul>
@@ -286,7 +304,7 @@ logger.audit({
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
-            <li id="production-signal-1" data-kb-polarity="signal"><strong>Logging hot-path latency / CPU</strong> — Cost the logger adds per event — worth watching where high event rates meet deep object graphs, since that is where redaction is most expensive.</li>
+            <li id="production-signal-1" data-kb-polarity="signal" data-kb-level="advanced"><strong>Logging hot-path latency / CPU</strong> — Cost the logger adds per event — worth watching where high event rates meet deep object graphs, since that is where redaction is most expensive.</li>
             <li id="production-signal-2" data-kb-polarity="signal"><strong>Audit-log ingestion rate / volume</strong> — Records written per unit time. A spike can be an attack, a runaway loop or log flooding; a drop toward zero usually means the audit path broke without saying so.</li>
             <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Dropped / queued log events</strong> — Depth of the buffer feeding the sink and any drop count — gaps here are gaps in the trail.</li>
             <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Redaction match rate</strong> — How often the ruleset actually masks a field. A drop can mean a renamed or newly added field is now going through in the clear.</li>
@@ -296,9 +314,9 @@ logger.audit({
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Denylist gap leaks a secret</strong> — A new field carrying a raw token or PII is not on the denylist and is written verbatim into an aggregator far less protected than the source system. This is how plaintext secrets end up in a SIEM.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Bypass via stray console.log or stack trace</strong> — Code logs a request object or dumps an exception outside the secure logger, so the policy never runs and sensitive fields land in the clear.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Bypass via stray console.log or stack trace</strong> — Code logs a request object or dumps an exception outside the secure logger, so the policy never runs and sensitive fields land in the clear.</li>
             <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Sink backpressure drops audit records</strong> — Under load the sink cannot keep up and the buffer overflows, so security events are discarded precisely when the trail matters most and non-repudiation quietly stops holding.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Over-aggressive redaction destroys evidence</strong> — A too-broad rule masks the identifiers or context an investigation needed, leaving a trail that is safe and useless.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Over-aggressive redaction destroys evidence</strong> — A too-broad rule masks the identifiers or context an investigation needed, leaving a trail that is safe and useless.</li>
             <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Forged entries from injected control characters</strong> — An untrusted value carrying carriage returns or line feeds writes what reads as an additional log line, so the record an investigator trusts was authored by the attacker.</li>
           </ul>
         </div>
@@ -307,7 +325,7 @@ logger.audit({
           <ul>
             <li id="production-check-1" data-kb-polarity="check">The ruleset was tested against a real log line for a field added since it was written, not only against the fields it already knew</li>
             <li id="production-check-2" data-kb-polarity="check">The audit sink is append-only and access-controlled — at least as protected as the system it records</li>
-            <li id="production-check-3" data-kb-polarity="check">The codebase was searched for log calls that bypass the logger, and the search is repeatable rather than a one-off</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">The codebase was searched for log calls that bypass the logger, and the search is repeatable rather than a one-off</li>
             <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Retention matches the governing compliance requirement, and someone can say which requirement that is</li>
             <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Where integrity is required, tamper-evidence was verified by altering a record and seeing the check fail</li>
             <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Security events sit on a durable path whose behaviour under backpressure is blocking or alerting, not silent discard</li>

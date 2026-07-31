@@ -33,8 +33,8 @@ node scripts/kb.mjs wild <id> --items '[{"id":…,"name":…,"note":…}]'
 node scripts/kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
 node scripts/kb.mjs link <from> <verb> <to> --note "…" --note-back "…"
 node scripts/kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"
-node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>      # accretion: from this level up
-node scripts/kb.mjs register <id> <element-id> <basic|advanced|expert|none>   # variant: at exactly this lens
+node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>      # accretion: from this level up — the default
+node scripts/kb.mjs register <id> <element-id> <basic|advanced|expert|none>   # rare: replaces the lower version
 ```
 
 It validates the JSON before it lands and never guesses placement. Prose inside a block you
@@ -68,15 +68,17 @@ paragraph per level, written via `kb.mjs explain`: `basic` is a junior's plain-w
 entry point, `advanced` names the mechanism precisely and states its consequence,
 `expert` argues when to choose it and what it costs.
 
-Each rung must stand alone — display is exact-match, so each lens renders ONLY its own
-rung. Every block shows at every lens; depth adapts inside blocks via two authored
-element attributes: `data-kb-level` (accretion — extra detail from that level up, via
-`kb.mjs level`) and `data-kb-register` (variant — the same idea re-said for exactly one
-lens, via `kb.mjs register`; adjacent registered siblings form one ascending group).
-One element takes at most one of the two, sections take neither, and no block may
-render empty at any lens — make check enforces all three. Untagged (visible
-everywhere) is the right default. The full register spec, per-lens audit procedure and
-tagging heuristics live in the **kb-explain** skill
+**The rungs STACK.** Lenses are cumulative — at advanced the reader sees the basic and
+advanced rungs, at expert all three — so each rung continues the one before it instead of
+re-telling it, and a sentence repeated across rungs is a defect. The same rule governs the
+page: `data-kb-level` (via `kb.mjs level`) is THE mechanism, meaning "visible from this
+level up", and untagged content is the small AWS-short page a junior reads end to end. On a
+rich page that inverts the usual instinct — most existing depth gets tagged `advanced` or
+`expert` until basic fits its sizing band. `data-kb-register` (via `kb.mjs register`) is a
+RARE replacement tool, for the few places where showing both versions would be wrong.
+One element takes at most one of the two, sections take neither, and no block may render
+empty at any lens — make check enforces all three. The sizing bands, the per-lens audit
+procedure and the tagging heuristics live in the **kb-explain** skill
 (`.claude/skills/kb-explain/SKILL.md`) — read it before writing or auditing a ladder.
 
 **The house prose register is [`.claude/rules/tone.md`](../rules/tone.md)** — second

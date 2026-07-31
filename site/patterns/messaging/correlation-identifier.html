@@ -103,9 +103,9 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1" data-kb-register="basic">You send three requests onto the same channel and go on with other work. Three answers come back later, in whatever order the network produced them, mixed in with answers meant for somebody else entirely. Nothing on any of them says which question it answers. Guess by arrival order and you will be right until the day one reply is slow, and then you hand a customer somebody else's result — a wrong match that only shows up under load is far worse than one that fails loudly. A <strong>correlation identifier</strong> is the fix everyone reinvents: write a unique ticket number on the way out, and have whoever replies write the same number back.</p>
+        <p id="description-p-1">You send three requests onto the same channel and go on with other work. Three answers come back later, in whatever order the network produced them, mixed in with answers meant for somebody else entirely. Nothing on any of them says which question it answers. Guess by arrival order and you will be right until the day one reply is slow, and then you hand a customer somebody else's result — a wrong match that only shows up under load is far worse than one that fails loudly. A <strong>correlation identifier</strong> is the fix everyone reinvents: write a unique ticket number on the way out, and have whoever replies write the same number back.</p>
         <p id="description-p-2" data-kb-level="advanced">A token — a UUID, a monotonic sequence number, or a business key already known to be unique — stamped into a message header when a request goes out, and copied verbatim by every participant that emits anything tied to that request. Its shape means nothing to the messaging infrastructure. It exists so a listener can ask which conversation this belongs to and get one unambiguous answer, whatever order things arrive in.</p>
-        <p id="description-p-3">The pattern generalizes past a single request/reply pair. Thread the same identifier through every hop of a longer chain — a message that fans out to several services, a saga's sequence of compensating steps, a request that crosses five microservices before it produces a response — and every log line, span, and metric emitted along the way can be filtered down to the one logical operation, even though the systems that emitted them share nothing else in common.</p>
+        <p id="description-p-3" data-kb-level="advanced">The pattern generalizes past a single request/reply pair. Thread the same identifier through every hop of a longer chain — a message that fans out to several services, a saga's sequence of compensating steps, a request that crosses five microservices before it produces a response — and every log line, span, and metric emitted along the way can be filtered down to the one logical operation, even though the systems that emitted them share nothing else in common.</p>
         <p id="description-p-4" data-kb-level="advanced">It's deliberately distinct from a message ID. A message ID names this one message and dies with it; a correlation ID names the conversation or operation the message is part of, and many messages across many systems can legitimately share it.</p>
       </div>
     </section>
@@ -131,6 +131,26 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Req["Requestor"]
+    Pend[("Pending map, keyed by id")]
+    subgraph Same["One id, copied verbatim at every hop"]
+        RQ[("Request channel")]
+        Svc["Responder service"]:::ext
+        RP[("Reply channel")]
+    end
+    Req --&gt;|"1 stamp a unique id, send"| RQ
+    Req --&gt;|"2 record the id as pending"| Pend
+    RQ --&gt;|"3 deliver"| Svc
+    Svc --&gt;|"4 reply, same id copied"| RP
+    RP --&gt;|"5 deliver"| Req
+    Req --&gt;|"6 look the id up, resolve the caller"| Pend
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does a reply find the request it answers when replies come back in any order? The id written at step 1 is copied at step 4 and looked up at step 6, so arrival order never enters into it.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -161,8 +181,8 @@ sequenceDiagram
         <dd>Reuse a domain identifier that's already unique — an order id, a session id — instead of minting a synthetic token. Cheaper, but only safe when that key genuinely can't repeat across concurrent conversations.</dd>
         <dt id="variations-item-3" data-kb-level="advanced"><a href="./scatter-gather.html">Scatter-Gather aggregation key</a></dt>
         <dd data-kb-level="advanced">One correlation id ties every parallel reply back to a single fan-out request, so the aggregator knows when it has collected them all.</dd>
-        <dt id="variations-item-4">Distributed trace ID</dt>
-        <dd>The same idea propagated across every hop of a call chain (W3C <code>traceparent</code>, <code>X-Request-Id</code>) so logs and spans from otherwise unrelated services join into one trace.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Distributed trace ID</dt>
+        <dd data-kb-level="advanced">The same idea propagated across every hop of a call chain (W3C <code>traceparent</code>, <code>X-Request-Id</code>) so logs and spans from otherwise unrelated services join into one trace.</dd>
         <dt id="variations-item-5" data-kb-level="advanced"><a href="../distributed/coordination/saga.html">Saga correlation</a></dt>
         <dd data-kb-level="advanced">One id threads every step of a long-running saga, so its completion, compensation, and timeout handlers all know which instance they belong to.</dd>
       </dl>
@@ -176,7 +196,7 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Lets one channel or queue carry many concurrent conversations without cross-talk between them.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Replies can arrive in any order, or interleaved with unrelated traffic, and still land on the right pending request.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Costs almost nothing to add — one extra header field, copied verbatim at every hop.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Costs almost nothing to add — one extra header field, copied verbatim at every hop.</li>
             <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Extends directly into distributed tracing: the same mechanism stitches a whole multi-service call into one story.</li>
           </ul>
         </div>
@@ -185,7 +205,7 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Every hop must copy the id correctly — one component that drops or regenerates it silently breaks the chain. Assert the id on the way in and reject a message without one, rather than minting a fresh id and losing the thread.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">The requestor must track pending correlation ids itself, with timeouts, or a reply that never arrives leaks memory forever — give the pending map a hard ceiling as well as an expiry, so a silent downstream degrades instead of exhausting the caller.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">A collision or an accidentally reused id attributes a reply to the wrong requestor — use a random UUID unless a business key is provably unique across concurrent conversations.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">A collision or an accidentally reused id attributes a reply to the wrong requestor — use a random UUID unless a business key is provably unique across concurrent conversations.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">It only marks messages as related — it provides no ordering and no guarantee that every expected reply actually arrived.</li>
             <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">Completeness needs a second mechanism on top: something has to know how many replies to expect and what to do when one never comes, which is the job of a <a href="./scatter-gather.html">scatter-gather</a> aggregator, not of the id.</li>
             <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">An id that reaches a log or an audit trail carries whatever it was derived from — a business key used as a correlation id puts an order number, or worse, into every span and log line a third party might hold.</li>
@@ -201,7 +221,7 @@ sequenceDiagram
           <h3>Reach for it when</h3>
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Multiple requests are in flight at once over the same asynchronous channel or queue.</li>
-            <li id="usage-when-2" data-kb-polarity="when">Replies can arrive out of order, or interleaved with unrelated messages, and still must land on the right caller.</li>
+            <li id="usage-when-2" data-kb-polarity="when" data-kb-level="advanced">Replies can arrive out of order, or interleaved with unrelated messages, and still must land on the right caller.</li>
             <li id="usage-when-3" data-kb-polarity="when">One logical operation spans several services or processes and needs to be traced as a single unit.</li>
           </ul>
         </div>
@@ -266,7 +286,7 @@ await webhook.deliver(clientUrl, { flowId, state: "cleared" }); // … and on th
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Pending-request timeout</strong> — How long the requestor keeps a correlation entry waiting for its reply before expiring it and reclaiming the slot.</li>
             <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Pending-map ceiling</strong> — The maximum number of outstanding correlations the requestor will hold at once, and what it does on reaching it — reject, shed, or block.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>ID generation scheme</strong> — Random UUID versus a reused business key; it sets how much collision resistance you have when many conversations share one channel.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>ID generation scheme</strong> — Random UUID versus a reused business key; it sets how much collision resistance you have when many conversations share one channel.</li>
             <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Propagation header</strong> — Which header carries the id (traceparent, X-Request-Id, JMSCorrelationID), and therefore what every hop has to read and re-emit.</li>
           </ul>
         </div>
@@ -274,7 +294,7 @@ await webhook.deliver(clientUrl, { flowId, state: "cleared" }); // … and on th
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Outstanding pending correlations</strong> — Size of the requestor pending map, next to its ceiling — the number that tells you whether replies are coming back at all.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Unmatched reply rate</strong> — Replies whose correlation id has no pending entry — late, unknown, or an id that was dropped or regenerated somewhere upstream.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Unmatched reply rate</strong> — Replies whose correlation id has no pending entry — late, unknown, or an id that was dropped or regenerated somewhere upstream.</li>
             <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Missing-id rate on ingress</strong> — Messages arriving with no correlation header at all, counted per upstream — this names the component that is breaking the chain.</li>
             <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Request-to-reply latency</strong> — Time from stamping the id on a request to matching its reply, measured per correlation.</li>
           </ul>
@@ -283,7 +303,7 @@ await webhook.deliver(clientUrl, { flowId, state: "cleared" }); // … and on th
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Leaked pending entries</strong> — A reply that never arrives, with no timeout on the pending map, grows the requestor state without bound until the process dies.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Dropped or regenerated id</strong> — One hop that fails to copy the id verbatim breaks the chain, and every reply behind it becomes unmatchable.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Dropped or regenerated id</strong> — One hop that fails to copy the id verbatim breaks the chain, and every reply behind it becomes unmatchable.</li>
             <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Collision or reuse</strong> — A repeated or accidentally reused id attributes a reply to the wrong requestor — a silent, load-dependent mismatch.</li>
             <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Late reply after expiry</strong> — A reply arriving after its pending entry timed out has nowhere to land; without a defined path it is dropped silently, and the work it reports on looks like it never finished.</li>
           </ul>
@@ -293,7 +313,7 @@ await webhook.deliver(clientUrl, { flowId, state: "cleared" }); // … and on th
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Every pending correlation expires, and the expiry path is exercised in tests rather than first in an incident</li>
             <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">The pending map has a hard ceiling as well as a timeout, so a silent downstream degrades instead of exhausting memory</li>
-            <li id="production-check-3" data-kb-polarity="check">Ids are collision-resistant, or the business key used instead was shown to be unique across concurrent conversations</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Ids are collision-resistant, or the business key used instead was shown to be unique across concurrent conversations</li>
             <li id="production-check-4" data-kb-polarity="check">Ingress asserts the id is present and rejects rather than minting a replacement, so a broken chain is loud</li>
             <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">A reply that arrives after its entry expired has a defined destination and is counted, not dropped</li>
             <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">The id carries no data you would not want in a log line or a third-party trace</li>
