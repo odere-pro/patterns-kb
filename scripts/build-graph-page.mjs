@@ -111,7 +111,7 @@ const html = `<!doctype html>
       <aside id="graph-panel" aria-label="Graph settings">
         <details class="panel-sec" open>
           <summary>Filters</summary>
-          <input class="graph-input" id="graph-search" type="search" placeholder="Search — name, symptom, tag:x, kind:x" aria-label="Filter the graph: free text, tag:x, kind:x, band:x, fav:true; prefix - negates" autocomplete="off" spellcheck="false">
+          <input class="graph-input" id="graph-search" type="search" placeholder="Search — name, symptom, tag:x, kind:x" aria-label="Filter the graph: free text, tag:x, kind:x, band:x, fav:true; prefix - negates" title="Shortcut: ⌘K (Ctrl+K)" autocomplete="off" spellcheck="false">
           <div class="panel-row" role="group" aria-label="Kinds — click to show or hide">
 ${kindBtns}
           </div>

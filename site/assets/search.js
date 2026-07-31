@@ -237,7 +237,8 @@
     wrap.className = "search";
     wrap.innerHTML =
       '<input type="search" id="kb-search" placeholder="Describe a problem — “one slow dependency blocks my threads”" ' +
-      'aria-label="Search patterns by name or by the problem they solve" autocomplete="off" spellcheck="false">' +
+      'aria-label="Search patterns by name or by the problem they solve" ' +
+      'title="Shortcut: / or ⌘K (Ctrl+K)" autocomplete="off" spellcheck="false">' +
       '<span class="search-status" id="kb-search-status" role="status" aria-live="polite"></span>';
     host.appendChild(wrap);
 
@@ -258,9 +259,15 @@
         if (first) first.click();
       }
     });
-    // "/" focuses search, the way every wiki does it.
+    // "/" focuses search, the way every wiki does it; ⌘K (Ctrl+K elsewhere), the way
+    // every app does. ⌘K also works from inside the input, reselecting the query.
     document.addEventListener("keydown", function (e) {
       if (e.key === "/" && document.activeElement !== input) { e.preventDefault(); input.focus(); }
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        input.focus();
+        input.select();
+      }
     });
   }
 

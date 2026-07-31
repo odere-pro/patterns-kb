@@ -624,6 +624,17 @@
   });
   document.addEventListener("keydown", function (ev) {
     if (ev.key === "Escape" && selectedId) { selectedId = null; clearTip(); render(); }
+    // ⌘K (Ctrl+K elsewhere) jumps to search, reopening its Filters section if closed.
+    if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && (ev.key === "k" || ev.key === "K")) {
+      var si = document.getElementById("graph-search");
+      if (si) {
+        ev.preventDefault();
+        var sec = si.closest("details");
+        if (sec) sec.open = true;
+        si.focus();
+        si.select();
+      }
+    }
   });
 
   /* ---------------- controls ---------------- */
