@@ -410,7 +410,16 @@ if (cmd === "get") {
       else doc.removeAttribute("data-kb-favourite");
       touched.push(`favourite=${fav}`);
     }
-    if (!touched.length) { console.error("nothing to set — pass --aliases / --tags / --solves / --favourite"); process.exit(1); }
+    /* The terse one-liner behind the hub chip, meta description and JSON-LD — all
+     * derived from this attribute, which is why it gets a writer instead of a
+     * hand edit. Cannot be removed: every page must carry an essence. */
+    const essence = opt("essence");
+    if (essence != null) {
+      if (!essence.trim()) { console.error("--essence: cannot be empty"); process.exit(1); }
+      doc.setAttribute("data-kb-essence", essence.trim());
+      touched.push("essence");
+    }
+    if (!touched.length) { console.error("nothing to set — pass --aliases / --tags / --solves / --favourite / --essence"); process.exit(1); }
     const out = root.toString();
     if (out !== src) writeFileSync(file, out);
     console.log(`${node.id}: ${touched.join(" ")}${out === src ? " (unchanged)" : ""}`);

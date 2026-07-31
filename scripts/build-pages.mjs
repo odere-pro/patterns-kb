@@ -136,15 +136,37 @@ for (const node of Object.values(graph.nodes)) {
     });
   }
 
-  /* ---- prose-paragraph ids: <block>-p-N in every block ----
-   * These make plain paragraphs addressable, which the per-level register variants
-   * need (`kb.mjs register <id> <element-id> <level>`). Positional — inserting a
-   * paragraph renumbers its successors, so re-run this before tagging. */
+  /* ---- variations dt→dd lens mirroring ----
+   * A variation is a dt/dd pair but only the dt carries the minted id, so a lens
+   * attribute authored on the dt would hide the label and orphan the body. Mirror
+   * the dt's attribute onto its dd (generated, self-cleaning) so the pair moves
+   * together at every lens. */
+  for (const dt of root.querySelectorAll('[data-kb-block="variations"] dl.variations dt')) {
+    let dd = dt.nextElementSibling;
+    if (!dd || dd.tagName?.toLowerCase() !== "dd") continue;
+    for (const attr of ["data-kb-level", "data-kb-register"]) {
+      const v = dt.getAttribute(attr);
+      if (v) dd.setAttribute(attr, v);
+      else if (dd.getAttribute(attr) != null) dd.removeAttribute(attr);
+    }
+  }
+
+  /* ---- prose ids: <block>-p-N on paragraphs, <block>-li-N on plain list items ----
+   * These make prose addressable, which per-level register variants and accretion
+   * tags need (`kb.mjs register|level <id> <element-id> <level>`). Plain-list ids
+   * cover the kinds whose content lives in .prose lists (hazard causes/cost,
+   * principle applying, theme siblings…) — the ITEMS table above wins for its own
+   * blocks because those lists are not inside .prose. Positional — inserting an
+   * element renumbers its successors, so re-run this before tagging. */
   for (const sec of root.querySelectorAll("[data-kb-block]")) {
     const b = sec.getAttribute("data-kb-block");
     if (b === "explain") continue; // the ladder's items are the addresses there
     sec.querySelectorAll(PROSE_P).forEach((el, i) => {
       el.setAttribute("id", `${b}-p-${i + 1}`);
+      idsStamped++;
+    });
+    sec.querySelectorAll(".prose li").forEach((el, i) => {
+      el.setAttribute("id", `${b}-li-${i + 1}`);
       idsStamped++;
     });
   }

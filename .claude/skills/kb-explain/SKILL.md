@@ -76,8 +76,14 @@ rewrite.
    paragraphs in the HTML, `make all` to mint ids, then `kb.mjs register` each rung;
    senior-only detail → `kb.mjs level`. Re-read `--level basic`: complete, compact,
    coherent.
-5. Heuristic (not a gate): the basic read lands around ≤40% of the expert read's word
-   count while still touching every block.
+5. Heuristic (not a gate), per kind — calibrated on the pilots: a rich pattern page
+   (production + wild + full variations) honestly floors around basic ≈ 60–70% of
+   expert (circuit-breaker: 67%); designs reach lower (≈40–60%) because sizing/
+   deepdives depth is genuinely senior. On SHORT kinds (hazards, principles, slim
+   themes) most prose serves all three audiences — there the goal is register
+   DIFFERENTIATION, not size reduction: distinct voices, expert ≥ ~25% deeper than
+   basic. Never hide shared symptom/definition prose from juniors to hit a ratio,
+   and never pad expert to manufacture one.
 
 ## Tagging and variant heuristics
 

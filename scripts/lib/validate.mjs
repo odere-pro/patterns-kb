@@ -55,6 +55,9 @@ export function lensProblems(root) {
     };
     for (const c of parent.childNodes) {
       if (c.nodeType !== 1) continue;
+      /* A variation's dd mirrors its dt's register (stamped by build-pages so the
+       * pair hides together) — it is derived, not a second rung in the run. */
+      if (c.tagName?.toLowerCase() === "dd") continue;
       const reg = c.getAttribute?.("data-kb-register");
       if (reg) run.push(reg);
       else flush();
