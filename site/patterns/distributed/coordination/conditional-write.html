@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Conditional Write · Patterns</title>
-  <meta name="description" content="Conditional Write — an atomic compare-and-set the store performs itself: the write carries a predicate and applies only if the row still matches, so the losing writer changes zero rows.">
+  <meta name="description" content="Conditional Write — Make a write happen only if the store still matches a predicate">
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
   <script src="../../../assets/theme.js"></script>
@@ -116,24 +116,24 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p>A conditional write hands the store both the change and the condition under which it may happen, and asks the store to check and write as a single indivisible operation. <code>UPDATE seats SET taken = true WHERE id = ? AND taken = false</code> only flips the seat if it is still free; a request that was too late matches no row and updates zero rows. The database serializes writes to the same row, so the loser's <code>WHERE</code> clause re-evaluates against the winner's committed state and quietly fails to apply — no lost update, no lock, no coordinator.</p>
-        <p>The force it resolves is the read-then-write race. Read a value into your application, decide something, then write back, and there is a gap between the read and the write in which another request can slip in and change what you read. Two buyers both see one seat left, both decrement, and the count goes to −1 with both charged for the same seat — the classic lost update. Checking in application code and writing afterwards is a time-of-check-to-time-of-use hole; the check is only meaningful if nothing changes before the write, which nothing guarantees.</p>
-        <p>A conditional write closes the gap by refusing to separate the check from the write. Because the predicate is evaluated inside the same statement that performs the write, there is no window for another request to intervene. It is the unifying primitive beneath higher-level schemes: optimistic concurrency control is a conditional write on a version column, distributed locks are a conditional write on a lease row, stock guards are a conditional write on a counter. The one requirement is that the entire decision fit into a predicate the store can evaluate; the moment deciding <em>what</em> to write needs application logic between the read and the write, this alone no longer suffices.</p>
+        <p id="description-p-1">A conditional write hands the store both the change and the condition under which it may happen, and asks the store to check and write as a single indivisible operation. <code>UPDATE seats SET taken = true WHERE id = ? AND taken = false</code> only flips the seat if it is still free; a request that was too late matches no row and updates zero rows. The database serializes writes to the same row, so the loser's <code>WHERE</code> clause re-evaluates against the winner's committed state and quietly fails to apply — no lost update, no lock, no coordinator.</p>
+        <p id="description-p-2">The force it resolves is the read-then-write race. Read a value into your application, decide something, then write back, and there is a gap between the read and the write in which another request can slip in and change what you read. Two buyers both see one seat left, both decrement, and the count goes to −1 with both charged for the same seat — the classic lost update. Checking in application code and writing afterwards is a time-of-check-to-time-of-use hole; the check is only meaningful if nothing changes before the write, which nothing guarantees.</p>
+        <p id="description-p-3">A conditional write closes the gap by refusing to separate the check from the write. Because the predicate is evaluated inside the same statement that performs the write, there is no window for another request to intervene. It is the unifying primitive beneath higher-level schemes: optimistic concurrency control is a conditional write on a version column, distributed locks are a conditional write on a lease row, stock guards are a conditional write on a counter. The one requirement is that the entire decision fit into a predicate the store can evaluate; the moment deciding <em>what</em> to write needs application logic between the read and the write, this alone no longer suffices.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
           <p>When what you want might be taken while you are still deciding, do not ask first and act second — the answer goes stale in the gap. Say both at once to the person who can do it: sell me the last ticket, but only if it is still there. They look and hand it over in one motion, so two of you can never leave with the same ticket.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
           <p>The guard rides inside the change itself: the update carries a WHERE clause naming the state it requires — the seat still free, the counter still positive, the row still absent — and the store evaluates that predicate in the same statement that applies it. Single-row writes are already serialized, so a late writer re-evaluates against the winner's committed state, matches no row, and changes nothing; the affected-row count is the whole result. Every engine spells it differently — SQL's WHERE, DynamoDB's ConditionExpression, Cassandra's IF; optimistic concurrency control and lease locks are both built on it.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
           <p>Choose it when the entire safety rule fits in one predicate the store can evaluate — try it first, because it closes the race with no lock held, no second round-trip and no coordination service to run. The bill starts with the losing write: zero rows changed is not an error, so an unchecked affected-row count fails silently, and a follow-up insert issued anyway leaves an orphan. Guard the contended row itself rather than a proxy counter, or two winners land on the same unit. The ceiling is hard: once the decision needs application logic between the read and the write, no predicate carries it and you escalate to a lock or a retry loop.</p>
         </div>
@@ -164,7 +164,7 @@ sequenceDiagram
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Status / claim guard</dt>
@@ -235,7 +235,7 @@ sequenceDiagram
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch">
+      <details class="sketch" id="sketch-variant-1">
         <summary>TypeScript — claim a seat, and guard a multi-write on the affected count</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">// The store decides, atomically: flip the seat only if it is still free.
 async function claimSeat(db: Db, seatId: string): Promise&lt;boolean&gt; {
@@ -272,14 +272,14 @@ async function sellTicket(db: Db, concertId: string, userId: string) {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="dynamodb-condition"><strong>DynamoDB ConditionExpression</strong><span>A write (PutItem, UpdateItem, DeleteItem) can carry a ConditionExpression such as attribute_not_exists(id) or price = :expected; the item is written only if the condition holds against the current item, otherwise the call fails with ConditionalCheckFailedException and nothing changes.</span></div>
-        <div class="wild-item" data-kb-example="redis-set-nx"><strong>Redis SET ... NX</strong><span>SET key value NX writes the key only if it does not already exist, returning nil when it is present. This set-if-absent is the acquire step of a Redis-based lock, usually paired with an EX/PX expiry so the lease self-releases.</span></div>
-        <div class="wild-item" data-kb-example="cassandra-lwt"><strong>Cassandra lightweight transactions</strong><span>An INSERT ... IF NOT EXISTS or UPDATE ... IF col = value is a Paxos-backed compare-and-set; Cassandra runs a consensus round so the conditional write is linearizable, and the result set reports [applied] plus the values it checked against.</span></div>
-        <div class="wild-item" data-kb-example="http-if-match"><strong>HTTP conditional requests</strong><span>A PUT or DELETE carrying If-Match: "etag" (or If-None-Match: *) tells the origin to apply the write only if the resource still matches that validator; on a mismatch the server returns 412 Precondition Failed and leaves the resource untouched.</span></div>
+        <div class="wild-item" data-kb-example="dynamodb-condition" id="wild-dynamodb-condition"><strong>DynamoDB ConditionExpression</strong><span>A write (PutItem, UpdateItem, DeleteItem) can carry a ConditionExpression such as attribute_not_exists(id) or price = :expected; the item is written only if the condition holds against the current item, otherwise the call fails with ConditionalCheckFailedException and nothing changes.</span></div>
+        <div class="wild-item" data-kb-example="redis-set-nx" id="wild-redis-set-nx"><strong>Redis SET ... NX</strong><span>SET key value NX writes the key only if it does not already exist, returning nil when it is present. This set-if-absent is the acquire step of a Redis-based lock, usually paired with an EX/PX expiry so the lease self-releases.</span></div>
+        <div class="wild-item" data-kb-example="cassandra-lwt" id="wild-cassandra-lwt"><strong>Cassandra lightweight transactions</strong><span>An INSERT ... IF NOT EXISTS or UPDATE ... IF col = value is a Paxos-backed compare-and-set; Cassandra runs a consensus round so the conditional write is linearizable, and the result set reports [applied] plus the values it checked against.</span></div>
+        <div class="wild-item" data-kb-example="http-if-match" id="wild-http-if-match"><strong>HTTP conditional requests</strong><span>A PUT or DELETE carrying If-Match: "etag" (or If-None-Match: *) tells the origin to apply the write only if the resource still matches that validator; on a mismatch the server returns 412 Precondition Failed and leaves the resource untouched.</span></div>
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -327,10 +327,10 @@ async function sellTicket(db: Db, concertId: string, userId: string) {
       </div>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
-        <div class="fluency-item" data-kb-theme="dealing-with-contention"><a href="../../../themes/dealing-with-contention.html">Dealing with Contention</a><span>Fold the check into the write so the store guards it atomically</span></div>
+        <div class="fluency-item" data-kb-theme="dealing-with-contention" id="fluency-dealing-with-contention"><a href="../../../themes/dealing-with-contention.html">Dealing with Contention</a><span>Fold the check into the write so the store guards it atomically</span></div>
       </div>
     </section>
 

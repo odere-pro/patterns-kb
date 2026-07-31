@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Caching · Patterns</title>
-  <meta name="description" content="Caching — trade storage and freshness for speed: where to place a cache, how reads and writes flow through it, and what to evict.">
+  <meta name="description" content="Caching — Where to place a cache, how reads and writes flow, and what to evict">
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
   <script src="../assets/theme.js"></script>
@@ -102,35 +102,35 @@
     <section class="doc-section" id="description" aria-labelledby="h-framing" data-kb-block="description">
       <h2 class="doc-h" id="h-framing">The question</h2>
       <div class="prose">
-        <p>A cache is a bet that the same data will be asked for again soon, and that a copy kept somewhere faster is worth the cost of keeping it. The economics are stark: reading from memory takes roughly a hundred nanoseconds, reading from an SSD-backed database takes about a millisecond, and a round trip across a continent takes hundreds of milliseconds. Caching exists to collapse whichever of those gaps is hurting — but every copy it keeps is a second source of truth that can drift, go stale, or evaporate at the worst moment.</p>
-        <p>That makes "add a cache" three decisions wearing one name. <strong>Where</strong> does the copy live relative to the request — inside the process, in a shared store, at the network edge, on the client device? <strong>How</strong> do reads and writes flow through it — does the application manage the cache by hand, or does the cache manage the store; do writes wait for durability or return the instant they land? And <strong>what</strong> gets thrown out when memory fills — the least recently used, the least frequently used, or simply whatever has aged past its time-to-live? Conflating these is how teams cache a consistency problem, or reach for a fancy write strategy when a plain read cache would have done.</p>
+        <p id="description-p-1">A cache is a bet that the same data will be asked for again soon, and that a copy kept somewhere faster is worth the cost of keeping it. The economics are stark: reading from memory takes roughly a hundred nanoseconds, reading from an SSD-backed database takes about a millisecond, and a round trip across a continent takes hundreds of milliseconds. Caching exists to collapse whichever of those gaps is hurting — but every copy it keeps is a second source of truth that can drift, go stale, or evaporate at the worst moment.</p>
+        <p id="description-p-2">That makes "add a cache" three decisions wearing one name. <strong>Where</strong> does the copy live relative to the request — inside the process, in a shared store, at the network edge, on the client device? <strong>How</strong> do reads and writes flow through it — does the application manage the cache by hand, or does the cache manage the store; do writes wait for durability or return the instant they land? And <strong>what</strong> gets thrown out when memory fills — the least recently used, the least frequently used, or simply whatever has aged past its time-to-live? Conflating these is how teams cache a consistency problem, or reach for a fancy write strategy when a plain read cache would have done.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
           <p>Fetching the same answer over and over is slow, so you keep a copy somewhere closer and hand that out instead. The bet is that it will be wanted again soon. Two prices come with it: the copy can quietly fall out of step with the real thing, and the space holding it is small, so something must be thrown out to make room.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
           <p>Three independent axes get collapsed into one decision. Placement runs from the client device and edge points of presence through a shared external tier to in-process memory — faster and less shared as you move inward, because per-instance copies diverge and duplicate memory across the fleet. Flow: fill lazily on a miss or refresh eagerly before expiry; write through to the store synchronously for freshness, or behind it asynchronously so the caller never waits. Eviction ranks by recency, by frequency, by insertion order, or not at all when a plain expiry clock fits.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
           <p>The lens is worth applying per dataset, not per system: name the gap that actually hurts — a hundred nanoseconds from memory, a millisecond from an SSD-backed store, hundreds of milliseconds across a continent — then the staleness that data can tolerate, and only then the placement, flow and eviction that fit. The classic misuse is caching around a consistency problem, or reaching for an asynchronous write strategy where a lazy read cache would have done. Every copy you keep is a second source of truth: it has to be invalidated, sized, and explained during the next incident, long after whoever added it has moved on.</p>
         </div>
       </div>
     </section>
 
-    <section class="doc-section" id="tradespace" aria-labelledby="h-tradespace" data-kb-block="tradespace" data-kb-level="advanced">
+    <section class="doc-section" id="tradespace" aria-labelledby="h-tradespace" data-kb-block="tradespace">
       <h2 class="doc-h" id="h-tradespace">The trade-space</h2>
       <div class="prose">
-        <p><strong>Where to place it</strong> is a spectrum from closest-to-the-request to most-shared. A <em>client-side</em> cache — the browser's HTTP cache, an app's on-device storage — is the fastest of all because the data never leaves the device, but you have the least control over freshness once it's out there. A <em>CDN</em> or edge cache moves static and semi-static content to points of presence near the user, trading a continental round trip for a single-digit-millisecond one. An <em>external</em> shared cache like Redis or Memcached runs as its own service so every application instance sees the same entries — the default in most designs, at the cost of one network hop. An <em>in-process</em> cache lives in the application's own memory: the fastest server-side option because there's no hop at all, but each instance has its own copy, so entries can diverge and memory is duplicated across the fleet.</p>
-        <p><strong>How reads and writes flow</strong> is the second axis. On reads, the cache can be filled lazily — populated only after a miss — or eagerly refreshed before entries expire. On writes, the choice is where durability sits: write to the store synchronously so a read can never see stale data, or write to the cache now and let the store catch up asynchronously so the caller never waits. Lazy-and-shared is the safe default; the eager and asynchronous variants buy latency at the price of more moving parts and weaker guarantees.</p>
-        <p><strong>What to evict</strong> is the third, and it only matters because memory is finite. <em>Least Recently Used (LRU)</em> drops whatever hasn't been touched in the longest time — the balanced default that suits most workloads. <em>Least Frequently Used (LFU)</em> drops whatever is asked for least often, which fits sharply skewed access where a few keys dominate. <em>First-In-First-Out (FIFO)</em> drops the oldest entry regardless of use — dead simple, and rarely the right call. <em>Time-To-Live (TTL)</em> sidesteps the ranking entirely: each entry simply expires after a set time, which is what you want when freshness, not popularity, is the thing that decays.</p>
+        <p id="tradespace-p-1"><strong>Where to place it</strong> is a spectrum from closest-to-the-request to most-shared. A <em>client-side</em> cache — the browser's HTTP cache, an app's on-device storage — is the fastest of all because the data never leaves the device, but you have the least control over freshness once it's out there. A <em>CDN</em> or edge cache moves static and semi-static content to points of presence near the user, trading a continental round trip for a single-digit-millisecond one. An <em>external</em> shared cache like Redis or Memcached runs as its own service so every application instance sees the same entries — the default in most designs, at the cost of one network hop. An <em>in-process</em> cache lives in the application's own memory: the fastest server-side option because there's no hop at all, but each instance has its own copy, so entries can diverge and memory is duplicated across the fleet.</p>
+        <p id="tradespace-p-2"><strong>How reads and writes flow</strong> is the second axis. On reads, the cache can be filled lazily — populated only after a miss — or eagerly refreshed before entries expire. On writes, the choice is where durability sits: write to the store synchronously so a read can never see stale data, or write to the cache now and let the store catch up asynchronously so the caller never waits. Lazy-and-shared is the safe default; the eager and asynchronous variants buy latency at the price of more moving parts and weaker guarantees.</p>
+        <p id="tradespace-p-3"><strong>What to evict</strong> is the third, and it only matters because memory is finite. <em>Least Recently Used (LRU)</em> drops whatever hasn't been touched in the longest time — the balanced default that suits most workloads. <em>Least Frequently Used (LFU)</em> drops whatever is asked for least often, which fits sharply skewed access where a few keys dominate. <em>First-In-First-Out (FIFO)</em> drops the oldest entry regardless of use — dead simple, and rarely the right call. <em>Time-To-Live (TTL)</em> sidesteps the ranking entirely: each entry simply expires after a set time, which is what you want when freshness, not popularity, is the thing that decays.</p>
       </div>
       <figure class="diagram">
         <pre class="mermaid">
@@ -148,39 +148,39 @@ flowchart LR
     <section class="doc-section" id="tour" aria-labelledby="h-tour" data-kb-block="tour">
       <h2 class="doc-h" id="h-tour">Patterns that implement the choice</h2>
       <div class="tour">
-        <div class="tour-step" data-kb-member="distributed-cache" data-kb-role="The default placement: a shared cache tier">
+        <div class="tour-step" data-kb-member="distributed-cache" data-kb-role="The default placement: a shared cache tier" id="tour-distributed-cache">
           <h3><a href="../patterns/caching/distributed-cache.html">Distributed Cache</a></h3>
           <p>A caching service in its own tier — Redis, Memcached — that every application instance reaches over the network, so they all share one view of the cached data. It's where most designs put the cache, precisely because it's shared and outlives any single process.</p>
         </div>
-        <div class="tour-step" data-kb-member="in-process-cache" data-kb-role="Fastest placement: the app's own memory">
+        <div class="tour-step" data-kb-member="in-process-cache" data-kb-role="Fastest placement: the app's own memory" id="tour-in-process-cache">
           <h3><a href="../patterns/caching/in-process-cache.html">In-Process Cache</a></h3>
           <p>Keeps the hottest, smallest data in the application process's own memory, so a hit needs no network hop at all. The fastest cache there is — at the cost of each instance holding its own copy — and a natural L1 in front of a shared tier.</p>
         </div>
-        <div class="tour-step" data-kb-member="client-side-cache" data-kb-role="Placement on the user's device">
+        <div class="tour-step" data-kb-member="client-side-cache" data-kb-role="Placement on the user's device" id="tour-client-side-cache">
           <h3><a href="../patterns/caching/client-side-cache.html">Client-Side Cache</a></h3>
           <p>Stores data on the user's own device — the browser's HTTP cache, local storage — so a repeated read makes no network request at all. Fastest of all and offline-capable, but with the least control over freshness.</p>
         </div>
-        <div class="tour-step" data-kb-member="cache-aside" data-kb-role="The default read-cache strategy">
+        <div class="tour-step" data-kb-member="cache-aside" data-kb-role="The default read-cache strategy" id="tour-cache-aside">
           <h3><a href="../patterns/caching/cache-aside.html">Cache-Aside</a></h3>
           <p>The application checks the cache first, and on a miss reads the source of truth and populates the cache itself. It's the default read strategy precisely because the cache can be empty, stale, or evicted at any moment without breaking correctness — the source is still there to fall back to.</p>
         </div>
-        <div class="tour-step" data-kb-member="read-through" data-kb-role="Let the cache own the miss path">
+        <div class="tour-step" data-kb-member="read-through" data-kb-role="Let the cache own the miss path" id="tour-read-through">
           <h3><a href="../patterns/caching/read-through.html">Read-Through</a></h3>
           <p>Moves the fetch-or-populate dance into the caching layer itself: callers ask the cache, and the cache asks the backing store on a miss. Every call site stops reimplementing the same logic — and the single load path is where request coalescing can shield the store from a herd of simultaneous misses.</p>
         </div>
-        <div class="tour-step" data-kb-member="write-through" data-kb-role="Keep the cache and store in lockstep">
+        <div class="tour-step" data-kb-member="write-through" data-kb-role="Keep the cache and store in lockstep" id="tour-write-through">
           <h3><a href="../patterns/caching/write-through.html">Write-Through</a></h3>
           <p>Every write updates the cache and the backing store together, synchronously, so a read that follows a write can never see a stale value. The price is write latency and a cache that fills with data nobody may ever read back.</p>
         </div>
-        <div class="tour-step" data-kb-member="write-behind" data-kb-role="Make writes feel instant">
+        <div class="tour-step" data-kb-member="write-behind" data-kb-role="Make writes feel instant" id="tour-write-behind">
           <h3><a href="../patterns/caching/write-behind.html">Write-Behind</a></h3>
           <p>Acknowledges a write the moment it lands in the cache and flushes it to the store asynchronously, usually in batches. Writes feel instant to the caller; the durability guarantee shifts to whatever drains the flush queue, and a crash before the flush loses data.</p>
         </div>
-        <div class="tour-step" data-kb-member="refresh-ahead" data-kb-role="Reload hot keys before they expire">
+        <div class="tour-step" data-kb-member="refresh-ahead" data-kb-role="Reload hot keys before they expire" id="tour-refresh-ahead">
           <h3><a href="../patterns/caching/refresh-ahead.html">Refresh-Ahead</a></h3>
           <p>Instead of waiting for a hot key to expire and miss, a background reload refreshes it just before its TTL runs out, so the entry never actually goes cold under load. It's the direct antidote to a popular key expiring and triggering a stampede.</p>
         </div>
-        <div class="tour-step" data-kb-member="cdn" data-kb-role="Cache at the network edge, near the user">
+        <div class="tour-step" data-kb-member="cdn" data-kb-role="Cache at the network edge, near the user" id="tour-cdn">
           <h3><a href="../patterns/distributed/routing/cdn.html">CDN</a></h3>
           <p>Pushes static and semi-static content to edge nodes near the requester, so a read is answered a few milliseconds away instead of crossing a continent to origin. It's caching applied at the network layer — the same miss-then-fill logic, moved to where latency is geography, not disk.</p>
         </div>
@@ -211,7 +211,7 @@ flowchart LR
       </div>
     </section>
 
-    <section class="doc-section" id="siblings" aria-labelledby="h-siblings" data-kb-block="siblings" data-kb-level="advanced">
+    <section class="doc-section" id="siblings" aria-labelledby="h-siblings" data-kb-block="siblings">
       <h2 class="doc-h" id="h-siblings">Related areas</h2>
       <div class="fluency-list">
         <div class="fluency-item"><a href="./performance.html">Performance</a><span>Caching is one arm of performance; the theme also spans load balancing and cutting memory churn.</span></div>

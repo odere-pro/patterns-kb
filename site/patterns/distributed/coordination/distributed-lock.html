@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Distributed Lock · Patterns</title>
-  <meta name="description" content="Distributed Lock — hold mutual exclusion as a lease with its own TTL that any server can read, so exactly one holder acts across a fleet; guard the resource with a fencing token against a stalled holder's double grant.">
+  <meta name="description" content="Distributed Lock — Hold exclusivity as a lease with a TTL that any server can see">
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
   <script src="../../../assets/theme.js"></script>
@@ -116,24 +116,24 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p>A distributed lock provides mutual exclusion across many independent processes — not within one database transaction, but across a whole fleet. Instead of a transaction-scoped row lock, it is a small record that says <em>who holds the lock and until when</em>, kept somewhere every server can read: a key in Redis, a node in ZooKeeper, a lease in etcd. Acquiring is an atomic "create only if absent"; releasing is deleting your own entry; and a time-to-live means a holder that crashes without releasing does not wedge the lock forever.</p>
-        <p>The force it resolves is exclusivity that a database transaction cannot reach. Some critical sections are longer or wider than a single transaction: a scheduled job that must run once across a dozen replicas; a ten-minute seat hold while a user finishes checkout; a migration only one instance should perform. <code>SELECT … FOR UPDATE</code> cannot span that — it would pin a connection for ten minutes, and it is invisible to other stateless app servers anyway. A lease any server can inspect is what makes fleet-wide, time-bounded exclusivity possible.</p>
-        <p>The hard part is that a distributed lock is <em>not</em> airtight. If the holder stalls — a long GC pause, a slow disk, a network blip — past the TTL, the lease expires and a second process acquires it while the first still believes it holds it. Now two holders run the critical section at once: a <strong>double grant</strong>. A TTL set too short causes exactly this; set too long, a crashed holder blocks everyone for that duration. The robust fix is not a better TTL but a <strong>fencing token</strong>: every acquisition hands out a monotonically increasing number, the holder stamps it on each write, and the protected resource rejects any write carrying a token older than the highest it has seen — turning a stale holder's writes into rejected writes rather than silent corruption. Martin Kleppmann's well-known critique of Redis's Redlock algorithm makes this exact point: under GC pauses and clock skew a lock service alone cannot guarantee mutual exclusion for correctness, so the resource itself must fence. Treat a distributed lock as safe for correctness only when the work is idempotent, the lock is a soft reservation where a rare double grant is tolerable, or a fencing token backs it.</p>
+        <p id="description-p-1">A distributed lock provides mutual exclusion across many independent processes — not within one database transaction, but across a whole fleet. Instead of a transaction-scoped row lock, it is a small record that says <em>who holds the lock and until when</em>, kept somewhere every server can read: a key in Redis, a node in ZooKeeper, a lease in etcd. Acquiring is an atomic "create only if absent"; releasing is deleting your own entry; and a time-to-live means a holder that crashes without releasing does not wedge the lock forever.</p>
+        <p id="description-p-2">The force it resolves is exclusivity that a database transaction cannot reach. Some critical sections are longer or wider than a single transaction: a scheduled job that must run once across a dozen replicas; a ten-minute seat hold while a user finishes checkout; a migration only one instance should perform. <code>SELECT … FOR UPDATE</code> cannot span that — it would pin a connection for ten minutes, and it is invisible to other stateless app servers anyway. A lease any server can inspect is what makes fleet-wide, time-bounded exclusivity possible.</p>
+        <p id="description-p-3">The hard part is that a distributed lock is <em>not</em> airtight. If the holder stalls — a long GC pause, a slow disk, a network blip — past the TTL, the lease expires and a second process acquires it while the first still believes it holds it. Now two holders run the critical section at once: a <strong>double grant</strong>. A TTL set too short causes exactly this; set too long, a crashed holder blocks everyone for that duration. The robust fix is not a better TTL but a <strong>fencing token</strong>: every acquisition hands out a monotonically increasing number, the holder stamps it on each write, and the protected resource rejects any write carrying a token older than the highest it has seen — turning a stale holder's writes into rejected writes rather than silent corruption. Martin Kleppmann's well-known critique of Redis's Redlock algorithm makes this exact point: under GC pauses and clock skew a lock service alone cannot guarantee mutual exclusion for correctness, so the resource itself must fence. Treat a distributed lock as safe for correctness only when the work is idempotent, the lock is a soft reservation where a rare double grant is tolerable, or a fencing token backs it.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
           <p>When several crews could each start the same job and only one should, keep a single sign-up sheet they can all see. Whoever writes their name down first goes ahead, and adds when they expect to finish. That way a crew that wanders off cannot hold the job up forever — but a crew that merely runs late loses its turn while still working, and someone else may start.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
           <p>Exclusivity lives outside any single transaction, in a store every server can reach: a small record naming the owner and an expiry. Acquiring is create-only-if-absent in one command — SET NX with a TTL in Redis, an ephemeral znode in ZooKeeper, a lease in etcd, a conditional UPDATE on a locked_until column. Releasing is an owner-checked delete; a dead holder simply lets the expiry pass; work that may run long heartbeats to extend it. When the grant must survive a partition it belongs in a consensus-backed store rather than one cache node.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
           <p>Choose it when exclusivity must span stateless servers and outlive a transaction — a run-once job across a dozen instances, a multi-minute seat hold — and you buy fleet-wide exclusion that self-heals when a holder crashes. It is not airtight: a stall past the TTL grants it twice while the stalled holder keeps working, so the protected resource must reject stale fencing tokens itself, the point of Kleppmann's Redlock critique. Treat it as safe only for idempotent work, soft reservations, or a fenced resource, and budget the rest — TTL tuning, jittered retries against the herd that wakes on release, alerts on expired-while-held, and a store that is now its own failure domain.</p>
         </div>
@@ -168,7 +168,7 @@ sequenceDiagram
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Single-instance Redis lock</dt>
@@ -233,7 +233,7 @@ sequenceDiagram
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch">
+      <details class="sketch" id="sketch-variant-1">
         <summary>TypeScript — Redis SET NX EX to acquire, Lua check-and-delete to release</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">// Acquire with SET NX EX: the value is a unique owner token, so only
 // the real holder can release. NX = create only if absent; PX = TTL.
@@ -263,13 +263,13 @@ async function release(redis: Redis, key: string, token: string) {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="redis"><strong>Redis</strong><span>The canonical single-instance lock: SET key owner NX EX ttl creates a self-expiring key in one atomic command, and a small Lua script does the owner-checked release. Redis also documents the multi-node Redlock algorithm, which is contested for correctness — Martin Kleppmann argued it cannot guarantee mutual exclusion under GC pauses or clock skew, and Redis has no built-in fencing tokens — so it best suits soft reservations rather than data a double grant would corrupt.</span></div>
-        <div class="wild-item" data-kb-example="zookeeper"><strong>Apache ZooKeeper</strong><span>Ephemeral sequential znodes implement a lock where the lowest sequence number holds it and each waiter watches only the node just ahead of it; a holder crash ends its session, auto-deletes its node, and wakes the next waiter. Strongly consistent, but not built for high-frequency (hundreds per second) locking.</span></div>
-        <div class="wild-item" data-kb-example="etcd"><strong>etcd</strong><span>A Lease with a TTL the client keeps alive, plus a transactional compare-and-swap (Txn on the key create-revision), gives an atomic acquire; the key mod-revision is a natural monotonically increasing fencing token. Its clientv3 concurrency package packages this as a Mutex recipe.</span></div>
+        <div class="wild-item" data-kb-example="redis" id="wild-redis"><strong>Redis</strong><span>The canonical single-instance lock: SET key owner NX EX ttl creates a self-expiring key in one atomic command, and a small Lua script does the owner-checked release. Redis also documents the multi-node Redlock algorithm, which is contested for correctness — Martin Kleppmann argued it cannot guarantee mutual exclusion under GC pauses or clock skew, and Redis has no built-in fencing tokens — so it best suits soft reservations rather than data a double grant would corrupt.</span></div>
+        <div class="wild-item" data-kb-example="zookeeper" id="wild-zookeeper"><strong>Apache ZooKeeper</strong><span>Ephemeral sequential znodes implement a lock where the lowest sequence number holds it and each waiter watches only the node just ahead of it; a holder crash ends its session, auto-deletes its node, and wakes the next waiter. Strongly consistent, but not built for high-frequency (hundreds per second) locking.</span></div>
+        <div class="wild-item" data-kb-example="etcd" id="wild-etcd"><strong>etcd</strong><span>A Lease with a TTL the client keeps alive, plus a transactional compare-and-swap (Txn on the key create-revision), gives an atomic acquire; the key mod-revision is a natural monotonically increasing fencing token. Its clientv3 concurrency package packages this as a Mutex recipe.</span></div>
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -312,10 +312,10 @@ async function release(redis: Redis, key: string, token: string) {
       </div>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
-        <div class="fluency-item" data-kb-theme="dealing-with-contention"><a href="../../../themes/dealing-with-contention.html">Dealing with Contention</a><span>Hold exclusivity across servers and across time as a self-expiring lease</span></div>
+        <div class="fluency-item" data-kb-theme="dealing-with-contention" id="fluency-dealing-with-contention"><a href="../../../themes/dealing-with-contention.html">Dealing with Contention</a><span>Hold exclusivity across servers and across time as a self-expiring lease</span></div>
       </div>
     </section>
 

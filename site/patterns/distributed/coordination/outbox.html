@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Outbox · Patterns</title>
-  <meta name="description" content="Outbox — write the state change and the event that announces it in one local transaction, then publish reliably.">
+  <meta name="description" content="Outbox — Writes the event and the state change in one local transaction">
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
   <script src="../../../assets/theme.js"></script>
@@ -124,24 +124,24 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p>The <strong>outbox</strong> pattern adds a table to a service's own database that holds messages waiting to be published. When the service changes state, it writes both the business row and an outbox row — the event describing that change — inside the same local ACID transaction. A separate process then reads the outbox and delivers each message to a broker, marking it published once it's safely on its way.</p>
-        <p>It resolves the <strong>dual-write problem</strong>. A service's database and its message broker are two different systems with no shared transaction between them. Publish before committing and a rolled-back write leaves the world believing something happened that never did. Commit and then publish, and a crash or a broker outage between the two silently drops the event, with the database looking perfectly consistent and no error anywhere. There's no way to make "write to the database" and "send to the broker" atomic across two resource managers without something like distributed two-phase commit, which most message brokers don't support and most teams don't want to run.</p>
-        <p>Outbox sidesteps the problem instead of solving it head-on: it turns the publish into a second local write, which the database transaction already makes atomic with the first. The genuinely hard part — getting the message across the network exactly when it should go — is pushed onto a relay that can retry indefinitely against a table, rather than a request handler that gets one shot before the client hangs up.</p>
+        <p id="description-p-1">The <strong>outbox</strong> pattern adds a table to a service's own database that holds messages waiting to be published. When the service changes state, it writes both the business row and an outbox row — the event describing that change — inside the same local ACID transaction. A separate process then reads the outbox and delivers each message to a broker, marking it published once it's safely on its way.</p>
+        <p id="description-p-2">It resolves the <strong>dual-write problem</strong>. A service's database and its message broker are two different systems with no shared transaction between them. Publish before committing and a rolled-back write leaves the world believing something happened that never did. Commit and then publish, and a crash or a broker outage between the two silently drops the event, with the database looking perfectly consistent and no error anywhere. There's no way to make "write to the database" and "send to the broker" atomic across two resource managers without something like distributed two-phase commit, which most message brokers don't support and most teams don't want to run.</p>
+        <p id="description-p-3">Outbox sidesteps the problem instead of solving it head-on: it turns the publish into a second local write, which the database transaction already makes atomic with the first. The genuinely hard part — getting the message across the network exactly when it should go — is pushed onto a relay that can retry indefinitely against a table, rather than a request handler that gets one shot before the client hangs up.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
           <p>Saving your work and telling other services about it are two different systems, and either can fail on its own: if the save works but the message never goes out, nobody downstream learns what happened; if the message goes out but the save is undone, they act on something that never happened. So write the message into your own database as part of the very same save, and let a helper deliver it afterwards, retrying until it lands. Like dropping a letter in your own out-tray as one act with writing it — the postman may be late, but the thing can never happen with the letter unwritten.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
           <p>The publish becomes a second local write: the business row and an event row land in one ACID transaction, and a relay drains still-unpublished rows to a broker or an HTTP endpoint, marking each one as it goes. The relay only ever sees committed rows, so a rolled-back transaction publishes nothing, and scanning in timestamp and sequence order delivers events in the order the service wrote them. Polling is the simple relay; a log-tailing connector removes the poll latency. In a KYC screening system every flow transition commits together with its client webhook event, so the unpublished rows are always the honest list of what the client is still owed.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
           <p>Reach for it when losing a notification is a correctness bug rather than an annoyance: the retryable unit becomes a durable row instead of one shot in a request handler, and recovery is just draining what is unpublished. It closes the dual write inside one service — a process that must also update other services' data stores needs a saga on top, not a bigger outbox. What you buy is at-least-once, never exactly-once: every consumer now owes deduplication, and a relay that dies between publishing and marking republishes by design. The rest of the bill is operational: a second table on the hot write path, a relay that must own each row exclusively, a cleanup job whose lag turns the poll into a scan of dead rows, and ordering only as wide as the key the table is scoped to.</p>
         </div>
@@ -174,7 +174,7 @@ sequenceDiagram
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Polling relay</dt>
@@ -236,7 +236,7 @@ sequenceDiagram
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch">
+      <details class="sketch" id="sketch-variant-1">
         <summary>TypeScript — a flow transition, its webhook event, and a relay</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">// Same local transaction: flow state change + outbox row
 async function clearFlow(tx: Transaction, flowId: string, personaId: string) {
@@ -273,13 +273,13 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="debezium"><strong>Debezium</strong><span>Its Outbox Event Router SMT (io.debezium.transforms.outbox.EventRouter) tails the database WAL/binlog and expands each outbox insert into a broker message, routing on the aggregatetype column and using aggregateid as the Kafka key so per-aggregate ordering is preserved — no polling, near-zero added latency.</span></div>
-        <div class="wild-item" data-kb-example="dynamodb-streams"><strong>Amazon DynamoDB Streams</strong><span>AWS documents this as the change-data-capture route to the same guarantee: enable streams on the table and the item-level change carries the event itself, so there is no second table to keep in step. The stream records those changes as a time-ordered sequence, and a Lambda function polls it and forwards each new record to an SQS queue for the consuming service.</span></div>
-        <div class="wild-item" data-kb-example="masstransit"><strong>MassTransit</strong><span>The .NET messaging library ships a transactional outbox: AddEntityFrameworkOutbox persists messages in an OutboxMessage table inside the same EF Core SaveChanges as the business write, and a delivery service sweeps and publishes them, with duplicate-detection to guard replays.</span></div>
+        <div class="wild-item" data-kb-example="debezium" id="wild-debezium"><strong>Debezium</strong><span>Its Outbox Event Router SMT (io.debezium.transforms.outbox.EventRouter) tails the database WAL/binlog and expands each outbox insert into a broker message, routing on the aggregatetype column and using aggregateid as the Kafka key so per-aggregate ordering is preserved — no polling, near-zero added latency.</span></div>
+        <div class="wild-item" data-kb-example="dynamodb-streams" id="wild-dynamodb-streams"><strong>Amazon DynamoDB Streams</strong><span>AWS documents this as the change-data-capture route to the same guarantee: enable streams on the table and the item-level change carries the event itself, so there is no second table to keep in step. The stream records those changes as a time-ordered sequence, and a Lambda function polls it and forwards each new record to an SQS queue for the consuming service.</span></div>
+        <div class="wild-item" data-kb-example="masstransit" id="wild-masstransit"><strong>MassTransit</strong><span>The .NET messaging library ships a transactional outbox: AddEntityFrameworkOutbox persists messages in an OutboxMessage table inside the same EF Core SaveChanges as the business write, and a delivery service sweeps and publishes them, with duplicate-detection to guard replays.</span></div>
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -324,11 +324,11 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
       </div>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
-        <div class="fluency-item" data-kb-theme="consistency-and-replication"><a href="../../../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Make the event and the write atomic</span></div>
-        <div class="fluency-item" data-kb-theme="multi-step-processes"><a href="../../../themes/multi-step-processes.html">Multi-Step Processes</a><span>Emit step events atomically with the state change</span></div>
+        <div class="fluency-item" data-kb-theme="consistency-and-replication" id="fluency-consistency-and-replication"><a href="../../../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Make the event and the write atomic</span></div>
+        <div class="fluency-item" data-kb-theme="multi-step-processes" id="fluency-multi-step-processes"><a href="../../../themes/multi-step-processes.html">Multi-Step Processes</a><span>Emit step events atomically with the state change</span></div>
       </div>
     </section>
 

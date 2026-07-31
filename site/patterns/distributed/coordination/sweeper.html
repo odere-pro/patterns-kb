@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sweeper · Patterns</title>
-  <meta name="description" content="Sweeper — a scheduled scan that finds work which failed by not happening: expired leases, exhausted retries, and records past their deadline.">
+  <meta name="description" content="Sweeper — Scans on a clock for work that failed by not happening">
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
   <script src="../../../assets/theme.js"></script>
@@ -105,25 +105,25 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p>A sweeper is a scheduled job whose entire input is a query for records that should have moved on by now. It runs every N seconds or minutes, selects rows matching a staleness predicate — <code>locked_at &lt; now() - interval</code>, <code>attempts &gt; budget</code>, <code>state = 'pending' AND created_at &lt; deadline</code> — and applies one resolution per row: reclaim it for another worker, escalate it to a dead state and tell somebody, or expire it and release whatever it was holding. It is the janitor of a distributed system, and it is almost always a handful of indexed queries rather than a service.</p>
-        <p>The force it resolves is that <strong>failure by absence produces no event</strong>. Every other component in a system is driven by something happening: a request arrives, a message is delivered, a callback fires. But the worker that died mid-task sends nothing. The user who abandoned checkout clicks nothing. The vendor that never called back generates no callback. These failures announce themselves with silence, and silence has no listener — so the only way to notice is for someone to go looking on a clock. That is the whole pattern: a periodic scan is the event source for non-events.</p>
-        <p>The hard part is what the sweeper does to your failure model. Once it exists, correctness depends on a background job running on time. A sweep that lags, crashes, or silently stops leaves leases held and resources locked — and because sweeps fall behind precisely when the system is busiest, it degrades exactly when the damage is worst. This is why mature designs push work out of the sweeper wherever they can: give the record a TTL so the store expires it, or check expiry lazily when the record is next read, so no external actor decides correctness. What stays in the sweeper is what genuinely needs an <em>action</em> — notifying a client that their request failed, alerting an operator, releasing a resource that nobody will read again soon. A sweeper that only had to answer "is this expired?" should not have been a sweeper.</p>
-        <p>Two properties are non-negotiable in the implementation. It must be <strong>idempotent</strong> — the same row swept twice, or swept by two instances, must not double-escalate or double-release. And it must <strong>guard its writes against live workers</strong>, because it is racing them by design: the task it judges abandoned may be a slow worker still holding it. A conditional update (<code>WHERE locked_by = $seen AND locked_at = $seen</code>) turns that race into a write that affects zero rows rather than a task stolen from a healthy worker.</p>
+        <p id="description-p-1">A sweeper is a scheduled job whose entire input is a query for records that should have moved on by now. It runs every N seconds or minutes, selects rows matching a staleness predicate — <code>locked_at &lt; now() - interval</code>, <code>attempts &gt; budget</code>, <code>state = 'pending' AND created_at &lt; deadline</code> — and applies one resolution per row: reclaim it for another worker, escalate it to a dead state and tell somebody, or expire it and release whatever it was holding. It is the janitor of a distributed system, and it is almost always a handful of indexed queries rather than a service.</p>
+        <p id="description-p-2">The force it resolves is that <strong>failure by absence produces no event</strong>. Every other component in a system is driven by something happening: a request arrives, a message is delivered, a callback fires. But the worker that died mid-task sends nothing. The user who abandoned checkout clicks nothing. The vendor that never called back generates no callback. These failures announce themselves with silence, and silence has no listener — so the only way to notice is for someone to go looking on a clock. That is the whole pattern: a periodic scan is the event source for non-events.</p>
+        <p id="description-p-3">The hard part is what the sweeper does to your failure model. Once it exists, correctness depends on a background job running on time. A sweep that lags, crashes, or silently stops leaves leases held and resources locked — and because sweeps fall behind precisely when the system is busiest, it degrades exactly when the damage is worst. This is why mature designs push work out of the sweeper wherever they can: give the record a TTL so the store expires it, or check expiry lazily when the record is next read, so no external actor decides correctness. What stays in the sweeper is what genuinely needs an <em>action</em> — notifying a client that their request failed, alerting an operator, releasing a resource that nobody will read again soon. A sweeper that only had to answer "is this expired?" should not have been a sweeper.</p>
+        <p id="description-p-4">Two properties are non-negotiable in the implementation. It must be <strong>idempotent</strong> — the same row swept twice, or swept by two instances, must not double-escalate or double-release. And it must <strong>guard its writes against live workers</strong>, because it is racing them by design: the task it judges abandoned may be a slow worker still holding it. A conditional update (<code>WHERE locked_by = $seen AND locked_at = $seen</code>) turns that race into a write that affects zero rows rather than a task stolen from a healthy worker.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
           <p>Some things fail by simply never happening: nobody clicked, nobody called back, the machine doing the job died without a word. Silence tells no one, so a small job runs every so often and looks for work that should have moved on by now, then puts it back, gives up on it out loud, or frees whatever it was holding. Like a caretaker walking the building at closing time.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
           <p>A scheduled job whose entire input is a staleness query — expired leases, attempts over budget, a row past its deadline — and one resolution per match: return the claim to the pending pool, park exhausted work in a dead state, or escalate to a human. In a KYC flow one tick reclaims a dead worker's task, dead-letters one that burned its retries, and tells the client their check failed. Every write is guarded on the values the row was selected with, so a slow-but-alive holder is never robbed.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
           <p>Choose it only when something must actively happen at the deadline — a customer told, an operator paged, capacity released. If the question is merely whether a record is still valid, answer it on read or let the store expire it, keeping correctness off a clock. Adopting one moves correctness into a background job that falls behind when the system is busiest, and that wants to be a singleton — so you buy leader election and the question of who notices when the sweeper dies quietly. Its cost scales with table size rather than stuck work, and the staleness threshold is a permanent bind between killing merely slow work and stranding resources.</p>
         </div>
@@ -148,7 +148,7 @@ flowchart LR
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Lease reclaim</dt>
@@ -225,7 +225,7 @@ flowchart LR
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch">
+      <details class="sketch" id="sketch-variant-1">
         <summary>TypeScript — one tick, three predicates, every write guarded</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">const LEASE_MS = 60_000;      // a claim not renewed within this is presumed dead
 const MAX_ATTEMPTS = 5;
@@ -276,15 +276,15 @@ setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="redis-active-expiry"><strong>Redis</strong><span>A key with a TTL is removed two ways at once — lazily, when a read touches an already-expired key, and by a background cycle that repeatedly samples keys from the set carrying an expiry and deletes the ones that have passed; without the active sweep, keys nobody ever reads again would hold memory forever.</span></div>
-        <div class="wild-item" data-kb-example="postgres-autovacuum"><strong>PostgreSQL autovacuum</strong><span>The autovacuum launcher wakes on a timer and starts workers against tables that have accumulated enough dead row versions, reclaiming the space left by UPDATE and DELETE once no live transaction can still see it — a scheduled scan for state everyone has finished with, and one that famously falls behind under heavy write load.</span></div>
-        <div class="wild-item" data-kb-example="kubernetes-ttl-after-finished"><strong>Kubernetes TTL-after-finished controller</strong><span>A Job that sets .spec.ttlSecondsAfterFinished is deleted, along with the pods it owns, once that long has elapsed since it completed or failed — and the documentation is explicit that cleanup happens some time after the TTL rather than at it, which is the sweeper's timing bargain stated in the API.</span></div>
-        <div class="wild-item" data-kb-example="s3-abort-incomplete-multipart-upload"><strong>Amazon S3 lifecycle rules</strong><span>A multipart upload that is never completed or aborted leaves its uploaded parts in the bucket — billed, and invisible to an ordinary object listing — and the AbortIncompleteMultipartUpload lifecycle action is a scheduled sweep that reclaims them a configured number of days after the upload was initiated: orphan collection with a grace period.</span></div>
-        <div class="wild-item" data-kb-example="django-clearsessions"><strong>Django clearsessions</strong><span>Django's database and file session backends never purge a session once it expires; the docs say plainly that expired records accumulate and it is your job to run the django-admin clearsessions management command regularly, typically from cron — the sweeper shipped as a command because the store cannot expire the row itself.</span></div>
+        <div class="wild-item" data-kb-example="redis-active-expiry" id="wild-redis-active-expiry"><strong>Redis</strong><span>A key with a TTL is removed two ways at once — lazily, when a read touches an already-expired key, and by a background cycle that repeatedly samples keys from the set carrying an expiry and deletes the ones that have passed; without the active sweep, keys nobody ever reads again would hold memory forever.</span></div>
+        <div class="wild-item" data-kb-example="postgres-autovacuum" id="wild-postgres-autovacuum"><strong>PostgreSQL autovacuum</strong><span>The autovacuum launcher wakes on a timer and starts workers against tables that have accumulated enough dead row versions, reclaiming the space left by UPDATE and DELETE once no live transaction can still see it — a scheduled scan for state everyone has finished with, and one that famously falls behind under heavy write load.</span></div>
+        <div class="wild-item" data-kb-example="kubernetes-ttl-after-finished" id="wild-kubernetes-ttl-after-finished"><strong>Kubernetes TTL-after-finished controller</strong><span>A Job that sets .spec.ttlSecondsAfterFinished is deleted, along with the pods it owns, once that long has elapsed since it completed or failed — and the documentation is explicit that cleanup happens some time after the TTL rather than at it, which is the sweeper's timing bargain stated in the API.</span></div>
+        <div class="wild-item" data-kb-example="s3-abort-incomplete-multipart-upload" id="wild-s3-abort-incomplete-multipart-upload"><strong>Amazon S3 lifecycle rules</strong><span>A multipart upload that is never completed or aborted leaves its uploaded parts in the bucket — billed, and invisible to an ordinary object listing — and the AbortIncompleteMultipartUpload lifecycle action is a scheduled sweep that reclaims them a configured number of days after the upload was initiated: orphan collection with a grace period.</span></div>
+        <div class="wild-item" data-kb-example="django-clearsessions" id="wild-django-clearsessions"><strong>Django clearsessions</strong><span>Django's database and file session backends never purge a session once it expires; the docs say plainly that expired records accumulate and it is your job to run the django-admin clearsessions management command regularly, typically from cron — the sweeper shipped as a command because the store cannot expire the row itself.</span></div>
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">

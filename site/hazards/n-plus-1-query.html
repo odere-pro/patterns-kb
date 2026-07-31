@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>N+1 Query · Patterns</title>
-  <meta name="description" content="N+1 Query — a request that issues one query per row (1 to fetch N parents, then N to fetch each child) instead of a single batched or joined query, so latency explodes with the size of the result set.">
+  <meta name="description" content="N+1 Query — One query per row instead of one batched query — 1 + N round-trips">
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
   <script src="../assets/theme.js"></script>
@@ -71,23 +71,23 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p>An <strong>N+1 query</strong> is a request that fetches a list of N parent rows with a single query, then issues one <em>more</em> query for every parent to load its related child — so displaying N items costs 1 + N queries where one or two would do. The name is the arithmetic: 1 query for the parents, N for the children. Picture an endpoint returning 100 events, each with its venue: the code loads the 100 events in one query, then loops and looks up each event's venue individually — 100 more queries, 101 in total.</p>
-        <p>What makes it insidious is that it is rarely written on purpose. A lazy-loading ORM or a per-item resolver makes the extra queries invisible — reading <code>event.venue</code> inside a loop looks like a field access, not a network round-trip to the database. And it hides during development, where the result set is tiny: five rows means six queries, imperceptible. The same code path meets a production-sized list of ten thousand rows and quietly becomes ten thousand and one queries, and the request that was instant in testing now times out.</p>
+        <p id="description-p-1">An <strong>N+1 query</strong> is a request that fetches a list of N parent rows with a single query, then issues one <em>more</em> query for every parent to load its related child — so displaying N items costs 1 + N queries where one or two would do. The name is the arithmetic: 1 query for the parents, N for the children. Picture an endpoint returning 100 events, each with its venue: the code loads the 100 events in one query, then loops and looks up each event's venue individually — 100 more queries, 101 in total.</p>
+        <p id="description-p-2">What makes it insidious is that it is rarely written on purpose. A lazy-loading ORM or a per-item resolver makes the extra queries invisible — reading <code>event.venue</code> inside a loop looks like a field access, not a network round-trip to the database. And it hides during development, where the result set is tiny: five rows means six queries, imperceptible. The same code path meets a production-sized list of ten thousand rows and quietly becomes ten thousand and one queries, and the request that was instant in testing now times out.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
           <p>Showing a page of a hundred items, the code fetches all hundred in one trip to the database and then, one item at a time, goes back for each item's related record. A hundred and one round trips where two would do. On five test rows nobody notices; against a real list it becomes thousands of trips, and the request that was instant in testing times out.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
           <p>A lazy-loaded relation or a per-item resolver is touched inside a loop over the parents, so what reads as a field access is a separate round trip per row. Latency grows linearly with the result set — round-trip cost dominates, not the work — the engine plans thousands of trivial statements, and each request pins its connection long enough to saturate the pool. The fixes ask once for the whole set: batching keyed by parent ids, the move DataLoader automates, a join or eager prefetch, or a materialized view when the joined shape is read far more than it changes.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
           <p>The defining dynamic is an abstraction that hides cost: an ORM makes a network round trip look like a field read, so the defect is invisible in review and invisible at development scale, then linear in production. Defence belongs in the data-access layer — a batching loader, or fetch plans declared with the query — rather than in reviewers spotting loops, because otherwise every new caller reintroduces it. The second-order case is a serializer or a nested resolver that re-walks the graph one level deeper. The bill: eager loading over-fetches columns nobody reads, joins duplicate parent rows across children, and a materialized view buys the round trip back with staleness.</p>
         </div>
@@ -130,8 +130,8 @@ flowchart TB
     <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
       <h2 class="doc-h" id="h-mitigation">Getting out</h2>
       <div class="prose">
-        <p>Collapse the N child queries into one. The direct fix is to <strong>batch</strong> the child fetch into a single query keyed by the parent ids — one <code>SELECT ... WHERE parent_id IN (…)</code> in place of one query per parent. The <em>DataLoader</em> pattern automates exactly this: it coalesces the per-item requests made during one tick into a single batched call, so a resolver can keep asking for one venue at a time while only one query is actually issued.</p>
-        <p>Alternatively, fetch parents and children together with a <strong>JOIN</strong>, or an eager-load / prefetch, so the relation arrives alongside the parents in one round-trip instead of being pulled lazily row by row. And when the joined shape is read far more often than it changes, precompute it as a <strong>materialized view</strong>, turning the read into a single lookup against an already-assembled result. The through-line under all three is the same: stop asking once per row — ask once for the whole set.</p>
+        <p id="mitigation-p-1">Collapse the N child queries into one. The direct fix is to <strong>batch</strong> the child fetch into a single query keyed by the parent ids — one <code>SELECT ... WHERE parent_id IN (…)</code> in place of one query per parent. The <em>DataLoader</em> pattern automates exactly this: it coalesces the per-item requests made during one tick into a single batched call, so a resolver can keep asking for one venue at a time while only one query is actually issued.</p>
+        <p id="mitigation-p-2">Alternatively, fetch parents and children together with a <strong>JOIN</strong>, or an eager-load / prefetch, so the relation arrives alongside the parents in one round-trip instead of being pulled lazily row by row. And when the joined shape is read far more often than it changes, precompute it as a <strong>materialized view</strong>, turning the read into a single lookup against an already-assembled result. The through-line under all three is the same: stop asking once per row — ask once for the whole set.</p>
       </div>
 
     </section>

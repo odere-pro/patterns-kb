@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pessimistic Locking · Patterns</title>
-  <meta name="description" content="Pessimistic Locking — take an explicit row lock with SELECT … FOR UPDATE so no other transaction can read-for-update or write those rows until you commit; conflicts are prevented, not detected.">
+  <meta name="description" content="Pessimistic Locking — Lock the row up front so no one else can touch it until you're done">
   <link rel="stylesheet" href="../../../assets/tokens.css">
   <link rel="stylesheet" href="../../../assets/pattern.css">
   <script src="../../../assets/theme.js"></script>
@@ -94,24 +94,24 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p>Pessimistic locking takes the pessimistic bet — it assumes two transactions <em>will</em> collide, so it grabs an explicit lock on the rows it is about to touch before doing anything with them. In SQL that is <code>SELECT … FOR UPDATE</code> inside a transaction: every row the select returns is locked until you commit or roll back, and any other transaction that asks for those same rows — to update them, or to select them for update — blocks and waits its turn.</p>
-        <p>The force it resolves is the lost-update race: the gap between reading a value and writing it back. You read a row, decide something in application code, then write — and a second transaction slips in between your read and your write, so one of the two updates silently clobbers the other. A conditional write closes that gap when the safety rule is a simple predicate the database can evaluate inside the statement (<code>WHERE available_seats &gt; 0</code>). But once the decision is real application logic — <em>find four contiguous open seats</em>, <em>pick the cheapest unit still in stock</em> — there is no single <code>WHERE</code> clause that expresses it, and you have to hold the rows still while you think. Pessimistic locking holds them still.</p>
-        <p>Its defining choice is prevention over detection. Optimistic concurrency control makes the opposite bet: let everyone proceed, catch the collision at write time, and retry the loser — cheaper when conflicts are rare, but it thrashes when they are common. Pessimistic locking pays the lock cost on every transaction, collision or not, and in return never retries and never surprises anyone with a clobbered write. Reach for it when contention is genuinely high; stay optimistic when it is not.</p>
+        <p id="description-p-1">Pessimistic locking takes the pessimistic bet — it assumes two transactions <em>will</em> collide, so it grabs an explicit lock on the rows it is about to touch before doing anything with them. In SQL that is <code>SELECT … FOR UPDATE</code> inside a transaction: every row the select returns is locked until you commit or roll back, and any other transaction that asks for those same rows — to update them, or to select them for update — blocks and waits its turn.</p>
+        <p id="description-p-2">The force it resolves is the lost-update race: the gap between reading a value and writing it back. You read a row, decide something in application code, then write — and a second transaction slips in between your read and your write, so one of the two updates silently clobbers the other. A conditional write closes that gap when the safety rule is a simple predicate the database can evaluate inside the statement (<code>WHERE available_seats &gt; 0</code>). But once the decision is real application logic — <em>find four contiguous open seats</em>, <em>pick the cheapest unit still in stock</em> — there is no single <code>WHERE</code> clause that expresses it, and you have to hold the rows still while you think. Pessimistic locking holds them still.</p>
+        <p id="description-p-3">Its defining choice is prevention over detection. Optimistic concurrency control makes the opposite bet: let everyone proceed, catch the collision at write time, and retry the loser — cheaper when conflicts are rare, but it thrashes when they are common. Pessimistic locking pays the lock cost on every transaction, collision or not, and in return never retries and never surprises anyone with a clobbered write. Reach for it when contention is genuinely high; stay optimistic when it is not.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
           <p>When the same few things are fought over all day and edits keep vanishing under each other, claim the thing before you start, and everyone else waits their turn. Like the one bathroom in a busy house: you shut the door behind you, and the rest queue in the hall until you come out. Nobody is barged in on, but the hall waits as long as you take.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
           <p>Inside a transaction, SELECT FOR UPDATE takes an exclusive lock on every row the select returns and holds it until commit or rollback; any other transaction wanting those rows blocks and queues behind you. FOR SHARE is the weaker form, blocking writers while other readers pass. SKIP LOCKED steps over already-claimed rows so each worker grabs a different job, and NOWAIT fails rather than waits. The database's own deadlock detector aborts one side when acquisition orders disagree. Exclusivity spanning services or outliving the transaction needs a distributed lock instead.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
           <p>Choose it when contention on the same rows is high and the decision in the middle is real application logic — find four seats together, pick the cheapest unit left — that no WHERE clause expresses; you buy a deterministic winner, no retry loop and no clobbered write. The bill is concurrency: every transaction pays the lock cost, collision or not, and contenders serialize behind the holder. Hold time becomes the design constraint, so a payment call inside the transaction stalls the queue. You also owe consistent acquisition order, retry handling for the side the database aborts, and an index narrow enough that a scan does not lock rows you never meant to touch.</p>
         </div>
@@ -143,7 +143,7 @@ sequenceDiagram
       </figure>
     </section>
 
-    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations" data-kb-level="advanced">
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Exclusive vs. shared locks</dt>
@@ -208,7 +208,7 @@ sequenceDiagram
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch">
+      <details class="sketch" id="sketch-variant-1">
         <summary>TypeScript — SELECT … FOR UPDATE inside a transaction</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">// Claim one specific seat safely: lock the row, verify, then sell it.
 async function reserveSeat(db: Client, seatId: string, userId: string) {
@@ -242,13 +242,13 @@ async function reserveSeat(db: Client, seatId: string, userId: string) {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="postgresql"><strong>PostgreSQL</strong><span>Row-level locking reads: SELECT … FOR UPDATE (and FOR SHARE) lock the returned rows until the transaction ends. FOR UPDATE SKIP LOCKED, added in 9.5, lets many workers each claim a distinct unlocked row; NOWAIT fails fast instead of waiting on a held lock.</span></div>
-        <div class="wild-item" data-kb-example="mysql-innodb"><strong>MySQL / InnoDB</strong><span>Locking reads via FOR UPDATE and LOCK IN SHARE MODE (spelled FOR SHARE since 8.0, which also added SKIP LOCKED and NOWAIT). InnoDB holds the row locks to the end of the transaction and detects deadlocks, rolling one transaction back with an error the app must retry.</span></div>
-        <div class="wild-item" data-kb-example="skip-locked-queues"><strong>Database-backed job queues</strong><span>Postgres-backed queue libraries such as graphile-worker build a work queue on an ordinary table and claim the next job with SELECT … FOR UPDATE SKIP LOCKED, so concurrent pollers each atomically grab a different row and no two workers run the same task.</span></div>
+        <div class="wild-item" data-kb-example="postgresql" id="wild-postgresql"><strong>PostgreSQL</strong><span>Row-level locking reads: SELECT … FOR UPDATE (and FOR SHARE) lock the returned rows until the transaction ends. FOR UPDATE SKIP LOCKED, added in 9.5, lets many workers each claim a distinct unlocked row; NOWAIT fails fast instead of waiting on a held lock.</span></div>
+        <div class="wild-item" data-kb-example="mysql-innodb" id="wild-mysql-innodb"><strong>MySQL / InnoDB</strong><span>Locking reads via FOR UPDATE and LOCK IN SHARE MODE (spelled FOR SHARE since 8.0, which also added SKIP LOCKED and NOWAIT). InnoDB holds the row locks to the end of the transaction and detects deadlocks, rolling one transaction back with an error the app must retry.</span></div>
+        <div class="wild-item" data-kb-example="skip-locked-queues" id="wild-skip-locked-queues"><strong>Database-backed job queues</strong><span>Postgres-backed queue libraries such as graphile-worker build a work queue on an ordinary table and claim the next job with SELECT … FOR UPDATE SKIP LOCKED, so concurrent pollers each atomically grab a different row and no two workers run the same task.</span></div>
       </div>
     </section>
 
-    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production" data-kb-level="expert">
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
       <h2 class="doc-h" id="h-production">In production</h2>
       <div class="production">
         <div class="prod-group prod-knobs">
@@ -296,10 +296,10 @@ async function reserveSeat(db: Client, seatId: string, userId: string) {
       </div>
     </section>
 
-    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency" data-kb-level="advanced">
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
-        <div class="fluency-item" data-kb-theme="dealing-with-contention"><a href="../../../themes/dealing-with-contention.html">Dealing with Contention</a><span>Lock the contended rows up front when collisions are frequent</span></div>
+        <div class="fluency-item" data-kb-theme="dealing-with-contention" id="fluency-dealing-with-contention"><a href="../../../themes/dealing-with-contention.html">Dealing with Contention</a><span>Lock the contended rows up front when collisions are frequent</span></div>
       </div>
     </section>
 

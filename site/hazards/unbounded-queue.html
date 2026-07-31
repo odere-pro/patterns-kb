@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Unbounded Queue · Patterns</title>
-  <meta name="description" content="An in-memory queue or per-key state map with no capacity cap grows without bound under load until the process runs out of memory and the whole service crashes.">
+  <meta name="description" content="Unbounded Queue — A queue with no capacity cap grows until the process runs out of memory">
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
   <script src="../assets/theme.js"></script>
@@ -81,23 +81,23 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p>An <strong>unbounded queue</strong> is an in-memory buffer created with no ceiling on how many items it will hold. Think of a task scheduler that pushes work off the request path — welcome emails, thumbnail resizing, monthly reports — onto a queue that a pool of worker threads drains. As long as workers keep pace, the queue stays shallow and nothing is wrong. But the moment producers outrun consumers, depth climbs, and with no capacity limit there is nothing to stop it: every queued item is a live object on the heap, so the queue grows in lockstep with memory until there is none left.</p>
-        <p>It wears two faces. The obvious one is a producer–consumer buffer that fills faster than it empties — a burst of traffic enqueues thousands of tasks that a fixed worker pool needs minutes to clear. The quieter one is a <em>per-key state map</em> that only ever grows: rate-limiter buckets keyed by client id, a session cache, a dedup set — one entry added the first time each key is seen and never removed. That second shape is a slow, hidden memory leak that can run for days before it tips over. Both end the same way: the heap fills, and the process dies.</p>
+        <p id="description-p-1">An <strong>unbounded queue</strong> is an in-memory buffer created with no ceiling on how many items it will hold. Think of a task scheduler that pushes work off the request path — welcome emails, thumbnail resizing, monthly reports — onto a queue that a pool of worker threads drains. As long as workers keep pace, the queue stays shallow and nothing is wrong. But the moment producers outrun consumers, depth climbs, and with no capacity limit there is nothing to stop it: every queued item is a live object on the heap, so the queue grows in lockstep with memory until there is none left.</p>
+        <p id="description-p-2">It wears two faces. The obvious one is a producer–consumer buffer that fills faster than it empties — a burst of traffic enqueues thousands of tasks that a fixed worker pool needs minutes to clear. The quieter one is a <em>per-key state map</em> that only ever grows: rate-limiter buckets keyed by client id, a session cache, a dedup set — one entry added the first time each key is seen and never removed. That second shape is a slow, hidden memory leak that can run for days before it tips over. Both end the same way: the heap fills, and the process dies.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
           <p>Work that does not need answering right away gets parked in a list for background workers to get through. Nothing says how long that list may get. One busy morning the work arrives faster than the workers clear it, the list grows to millions of items, and every one of them is holding memory. Memory runs out and the whole process dies — including the parts serving customers.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
           <p>A buffer created with no capacity — a blocking queue from its default constructor, or a per-key map that is never evicted — absorbs whatever arrives. Once producers outpace consumers, depth climbs, every queued item is a live object, and the collector burns CPU on a heap that keeps filling until an out-of-memory error takes down the whole process, request handlers included. Bound the structure and choose the overflow policy deliberately: block the producer, reject with a 503, or drop and log. Backpressure, a bounded producer-consumer queue, semaphore permits and TTL or LRU eviction are the implementations.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
           <p>The defining dynamic is a swap of one limit for another: without a ceiling a throughput shortfall becomes a memory debt that accrues in silence, and by the time depth is visible the queued work is already worthless — minute-old thumbnails, emails nobody wants now. Put the ceiling at construction and the decision in the accept path, because a structure that is unbounded by default makes every producer's discipline load-bearing. Two second-order cases: a per-key map that grows with keyspace cardinality rather than load, leaking for days, and the crash loop where the restarted process refills the same buffer. Bounding costs a decision you cannot dodge — somebody gets blocked, rejected or dropped.</p>
         </div>
@@ -131,8 +131,8 @@
     <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
       <h2 class="doc-h" id="h-mitigation">Getting out</h2>
       <div class="prose">
-        <p>The root fix is to <strong>give the queue a bounded capacity</strong> and decide explicitly what happens when it is full — an overflow policy. There are three honest choices, matched to the workload: <em>block the producer</em> until space frees up, which slows a fast producer down and is right for internal pipelines that can afford to wait; <em>reject the item</em> with an immediate "system busy" response (a 503), which is right for request paths that must answer fast rather than stall; or <em>drop</em> the oldest or newest item and log it, which is right for lossy streams like analytics where shedding load under pressure is acceptable. The one policy that is never acceptable is "accept forever."</p>
-        <p>A bounded queue also gives you <strong>backpressure</strong> for free: when the buffer is full a blocking put slows the producer before memory can overflow, coupling the rate of arrival to the rate of drain. Where there is no queue object to bound — a burst of concurrent operations rather than a stream of tasks — cap the in-flight work with a fixed number of <strong>permits</strong> so only so much can be outstanding at once. And for the per-key state map, the equivalent of a capacity limit is an <strong>eviction policy</strong>: a TTL, an LRU cap, or idle-eviction, so entries expire instead of accumulating for the lifetime of the process. In every case the move is the same — put a ceiling on the structure, then choose deliberately what happens when it is reached.</p>
+        <p id="mitigation-p-1">The root fix is to <strong>give the queue a bounded capacity</strong> and decide explicitly what happens when it is full — an overflow policy. There are three honest choices, matched to the workload: <em>block the producer</em> until space frees up, which slows a fast producer down and is right for internal pipelines that can afford to wait; <em>reject the item</em> with an immediate "system busy" response (a 503), which is right for request paths that must answer fast rather than stall; or <em>drop</em> the oldest or newest item and log it, which is right for lossy streams like analytics where shedding load under pressure is acceptable. The one policy that is never acceptable is "accept forever."</p>
+        <p id="mitigation-p-2">A bounded queue also gives you <strong>backpressure</strong> for free: when the buffer is full a blocking put slows the producer before memory can overflow, coupling the rate of arrival to the rate of drain. Where there is no queue object to bound — a burst of concurrent operations rather than a stream of tasks — cap the in-flight work with a fixed number of <strong>permits</strong> so only so much can be outstanding at once. And for the per-key state map, the equivalent of a capacity limit is an <strong>eviction policy</strong>: a TTL, an LRU cap, or idle-eviction, so entries expire instead of accumulating for the lifetime of the process. In every case the move is the same — put a ceiling on the structure, then choose deliberately what happens when it is reached.</p>
       </div>
 
     </section>

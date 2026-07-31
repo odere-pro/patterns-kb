@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Resource Leak · Patterns</title>
-  <meta name="description" content="A pooled resource or permit is acquired but never released, so capacity permanently shrinks until every request blocks forever — with no crash and no errors to show for it.">
+  <meta name="description" content="Resource Leak — A resource acquired but never released, shrinking capacity until everything blocks">
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
   <script src="../assets/theme.js"></script>
@@ -76,23 +76,23 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p>A <strong>resource leak</strong> is what happens when a finite, pooled resource — a database connection, a file handle, a semaphore permit, a lock — is acquired but never released. These resources are deliberately limited and expensive: a connection pool might hold five or ten connections created once at startup and reused, because opening a new one costs sockets, memory, and setup time. Every request borrows one and is expected to give it back. A leak is a borrow with no return: the resource is checked out of the pool and simply never comes back, so the count of available resources drops by one, permanently.</p>
-        <p>The mechanism is almost always a missing release on the error path. Code acquires the resource, does some work, then an exception is thrown — or an early return is taken — before the release call runs, so control jumps straight past it and the resource is orphaned. Unlike most failures there is nothing dramatic to see: the process does not crash, no stack trace is printed, the borrowed handles just vanish from circulation one at a time. It is, for good reason, the very first bug an interviewer probes for in any pooling or concurrency design.</p>
+        <p id="description-p-1">A <strong>resource leak</strong> is what happens when a finite, pooled resource — a database connection, a file handle, a semaphore permit, a lock — is acquired but never released. These resources are deliberately limited and expensive: a connection pool might hold five or ten connections created once at startup and reused, because opening a new one costs sockets, memory, and setup time. Every request borrows one and is expected to give it back. A leak is a borrow with no return: the resource is checked out of the pool and simply never comes back, so the count of available resources drops by one, permanently.</p>
+        <p id="description-p-2">The mechanism is almost always a missing release on the error path. Code acquires the resource, does some work, then an exception is thrown — or an early return is taken — before the release call runs, so control jumps straight past it and the resource is orphaned. Unlike most failures there is nothing dramatic to see: the process does not crash, no stack trace is printed, the borrowed handles just vanish from circulation one at a time. It is, for good reason, the very first bug an interviewer probes for in any pooling or concurrency design.</p>
       </div>
     </section>
 
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
           <p>Each request borrows a database connection from a small shared pool and is meant to hand it back. When something throws partway through, the hand-back is skipped and that connection is gone for good. One per failure, invisible. Days later the last one goes: every request now waits for a connection that will never come free, and the service stops answering — with no errors anywhere.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
           <p>Acquire and release sit in separate statements, so an exception or an early return between them orphans the handle; a stalled downstream that holds a borrow for seconds drains the same pool with no bug at all. The signature is an in-use count that only climbs, callers blocking on an acquire that can never succeed, worker threads parked behind them, and a database that looks idle because almost nothing reaches it. Bind the release to the scope — a finally, a with block, RAII, a defer — then add an acquisition timeout, validation before hand-out, and utilization alerting.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
           <p>What defines it is delay plus silence: capacity erodes one failed request at a time, so the outage lands hours after and nowhere near the line that skipped the release, and monitoring shows zero exceptions while users see only timeouts. The defence has to be structural — a scope-bound construct, or a pool that hands out something whose closing is guaranteed — never a convention each caller honours on every error path. The second-order case is ownership handed across threads, where the resource is released by nobody or released twice. The bill: timeouts abort legitimately slow work, validation costs a round trip per checkout, and a cap turns a silent leak into visible rejections.</p>
         </div>
@@ -126,8 +126,8 @@
     <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
       <h2 class="doc-h" id="h-mitigation">Getting out</h2>
       <div class="prose">
-        <p>The one fix that prevents the leak outright is to <strong>bind the release to the scope</strong> so the error path frees the resource just as surely as the happy path. A <code>finally</code> block, a <code>with</code>/<code>using</code> context manager, RAII, or a <code>defer</code> keeps the acquire and its guaranteed release together, so no exception or early return can slip between them. Acquire and release are a single unit; write them as one.</p>
-        <p>Then make the wait survivable. Add an <strong>acquisition timeout</strong> so a caller that cannot get a resource fails fast — returns a clear error or a 503 — instead of blocking forever; this alone converts the worst symptom of a leak, a service that hangs silently with no errors, into a handful of loud, visible failures you can alert on. <strong>Validate or health-check</strong> pooled resources before handing them out, discarding and replacing dead ones, so a stale connection is not mistaken for a leaked one. And <strong>bound acquisition</strong> and watch pool utilization: an in-use count that only ever climbs and never falls back is the unmistakable signature of a leak, and it is visible long before the pool hits zero.</p>
+        <p id="mitigation-p-1">The one fix that prevents the leak outright is to <strong>bind the release to the scope</strong> so the error path frees the resource just as surely as the happy path. A <code>finally</code> block, a <code>with</code>/<code>using</code> context manager, RAII, or a <code>defer</code> keeps the acquire and its guaranteed release together, so no exception or early return can slip between them. Acquire and release are a single unit; write them as one.</p>
+        <p id="mitigation-p-2">Then make the wait survivable. Add an <strong>acquisition timeout</strong> so a caller that cannot get a resource fails fast — returns a clear error or a 503 — instead of blocking forever; this alone converts the worst symptom of a leak, a service that hangs silently with no errors, into a handful of loud, visible failures you can alert on. <strong>Validate or health-check</strong> pooled resources before handing them out, discarding and replacing dead ones, so a stale connection is not mistaken for a leaked one. And <strong>bound acquisition</strong> and watch pool utilization: an in-use count that only ever climbs and never falls back is the unmistakable signature of a leak, and it is visible long before the pool hits zero.</p>
       </div>
 
     </section>
