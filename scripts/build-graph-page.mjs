@@ -45,9 +45,12 @@ const legend = families.map((f) =>
 ).join("\n");
 
 /* ---- panel controls ---- */
+/* The five kinds are the built-in groups: a colored chip per kind (swatch matches the
+ * node color on the canvas), clickable to show/hide that kind. User-defined query
+ * groups extend the same section. */
 const KIND_LABELS = { pattern: "Patterns", hazard: "Hazards", theme: "Themes", principle: "Principles", design: "Case studies" };
 const kindBtns = Object.entries(KIND_LABELS).map(([kind, label]) =>
-  `          <button type="button" class="gbtn kind-btn" data-kind="${kind}" aria-pressed="true">${esc(label)}</button>`,
+  `          <button type="button" class="gbtn kind-btn kind-${kind}" data-kind="${kind}" aria-pressed="true"><span class="swatch" aria-hidden="true"></span>${esc(label)}</button>`,
 ).join("\n");
 
 const bandOptions = BANDS.map((b) =>
@@ -107,9 +110,6 @@ const html = `<!doctype html>
         <details class="panel-sec" open>
           <summary>Filters</summary>
           <input class="graph-input" id="graph-search" type="search" placeholder="Search — name, symptom, tag:x, kind:x" aria-label="Filter the graph: free text, tag:x, kind:x, band:x, fav:true; prefix - negates" autocomplete="off" spellcheck="false">
-          <div class="panel-row">
-${kindBtns}
-          </div>
           <select class="graph-select" id="band-select" aria-label="Filter patterns by band">
             <option value="">All bands</option>
 ${bandOptions}
@@ -123,8 +123,11 @@ ${bandOptions}
 ${legend}
           </div>
         </details>
-        <details class="panel-sec">
+        <details class="panel-sec" open>
           <summary>Groups</summary>
+          <div class="panel-row" role="group" aria-label="Kinds — click to show or hide">
+${kindBtns}
+          </div>
           <div id="group-list"></div>
           <button type="button" class="gbtn" id="group-add">+ New group</button>
         </details>
