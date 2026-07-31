@@ -98,8 +98,8 @@
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
         <p id="description-p-1"><strong>Pipe-and-Filter</strong> decomposes a processing task into a sequence of independent <em>filters</em>, each doing one transformation, connected by <em>pipes</em> that carry data from one filter's output to the next filter's input. A filter knows nothing about where its input came from or where its output goes — it only knows the shape of the data it consumes and produces.</p>
-        <p id="description-p-2">The force it resolves is <strong>tangled, monolithic processing logic</strong>. Without it, a single function or class ends up doing parsing, validation, transformation, and formatting all at once, and changing one step risks breaking the others. Splitting the work into filters lets each stage be written, tested, and reasoned about in isolation, and lets the pipeline be reassembled — reordered, extended, or partially reused — without touching the filters themselves.</p>
-        <p id="description-p-3">The pipe is not incidental plumbing. Because it's the only channel between stages, it decouples their execution: filters can run in the same process one after another, in separate threads passing through queues, or on separate machines passing through sockets or a message broker, without any filter's code changing. That same decoupling is what makes the pattern the backbone of the Unix shell, compilers, and stream-processing frameworks alike.</p>
+        <p id="description-p-2">The force it resolves is <strong>tangled, monolithic processing logic</strong>. Without it, one function parses, validates, transforms and formats in a single body, so a change to the validation rules can only be made by reading and re-testing all of it. The same tangle blocks reuse: the cleanup step two other jobs need cannot be lifted out, so it gets copied, and the copies drift.</p>
+        <p id="description-p-3" data-kb-level="advanced">The pipe is not incidental plumbing. Because it's the only channel between stages, it decouples their execution: filters can run in the same process one after another, in separate threads passing through queues, or on separate machines passing through sockets or a message broker, without any filter's code changing. That same decoupling is what makes the pattern the backbone of the Unix shell, compilers, and stream-processing frameworks alike.</p>
       </div>
     </section>
 
@@ -108,15 +108,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Break a big processing job into a line of small steps, where each step takes what the previous one produced, does one thing to it, and passes the result on — like an assembly line in a factory. No step knows what came before or after it, so you can swap steps, add new ones, or reuse one elsewhere without touching the rest.</p>
+          <p>Think of a job that reads a log file, drops the broken lines, looks up each customer's name, and writes a report. Build it as four small steps in a row: each step takes what the one before it produced, does its own single job, and hands the result on. Fix the lookup, add a step, or reuse one of the four in another job, and nothing else in the line has to change — like swapping one station on a factory line while the rest keeps running.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>Independent filters each perform one transformation and connect only through pipes carrying data between them; a filter knows the shape of its input and output, never its neighbors. Because the pipe is the sole channel, execution decouples for free — the same filters run in-process, across threads over queues, or across machines over sockets or a broker, unchanged. Pipelines recompose by reordering, inserting, or dropping stages. It is the backbone of Unix shells, compiler phases, and stream processors, and often composes with message queues for buffering between stages.</p>
+          <p>The unit of independence is the contract at the seam: a shape of data in, a shape of data out, nothing shared. Keep each filter stateless per record and its copies become interchangeable, which turns throughput work into finding the slowest stage and running more of that one filter rather than scaling the chain as a unit. Order is what you trade away — parallel copies of a stage finish out of sequence, so either every record carries a key you can re-sort on, or the stage that needs order stays single-threaded and sets the ceiling.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when processing genuinely decomposes into ordered, stateless transformations and you want stages to scale, evolve, or be reused independently — its value is recomposition: the pipeline is configuration, not code. The bill starts at the seams: every stage boundary pays serialization and transport, end-to-end latency is the sum of the hops, and throughput is capped by the slowest filter until you buffer or parallelize around it. Cross-cutting state is the disqualifier — work that needs one atomic transaction or shared request context fights the model. And an error surfacing three stages downstream costs real tracing effort, so budget for correlation ids and per-stage observability before the pipeline grows.</p>
+          <p>Choose it when the stages have different lifecycles — different owners, different scaling curves, different reuse — because what you are buying is a pipeline that is configuration rather than code, and rearranging it costs no rewrite. Price it at the seams: each boundary crossed pays serialization and a hop of latency, so an in-process chain and a broker-connected one are different systems wearing the same diagram. Two costs come due later. A fault surfaces stages away from its cause, which you pay off with a correlation id on every record and per-stage metrics, put in before the pipeline grows past three stages. Work needing one atomic transaction or a shared request context has no counter-move here at all — that one is a reason to pick something else.</p>
         </div>
       </div>
     </section>
@@ -126,12 +126,37 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    Src["Source, file or socket"] -->|"raw data"| FA["Filter A"]
-    FA -->|"A's output"| FB["Filter B"]
-    FB -->|"B's output"| FC["Filter C"]
-    FC -->|"result"| Snk["Sink, output or store"]
+    Src[("Log file")]
+    subgraph Pipe["Each filter knows only the shape it takes in and the shape it emits"]
+        Parse["Parse"]
+        Drop["Drop bad lines"]
+        Enrich["Look up customer"]
+        Format["Format row"]
+    end
+    Sink[("Report store")]
+    Src --&gt;|"1 raw line"| Parse
+    Parse --&gt;|"2 record"| Drop
+    Drop --&gt;|"3 valid record"| Enrich
+    Enrich --&gt;|"4 named record"| Format
+    Format --&gt;|"5 report row"| Sink
         </pre>
-        <figcaption>Data enters at the source and passes through each filter in turn, each one transforming it before it moves down the pipe to the next.</figcaption>
+        <figcaption>What lets you splice a stage in, or swap one out, without editing its neighbours? No filter in the box names another one — each is written against the record it receives and the record it emits, so every numbered arrow is a place a new filter can be cut in.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+flowchart LR
+    Parse["Parse — fast"]
+    Q1[("bounded queue")]
+    Enrich["Look up customer — slow"]
+    Q2[("bounded queue")]
+    Format["Format row"]
+    Parse --&gt;|"1 emit"| Q1
+    Q1 --&gt;|"2 take"| Enrich
+    Enrich --&gt;|"3 emit"| Q2
+    Q2 --&gt;|"4 take"| Format
+    Q1 -.-&gt;|"5 full: Parse blocks"| Parse
+        </pre>
+        <figcaption>Give each stage its own thread and the fast one races ahead. A bounded queue on the seam turns that into backpressure: once Q1 is full, Parse blocks on the hand-off and the pipeline settles at the speed of the lookup instead of buying memory to hide it.</figcaption>
       </figure>
     </section>
 
@@ -142,10 +167,10 @@ flowchart LR
         <dd>Each filter is an iterator that only computes its next value when downstream asks for one — memory-cheap, and results start flowing before the whole input is read.</dd>
         <dt id="variations-item-2">Push (batch) pipelines</dt>
         <dd>Each filter runs to completion over its whole input before handing off the full output. Simpler to reason about, but no result until every stage finishes.</dd>
-        <dt id="variations-item-3"><a href="../concurrency/producer-consumer.html">Producer-Consumer staging</a></dt>
-        <dd>Adjacent filters are split across threads or processes, connected by a bounded queue instead of a direct call, so each stage runs at its own pace.</dd>
-        <dt id="variations-item-4"><a href="../concurrency/backpressure.html">Backpressure-aware filters</a></dt>
-        <dd>A slow filter signals upstream to slow down production instead of letting an unbounded queue build up between stages.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced"><a href="../concurrency/producer-consumer.html">Producer-Consumer staging</a></dt>
+        <dd data-kb-level="advanced">Adjacent filters are split across threads or processes, connected by a bounded queue instead of a direct call, so each stage runs at its own pace.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced"><a href="../concurrency/backpressure.html">Backpressure-aware filters</a></dt>
+        <dd data-kb-level="advanced">A slow filter signals upstream to slow down production instead of letting an unbounded queue build up between stages.</dd>
       </dl>
     </section>
 
@@ -157,8 +182,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Filters are small, single-purpose, and independently testable.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Pipelines are recomposable — reorder, insert, or drop a stage without rewriting the rest.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Independent stages can run concurrently, on separate threads or machines.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">New behavior often means adding a filter, not editing existing ones.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Independent stages can run concurrently, on separate threads or machines.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">New behavior often means adding a filter, not editing existing ones.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -166,7 +191,7 @@ flowchart LR
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Serializing and moving data between stages adds latency and overhead.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">An error deep in the pipeline is harder to trace back to its source stage.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">State that spans the whole request doesn't fit a model of stateless, local filters.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">State that spans the whole request doesn't fit a model of stateless, local filters.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Overall throughput is capped by the slowest filter unless stages are buffered or parallelized.</li>
           </ul>
         </div>
@@ -181,7 +206,7 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Processing naturally decomposes into a sequence of independent transformations.</li>
             <li id="usage-when-2" data-kb-polarity="when">You want stages that can be reordered, reused, or replaced without touching the others.</li>
-            <li id="usage-when-3" data-kb-polarity="when">Stages can usefully run concurrently, or scale independently under load.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Stages can usefully run concurrently, or scale independently under load.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -189,7 +214,7 @@ flowchart LR
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The steps share complex state or must run as one atomic unit.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">A single straightforward function is clearer than a pipeline of tiny stages.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The overhead of pipes and buffering outweighs the benefit for a small, fixed job.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The overhead of pipes and buffering outweighs the benefit for a small, fixed job.</li>
           </ul>
         </div>
       </div>
@@ -227,8 +252,8 @@ run();</code></pre>
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="unix-pipes" id="wild-unix-pipes"><strong>Unix shell pipes</strong><span>The shell connects programs with anonymous pipes, a fixed kernel buffer of 64 KB by default on Linux. Stages run concurrently, and when the buffer fills the writer blocks, giving the pipeline natural backpressure for free.</span></div>
-        <div class="wild-item" data-kb-example="java-streams" id="wild-java-streams"><strong>java.util.stream</strong><span>Intermediate map and filter operations are lazy and do nothing until a terminal operation runs; calling parallelStream splits the source and runs the pipeline across the shared ForkJoinPool.commonPool.</span></div>
-        <div class="wild-item" data-kb-example="gstreamer" id="wild-gstreamer"><strong>GStreamer</strong><span>GStreamer links elements through typed pads into a pipeline; inserting a queue element hands the downstream segment its own thread, and a bus carries state-change and error messages back to the application.</span></div>
+        <div class="wild-item" data-kb-example="java-streams" id="wild-java-streams" data-kb-level="advanced"><strong>java.util.stream</strong><span>Intermediate map and filter operations are lazy and do nothing until a terminal operation runs; calling parallelStream splits the source and runs the pipeline across the shared ForkJoinPool.commonPool.</span></div>
+        <div class="wild-item" data-kb-example="gstreamer" id="wild-gstreamer" data-kb-level="expert"><strong>GStreamer</strong><span>GStreamer links elements through typed pads into a pipeline; inserting a queue element hands the downstream segment its own thread, and a bus carries state-change and error messages back to the application.</span></div>
       </div>
     </section>
 
@@ -239,33 +264,33 @@ run();</code></pre>
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Inter-stage queue bound</strong> — Capacity of the bounded buffer between adjacent filters. Too small starves a fast downstream stage; too large hides backpressure and lets memory balloon.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Batch / chunk size</strong> — How many records a filter reads or emits per hand-off. Larger batches amortize per-item and serialization overhead; smaller batches cut end-to-end latency.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Per-stage parallelism</strong> — Number of worker threads or instances running one filter, so a slow stage can be scaled independently of the rest of the pipeline.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Batch / chunk size</strong> — How many records a filter reads or emits per hand-off. Larger batches amortize per-item and serialization overhead; smaller batches cut end-to-end latency.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Per-stage parallelism</strong> — Number of worker threads or instances running one filter, so a slow stage can be scaled independently of the rest of the pipeline.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Per-stage queue depth</strong> — Fill level of each inter-stage buffer. A queue that stays near full marks the stage just downstream as the bottleneck.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Per-stage throughput</strong> — Records per second each filter completes. The slowest stage sets the ceiling for the whole pipeline.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>End-to-end latency</strong> — Time for one record to traverse every stage; it rises sharply once any upstream queue starts backing up.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Per-stage throughput</strong> — Records per second each filter completes. The slowest stage sets the ceiling for the whole pipeline.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>End-to-end latency</strong> — Time for one record to traverse every stage; it rises sharply once any upstream queue starts backing up.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Slowest stage caps throughput</strong> — The pipeline runs no faster than its slowest filter; buffers ahead of it fill and stages upstream stall waiting to hand off.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Unbounded queue exhausts memory</strong> — With no bound and no backpressure, a fast producer ahead of a slow filter grows the connecting buffer until the process runs out of memory.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Head-of-line blocking</strong> — In an ordered stage, one slow or stuck record blocks every record queued behind it, even ones that could run immediately.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Unbounded queue exhausts memory</strong> — With no bound and no backpressure, a fast producer ahead of a slow filter grows the connecting buffer until the process runs out of memory.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Head-of-line blocking</strong> — In an ordered stage, one slow or stuck record blocks every record queued behind it, even ones that could run immediately.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Every inter-stage queue is bounded, with a defined full policy: block, drop, or spill to disk.</li>
-            <li id="production-check-2" data-kb-polarity="check">The slowest stage is identified and can be parallelized or scaled on its own.</li>
-            <li id="production-check-3" data-kb-polarity="check">Backpressure propagates from the slowest consumer back to the source.</li>
-            <li id="production-check-4" data-kb-polarity="check">A stage failure has a defined outcome (retry, skip, or halt) and the failing record is traceable to its stage.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">The slowest stage is identified and can be parallelized or scaled on its own.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Backpressure propagates from the slowest consumer back to the source.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="expert">A stage failure has a defined outcome (retry, skip, or halt) and the failing record is traceable to its stage.</li>
           </ul>
         </div>
       </div>

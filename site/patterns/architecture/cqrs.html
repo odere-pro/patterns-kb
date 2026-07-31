@@ -114,9 +114,9 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1"><strong>CQRS</strong> (Command Query Responsibility Segregation) splits the model that changes state from the model that answers questions about it. A command handler validates input, applies business rules, and mutates the write model; a separate query model — often a different shape, sometimes a different store entirely — serves reads. Nothing requires the two to share a schema, a class, or even a database.</p>
-        <p id="description-p-2">The force it resolves is the tension baked into a single domain model asked to serve both directions at once. A model good at protecting invariants — normalized, rich with behavior, resistant to invalid states — is rarely the model that serves a dashboard, a search screen, or a report efficiently; that side wants denormalized, pre-joined, read-shaped data. Bending one model to satisfy both jobs usually means compromising the one that enforces correctness to make the other queryable, or accreting read-specific methods onto an otherwise clean write model.</p>
-        <p id="description-p-3">It also acknowledges an asymmetry most systems have: reads usually outnumber writes by orders of magnitude, and the two scale under entirely different pressures. Splitting the models means each side can be cached, indexed, replicated, or rebuilt on its own schedule, without the write side's transactional guarantees dictating how the read side is shaped or scaled.</p>
+        <p id="description-p-1"><strong>CQRS</strong> (Command Query Responsibility Segregation) splits the model that changes state from the model that answers questions about it. Nothing requires the two to share a schema, a class, or even a database — only that a change made through one becomes visible through the other.</p>
+        <p id="description-p-2">The force it resolves is one model asked to face two directions, and the damage it takes doing so. Read-only helper fields and report methods accrete onto the class that guards your invariants; the normalisation that keeps writes safe gets relaxed a column at a time to make a screen load. Both jobs end up done badly, and the code nobody dares change is the code enforcing correctness.</p>
+        <p id="description-p-3" data-kb-level="advanced">It also acknowledges an asymmetry most systems have: reads usually outnumber writes by orders of magnitude, and the two scale under entirely different pressures. Splitting the models means each side can be cached, indexed, replicated, or rebuilt on its own schedule, without the write side's transactional guarantees dictating how the read side is shaped or scaled.</p>
       </div>
     </section>
 
@@ -125,15 +125,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Use one model for changing data and a different one for showing it. The write side stays strict and correct; the read side is shaped exactly like what the screen needs, so it can be fast.</p>
+          <p>One table design is being asked to do two jobs. Saving an order wants the data split across tidy, tightly-checked tables so nothing invalid can ever land; the dashboard that lists those orders wants it all sitting in one row so the page returns in milliseconds. Serve both from the same design and you pick your damage: bolt report-shaped columns onto the thing guarding your rules, or join nine tables on every page load and watch it time out. Keep two designs instead — one for saving, kept strict, and a second copy shaped exactly like the screen, refreshed whenever the first one changes.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>Commands mutate a write model; queries hit one or more read models projected from write-side events or change feeds, each denormalized for its query. The two sides index, scale and even store data independently, and the projection pipeline makes read models eventually consistent.</p>
+          <p>That refresh is a projection. Each committed write emits an event, or lands in a change feed the store already publishes, and a projector applies it to one read model per query shape — each denormalised until its query is a single lookup. Because the projector runs after the commit, the read side is eventually consistent: a user can write and not see it a second later, and how far behind it may fall is a number you pick rather than a property you inherit. None of this requires storing events as the system of record — the write side can hold current state and still emit what the projector needs.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Justify it by asymmetry: complex domain invariants on the write side plus divergent, high-volume read shapes. The bill is real — projection lag must be designed into the UX (read-your-own-writes), a projection rebuild story is mandatory, and two models mean schema evolution twice. Applied to a CRUD-shaped domain it is pure ceremony; applied per bounded context where the asymmetry exists, it is one of the highest-leverage scaling moves.</p>
+          <p>Split per bounded context, and only where the asymmetry is real: rich invariants on the write side facing high-volume, divergently shaped reads. On a CRUD domain it is ceremony — a read replica and two indexed views buy most of the win for none of what follows. Staleness becomes a product decision, so show a pending state in the UI or route read-your-own-writes queries straight at the write model. A projection you cannot rebuild is a projection you cannot fix, so keep projectors idempotent and replayable from the write side. And publish the event inside the command's transaction or through an outbox: an event lost between the two leaves the read model wrong permanently rather than merely late. After that it is an operating loop — tune the batch, watch the lag, expect one poison event to stall the stream, and gate release on a rebuild you have timed against real history.</p>
         </div>
       </div>
     </section>
@@ -143,13 +143,24 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    C["Client"] -->|"command"| CH["Command Handler"]
-    CH -->|"persist state"| WM[("Write Model")]
-    WM -->|"project (sync or async)"| RM[("Read Model")]
-    C -->|"query"| QH["Query Handler"]
-    QH -->|"read"| RM
+    C["Client"]
+    Proj["Projector"]
+    subgraph W["Write side — guards the invariants"]
+        CH["Command handler"]
+        WM[("Write store")]
+    end
+    subgraph R["Read side — one model per query shape"]
+        RM[("Read model")]
+        QH["Query handler"]
+    end
+    C --&gt;|"1 command"| CH
+    CH --&gt;|"2 validate, commit"| WM
+    WM --&gt;|"3 event or change feed"| Proj
+    Proj --&gt;|"4 apply, denormalised"| RM
+    C --&gt;|"5 query"| QH
+    QH --&gt;|"6 single lookup"| RM
         </pre>
-        <figcaption>Commands flow through a handler into the write model; queries read from a separately shaped read model kept up to date by a projection.</figcaption>
+        <figcaption>Where does stale data come from? Step 2 has committed before step 4 has run, so a step 5 query arriving in that window returns the old row — the gap between 3 and 4 is the lag you have to budget for.</figcaption>
       </figure>
     </section>
 
@@ -160,10 +171,10 @@ flowchart LR
         <dd>Separate command and query model classes, but one shared database — the simplest form, and it avoids managing eventual consistency between two stores.</dd>
         <dt id="variations-item-2"><a href="../distributed/coordination/materialized-view.html">Materialized View</a></dt>
         <dd>The read side is a precomputed, denormalized projection held in a store shaped for its query — a dedicated read database or search index.</dd>
-        <dt id="variations-item-3"><a href="./event-sourcing.html">Event Sourcing</a></dt>
-        <dd>The write side persists a stream of domain events rather than current state; read models are projections built by replaying that stream. A common pairing, not a requirement.</dd>
-        <dt id="variations-item-4">Task-based commands</dt>
-        <dd>Commands are named for user intent (<code>ApproveOrder</code>, not <code>UpdateOrder</code>), keeping the write model's invariants explicit instead of exposing raw field setters.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced"><a href="./event-sourcing.html">Event Sourcing</a></dt>
+        <dd data-kb-level="advanced">The write side persists a stream of domain events rather than current state; read models are projections built by replaying that stream. A common pairing, not a requirement.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Task-based commands</dt>
+        <dd data-kb-level="advanced">Commands are named for user intent (<code>ApproveOrder</code>, not <code>UpdateOrder</code>), keeping the write model's invariants explicit instead of exposing raw field setters.</dd>
       </dl>
     </section>
 
@@ -175,8 +186,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Read and write sides scale and are optimized independently — vital when reads vastly outnumber writes.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Query models are shaped for the screen or report they serve, without compromise joins or ORM gymnastics.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The write model stays focused on protecting invariants, not on shaping output for consumers.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">New read views can be added, or rebuilt from scratch, without touching write-side logic.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">The write model stays focused on protecting invariants, not on shaping output for consumers.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">New read views can be added, or rebuilt from scratch, without touching write-side logic.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -185,7 +196,7 @@ flowchart LR
             <li id="tradeoffs-con-1" data-kb-polarity="con">Two models — sometimes two stores — to build, deploy, and keep in sync: real added complexity.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Sync between write and read side is often eventually consistent, so a read right after a write can be stale.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Debugging spans two models instead of one, making it harder to trace a value back to what wrote it.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Overkill for a small CRUD app with no meaningful asymmetry between how it's written and how it's read.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Overkill for a small CRUD app with no meaningful asymmetry between how it's written and how it's read.</li>
           </ul>
         </div>
       </div>
@@ -199,7 +210,7 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Read and write workloads have very different shapes, volumes, or scaling needs.</li>
             <li id="usage-when-2" data-kb-polarity="when">Query needs — dashboards, search, reports — don't map cleanly onto the write model's structure.</li>
-            <li id="usage-when-3" data-kb-polarity="when">You want to add new read views without destabilizing the code that enforces write-side invariants.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You want to add new read views without destabilizing the code that enforces write-side invariants.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -207,7 +218,7 @@ flowchart LR
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The domain is simple CRUD with no real divergence between how it's written and how it's read.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">The team can't absorb the operational cost of a second model, or of eventual consistency.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">A single well-designed model plus a couple of read-only projections already covers the need.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">A single well-designed model plus a couple of read-only projections already covers the need.</li>
           </ul>
         </div>
       </div>
@@ -253,7 +264,7 @@ async function getOrderSummary(orderId: string, view: OrderSummaryStore) {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="axon" id="wild-axon"><strong>Axon Framework</strong><span>A Java framework built explicitly around CQRS: command handlers on aggregates raise events, while tracking event processors maintain query projections and can be reset to replay the event store and rebuild a projection from scratch.</span></div>
-        <div class="wild-item" data-kb-example="marten" id="wild-marten"><strong>Marten</strong><span>A .NET library over PostgreSQL that persists events in the write store and maintains read-side projections either inline in the write transaction or asynchronously via a background daemon that can rebuild a projection by replaying the event log.</span></div>
+        <div class="wild-item" data-kb-example="marten" id="wild-marten" data-kb-level="advanced"><strong>Marten</strong><span>A .NET library over PostgreSQL that persists events in the write store and maintains read-side projections either inline in the write transaction or asynchronously via a background daemon that can rebuild a projection by replaying the event log.</span></div>
       </div>
     </section>
 
@@ -264,38 +275,38 @@ async function getOrderSummary(orderId: string, view: OrderSummaryStore) {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Projection batch size &amp; poll interval</strong> — How many events a projector applies per pass and how often it wakes to look for more. Larger batches raise throughput but widen the read side's lag behind the write side.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Read-model rebuild</strong> — The ability to drop a projection and replay it from the write store or event log. Rebuild cost grows with history volume, so it must be planned, not discovered under fire.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Staleness budget</strong> — The maximum read-after-write lag a query is allowed to show before it must block, retry, or fall back to the write model. Sets the contract the rest of the system is built against.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Read-side replicas and indexing</strong> — Number of read replicas and the indexes on the query store, scaled and shaped independently of the write store to match the read workload.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Command idempotency key</strong> — The dedup key that lets a retried command be recognized and applied once, since async projection makes accidental double-submits easy.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Read-model rebuild</strong> — The ability to drop a projection and replay it from the write store or event log. Rebuild cost grows with history volume, so it must be planned, not discovered under fire.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Staleness budget</strong> — The maximum read-after-write lag a query is allowed to show before it must block, retry, or fall back to the write model. Sets the contract the rest of the system is built against.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Read-side replicas and indexing</strong> — Number of read replicas and the indexes on the query store, scaled and shaped independently of the write store to match the read workload.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Command idempotency key</strong> — The dedup key that lets a retried command be recognized and applied once, since async projection makes accidental double-submits easy.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Projection lag</strong> — Gap between the latest committed write and what the read model reflects — measured as events pending or seconds behind. The core health number for CQRS.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Projection backlog depth</strong> — Count of events queued for a projector but not yet applied; a rising backlog is lag about to happen.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Command-handler p99 latency</strong> — Tail latency of the write path, watched separately from read latency since the two scale under different pressure.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Rebuild duration</strong> — Wall-clock time to replay and rebuild a projection from scratch — the number that decides whether a rebuild is a routine op or an outage.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Projection backlog depth</strong> — Count of events queued for a projector but not yet applied; a rising backlog is lag about to happen.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Command-handler p99 latency</strong> — Tail latency of the write path, watched separately from read latency since the two scale under different pressure.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Rebuild duration</strong> — Wall-clock time to replay and rebuild a projection from scratch — the number that decides whether a rebuild is a routine op or an outage.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Projection lag blows out</strong> — The write side races ahead of a slow projector; read models fall arbitrarily behind and users see stale data with no upper bound on how stale.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Poison event stalls the projector</strong> — One un-applicable event at the head of an ordered stream blocks every projection behind it until it is skipped or dead-lettered.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Read-after-write anomaly</strong> — A user writes, immediately reads, and does not see their own change — driving confused retries and duplicate submits.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Permanent write/read divergence</strong> — If the command and its event are not persisted atomically, a crash between them leaves the read model wrong forever, not just late.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Poison event stalls the projector</strong> — One un-applicable event at the head of an ordered stream blocks every projection behind it until it is skipped or dead-lettered.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Read-after-write anomaly</strong> — A user writes, immediately reads, and does not see their own change — driving confused retries and duplicate submits.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Permanent write/read divergence</strong> — If the command and its event are not persisted atomically, a crash between them leaves the read model wrong forever, not just late.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Staleness budget is documented, and eventual consistency is made visible in the UI (a processing state) rather than hidden.</li>
-            <li id="production-check-2" data-kb-polarity="check">Every projection is rebuildable from the write side, and the rebuild has been run and timed against production-scale history.</li>
-            <li id="production-check-3" data-kb-polarity="check">Projectors are idempotent — applying the same event twice leaves the read model identical.</li>
-            <li id="production-check-4" data-kb-polarity="check">Command-to-event persistence is atomic (single transaction or an outbox) so the read model cannot diverge permanently.</li>
-            <li id="production-check-5" data-kb-polarity="check">Projection lag is monitored with an alert threshold, and poison events dead-letter instead of halting the stream.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Every projection is rebuildable from the write side, and the rebuild has been run and timed against production-scale history.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Projectors are idempotent — applying the same event twice leaves the read model identical.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="expert">Command-to-event persistence is atomic (single transaction or an outbox) so the read model cannot diverge permanently.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">Projection lag is monitored with an alert threshold, and poison events dead-letter instead of halting the stream.</li>
           </ul>
         </div>
       </div>

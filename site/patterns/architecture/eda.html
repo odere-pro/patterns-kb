@@ -87,8 +87,8 @@
       <div class="prose">
         <p id="description-p-1">In an <strong>event-driven architecture</strong>, components emit events — immutable records that something happened, like <code>OrderPlaced</code> or <code>PaymentCaptured</code> — without knowing or caring who, if anyone, reacts. Interested components subscribe to the event types they care about and react asynchronously, whenever the event reaches them. No producer ever calls a consumer's method; it only asserts a fact into the world.</p>
         <p id="description-p-2">The force it resolves is <strong>coupling through synchronous calls</strong>. A service that invokes its collaborators directly must know their addresses, their interfaces, and be available to wait for their replies — one slow or failing dependent stalls the caller, and adding a new consumer means changing the producer's code. Events invert that: the producer publishes once, and zero, one, or a hundred consumers may react, today or after the producer has moved on.</p>
-        <p id="description-p-3">This buys temporal, spatial, and behavioral decoupling. Producer and consumer don't need to be running at the same time, don't need to know each other's location, and the producer's contract is the event's shape, not a method signature tied to any particular subscriber's needs. New reactions — a fraud check, an analytics pipeline, a notification — plug in by subscribing, never by touching the code that raised the event.</p>
-        <p id="description-p-4">That freedom has a cost: the price of "fire and forget" is that no one guarantees delivery order, timing, or even that a listener still exists. Event-driven architecture trades the traceability of a direct call stack for the flexibility of a system that reacts to what happened rather than dictating what happens next.</p>
+        <p id="description-p-3" data-kb-level="advanced">Each decoupling is a concrete permission, and it is worth naming them separately. In time: producer and consumer never have to run at the same moment, so a nightly batch job can serve a producer that publishes all day. In space: the producer's configuration names a topic, not a hostname, so consumers move, multiply, or disappear with no redeploy on the other side. In behaviour: the published contract is the event's shape, so a consumer can change what it does with an <code>OrderPlaced</code> without asking the team that raised it.</p>
+        <p id="description-p-4" data-kb-level="advanced">The freedom has an owner-shaped cost. In a direct call the caller owns the outcome of the whole sequence; with events nobody does — each handler owns only its own reaction, so "was this order fully processed" stops being a return value and becomes a question you answer by inspecting several systems. Event-driven architecture trades dictating what happens next for reacting to what already happened, and you build the accounting for that trade yourself.</p>
       </div>
     </section>
 
@@ -97,15 +97,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Instead of one part of a system calling another and waiting for an answer, each part simply announces what just happened — like a school bell ringing. Whoever cares reacts in their own time; whoever doesn't just ignores it. The announcer never knows or cares who is listening, so new listeners can join later without changing anything.</p>
+          <p>Checkout has to charge the card, email a receipt, tell the warehouse and update a dashboard. Written as four calls in a row, checkout waits for all four: the day the email service is slow the customer stares at a spinner, and the day someone wants a fifth reaction, someone edits checkout. Have checkout pin a note to a board instead — "order 42 was placed" — and go back to work. Each team watches the board and reacts on its own clock, so a listener that is asleep delays nobody, and a new listener starts watching without anyone touching checkout.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>Producers publish immutable event records to a broker; consumers subscribe by type and react asynchronously, decoupled in time, space, and identity. The producer's contract is the event's schema, not a subscriber's method signature, so new reactions attach by subscription alone, without touching the producer. Delivery is typically at-least-once and unordered, which forces idempotent handlers, schema versioning, and dead-letter queues into the design. It usually rides on a durable log or message queue and pairs naturally with event sourcing and CQRS-style projections.</p>
+          <p>The board is a broker, and its job is to be a durable buffer with independent read positions. The producer's write completes when the broker acknowledges the event, not when anyone processes it, and each subscriber group tracks its own position in the stream — so a consumer down for an hour resumes where it stopped, and a brand-new consumer can start from the beginning of whatever is still retained. Delivery is at-least-once and ordered only within one partition or key, which is not a detail you can paper over: every handler must be idempotent, and any handler that assumes it saw the previous event will eventually be wrong. What the broker does not solve is the producer's own dual write — committing the row and publishing the event are two operations, and either can succeed alone.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when many independently owned consumers must react to the same facts on their own deploy and scale schedules — its value is that adding a reaction never touches the producer, which is what lets an organization grow subsystems without coordinating releases. Justify it per boundary, not system-wide: inside one team's synchronous workflow it converts a readable call stack into distributed debugging. The bill is pervasive eventual consistency, duplicate and out-of-order delivery as the normal case, and an operational floor — broker capacity, consumer lag monitoring, dead-letter triage, schema governance — that must be staffed before the first consumer, because retrofitting ordering or exactly-once semantics later is close to impossible.</p>
+          <p>Justify it per boundary, not per system. Across independently owned services reacting to the same facts it is what lets teams ship without coordinating releases; inside one team's synchronous workflow it trades a readable stack trace for distributed debugging and buys nothing. Most of the bill has a named counter-move. The dual write is closed by a transactional outbox, so the event ships from the same commit as the row. Duplicates are closed by a dedup key the consumer commits with its own write, which is cheaper and more honest than any exactly-once claim. The lost call stack is closed by a correlation id carried on every event and traced on — decided before the first consumer ships, because backfilling it across a live fleet is not a sprint. What has no cheap counter-move is eventual consistency: a consumer's view is always behind, so a rule that needs an immediate consistent answer stays on a synchronous path. Then run the loop — size partitions and retention, watch lag, expect a poison message to stall a partition first, and gate the launch on idempotent consumers behind a dead-letter queue.</p>
         </div>
       </div>
     </section>
@@ -115,12 +115,25 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    P["Order Service"] -->|"publishes OrderPlaced"| B["Event Bus"]
-    B -->|"delivers"| C1["Billing"]
-    B -->|"delivers"| C2["Shipping"]
-    B -->|"delivers"| C3["Analytics"]
+    Checkout["Checkout service"]
+    Orders[("Orders table")]
+    subgraph Seam["The broker — neither side knows the other"]
+        Topic[("orders topic, retained")]
+        DLQ[("Dead-letter queue")]
+    end
+    Billing["Billing consumer"]
+    Warehouse["Warehouse consumer"]
+    Analytics["Analytics consumer"]:::ext
+    Checkout --&gt;|"1 commit order"| Orders
+    Checkout --&gt;|"2 publish OrderPlaced"| Topic
+    Topic --&gt;|"3 read at own offset"| Billing
+    Topic --&gt;|"4 read at own offset"| Warehouse
+    Billing --&gt;|"5 commit offset"| Topic
+    Billing -.-&gt;|"after N failed retries"| DLQ
+    Topic -.-&gt;|"subscribes later, replays"| Analytics
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>One event, published once, fans out to every subscribed consumer. The producer never learns who reacted, or how many did.</figcaption>
+        <figcaption>What does the checkout thread wait for? Step 2 only — the broker acknowledging the event. Steps 3 to 5 run on each consumer's own clock against its own offset, which is why a consumer that is down delays nobody and catches up later.</figcaption>
       </figure>
     </section>
 
@@ -131,12 +144,12 @@ flowchart LR
         <dd>In choreography every service reacts to events on its own, with no central controller. In orchestration a coordinator — often a saga — tells each participant what to do next. Pure EDA favors choreography; orchestration returns when a business process needs an explicit, auditable sequence.</dd>
         <dt id="variations-item-2">Event notification vs. event-carried state transfer</dt>
         <dd>A thin event says only "this changed, go fetch details," forcing consumers to call back for the rest. A fat event carries the full new state so consumers never need to. Fatter events cut coupling further but risk staleness and duplicated data across services.</dd>
-        <dt id="variations-item-3"><a href="../ddd/domain-event.html">Domain Event</a> vocabulary</dt>
-        <dd>The events themselves are named and shaped as business facts, not technical deltas — <code>OrderPlaced</code>, not <code>RowUpdated</code>. This is the vocabulary EDA is built out of.</dd>
-        <dt id="variations-item-4"><a href="../messaging/pubsub.html">Publish-Subscribe</a> transport</dt>
-        <dd>The wiring mechanism underneath: producers publish to a topic, consumers subscribe to it, and a broker handles fan-out, buffering, and delivery — Kafka, SNS/SQS, RabbitMQ, EventBridge.</dd>
-        <dt id="variations-item-5"><a href="./event-sourcing.html">Event Sourcing</a> persistence</dt>
-        <dd>Instead of just reacting to events in flight, the event stream itself becomes the system of record — current state is derived by replaying it. A natural, but optional, pairing with EDA.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced"><a href="../ddd/domain-event.html">Domain Event</a> vocabulary</dt>
+        <dd data-kb-level="advanced">The events themselves are named and shaped as business facts, not technical deltas — <code>OrderPlaced</code>, not <code>RowUpdated</code>. This is the vocabulary EDA is built out of.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced"><a href="../messaging/pubsub.html">Publish-Subscribe</a> transport</dt>
+        <dd data-kb-level="advanced">The wiring mechanism underneath: producers publish to a topic, consumers subscribe to it, and a broker handles fan-out, buffering, and delivery — Kafka, SNS/SQS, RabbitMQ, EventBridge.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced"><a href="./event-sourcing.html">Event Sourcing</a> persistence</dt>
+        <dd data-kb-level="advanced">Instead of just reacting to events in flight, the event stream itself becomes the system of record — current state is derived by replaying it. A natural, but optional, pairing with EDA.</dd>
       </dl>
     </section>
 
@@ -148,8 +161,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Producers and consumers are decoupled in time, space, and identity — add a reaction without touching the source.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Consumers scale, deploy, and fail independently of the producer and of each other.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Naturally resilient to partial outages: a down consumer doesn't block the producer, and queued events catch it up later.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Models the domain as a stream of things that happened, which often matches how the business actually thinks.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Naturally resilient to partial outages: a down consumer doesn't block the producer, and queued events catch it up later.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Models the domain as a stream of things that happened, which often matches how the business actually thinks.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -172,7 +185,7 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Multiple, independently-owned parts of the system need to react to the same fact without the producer knowing who they are.</li>
             <li id="usage-when-2" data-kb-polarity="when">Producers and consumers must be deployed, scaled, and evolved on separate schedules.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The domain is naturally a stream of things that happened — orders placed, payments captured, inventory changed.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The domain is naturally a stream of things that happened — orders placed, payments captured, inventory changed.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -180,7 +193,7 @@ flowchart LR
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">A handful of services run one synchronous business transaction and the caller needs an immediate, consistent answer.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">The team can't yet operate and monitor a broker, retries, and dead-letter handling.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">There is exactly one consumer that will ever care — a direct call is simpler and easier to trace.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">There is exactly one consumer that will ever care — a direct call is simpler and easier to trace.</li>
           </ul>
         </div>
       </div>
@@ -222,8 +235,8 @@ bus.emit("OrderPlaced", { orderId: "o-42", total: 4999 });</code></pre>
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="kafka" id="wild-kafka"><strong>Apache Kafka</strong><span>A durable, partitioned commit log where many independent consumer groups read the same stream at their own pace; parallelism is bounded by partition count, ordering is guaranteed only within a partition, and consumers can rewind to any retained offset to replay.</span></div>
-        <div class="wild-item" data-kb-example="eventbridge" id="wild-eventbridge"><strong>AWS EventBridge</strong><span>Routes events from producers to any number of subscribed targets using content-based rule matching, with no producer-side knowledge of consumers; failed deliveries can be retried and sent to a dead-letter queue.</span></div>
-        <div class="wild-item" data-kb-example="rabbitmq" id="wild-rabbitmq"><strong>RabbitMQ</strong><span>Brokers messages through exchanges that fan a published event out to whatever queues have bound to it by routing key; consumers acknowledge messages and unacked ones are redelivered.</span></div>
+        <div class="wild-item" data-kb-example="eventbridge" id="wild-eventbridge" data-kb-level="advanced"><strong>AWS EventBridge</strong><span>Routes events from producers to any number of subscribed targets using content-based rule matching, with no producer-side knowledge of consumers; failed deliveries can be retried and sent to a dead-letter queue.</span></div>
+        <div class="wild-item" data-kb-example="rabbitmq" id="wild-rabbitmq" data-kb-level="advanced"><strong>RabbitMQ</strong><span>Brokers messages through exchanges that fan a published event out to whatever queues have bound to it by routing key; consumers acknowledge messages and unacked ones are redelivered.</span></div>
       </div>
     </section>
 
@@ -234,38 +247,38 @@ bus.emit("OrderPlaced", { orderId: "o-42", total: 4999 });</code></pre>
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Partition / consumer-group parallelism</strong> — Per-topic throughput is capped by partition count; add partitions and consumers to scale out, at the cost of losing per-key ordering across partitions.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Delivery semantics and ack mode</strong> — At-least-once vs at-most-once, manual vs automatic acknowledgement. Chooses which side of the duplicate-versus-loss tradeoff the system lives on.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Retry policy and dead-letter queue</strong> — Max attempts, backoff schedule, and the destination where a message that keeps failing is parked instead of blocking the stream.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Event retention</strong> — How long the broker keeps events (log retention or queue TTL), which bounds how far a new or lagging consumer can rewind and replay.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Consumer prefetch / max in-flight</strong> — Number of unacknowledged messages a consumer buffers at once — the dial between throughput and memory pressure per consumer.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Delivery semantics and ack mode</strong> — At-least-once vs at-most-once, manual vs automatic acknowledgement. Chooses which side of the duplicate-versus-loss tradeoff the system lives on.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Retry policy and dead-letter queue</strong> — Max attempts, backoff schedule, and the destination where a message that keeps failing is parked instead of blocking the stream.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Event retention</strong> — How long the broker keeps events (log retention or queue TTL), which bounds how far a new or lagging consumer can rewind and replay.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Consumer prefetch / max in-flight</strong> — Number of unacknowledged messages a consumer buffers at once — the dial between throughput and memory pressure per consumer.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Consumer lag</strong> — Offset gap between the latest produced event and the last one a consumer group has committed. The single best indicator that consumers are falling behind.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Dead-letter queue depth</strong> — Count of messages that exhausted their retries. A non-zero and rising DLQ is a stuck workflow, not noise.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>End-to-end latency</strong> — Time from an event being produced to it being processed — the number users actually feel through an event-driven flow.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Redelivery / duplicate rate</strong> — How often the same message is delivered more than once, which tells you how hard your idempotency layer is working.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Dead-letter queue depth</strong> — Count of messages that exhausted their retries. A non-zero and rising DLQ is a stuck workflow, not noise.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>End-to-end latency</strong> — Time from an event being produced to it being processed — the number users actually feel through an event-driven flow.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Redelivery / duplicate rate</strong> — How often the same message is delivered more than once, which tells you how hard your idempotency layer is working.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Consumer lag grows unbounded</strong> — Producers outpace consumers; the backlog climbs, latency stretches, and if it crosses the retention window unread events are silently dropped.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Poison message</strong> — A message that always fails cycles through retries, either blocking its partition or flooding the dead-letter queue.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Duplicate processing</strong> — At-least-once redelivery double-applies side effects — a second charge, a second email — whenever a consumer is not idempotent.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Out-of-order delivery</strong> — Retries and cross-partition fan-out mean events arrive in a different order than they happened, breaking handlers that assumed sequence.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Poison message</strong> — A message that always fails cycles through retries, either blocking its partition or flooding the dead-letter queue.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Duplicate processing</strong> — At-least-once redelivery double-applies side effects — a second charge, a second email — whenever a consumer is not idempotent.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Out-of-order delivery</strong> — Retries and cross-partition fan-out mean events arrive in a different order than they happened, breaking handlers that assumed sequence.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Consumers are idempotent — a dedup key or processed-id table makes redelivery a no-op.</li>
-            <li id="production-check-2" data-kb-polarity="check">Every subscription has a dead-letter queue with an alert on its depth.</li>
-            <li id="production-check-3" data-kb-polarity="check">Consumer lag is monitored per group with a threshold that pages before retention is breached.</li>
-            <li id="production-check-4" data-kb-polarity="check">Event schemas are versioned with a compatibility policy, and consumers tolerate unknown fields.</li>
-            <li id="production-check-5" data-kb-polarity="check">Retention is set long enough to survive the longest expected consumer outage or replay.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Every subscription has a dead-letter queue with an alert on its depth.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Consumer lag is monitored per group with a threshold that pages before retention is breached.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Event schemas are versioned with a compatibility policy, and consumers tolerate unknown fields.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Retention is set long enough to survive the longest expected consumer outage or replay.</li>
           </ul>
         </div>
       </div>
