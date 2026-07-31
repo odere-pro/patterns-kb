@@ -54,6 +54,21 @@
       "@id": "./content-based-router.html#content-based-router",
       "name": "Content-Based Router",
       "kb:note": "The default branch of a router: unmatched or malformed messages land here"
+    },
+    {
+      "@id": "../../principles/fail-fast.html#fail-fast",
+      "name": "Fail Fast",
+      "kb:note": "Gives the fast failure somewhere visible to land"
+    },
+    {
+      "@id": "./pubsub.html#pubsub",
+      "name": "Publish-Subscribe",
+      "kb:note": "Each subscription gets its own dead-letter destination, not one shared per topic"
+    },
+    {
+      "@id": "./competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:note": "The cap is what stops a poison message circulating through the whole pool"
     }
   ],
   "kb:demonstrated-by": [
@@ -118,9 +133,9 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1">A <strong>dead letter channel</strong> is a dedicated channel that the messaging infrastructure routes a message to when it cannot be delivered to its intended destination, or a consumer cannot process it successfully after every legitimate attempt has been exhausted. The message doesn't disappear — it lands somewhere it can be inspected, diagnosed, and, if the underlying issue is fixed, replayed.</p>
-        <p id="description-p-2">The forces it resolves are <strong>message loss</strong> and the <strong>poison message problem</strong>. Some messages fail for reasons that have nothing to do with a transient network blip: a malformed payload, an unrecognized message type, a business rule that will never pass, an expired TTL. A naive consumer either drops such a message silently — data loss, and a bug nobody notices until it's someone's missing order — or it keeps redelivering the same message to the head of the queue, where it blocks every message behind it.</p>
-        <p id="description-p-3">Dead-lettering separates the two concerns. The main channel keeps moving because the offending message is pulled out of its path; the message itself is preserved, tagged with its failure context, in a channel built for triage rather than throughput. Most brokers implement the mechanics natively — SQS redrive policies, RabbitMQ dead-letter exchanges, Kafka dead-letter topics — but the pattern is the same whether the broker does the routing or the application does.</p>
+        <p id="description-p-1" data-kb-register="basic">One message in the queue has a date field the consumer cannot read. Retrying will not help — it will fail the same way in an hour and in a week. You have two bad options. Throw it away, and nobody learns it existed until a customer asks where their order went. Or keep retrying it, and it sits at the front of the queue failing over and over while every message behind it waits its turn forever. A <strong>dead letter channel</strong> is the third option: after a fixed number of attempts, move that one message to a separate place where it is kept, with the reason it failed, until a person can look at it.</p>
+        <p id="description-p-2" data-kb-level="advanced">A dedicated channel the broker or the application routes a message to once it cannot be delivered or cannot be processed: bounded retries exhausted, a time-to-live expired, a queue length limit exceeded, or a consumer rejecting it without requeue. The message is not deleted — it leaves the hot path carrying its failure context, so it can be inspected, diagnosed and, once the cause is fixed, replayed into the main channel.</p>
+        <p id="description-p-3">Two concerns come apart that way. The main channel keeps moving, because the offending message is out of its path; the message itself survives, in a channel built for triage rather than throughput. Most brokers implement the mechanics natively — SQS redrive policies, RabbitMQ dead-letter exchanges, Kafka dead-letter topics — but the pattern is the same whether the broker does the routing or your code does.</p>
       </div>
     </section>
 
@@ -129,15 +144,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Sometimes a job simply cannot be done: the details are garbled, or nothing about it will ever work. Retrying forever blocks everything queued behind it, and throwing it away means nobody ever learns it existed. So the failed one moves to a side shelf, where a person can look at it, fix the cause, and put it back in line.</p>
+          <p>Some jobs can never be done. The address on it is nonsense, or a number that should be a date is the word "soon" — no amount of trying again will change that. Both obvious reactions are wrong. Throw the job away and nobody finds out it existed until a customer asks where their order went. Keep retrying it and it sits at the front of the line failing, over and over, while every job behind it waits for a job that will never finish. So do the third thing: after a few honest attempts, move that one job off the line and onto a side shelf, together with a note saying what went wrong. The line starts moving again, the job still exists, and a person can pick it up, fix the cause, and put it back. The shelf only works if somebody actually looks at it.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>A dedicated channel the broker or the application routes a message to once its bounded retries are exhausted, its time-to-live expires, or a consumer rejects it without requeue: the poison message leaves the hot path with its failure context attached, and the main channel keeps flowing. Nothing requires a broker. In the KYC design the queue is a Postgres table, dead is a status on the task row, and the sweeper parks tasks past their attempt budget, alerting an operator and emitting a failure event to the client.</p>
+          <p>A dedicated channel that the broker or the application routes a message to once delivery or processing is finished failing: bounded retries exhausted, a message time-to-live expired, a queue length limit hit, or a consumer rejecting without requeue. The poison message leaves the hot path with its failure context attached, so head-of-line blocking ends and the loss stays visible. The variants sit at different levels. Broker-native redrive moves the message after a delivery-count or TTL trigger with no application code — an SQS redrive policy, a RabbitMQ dead-letter exchange, a Kafka Connect dead-letter topic. Per-reason quarantine splits the channel by failure category, so a schema violation and a business-rule rejection get different remediation rather than one undifferentiated pile. And no broker is needed at all: a status column on a task row plus a sweep that parks anything past its attempt budget is the same pattern in a database.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>Choose it when some failures are permanent rather than transient and silent loss is unacceptable: it converts head-of-line blocking and quiet drops into a visible, inspectable backlog. The trade is that you buy visibility and pay in process. The channel needs an owner, an alert on depth and oldest-message age, and a retention window longer than your realistic time-to-fix, or quarantined messages expire before anyone triages them and the loss you avoided arrives late instead. Replay is the second bill: ordering is gone once a message leaves the main flow, and requeueing something partially processed double-applies unless the consumer dedupes. Unwatched, it is a graveyard rather than a safety net.</p>
+          <p>Choose it when some failures are permanent rather than transient and silent loss is unacceptable — it converts head-of-line blocking and quiet drops into a visible, inspectable backlog, which is the only form of failure you can actually staff. You buy that visibility and pay in process, on three lines. The channel needs an owner and an alert on depth and oldest-message age, or it is a graveyard with better branding. Retention must exceed your realistic time-to-fix — and where the expiry clock runs from the original enqueue time rather than from arrival, longer than the source queue's retention too, because the message arrives already aged. Replay is the third line: ordering is gone the moment a message leaves the main flow, and requeueing something partially processed double-applies its side effects unless the consumer is idempotent, so pair the replay path with an idempotency key rather than with a promise to be careful. Note also what it does not do — it catches what retry with backoff could not fix, so if you have not bounded retries first, the channel will fill with things that would have worked on the fourth attempt. Then run the loop: tune the attempt cap and retention, watch depth, arrival rate and oldest-message age, expect an unwatched channel to expire its contents first, and gate the release on an alert, an owner and a rehearsed replay.</p>
         </div>
       </div>
     </section>
@@ -162,12 +177,12 @@ flowchart LR
       <dl class="variations">
         <dt id="variations-item-1"><a href="../distributed/resilience/retry-backoff.html">Retry with Backoff</a>, then dead-letter</dt>
         <dd>Exhaust a bounded retry policy first, so only failures that survive every attempt get diverted — the two patterns are almost always paired, one absorbing transient errors, the other catching what's left.</dd>
-        <dt id="variations-item-2">Per-reason quarantine</dt>
-        <dd>Route to separate dead-letter channels by failure category — schema violation, business rule, timeout — so each category gets its own remediation path instead of one undifferentiated pile.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Per-reason quarantine</dt>
+        <dd data-kb-level="advanced">Route to separate dead-letter channels by failure category — schema violation, business rule, timeout — so each category gets its own remediation path instead of one undifferentiated pile.</dd>
         <dt id="variations-item-3">Broker-native redrive</dt>
         <dd>SQS redrive policies, RabbitMQ's <code>x-dead-letter-exchange</code>, and Kafka's dead-letter topic convention move a message automatically after N delivery attempts or a TTL expiry, with no application code involved.</dd>
-        <dt id="variations-item-4"><a href="./idempotency.html">Idempotent</a> replay</dt>
-        <dd>Tag messages with an idempotency key before requeueing a fixed dead letter, so resubmitting it into the main channel can't cause a duplicate side effect if it was partially processed the first time.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced"><a href="./idempotency.html">Idempotent</a> replay</dt>
+        <dd data-kb-level="advanced">Tag messages with an idempotency key before requeueing a fixed dead letter, so resubmitting it into the main channel can't cause a duplicate side effect if it was partially processed the first time.</dd>
       </dl>
     </section>
 
@@ -180,16 +195,18 @@ flowchart LR
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Undeliverable messages stay visible and inspectable instead of being silently dropped.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Keeps the main channel flowing — one poison message can't block every message behind it.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">Gives operators a concrete replay point: fix the cause, then requeue with confidence.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Concentrates failure signal in one place, which makes alerting and metrics straightforward.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Concentrates failure signal in one place, which makes alerting and metrics straightforward.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Another channel to monitor — dead letters that nobody watches just accumulate and go stale.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">No ordering guarantee once a message is pulled from the main flow and replayed later.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Another channel to monitor — dead letters that nobody watches just accumulate and go stale. Alert on depth and on the age of the oldest message, or you have moved the loss rather than stopped it.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">No ordering guarantee once a message is pulled from the main flow and replayed later — if order carries meaning, quarantine the whole key rather than the one message.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">Blind replay without root-cause analysis just reproduces the same failure a second time.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Adds moving parts: routing rules, a retention policy, and a remediation process someone must own.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">Replaying a message that was half processed the first time re-applies its side effects — the replay path needs <a href="./idempotency.html">idempotent</a> consumers before it is safe to use.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">Without a bounded <a href="../distributed/resilience/retry-backoff.html">retry</a> in front of it, the channel fills with messages that would have succeeded on the next attempt, and the real permanent failures are lost in the noise.</li>
           </ul>
         </div>
       </div>
@@ -256,8 +273,8 @@ async function runTask(task: Task): Promise&lt;void&gt; {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="sqs-redrive" id="wild-sqs-redrive"><strong>Amazon SQS redrive policy</strong><span>A source queue names a dead-letter queue and a maxReceiveCount in its redrive policy; once a message has been received that many times without being deleted, SQS moves it to the DLQ automatically. A redrive-to-source action moves messages back after the cause is fixed.</span></div>
-        <div class="wild-item" data-kb-example="rabbitmq-dlx" id="wild-rabbitmq-dlx"><strong>RabbitMQ dead-letter exchanges</strong><span>The x-dead-letter-exchange argument (with an optional x-dead-letter-routing-key) republishes a message to a separate exchange when any of the four dead-letter triggers fires: rejection with requeue=false, message TTL expiry, exceeding the queue length limit, or a quorum queue returning it more times than its delivery limit.</span></div>
-        <div class="wild-item" data-kb-example="kafka-connect-dlq" id="wild-kafka-connect-dlq"><strong>Kafka Connect</strong><span>Setting errors.tolerance=all with errors.deadletterqueue.topic.name routes records a connector cannot convert or process to a dead-letter topic instead of failing the task; errors.deadletterqueue.context.headers.enable adds headers describing the failure to each dead-lettered record.</span></div>
+        <div class="wild-item" data-kb-example="rabbitmq-dlx" id="wild-rabbitmq-dlx" data-kb-level="advanced"><strong>RabbitMQ dead-letter exchanges</strong><span>The x-dead-letter-exchange argument (with an optional x-dead-letter-routing-key) republishes a message to a separate exchange when any of the four dead-letter triggers fires: rejection with requeue=false, message TTL expiry, exceeding the queue length limit, or a quorum queue returning it more times than its delivery limit.</span></div>
+        <div class="wild-item" data-kb-example="kafka-connect-dlq" id="wild-kafka-connect-dlq" data-kb-level="advanced"><strong>Kafka Connect</strong><span>Setting errors.tolerance=all with errors.deadletterqueue.topic.name routes records a connector cannot convert or process to a dead-letter topic instead of failing the task; errors.deadletterqueue.context.headers.enable adds headers describing the failure to each dead-lettered record.</span></div>
       </div>
     </section>
 
@@ -268,9 +285,9 @@ async function runTask(task: Task): Promise&lt;void&gt; {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Max delivery attempts</strong> — The receive or redelivery count after which a message is diverted to the dead-letter channel instead of being retried again (SQS maxReceiveCount, broker delivery-limit).</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Dead-letter retention</strong> — How long a dead letter is kept before the broker deletes it — must exceed your realistic triage window or messages vanish before anyone looks (SQS MessageRetentionPeriod, RabbitMQ x-message-ttl). On brokers that keep the original enqueue time, SQS included, set it longer than the source queue's retention: the message arrives already partly aged.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Redrive / replay policy</strong> — The mechanism and batch size for moving messages back from the dead-letter channel to the source once the cause is fixed (SQS redrive-to-source).</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Per-reason routing</strong> — Whether all failures land in one channel or separate channels by category (schema violation, business rule, timeout), each with its own remediation path.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Dead-letter retention</strong> — How long a dead letter is kept before the broker deletes it (SQS MessageRetentionPeriod, RabbitMQ x-message-ttl). On brokers that keep the original enqueue time, SQS included, the clock counts from when the message first entered the source queue, not from when it arrived here.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Redrive / replay policy</strong> — The mechanism and batch size for moving messages back to the source once the cause is fixed (SQS redrive-to-source).</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Per-reason routing</strong> — Whether all failures land in one channel or in separate channels by category — schema violation, business rule, timeout — each with its own remediation path.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
@@ -278,26 +295,29 @@ async function runTask(task: Task): Promise&lt;void&gt; {
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Dead-letter depth</strong> — Message count in the channel — the headline health signal; sustained growth means failures are accumulating faster than they are triaged.</li>
             <li id="production-signal-2" data-kb-polarity="signal"><strong>Age of oldest dead letter</strong> — How long the oldest quarantined message has waited — a proxy for triage backlog and for retention running out.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Dead-letter arrival rate</strong> — Messages entering the channel per interval; a sharp spike usually names a systemic cause — a bad deploy, a schema change, a downstream outage.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Dead-letter arrival rate</strong> — Messages entering the channel per interval; a sharp spike usually names a systemic cause — a bad deploy, a schema change, a downstream outage.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Replay success rate</strong> — How many redriven messages complete on the second pass; a low rate says the root cause was not actually fixed.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Unwatched channel</strong> — Dead letters nobody monitors accumulate silently and are deleted when retention expires — data loss that surfaces only when someone reports a missing record.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Retention shorter than triage</strong> — A retention window below the realistic time-to-fix deletes quarantined messages before the cause is diagnosed and they can be replayed.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Retention shorter than triage</strong> — A retention window below the realistic time-to-fix deletes quarantined messages before the cause is diagnosed and they can be replayed.</li>
             <li id="production-failure-3" data-kb-polarity="failure"><strong>Blind replay reproduces failure</strong> — Requeueing without root-cause analysis sends the same message straight back through the same failure and into the dead-letter channel again.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Duplicate side effects on replay</strong> — Replaying a message that was partially processed the first time re-applies its side effects unless the consumer is idempotent.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Duplicate side effects on replay</strong> — Replaying a message that was partially processed the first time re-applies its side effects unless the consumer is idempotent.</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Redrive storm</strong> — Replaying a large backlog in one batch pushes the whole accumulated failure period back through the consumers at once, on top of live traffic.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
-            <li id="production-check-1" data-kb-polarity="check">Alert on dead-letter depth and oldest-message age — a channel nobody watches is silent data loss.</li>
-            <li id="production-check-2" data-kb-polarity="check">Set retention longer than your realistic triage-and-fix window — and where the expiry clock counts from the original enqueue time (SQS), longer than the source queue's retention too.</li>
-            <li id="production-check-3" data-kb-polarity="check">Pair replay with idempotent consumers so requeueing cannot double-apply a partially processed message.</li>
-            <li id="production-check-4" data-kb-polarity="check">Capture failure context — reason, attempt count, timestamp — on each dead-lettered message.</li>
-            <li id="production-check-5" data-kb-polarity="check">Root-cause before replay rather than blind-requeueing into the same failure.</li>
+            <li id="production-check-1" data-kb-polarity="check">Depth and oldest-message age are alerted on, and the alert has a named owner</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">The retention window was compared against your measured time-to-diagnose — and where the expiry clock counts from the original enqueue time, against the source queue's retention too</li>
+            <li id="production-check-3" data-kb-polarity="check">Consumers on the replay path are idempotent, verified by replaying the same message twice</li>
+            <li id="production-check-4" data-kb-polarity="check">Failure context — reason, attempt count, timestamp — travels with each dead-lettered message</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">A replay has been rehearsed outside an incident, so nobody first learns the redrive command during one</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Bounded retries run in front of the channel, so only failures that survive every attempt arrive</li>
           </ul>
         </div>
       </div>
@@ -322,6 +342,9 @@ async function runTask(task: Task): Promise&lt;void&gt; {
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="idempotency"><a href="./idempotency.html">Idempotency</a><span class="rel-note">Dedupe redeliveries; divert true failures</span></div>
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="sweeper"><a href="../distributed/coordination/sweeper.html">Sweeper</a><span class="rel-note">without a broker to provide one, the dead state is a column and a sweep is what moves work into it</span></div>
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="content-based-router"><a href="./content-based-router.html">Content-Based Router</a><span class="rel-note">The default branch of a router: unmatched or malformed messages land here</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="fail-fast"><a href="../../principles/fail-fast.html">Fail Fast</a><span class="rel-note">Gives the fast failure somewhere visible to land</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="pubsub"><a href="./pubsub.html">Publish-Subscribe</a><span class="rel-note">Each subscription gets its own dead-letter destination, not one shared per topic</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="competing-consumers"><a href="./competing-consumers.html">Competing Consumers</a><span class="rel-note">The cap is what stops a poison message circulating through the whole pool</span></div>
         </div>
       </div>
 

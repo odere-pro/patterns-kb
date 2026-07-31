@@ -44,6 +44,16 @@
       "@id": "../routing/service-mesh.html#service-mesh",
       "name": "Service Mesh",
       "kb:note": "Mesh policy sets timeouts fleet-wide instead of per client library"
+    },
+    {
+      "@id": "../../../principles/fail-fast.html#fail-fast",
+      "name": "Fail Fast",
+      "kb:note": "A bounded wait is how a call fails fast instead of hanging"
+    },
+    {
+      "@id": "../../messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "An expiry means unknown, not did-not-happen — reconciliation needs a key"
     }
   ],
   "kb:enables": [
@@ -58,6 +68,16 @@
       "@id": "../../../hazards/deadlock.html#deadlock",
       "name": "Deadlock",
       "kb:note": "A lock-acquisition timeout breaks an otherwise indefinite circular wait"
+    },
+    {
+      "@id": "../../../hazards/cascading-failure.html#cascading-failure",
+      "name": "Cascading Failure",
+      "kb:note": "Callers that wait unbounded exhaust themselves and spread it"
+    },
+    {
+      "@id": "../../../hazards/connection-pool-exhaustion.html#connection-pool-exhaustion",
+      "name": "Connection-Pool Exhaustion",
+      "kb:note": "A stuck dependency otherwise ties up every pool slot"
     }
   ],
   "kb:demonstrated-by": [
@@ -117,9 +137,10 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1">A <strong>timeout</strong> bounds how long one operation is allowed to take before the caller gives up and treats it as failed. A <strong>deadline</strong> bounds something larger: an absolute point in time — computed once and propagated across however many hops a request makes — that every downstream call must respect regardless of how it got there. A timeout answers <em>how long is this attempt allowed to run</em>; a deadline answers <em>how much time is left for the whole thing</em>.</p>
-        <p id="description-p-2">The force behind both is the same: nothing in a distributed system is guaranteed to respond, and a caller that waits unconditionally on the network is at the mercy of whatever it called. A hung dependency ties up a thread, a socket, or a connection-pool slot for as long as the caller is willing to wait — which, unbounded, is forever. Multiply that across enough concurrent requests and the caller exhausts its own resources waiting on someone else's problem, before it ever gets the chance to report an error.</p>
-        <p id="description-p-3">Propagation is what turns isolated timeouts into a real deadline. If each hop in a call chain sets its own fresh timeout, a client-side budget of 500 ms can balloon into seconds once three services each wait out their full allotment before giving up. Passing the <em>remaining</em> budget forward — as a context value, a gRPC deadline, an HTTP header — lets every hop shrink its own timeout to whatever time is actually left, so the total latency the caller experiences is capped exactly once, at the top.</p>
+        <p id="description-p-1" data-kb-register="basic">You call something and no answer comes back. Not an error — nothing. The request sits there holding a thread and a connection, and so does the next one, and the one after that, until your service has nothing left to serve anybody with and it never even got to report a problem. Deciding up front how long you are willing to wait is what stops that: when the time is up, you give up, free the thread and say so.</p>
+        <p id="description-p-2" data-kb-level="advanced">Two bounds, at two scopes. A <strong>timeout</strong> caps a single attempt: this call gets 300 ms and is treated as failed after that. A <strong>deadline</strong> caps the whole request — an absolute instant computed once at the top and propagated across every hop, as a gRPC deadline, a context value or a header — so each service shrinks its own wait to the budget actually left. Without that propagation the waits stack: a 500 ms client budget becomes seconds once three services each wait out a fresh allotment of their own.</p>
+        <p id="description-p-3">Nothing across a network is obliged to answer you. An unbounded wait is a resource commitment nobody priced — a thread, a socket and a pool slot pledged to a dependency for as long as it cares to stay silent — and it is paid concurrently, by every request in flight.</p>
+        <p id="description-p-4">One honest limit sits under all of it: a timeout stops <em>you</em> waiting, not the other side working. Unless the call is genuinely cancelled, an expiry means <em>unknown</em>, not <em>did not happen</em> — the write may still land after you have given up, and something has to reconcile that.</p>
       </div>
     </section>
 
@@ -128,15 +149,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Decide up front how long you are willing to wait, and give up once that time is gone. With no limit, one silent partner can leave you hanging forever, and everything queued behind you waits too. It is the reason you put the phone down after ten minutes on hold: the call may still be worth making later, just not at the cost of your whole afternoon.</p>
+          <p>A call goes out and nothing comes back — no answer, no error, just silence. Meanwhile it is holding a worker and a connection, and so is every other request stuck behind the same quiet service, until there is nothing left to serve anyone with. So decide in advance how long you are willing to wait, and give up when that time is gone. It is why you put the phone down after ten minutes on hold: the call may still be worth making later, just not at the cost of your whole afternoon. Two things follow from giving up. Say so clearly, so whoever asked gets an answer instead of a hang — and remember the other side may finish the work anyway, so giving up is not the same as it never happening.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>A timeout caps a single attempt; a deadline is an absolute instant computed once and propagated across every hop — as a gRPC deadline, a context value or a header — so each service shrinks its wait to the budget actually left and total latency is capped once at the top, not multiplied per hop. In a KYC screening system every vendor call carries its own deadline because vendors publish no latency bound, and expiry fails the task loudly so it is rescheduled rather than holding a worker slot.</p>
+          <p>A timeout bounds one attempt; a deadline is an absolute instant computed once and carried across every hop — a gRPC deadline, a context value, a header — so each service shrinks its own wait to the budget that is actually left and total latency is capped once at the top rather than multiplied per hop. The distinction bites on retries: a timeout resets with each attempt, so three tries at 200 ms spend 600 ms against a 300 ms budget, while a deadline the attempts share cannot. Two dials, not one: an idle timeout bounds the gap between bytes and a total timeout bounds the whole operation, and a slow trickle satisfies the first while blowing through the second. Propagate the remaining duration rather than a wall-clock instant wherever host clocks are not trustworthy, since skew hands the next hop a budget the caller never meant to give it.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>Every call across a process, network or disk boundary needs one; the real decisions are the number and where the budget lives. Too tight turns a slow success into a failure and, with retries behind it, into extra load; too loose leaves the resource exhaustion it exists to prevent time to happen — so derive it from measured p99 with headroom and make retried attempts share the deadline rather than reset it. The honest limit: a timeout only stops you waiting. Without real cancellation the remote side may still commit, so an expiry means unknown rather than did not happen, and someone has to reconcile that.</p>
+          <p>Every call across a process, network or disk boundary gets one — that part is not a judgement call. The judgement is the value and the cancellation behind it. Too tight converts slow successes into failures, and with retries behind it into extra load on a dependency that was merely slow, so derive the value from that dependency's measured p99 with headroom and re-derive it when the dependency changes. Too loose leaves the resource exhaustion it exists to prevent all the time it needs. The structural cost is that a timeout only stops you waiting: without real cancellation the remote side may still commit, so an expiry means unknown rather than did not happen, and something — an idempotency key, a reconciliation job — has to close that gap rather than a comment saying it should not happen. Two second-order effects are worth pricing: a shared dependency crossing one threshold makes every caller fail at the same instant, and their retries then arrive together; and tightening a timeout without revisiting the retry and breaker policy around it multiplies attempts silently. Then run the loop: tune each timeout against measured latency, watch the timeout rate next to the headroom above p99, find which hop exhausts the budget first, and gate the release on a traced request whose end-to-end wait matches the budget set at the top.</p>
         </div>
       </div>
     </section>
@@ -169,12 +190,12 @@ sequenceDiagram
       <dl class="variations">
         <dt id="variations-item-1">Timeout vs. deadline</dt>
         <dd>A timeout resets with every retry; a deadline does not — three retries at a 200 ms timeout can burn 600 ms even though the caller only budgeted 300 ms total.</dd>
-        <dt id="variations-item-2">Absolute vs. relative deadline</dt>
-        <dd>Propagate a fixed wall-clock instant rather than a duration, so clock skew and processing delay between hops don't silently eat into the remaining budget.</dd>
+        <dt id="variations-item-2" data-kb-level="expert">Absolute vs. relative deadline</dt>
+        <dd data-kb-level="expert">Propagate a fixed wall-clock instant rather than a duration, so clock skew and processing delay between hops don't silently eat into the remaining budget.</dd>
         <dt id="variations-item-3">Idle vs. total timeout</dt>
         <dd>An idle timeout bounds the gap between bytes on a connection; a total timeout bounds the whole operation — a slow trickle can satisfy the first while blowing through the second.</dd>
-        <dt id="variations-item-4">Deadline propagation mechanisms</dt>
-        <dd>Carried as a context value, a gRPC deadline, or an HTTP header, so every service in the chain enforces the same shared clock instead of inventing its own.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Deadline propagation mechanisms</dt>
+        <dd data-kb-level="advanced">Carried as a context value, a gRPC deadline, or an HTTP header, so every service in the chain enforces the same shared clock instead of inventing its own.</dd>
       </dl>
     </section>
 
@@ -193,10 +214,11 @@ sequenceDiagram
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Set too tight, it aborts calls that would have succeeded a moment later.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Set too tight, it aborts calls that would have succeeded a moment later — derive it from that dependency's measured p99 with headroom, not from a round number.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Set too loose, it barely helps — the resource exhaustion it's meant to prevent still has time to happen.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Without propagation, each hop's fresh timeout can multiply total wait time far past what the caller intended.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">A timeout only tells you the caller gave up — the remote side may have already committed the work.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Without propagation, each hop's fresh timeout can multiply total wait time far past what the caller intended — pass the remaining budget forward and let every hop shrink to it.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">A timeout only tells you the caller gave up — the remote side may have already committed the work, so give the operation an <a href="../../messaging/idempotency.html">idempotency key</a> and a reconciliation path before you treat an expiry as a failure.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">An absolute deadline is only as good as the clocks carrying it: skew between hosts hands a downstream more or less budget than the caller meant to give it. Keep hosts synchronized, and send the remaining duration instead where you cannot trust the clock.</li>
           </ul>
         </div>
       </div>
@@ -266,7 +288,7 @@ await deadline.run(signal =&gt; sanctionsVendor.screen(doc.name, flowId, signal)
       <div class="wild-list">
         <div class="wild-item" data-kb-example="grpc" id="wild-grpc"><strong>gRPC</strong><span>Deadlines are first-class and absolute: the client sets one, it travels with the request as the grpc-timeout header, a server can read the time remaining from its context, and a breach surfaces as the DEADLINE_EXCEEDED status — propagating through chained calls when the context is forwarded.</span></div>
         <div class="wild-item" data-kb-example="go-context" id="wild-go-context"><strong>Go context</strong><span>context.WithTimeout and WithDeadline return a context whose Done channel closes when time runs out and whose Err reports context.DeadlineExceeded; threading it through a call tree gives every function a shared cancellation deadline to select on.</span></div>
-        <div class="wild-item" data-kb-example="envoy" id="wild-envoy"><strong>Envoy</strong><span>A per-route timeout (default 15s) bounds the whole proxied request so a hung upstream cannot hold the connection open indefinitely; a separate per-try timeout bounds each retry attempt and an idle timeout reaps quiet connections.</span></div>
+        <div class="wild-item" data-kb-example="envoy" id="wild-envoy" data-kb-level="advanced"><strong>Envoy</strong><span>A per-route timeout (default 15s) bounds the whole proxied request so a hung upstream cannot hold the connection open indefinitely; a separate per-try timeout bounds each retry attempt and an idle timeout reaps quiet connections.</span></div>
       </div>
     </section>
 
@@ -276,37 +298,41 @@ await deadline.run(signal =&gt; sanctionsVendor.screen(doc.name, flowId, signal)
         <div class="prod-group prod-knobs">
           <h3>Tuning knobs</h3>
           <ul>
-            <li id="production-knob-1" data-kb-polarity="knob"><strong>Per-attempt timeout</strong> — The bound on a single call — how long this one attempt may run before the caller gives up and treats it as failed.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>End-to-end deadline / budget</strong> — An absolute time budget computed once at the top and propagated across every hop, so the total latency is capped exactly once rather than per hop.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Idle vs. total timeout</strong> — Separate dials for the gap between bytes on a connection (idle) and the whole operation (total) — a slow trickle can satisfy one while blowing through the other.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Propagation mechanism</strong> — How the remaining budget is carried forward — a gRPC deadline, a context value, or an HTTP header — so each hop shrinks its timeout to the time actually left.</li>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Per-attempt timeout</strong> — How long a single call may run before the caller treats it as failed.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>End-to-end deadline</strong> — The budget computed once at the top of the request and propagated to every hop, so total latency is capped once instead of per hop.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Idle against total timeout</strong> — Separate dials for the gap between bytes on a connection and for the whole operation. A slow trickle satisfies the first and blows through the second.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Propagation mechanism</strong> — How the remaining budget travels — a gRPC deadline, a context value, an HTTP header — and whether it carries an instant or a duration.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Connection-phase timeouts</strong> — Separate bounds on connect and on TLS handshake, which fail for different reasons than a slow response and are often left unset by client-library defaults.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
-            <li id="production-signal-1" data-kb-polarity="signal"><strong>Timeout rate</strong> — The fraction of calls aborted by hitting the timeout — rising when the limit is too tight or a dependency is degrading.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Latency headroom vs. the cutoff</strong> — How close p99/p99.9 latency runs to the timeout value; little headroom means normal slow calls are being aborted.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Resource occupancy</strong> — Threads, sockets, or connection-pool slots held waiting on in-flight calls — the resource an unbounded wait would exhaust.</li>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Timeout rate</strong> — The share of calls aborted at the limit, per dependency. Rising means the value is too tight or the dependency is degrading.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Headroom above p99</strong> — The gap between the timeout and observed p99 or p99.9 latency. Little headroom means ordinary slow calls are being converted into errors.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Resource occupancy</strong> — Threads, sockets and pool slots held by in-flight calls — the resource an unbounded wait consumes, watched while it is still recoverable.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Budget exhausted on arrival</strong> — Requests reaching a hop with no time left. That hop is failing for something an earlier hop spent, and the trace names which one.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Too tight</strong> — A timeout below real latency aborts calls that would have succeeded, converting slow responses into failures and often into extra retry load.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>No propagation</strong> — Without a shared deadline, each hop starts a fresh timeout and the waits stack, so the caller can wait far past the budget it set at the top.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Abandoned but still running</strong> — A timeout only stops the caller waiting; without real cancellation the remote side keeps working and may commit the operation after the caller gave up.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Clock skew on absolute deadlines</strong> — An absolute wall-clock deadline propagated across hosts with unsynchronized clocks can arrive early or late, mis-budgeting the remaining time.</li>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Too tight under load</strong> — A timeout below real latency aborts calls that would have succeeded, and the retries behind it add load to a dependency that was only slow.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>No propagation</strong> — Each hop starts a fresh timeout, the waits stack, and the caller waits far past the budget it set at the top.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Abandoned but still running</strong> — The caller stopped waiting; the remote side did not stop working, and may commit after the caller has reported failure.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Clock skew on absolute deadlines</strong> — A wall-clock instant propagated between hosts with unsynchronized clocks arrives early or late, so a hop gets a budget nobody intended.</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Synchronized expiry</strong> — One shared dependency crossing the threshold makes every caller time out at the same instant, and their retries arrive together as a second wave.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
-            <li id="production-check-1" data-kb-polarity="check">Give every call that crosses a process, network, or disk boundary a timeout — no unbounded waits.</li>
-            <li id="production-check-2" data-kb-polarity="check">Propagate one end-to-end deadline and shrink each hop to the time remaining.</li>
-            <li id="production-check-3" data-kb-polarity="check">Pair the timeout with real cancellation so abandoned work actually stops.</li>
-            <li id="production-check-4" data-kb-polarity="check">Set the timeout from measured p99 latency with headroom, not a round guess.</li>
-            <li id="production-check-5" data-kb-polarity="check">Ensure retried attempts share the deadline rather than resetting it.</li>
+            <li id="production-check-1" data-kb-polarity="check">No call crossing a process, network or disk boundary is left unbounded — including the ones inside client libraries, whose default is often no timeout at all</li>
+            <li id="production-check-2" data-kb-polarity="check">Each value was derived from that dependency's measured latency, and the measurement is recent enough to still be true</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">A traced request through the whole chain shows the end-to-end wait matching the budget set at the top, not the sum of the hops</li>
+            <li id="production-check-4" data-kb-polarity="check">The unknown outcome has an owner: when a call expires, an idempotency key or a reconciliation path decides whether the work happened</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Retried attempts draw on the same deadline instead of resetting it, verified against a dependency held slow on purpose</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">The timeout, retry and breaker settings around one dependency were reviewed together, so tightening one does not quietly multiply the others</li>
           </ul>
         </div>
       </div>
@@ -315,7 +341,7 @@ await deadline.run(signal =&gt; sanctionsVendor.screen(doc.name, flowId, signal)
     <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
-        <div class="fluency-item" data-kb-theme="resilience" id="fluency-resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Never wait forever</span></div>
+        <div class="fluency-item" data-kb-theme="resilience" id="fluency-resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Never wait forever — a bounded wait is what gives the thread, the socket and the caller an answer.</span></div>
       </div>
     </section>
 
@@ -328,6 +354,8 @@ await deadline.run(signal =&gt; sanctionsVendor.screen(doc.name, flowId, signal)
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="retry-backoff"><a href="./retry-backoff.html">Retry with Backoff</a><span class="rel-note">Bound the attempt, then decide to retry</span></div>
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="sweeper"><a href="../coordination/sweeper.html">Sweeper</a><span class="rel-note">a deadline nobody checks is a comment — a periodic scan is what turns it into an outcome</span></div>
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="service-mesh"><a href="../routing/service-mesh.html">Service Mesh</a><span class="rel-note">Mesh policy sets timeouts fleet-wide instead of per client library</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="fail-fast"><a href="../../../principles/fail-fast.html">Fail Fast</a><span class="rel-note">A bounded wait is how a call fails fast instead of hanging</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="idempotency"><a href="../../messaging/idempotency.html">Idempotency</a><span class="rel-note">An expiry means unknown, not did-not-happen — reconciliation needs a key</span></div>
         </div>
       </div>
 
@@ -342,6 +370,8 @@ await deadline.run(signal =&gt; sanctionsVendor.screen(doc.name, flowId, signal)
         <p class="rel-type">Prevents</p>
         <div class="rel-list">
           <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="deadlock"><a href="../../../hazards/deadlock.html">Deadlock</a><span class="rel-note">A lock-acquisition timeout breaks an otherwise indefinite circular wait</span></div>
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="cascading-failure"><a href="../../../hazards/cascading-failure.html">Cascading Failure</a><span class="rel-note">Callers that wait unbounded exhaust themselves and spread it</span></div>
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="connection-pool-exhaustion"><a href="../../../hazards/connection-pool-exhaustion.html">Connection-Pool Exhaustion</a><span class="rel-note">A stuck dependency otherwise ties up every pool slot</span></div>
         </div>
       </div>
 

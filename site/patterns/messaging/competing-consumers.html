@@ -54,6 +54,11 @@
       "@id": "./fan-out.html#fan-out",
       "name": "Fan-Out",
       "kb:note": "A queue per fan-out branch, each drained by a pool."
+    },
+    {
+      "@id": "./dead-letter-channel.html#dead-letter-channel",
+      "name": "Dead Letter Channel",
+      "kb:note": "A message that fails every attempt burns a pool slot on every pass until an attempt cap diverts it"
     }
   ],
   "kb:demonstrated-by": [
@@ -143,10 +148,10 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1"><strong>Competing consumers</strong> put several identical consumer instances on the same channel — a queue, a topic partition, a work stream — and let a broker hand each incoming message to whichever consumer is free. The consumers don't coordinate with each other and don't know how many siblings they have; they just pull, process, and ack. The broker hands a given message to one pool member at a time — exclusive delivery at that moment, not a promise it will never be handled twice: delivery is at-least-once, and a message whose lease expires reappears for another consumer.</p>
-        <p id="description-p-2">The force it resolves is a <strong>single-consumer throughput ceiling</strong>. One consumer reading a channel serially can only go as fast as one process, one CPU, one network connection allows — and if the producer outpaces it, the backlog grows without bound. Rewriting the producer or the message format to fix this is usually not on the table; the channel and its contract are fixed.</p>
-        <p id="description-p-3">The pattern turns "add capacity" into "add a consumer instance." Because consumers are stateless and interchangeable, scaling out is a deployment decision, not a code change: start more workers pointed at the same channel and the broker starts spreading messages across all of them. Scaling back down is just as cheap.</p>
-        <p id="description-p-4">This is a lens, not a single fixed mechanism — the same idea shows up as JMS queue listeners, Kafka consumer groups, RabbitMQ competing consumers on one queue, and SQS workers polling the same queue. What they share is one channel, many pullers, and one-consumer-at-a-time delivery to the group.</p>
+        <p id="description-p-1" data-kb-register="basic">Jobs pile into a queue faster than the one program reading it can finish them. Each one takes two seconds, four arrive every second, and the line only ever gets longer — by evening a receipt that should have gone out at once is hours old, and nothing in the code is wrong. You cannot make the one worker twice as fast, and you cannot ask the senders to slow down. <strong>Competing consumers</strong> is the other move: start several identical copies of the worker on the same queue, and let the queue hand each job to whichever copy is free. When the line grows you start one more; when it shrinks you stop one.</p>
+        <p id="description-p-2" data-kb-level="advanced">Several identical, stateless consumer instances read one channel — a queue, a topic partition, a work stream — and the broker hands each message to whichever member is free. The consumers never coordinate and do not know how many siblings they have; they pull, process, and ack. Delivery is exclusive at a moment, not forever: the broker leases a message to one member at a time, and a lease that expires unacked puts the message back for a sibling, which makes delivery at-least-once.</p>
+        <p id="description-p-3">What that buys is a change of unit. "Add capacity" becomes "add a consumer instance" — a deployment decision rather than a code change, because the consumers are interchangeable and hold no state between messages. Scaling back down is just as cheap.</p>
+        <p id="description-p-4" data-kb-level="advanced">It is a lens rather than one fixed mechanism: the same idea shows up as JMS queue listeners, Kafka consumer groups, RabbitMQ consumers on a shared queue, and SQS workers polling one queue. What they share is one channel, many pullers, and one-consumer-at-a-time delivery to the group.</p>
       </div>
     </section>
 
@@ -155,15 +160,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Work waits in one line and several people pull from it — like a single airport queue feeding whichever desk is free. Nobody hands out assignments, and no worker knows how many others exist: each takes the next item, finishes it, and comes back for another. When the line grows you open one more desk; when it shrinks you close one.</p>
+          <p>There are two ways to make work go faster: do each item quicker, or do more items at the same time. The first one runs out — a program that takes two seconds per job is not going to take one, however hard you try, and meanwhile jobs keep arriving at four a second. The second one barely has a limit, provided the jobs do not depend on each other. So instead of one worker reading the queue, run several identical copies of it against that same queue and let the queue hand each job to whichever copy is free. Nobody assigns work and no copy knows how many others exist: each takes the next job, finishes it, comes back. It is one airport queue feeding whichever desk opens up, so busy morning means open another desk. The catch is that a copy can die halfway through a job, and the queue will then give that job to somebody else — so the same job is sometimes done twice, and your work has to be safe to repeat.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>Several identical stateless consumers pull from one channel, and the broker leases each message to exactly one of them at a time; an unacked lease expires and the message reappears for a sibling, so delivery is at-least-once and every handler owes idempotency. Capacity becomes replica count rather than code. The KYC design does this without a broker at all: worker replicas claim pending task rows with FOR UPDATE SKIP LOCKED, so a locked row is invisible to the rest and adding a replica adds throughput.</p>
+          <p>Several identical stateless consumers read one channel, and the broker leases each message to exactly one of them at a time; an unacked lease expires and the message reappears for a sibling, so delivery is at-least-once and every handler owes idempotency. Capacity becomes replica count rather than code. The variants differ in how the group is formed. A flat pool takes whatever is next and gives up ordering entirely. Keyed or partitioned consumption hashes each message to a partition owned by one consumer at a time, which preserves per-key order and caps parallelism at the partition count. Layer a pool under a topic and each subscriber group still receives every message once while members inside a group compete for it — fan-out across groups, load-sharing within one. A broker is not even required: worker replicas can claim rows from a task table with a skip-locked read, where the row lock is the lease.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>Choose it when work is naturally independent and arrivals outrun one process: throughput turns into a deployment dial, and any consumer can die mid-message with no special handling. The bill is ordering and exactly-once, both surrendered — relatedness has to be re-expressed as a partition key, which then caps parallelism at the partition count, and redelivery after a lease expiry means duplicate work unless handlers are safe to repeat. The sharp edges are operational: a lease below p99 processing duplicates in-flight work, a generous prefetch lets one consumer hoard the backlog while siblings idle, and a poison message burns capacity until a max-attempts cap dead-letters it.</p>
+          <p>Choose it when work items are independent and arrivals outrun one process: throughput becomes a deployment dial, and any consumer can die mid-message with no special handling. The bill is ordering and exactly-once, both surrendered, and each line has a counter-move. Relatedness has to be re-expressed as a partition key, and that key caps parallelism at the partition count — pick the count for the throughput you expect to need, because raising it later re-scatters existing keys across partitions. Redelivery after a lease expiry means duplicate work, so buy safety with idempotent handlers keyed on a message id instead of trying to buy exactly-once from a broker that cannot sell it. A message that fails every attempt burns pool capacity indefinitely, so cap attempts and divert it to a dead-letter channel with an alert on depth. And a pool only fixes the consumer side: when the producer's bursts are the real problem, put a load-leveling queue in front rather than running a pool sized for the peak all day. Then run the loop — tune consumer count, prefetch and lease, watch queue depth against drain rate and the spread of work across instances, expect a lease shorter than p99 processing to double work first, and gate the release on idempotent handlers and a dead-letter path.</p>
         </div>
       </div>
     </section>
@@ -188,12 +193,12 @@ flowchart LR
       <dl class="variations">
         <dt id="variations-item-1">Static pool</dt>
         <dd>A fixed number of consumer instances, sized for expected peak load. Simple to operate, wasteful when load is bursty.</dd>
-        <dt id="variations-item-2">Partitioned / keyed consumption</dt>
-        <dd>Messages are hashed to a partition or shard by key, and each partition is owned by exactly one consumer at a time — preserves per-key order while still spreading unrelated keys across the pool (Kafka partitions, Kinesis shards).</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Partitioned / keyed consumption</dt>
+        <dd data-kb-level="advanced">Messages are hashed to a partition or shard by key, and each partition is owned by exactly one consumer at a time — preserves per-key order while still spreading unrelated keys across the pool (Kafka partitions, Kinesis shards).</dd>
         <dt id="variations-item-3"><a href="./pubsub.html">Publish-Subscribe</a></dt>
         <dd>Layer competing consumers under pub/sub: each subscriber group receives every message once, but the consumers inside a group compete for it — fan-out across groups, load-sharing within one.</dd>
-        <dt id="variations-item-4">Exclusive delivery via lease / visibility timeout</dt>
-        <dd>The broker hides a delivered message from other consumers for a lease window; a consumer that crashes before acking lets it reappear for someone else to pick up.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Exclusive delivery via lease / visibility timeout</dt>
+        <dd data-kb-level="advanced">The broker hides a delivered message from other consumers for a lease window; a consumer that crashes before acking lets it reappear for someone else to pick up.</dd>
       </dl>
     </section>
 
@@ -206,16 +211,18 @@ flowchart LR
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Scales throughput horizontally by adding consumer instances, with no producer changes.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Consumers are stateless and interchangeable — any one can crash and restart without special handling.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">The channel itself absorbs load spikes as a buffer while the pool catches up.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Failed processing just means the message goes back for another consumer to try.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Failed processing just means the message goes back for another consumer to try.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">No ordering guarantee across the pool — two related messages can be processed out of sequence by different consumers.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Most brokers give at-least-once delivery, so a redelivered message must be handled safely, not processed twice.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">A poison message that always fails can bounce between consumers until it's dead-lettered.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Uneven message cost means one consumer can be starved while another sits idle.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Most brokers give at-least-once delivery, so a redelivered message must be handled safely, not processed twice — that is what <a href="./idempotency.html">idempotency</a> is for.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">A poison message that always fails can bounce between consumers, burning capacity, until an attempt cap sends it to a <a href="./dead-letter-channel.html">dead-letter channel</a>.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Uneven message cost means one consumer can be starved while another sits idle.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">Restoring order costs parallelism: a partition key keeps related messages in sequence, and the partition count then becomes the ceiling on how many consumers can work at once.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">A pool only widens the consumer side. If the producer's bursts are what hurts, a <a href="../distributed/resilience/load-leveling.html">leveling queue</a> in front is cheaper than a pool sized for the peak all day.</li>
           </ul>
         </div>
       </div>
@@ -237,7 +244,7 @@ flowchart LR
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Messages must be processed in strict global order — a single consumer, or per-key partitioning, fits better.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">Every consumer needs to see every message — that's fan-out, not sharing; reach for <a href="./pubsub.html">Publish-Subscribe</a> instead.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Processing isn't safely repeatable — redelivery under at-least-once delivery will corrupt state.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Processing isn't safely repeatable — redelivery under at-least-once delivery will corrupt state.</li>
           </ul>
         </div>
       </div>
@@ -245,7 +252,25 @@ flowchart LR
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1">
+      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+        <summary>TypeScript — the whole idea: identical workers, one queue</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">async function worker(queue: Queue) {
+  while (true) {
+    const job = await queue.receive();   // the queue picks one free worker
+    if (!job) continue;                  // nothing waiting, ask again
+    try {
+      await handle(job);
+      await queue.ack(job);              // done — it leaves the queue
+    } catch {
+      await queue.nack(job);             // put it back for a sibling to retry
+    }
+  }
+}
+
+// Capacity is the number of copies you start. Nothing here knows about the others.
+for (let i = 0; i &lt; workerCount; i++) worker(jobQueue);</code></pre>
+      </details>
+      <details class="sketch" id="sketch-variant-2" data-kb-level="advanced">
         <summary>TypeScript — replicas claiming KYC tasks from one Postgres queue</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">interface Task { id: string; flowId: string; type: "verify_id" | "check_list"; }
 
@@ -289,8 +314,8 @@ for (let i = 0; i &lt; workerCount; i++) {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="kafka-consumer-groups" id="wild-kafka-consumer-groups"><strong>Kafka consumer groups</strong><span>Partitions are divided among the consumers in a group so exactly one member reads each partition; a rebalance reassigns partitions when a member joins or leaves. The partition count is the hard ceiling on parallelism — consumers beyond it sit idle with nothing assigned.</span></div>
-        <div class="wild-item" data-kb-example="celery" id="wild-celery"><strong>Celery</strong><span>Python workers compete for tasks on a shared RabbitMQ or Redis broker, scaling by adding worker processes or raising --concurrency. worker_prefetch_multiplier controls how many tasks each worker reserves ahead of time, the knob that trades throughput against even distribution.</span></div>
-        <div class="wild-item" data-kb-example="sidekiq" id="wild-sidekiq"><strong>Sidekiq</strong><span>Ruby workers compete for jobs on shared Redis queues, each process running a pool of threads (concurrency) that pull with BRPOP. Because plain BRPOP removes the job before it is done, an in-flight job is lost if the process is killed; reliable fetch that re-queues interrupted jobs is a Pro/Enterprise feature.</span></div>
+        <div class="wild-item" data-kb-example="celery" id="wild-celery" data-kb-level="advanced"><strong>Celery</strong><span>Python workers compete for tasks on a shared RabbitMQ or Redis broker, scaling by adding worker processes or raising --concurrency. worker_prefetch_multiplier controls how many tasks each worker reserves ahead of time, the knob that trades throughput against even distribution.</span></div>
+        <div class="wild-item" data-kb-example="sidekiq" id="wild-sidekiq" data-kb-level="advanced"><strong>Sidekiq</strong><span>Ruby workers compete for jobs on shared Redis queues, each process running a pool of threads (concurrency) that pull with BRPOP. Because plain BRPOP removes the job before it is done, an in-flight job is lost if the process is killed; reliable fetch that re-queues interrupted jobs is a Pro/Enterprise feature.</span></div>
         <div class="wild-item" data-kb-example="amazon-sqs" id="wild-amazon-sqs"><strong>Amazon SQS</strong><span>Many workers poll one queue and each message is handled once: a visibility timeout hides an in-flight message from sibling workers while it is processed, a Lambda event source mapping polls the queue and invokes functions in batches, and a redrive policy moves a message to a dead-letter queue after maxReceiveCount failed attempts.</span></div>
       </div>
     </section>
@@ -301,39 +326,42 @@ for (let i = 0; i &lt; workerCount; i++) {
         <div class="prod-group prod-knobs">
           <h3>Tuning knobs</h3>
           <ul>
-            <li id="production-knob-1" data-kb-polarity="knob"><strong>Consumer count / concurrency</strong> — The number of consumer instances or threads pulling from the channel — the primary throughput dial; scaling out is a deployment change, not a code change.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Prefetch / batch size</strong> — How many unacked messages one consumer holds at a time (RabbitMQ basic.qos prefetch_count, Kafka max.poll.records) — too high and one consumer hoards the backlog while siblings idle.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Visibility timeout / lease</strong> — How long a delivered message is hidden from other consumers before it reappears (SQS VisibilityTimeout) — set below processing time and the message is redelivered mid-flight. Kafka's dial is different in kind: max.poll.interval.ms is a poll deadline whose breach costs the consumer its whole partition assignment, not a per-message lease.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Max delivery attempts</strong> — The redelivery count after which a repeatedly-failing message is diverted to a dead-letter path (SQS maxReceiveCount) instead of bouncing through the pool forever.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Partition / shard count</strong> — In a keyed model, the number of partitions caps how many consumers in a group can work in parallel (Kafka partitions, Kinesis shards).</li>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Consumer count / concurrency</strong> — The number of consumer instances or threads pulling from the channel — the primary throughput dial, changed by deployment rather than by code.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Prefetch / batch size</strong> — How many unacked messages one consumer holds at a time (RabbitMQ basic.qos prefetch_count, Kafka max.poll.records), trading per-consumer throughput against how evenly work spreads.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Visibility timeout / lease</strong> — How long a delivered message is hidden from the rest of the pool before it reappears (SQS VisibilityTimeout). Kafka's dial is different in kind: max.poll.interval.ms is a poll deadline whose breach costs the consumer its whole partition assignment, not one message.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Max delivery attempts</strong> — The redelivery count after which a message is diverted to a dead-letter path (SQS maxReceiveCount).</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Partition / shard count</strong> — In a keyed model, the number of partitions — it fixes the ceiling on how many consumers in a group can work in parallel (Kafka partitions, Kinesis shards).</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Queue depth / consumer lag</strong> — Backlog waiting versus drain rate (Kafka consumer-group lag, SQS ApproximateNumberOfMessages) — the headline signal of whether the pool is keeping up.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Per-consumer throughput spread</strong> — Distribution of work across instances — a wide spread means one consumer is starved or hot while others idle.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>In-flight / unacked count</strong> — Messages leased but not yet acked — high and stuck points at slow handlers or leaks.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Redelivery rate</strong> — How often messages are re-delivered after nack or lease expiry — a proxy for handler failures and duplicate work.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Per-consumer throughput spread</strong> — Distribution of completed work across instances; a wide spread means the sharing is not working, whatever the total says.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>In-flight / unacked count</strong> — Messages leased but not yet acked — a number that is high and stuck points at slow handlers or leaked leases.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Redelivery rate</strong> — How often messages come back after a nack or a lease expiry — a proxy for handler failures and for duplicate work.</li>
+            <li id="production-signal-5" data-kb-polarity="signal" data-kb-level="expert"><strong>Dead-letter depth and arrival rate</strong> — Messages that exhausted their attempts; every one is work that silently did not happen.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Lease shorter than processing</strong> — A visibility timeout below the real processing time redelivers the message while the first consumer is still working it, so two consumers do the same work.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Prefetch starvation</strong> — A prefetch set too high lets one consumer pull the whole backlog into its buffer while its siblings sit idle, defeating the load sharing.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Idle consumers past partition count</strong> — In a keyed model, consumers beyond the partition count get no partition assigned and sit idle no matter how much backlog exists.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Poison message churn</strong> — A message that always fails bounces between consumers, burning capacity, until a max-attempts cap dead-letters it.</li>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Lease shorter than processing</strong> — A visibility timeout below real processing time redelivers the message while the first consumer is still working on it, so two consumers do the same work and both may write.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Prefetch starvation</strong> — A prefetch set too high lets one consumer pull the whole backlog into its buffer while its siblings sit idle, so adding instances stops adding throughput.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Idle consumers past partition count</strong> — In a keyed model, consumers beyond the partition count get no partition assigned and sit idle no matter how deep the backlog is.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Poison message churn</strong> — A message that always fails bounces through the pool, consuming a slot on every pass, until an attempt cap dead-letters it.</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Rebalance stalls</strong> — A member joining, leaving or missing its poll deadline triggers a reassignment, and consumption on the affected partitions pauses until it settles — frequent restarts turn this into steady-state lost throughput.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
-            <li id="production-check-1" data-kb-polarity="check">Make handlers idempotent — at-least-once delivery means a redelivered message must be safe to process twice.</li>
-            <li id="production-check-2" data-kb-polarity="check">Set the visibility / lease timeout comfortably above p99 processing time.</li>
-            <li id="production-check-3" data-kb-polarity="check">Tune prefetch low enough that work spreads evenly across the pool.</li>
-            <li id="production-check-4" data-kb-polarity="check">Configure a dead-letter path with a max-attempts cap so poison messages leave the pool.</li>
-            <li id="production-check-5" data-kb-polarity="check">Ensure partition or shard count is at least the target consumer count in a keyed model.</li>
+            <li id="production-check-1" data-kb-polarity="check">Handlers are idempotent, and that was tested by replaying the same message rather than assumed</li>
+            <li id="production-check-2" data-kb-polarity="check">The lease was set from an observed p99 processing time under load, not from a default</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Work distribution across the pool was watched with a full backlog, not only with an empty one</li>
+            <li id="production-check-4" data-kb-polarity="check">A dead-letter path exists with an attempt cap, and its depth is alerted on</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">In a keyed model, the partition count is at least the consumer count you plan to run</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Consumers shut down by finishing or releasing the message in hand, so a deploy does not manufacture redeliveries</li>
           </ul>
         </div>
       </div>
@@ -359,6 +387,7 @@ for (let i = 0; i &lt; workerCount; i++) {
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="message-queue"><a href="./message-queue.html">Message Queue</a><span class="rel-note">Scale consumers off one queue</span></div>
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="idempotency"><a href="./idempotency.html">Idempotency</a><span class="rel-note">Parallel consumers must handle redelivery</span></div>
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="fan-out"><a href="./fan-out.html">Fan-Out</a><span class="rel-note">A queue per fan-out branch, each drained by a pool.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="dead-letter-channel"><a href="./dead-letter-channel.html">Dead Letter Channel</a><span class="rel-note">A message that fails every attempt burns a pool slot on every pass until an attempt cap diverts it</span></div>
         </div>
       </div>
 

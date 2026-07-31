@@ -59,6 +59,11 @@
       "@id": "./workflow-orchestration.html#workflow-orchestration",
       "name": "Workflow Orchestration",
       "kb:note": "A saga's steps can be driven by a durable orchestration engine rather than choreographed by events"
+    },
+    {
+      "@id": "./sweeper.html#sweeper",
+      "name": "Sweeper",
+      "kb:note": "A step that neither completes nor times out emits no event — a sweep is what expires it and starts the compensation"
     }
   ],
   "kb:prerequisite": [
@@ -73,6 +78,13 @@
       "@id": "../resilience/compensating-transaction.html#compensating-transaction",
       "name": "Compensating Transaction",
       "kb:note": "A saga undoes work with compensating transactions"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../../hazards/dual-write-inconsistency.html#dual-write-inconsistency",
+      "name": "Dual-Write Inconsistency",
+      "kb:note": "Replaces the distributed transaction the dual write silently assumed"
     }
   ],
   "kb:demonstrated-by": [
@@ -137,10 +149,11 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1">A <strong>saga</strong> replaces one big cross-service transaction with a sequence of small local ones. Each participating service commits its own local transaction, touching only data it owns, then triggers the next step — either by publishing an event or by responding to a coordinator's command. If any step fails, the saga runs <em>compensating transactions</em> for every step already committed, undoing their effects in reverse order.</p>
-        <p id="description-p-2">The force it resolves is that <strong>a business transaction now spans data no single database can lock</strong>. In a monolith, wrapping several tables in one ACID transaction is free. Split that same operation across microservices and there's no shared transaction manager: a two-phase commit would need every participant to hold locks until the slowest one votes, coupling everyone's availability to the least reliable service and colliding badly with real-world timeouts and partitions.</p>
-        <p id="description-p-3">A saga refuses that coupling. Each local transaction commits and is durable the instant it runs — no service blocks waiting on another's yes. What you give up is isolation and immediate consistency: a saga in flight leaves partially-applied state visible to the rest of the system, and correctness arrives only once every step, or every compensation, has actually run.</p>
-        <p id="description-p-4">Coordination happens one of two ways: <em>choreographed</em>, where each service listens for the previous step's event and decides its own next action, or <em>orchestrated</em>, where a dedicated coordinator issues each step as a command and tracks the saga's progress explicitly, as a state machine.</p>
+        <p id="description-p-1" data-kb-register="basic">Checkout charges the card in one service and reserves the stock in another. The charge goes through, the reservation fails, and there is no single cancel button — the money has already moved in a database your service does not own. So take the steps one at a time, and write down for each one how to take it back. A step that fails on a passing glitch gets tried again; a step that fails for a real reason — card declined, last item sold — sends you back through the steps that already succeeded, undoing each in turn, so nobody is left charged for an order that will never ship.</p>
+        <p id="description-p-2" data-kb-level="advanced">A <strong>saga</strong> replaces one big cross-service transaction with a sequence of small local ones. Each participating service commits its own local transaction, touching only data it owns, then triggers the next step — either by publishing an event or by responding to a coordinator's command. If any step fails, the saga runs <em>compensating transactions</em> for every step already committed, undoing their effects in reverse order.</p>
+        <p id="description-p-3" data-kb-level="advanced">The force it resolves is that <strong>a business transaction now spans data no single database can lock</strong>. In a monolith, wrapping several tables in one ACID transaction is free. Split that same operation across microservices and there's no shared transaction manager: a two-phase commit would need every participant to hold locks until the slowest one votes, coupling everyone's availability to the least reliable service and colliding badly with real-world timeouts and partitions.</p>
+        <p id="description-p-4">Each step commits on its own and stays committed, so no service blocks waiting on another's yes. What you give up is isolation and immediate consistency: while the sequence is in flight, half-applied state is visible to the rest of the system, and correctness arrives only once every step, or every undo, has actually run.</p>
+        <p id="description-p-5" data-kb-level="advanced">Coordination happens one of two ways: <em>choreographed</em>, where each service listens for the previous step's event and decides its own next action, or <em>orchestrated</em>, where a dedicated coordinator issues each step as a command and tracks the saga's progress explicitly, as a state machine.</p>
       </div>
     </section>
 
@@ -149,15 +162,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Booking a trip means several separate bookings — the flight, the hotel, the car — each confirmed by a different company the moment you make it, and nobody has a single button that cancels the lot. So make them one at a time, and when a later one falls through, decide which way to go: if it failed for a passing reason, try that booking again and carry on; if it failed for a real one, walk back through the bookings you already made and undo each in turn. Either way, nothing is left half-finished.</p>
+          <p>Do the steps one at a time, and write down beside each one how to take it back. A failure then has only two answers and the cause picks which: something briefly broken means try that step again and carry on, while a real refusal — the card declined, the last one sold — means walking backwards through the steps that already worked, undoing each in turn. It is how a travel agent unwinds a trip when the hotel falls through: cancel the car, then cancel the flight, in the reverse order they were booked. Nothing is left half-finished, and nobody keeps money for something that will never arrive.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>A sequence of local transactions, each publishing an event or reply that triggers the next, replacing distributed two-phase commit with eventual consistency plus explicit undo logic. A failed step routes one of two ways: continuation, which retries and drives the flow forward, or compensation, which reverses the steps already committed — a platform failure takes the first, a business rejection the second. Coordination comes in two styles: choreography, where services react to each other's events, and orchestration, where a coordinator issues each step and persists the flow as a state machine.</p>
+          <p>Run the transaction as a sequence of local transactions, each committing in one service's own database and then triggering the next by publishing an event or answering a coordinator's command: eventual consistency plus explicit undo, in place of a two-phase commit that would hold every participant's locks until the slowest one votes. Classify the failure before you react — a platform failure (timeout, dropped connection, dead instance) takes forward recovery, retrying the step and continuing, while a business rejection (payment declined, stock gone) takes backward recovery, compensating every committed step in reverse. The two coordination styles differ mechanically: choreography has each service subscribe to the previous step's event, so there is no coordinator to fail; orchestration has one coordinator issue each step and persist progress as a state machine, so the flow is queryable in one place.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>Pick a saga when a business process spans service boundaries and holding locks across them is unacceptable — you trade isolation for availability, and interim states become externally visible. The hard parts: compensations are business decisions, not rollbacks (a refund is not an un-charge); every step needs idempotency and deduplication; and misreading a transient failure as a business one unwinds a saga that needed nothing but a retry. Choreography stays simple and has no single point of failure while the participants are few, and stops being traceable as they multiply; orchestration absorbs that complexity into a coordinator that is now the flow's single point of failure — and the one place anyone can answer where a given order actually is.</p>
+          <p>Choose a saga when a business process crosses service boundaries and coupling their availability is unacceptable — you are buying autonomy with the isolation an ACID transaction would have given you, and half-applied state becomes externally visible. The bill comes in four parts, each with a counter-move. A compensation is a business decision rather than a rollback (a refund is not an un-charge), so agree each reversal with the process owner and place the one irreversible step as the pivot: everything before it compensable, everything after it driven forward on retry. Steps and compensations get replayed, so key both by saga id and make them idempotent. The local commit and the event that triggers the next step are two writes to two systems, so emit through an outbox instead of after the commit. Concurrent readers see the middle of the sequence, so flag the entity provisional with a semantic lock. Choreography stays simple while participants are few and stops being traceable as they multiply; orchestration absorbs that complexity into a coordinator that is both the flow's single point of failure and the only place anyone can answer where an order actually is. Then run the loop — tune retry policy and step timeouts, watch the compensation rate and the age of the oldest open saga, expect the compensation that cannot itself complete, and gate the release on a dead-letter path with an operator behind it.</p>
         </div>
       </div>
     </section>
@@ -186,12 +199,12 @@ flowchart LR
         <dd>Each service publishes a <a href="../../ddd/domain-event.html">Domain Event</a> when its step completes, and downstream services subscribe and react on their own. No central coordinator and no single point of failure, which suits a handful of participants; add more and the dependencies between them get hard to trace, because the flow is implicit across every participant's code.</dd>
         <dt id="variations-item-3">Forward vs. backward recovery</dt>
         <dd>A failed step does not automatically mean undo. A platform-level failure — a timeout, a dropped connection, an instance that died — takes forward recovery: retry the local transaction and continue the sequence. An application-level failure — the payment was declined, the item is out of stock — takes backward recovery: compensate the steps that already committed. Classify the failure before choosing a direction, or a transient blip unwinds a saga that needed nothing but a retry.</dd>
-        <dt id="variations-item-4">Compensating Transaction</dt>
-        <dd>Not every failure needs undoing — idempotent retries absorb transient errors, while a <a href="../resilience/compensating-transaction.html">Compensating Transaction</a> only runs for a step that fully committed and must be semantically reversed.</dd>
-        <dt id="variations-item-5">Semantic lock</dt>
-        <dd>Mark an entity provisional or pending while its saga is in flight, so concurrent readers and writers can detect the in-progress state instead of treating it as final.</dd>
-        <dt id="variations-item-6">Pivot step</dt>
-        <dd>Place the one step that cannot be undone deliberately: everything before it stays compensable, and everything after it is driven forward on repeat — idempotent retries toward completion — rather than reversed. Once the pivot commits, the saga's only direction is through.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Compensating Transaction</dt>
+        <dd data-kb-level="advanced">Not every failure needs undoing — idempotent retries absorb transient errors, while a <a href="../resilience/compensating-transaction.html">Compensating Transaction</a> only runs for a step that fully committed and must be semantically reversed.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced">Semantic lock</dt>
+        <dd data-kb-level="advanced">Mark an entity provisional or pending while its saga is in flight, so concurrent readers and writers can detect the in-progress state instead of treating it as final.</dd>
+        <dt id="variations-item-6" data-kb-level="expert">Pivot step</dt>
+        <dd data-kb-level="expert">Place the one step that cannot be undone deliberately: everything before it stays compensable, and everything after it is driven forward on repeat — idempotent retries toward completion — rather than reversed. Once the pivot commits, the saga's only direction is through.</dd>
       </dl>
     </section>
 
@@ -213,7 +226,8 @@ flowchart LR
             <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="expert">No isolation: partial saga state is visible to other transactions mid-flight, unless masked by a semantic lock.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Every step needs a compensation designed for it, including ones that feel irreversible.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">A failure now spans several services — tracing and debugging needs distributed context.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Compensations must themselves be idempotent and retry-safe, and their own failure needs a plan.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Compensations must themselves be idempotent and retry-safe, and nothing compensates a compensation — route the ones that exhaust their retries to a dead-letter queue with an operator behind it.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Choreographed, the flow exists only as the sum of every participant's subscriptions, so nobody can say where an order is — thread a <a href="../../messaging/correlation-identifier.html">Correlation Identifier</a> through every step, or move the sequence into an orchestrator that persists it.</li>
           </ul>
         </div>
       </div>
@@ -243,7 +257,34 @@ flowchart LR
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1">
+      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+        <summary>TypeScript — three steps, each carrying the undo that takes it back</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">interface Step {
+  run: (orderId: string) =&gt; Promise&lt;void&gt;;
+  undo: (orderId: string) =&gt; Promise&lt;void&gt;;   // how this step is taken back
+}
+
+const steps: Step[] = [
+  { run: (o) =&gt; payments.charge(o),  undo: (o) =&gt; payments.refund(o) },
+  { run: (o) =&gt; stock.reserve(o),    undo: (o) =&gt; stock.release(o) },
+  { run: (o) =&gt; shipping.book(o),    undo: (o) =&gt; shipping.cancel(o) },
+];
+
+async function runSaga(orderId: string): Promise&lt;void&gt; {
+  const committed: Step[] = [];
+  for (const step of steps) {
+    try {
+      await step.run(orderId);       // one service, one local transaction
+      committed.push(step);
+    } catch (err) {
+      // Undo the steps that already committed, newest first, then give up.
+      for (const done of committed.reverse()) await done.undo(orderId);
+      throw err;
+    }
+  }
+}</code></pre>
+      </details>
+      <details class="sketch" id="sketch-variant-2" data-kb-level="advanced">
         <summary>TypeScript — a forward-only KYC saga with terminal failure states</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">type FlowState =
   | "pending" | "verifying" | "screening"
@@ -281,7 +322,7 @@ async function runFlow(flowId: string, personaId: string): Promise&lt;void&gt; {
       <div class="wild-list">
         <div class="wild-item" data-kb-example="temporal" id="wild-temporal"><strong>Temporal</strong><span>A durable workflow engine: a workflow orchestrates activities and, on failure, runs the compensation handlers it accumulated — the orchestrated saga made explicit in code. Per-activity RetryPolicy (maximum attempts, backoff coefficient) and start-to-close timeouts are the retry and timeout knobs, and workflow state survives worker crashes.</span></div>
         <div class="wild-item" data-kb-example="step-functions" id="wild-step-functions"><strong>AWS Step Functions</strong><span>State machines whose Retry and Catch fields, with a rollback branch, are the way AWS documents implementing sagas: each state invokes a step, a Catch routes failures to compensating states, and TimeoutSeconds bounds how long a step may hang.</span></div>
-        <div class="wild-item" data-kb-example="axon" id="wild-axon"><strong>Axon Framework</strong><span>Ships a first-class SagaManager on the JVM: a @Saga class uses @SagaEventHandler methods correlated by an association property to drive event-choreographed sagas, tracking each saga instance's state and firing compensations as later events arrive.</span></div>
+        <div class="wild-item" data-kb-example="axon" id="wild-axon" data-kb-level="advanced"><strong>Axon Framework</strong><span>Ships a first-class SagaManager on the JVM: a @Saga class uses @SagaEventHandler methods correlated by an association property to drive event-choreographed sagas, tracking each saga instance's state and firing compensations as later events arrive.</span></div>
       </div>
     </section>
 
@@ -291,10 +332,11 @@ async function runFlow(flowId: string, personaId: string): Promise&lt;void&gt; {
         <div class="prod-group prod-knobs">
           <h3>Tuning knobs</h3>
           <ul>
-            <li id="production-knob-1" data-kb-polarity="knob"><strong>Step retry policy</strong> — Max attempts and backoff before a transient step failure is treated as fatal and triggers compensation. Too eager retries hammer a struggling downstream service; too few roll back sagas that would have succeeded on the next try.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Step / saga timeout</strong> — How long a step (or the whole saga) may stay open before it is abandoned and compensations run. Without it a hung participant leaves the saga in flight indefinitely, holding any semantic locks.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Compensation retry and escalation</strong> — How compensations are retried when they fail, and where a permanently-failing compensation is escalated. Compensation failure is the case that cannot itself be compensated, so it needs an explicit landing spot.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>In-flight saga concurrency</strong> — A cap on how many sagas run at once, bounding load on participating services and the pressure of provisional, partially-applied state on the rest of the system.</li>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Step retry policy</strong> — Max attempts and backoff before a transient step failure is treated as fatal and turns the saga around. Size it from the participant's observed recovery time, since every attempt past that point is a compensation you paid to avoid.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Step and saga timeouts</strong> — How long one step, and the whole flow, may stay open before it is abandoned. The saga timeout doubles as the bound on how long provisional state stays visible to everyone else.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Failure classification</strong> — Which error codes count as a business rejection and which as a platform failure. The mapping decides whether a failed step is driven forward or unwound, so keep it somewhere a domain expert can read and change.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Compensation retry and escalation</strong> — How many times a failed compensation is retried, and where it lands when the retries run out. Nothing compensates a compensation, so the landing spot has to be explicit.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>In-flight saga concurrency</strong> — A cap on how many sagas run at once, bounding both load on the participants and how much half-applied state the rest of the system can see at any moment.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
@@ -302,8 +344,8 @@ async function runFlow(flowId: string, personaId: string): Promise&lt;void&gt; {
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Open saga count and age</strong> — How many sagas are in flight and how old the oldest is. A growing tail of long-lived sagas means steps are stalling and compensations are not firing.</li>
             <li id="production-signal-2" data-kb-polarity="signal"><strong>Compensation / rollback rate</strong> — Fraction of sagas that end in compensation rather than completion. A spike points at a specific failing step dragging whole transactions into rollback.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Per-step failure rate</strong> — Failures attributed to each participant. Isolates which service is forcing sagas to unwind, since a failure now spans several services.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Saga duration p99</strong> — End-to-end time from first step to final commit or compensation — the window during which partial, un-isolated state is visible to everyone else.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Per-step failure rate</strong> — Failures attributed to each participant. Isolates which service is forcing sagas to unwind, since a failure now spans several services.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Saga duration p99</strong> — End-to-end time from first step to final commit or compensation — the window during which partial, un-isolated state is visible to everyone else.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
@@ -311,8 +353,9 @@ async function runFlow(flowId: string, personaId: string): Promise&lt;void&gt; {
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Compensation fails</strong> — A step committed but its compensation cannot complete; the saga is stuck half-applied and no automatic path exists to fix it. It must be alerted and routed to manual repair.</li>
             <li id="production-failure-2" data-kb-polarity="failure"><strong>Non-idempotent replay</strong> — A retried or redelivered step applies twice — a double charge, a double reservation — because the step or compensation was not keyed by saga id.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stuck saga holds a semantic lock</strong> — A step neither completes nor times out; the entity stays flagged provisional forever, blocking or confusing concurrent readers that respect the lock.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Stuck saga holds a semantic lock</strong> — A step neither completes nor times out; the entity stays flagged provisional forever, blocking or confusing concurrent readers that respect the lock.</li>
             <li id="production-failure-4" data-kb-polarity="failure"><strong>Dirty reads of partial state</strong> — Because a saga gives no isolation, other transactions observe intermediate state — an order that exists but is not yet paid — and act on it before the saga finishes or rolls back.</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>A blip read as a rejection</strong> — Under load the participants time out, the classifier files those timeouts as business failures, and sagas that needed one retry unwind instead — so the compensations become their own load on services that were already struggling.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -320,9 +363,10 @@ async function runFlow(flowId: string, personaId: string): Promise&lt;void&gt; {
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Every step has a compensation designed for it, including steps that feel irreversible</li>
             <li id="production-check-2" data-kb-polarity="check">Steps and compensations are idempotent and keyed by saga id so replays are safe</li>
-            <li id="production-check-3" data-kb-polarity="check">Every step has a timeout, so a hung participant triggers compensation instead of stalling</li>
-            <li id="production-check-4" data-kb-polarity="check">Failed compensations are alerted and land in a dead-letter queue for manual intervention</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="expert">The one step that cannot be undone is named as the pivot, and everything after it is driven forward on retry rather than reversed</li>
+            <li id="production-check-4" data-kb-polarity="check">Somebody is on the other end of the dead-letter path, and they have been shown what a stuck compensation looks like before it happens</li>
             <li id="production-check-5" data-kb-polarity="check">A correlation id threads through every step for distributed tracing of a failure</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="advanced">The classifier was exercised against a participant that hangs, not only one that declines — that is the case it gets wrong</li>
           </ul>
         </div>
       </div>
@@ -349,6 +393,7 @@ async function runFlow(flowId: string, personaId: string): Promise&lt;void&gt; {
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="cqrs"><a href="../../architecture/cqrs.html">CQRS</a><span class="rel-note">Sagas often drive read-model updates</span></div>
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="correlation-identifier"><a href="../../messaging/correlation-identifier.html">Correlation Identifier</a><span class="rel-note">Correlate the steps of one saga</span></div>
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="workflow-orchestration"><a href="./workflow-orchestration.html">Workflow Orchestration</a><span class="rel-note">A saga's steps can be driven by a durable orchestration engine rather than choreographed by events</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="sweeper"><a href="./sweeper.html">Sweeper</a><span class="rel-note">A step that neither completes nor times out emits no event — a sweep is what expires it and starts the compensation</span></div>
         </div>
       </div>
 
@@ -366,7 +411,14 @@ async function runFlow(flowId: string, personaId: string): Promise&lt;void&gt; {
         </div>
       </div>
 
-            <div class="rel-group">
+                  <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="dual-write-inconsistency"><a href="../../../hazards/dual-write-inconsistency.html">Dual-Write Inconsistency</a><span class="rel-note">Replaces the distributed transaction the dual write silently assumed</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
         <p class="rel-type">Demonstrated by</p>
         <div class="rel-list">
           <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="robinhood"><a href="../../../designs/robinhood.html">Robinhood</a><span class="rel-note">consistency across services with no shared transaction is held by ordered steps plus a reconciler, not an atomic commit</span></div>

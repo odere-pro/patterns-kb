@@ -105,8 +105,8 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1"><strong>Scatter-Gather</strong> splits into two halves joined by one correlated exchange. The <em>scatter</em> half broadcasts a request to a set of recipients — a fixed list, a topic with several subscribers, or a dynamically resolved set of providers. The <em>gather</em> half collects the individual replies as they trickle back and combines them into one aggregate message that goes to the original requestor, who never sees the fan-out at all.</p>
-        <p id="description-p-2">It resolves a specific tension: the answer to a request may live in more than one place, but the caller wants a single call and a single reply. Querying five pricing providers, four inventory shards, or a dozen workers one at a time multiplies latency by the number of recipients. Scatter-Gather parallelizes the dispatch — every recipient is asked at once — and centralizes the merge, so the caller's contract stays "one request in, one response out" no matter how many parties actually answered it.</p>
+        <p id="description-p-1" data-kb-register="basic">You need a shipping quote and five carriers can give you one. Ask the first, wait 400 ms, ask the second, wait again — five in a row and the customer has been staring at a spinner for two seconds, for work that was never dependent in the first place. <strong>Scatter-Gather</strong> asks all five at the same moment and waits once, for the slowest, not for the sum. Then one place collects whatever came back and turns it into a single answer: the cheapest quote, or all the pieces joined up. The caller still made one call and got one reply, and never learns that five things happened in between.</p>
+        <p id="description-p-2" data-kb-level="advanced">Two halves joined by one correlated exchange. The <em>scatter</em> half dispatches a request to a set of recipients at once — a fixed list, a topic with several subscribers, or a set resolved at runtime from a registry. The <em>gather</em> half collects the independent replies as they arrive and combines them into one aggregate for the original requestor. Serial querying multiplies latency by the recipient count; this trades that sum for a maximum, and centralizes the merge so the caller's contract stays one request in, one response out.</p>
         <p id="description-p-3">Two intents show up under the same shape. In the <em>auction</em> form, every recipient answers the identical question and gather keeps only the best reply — cheapest quote, fastest route — discarding the rest. In the <em>distribution</em> form, the request is partitioned so each recipient does distinct work, and gather reassembles the parts into a whole, closer to a fan-out/fan-in over a computation than a competition.</p>
         <p id="description-p-4">Because replies arrive independently and out of order, each one must carry a correlation token back to its originating request, and the gather step has to decide what to do about recipients that never answer.</p>
       </div>
@@ -117,15 +117,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Sometimes the answer you need lives in several places at once. Asking each one in turn takes as long as all of them added together, so you ask everybody at the same time and wait for the replies to come in. Then you combine what came back into a single answer for whoever asked — like mailing the same question to five suppliers and handing back one quote.</p>
+          <p>Waiting is the thing to notice. If five different services each hold part of your answer and you ask them one after another, you wait five times — and four of those waits bought you nothing, because none of the questions depended on the answer before it. Ask all five in the same breath instead and you wait once, for whichever is slowest. Then one place puts the replies together into a single result and hands that back, so whoever asked made one request and got one answer without ever learning that five things happened underneath. Two problems come with asking everybody at once. The answers arrive in whatever order they finish, so each one has to say which question it belongs to. And one of them may never arrive at all, which means you have to decide in advance — before it happens, not during — whether you go ahead without it or refuse to answer.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>One request is dispatched to N recipients at once — a fixed list, a topic, or a set resolved at runtime — and a collector correlates the independent replies into a single aggregate, either picking a winner or reassembling parts. In the KYC design the concluding transaction inserts one screening task per sanctions list; worker replicas claim the legs independently, each leg owning its own deadline, retry budget and result row, and every finishing leg counts results against the list count so exactly one guarded update concludes the flow.</p>
+          <p>One request is dispatched to N recipients at once — a fixed recipient list, a topic, or a set resolved at runtime — and a collector correlates the independent replies into a single aggregate, so overall latency is the slowest reply rather than the sum of all of them. Two intents wear the same shape. In the auction form every recipient answers the identical question and the collector keeps one winner, discarding the rest. In the distribution form the request is partitioned so each recipient does distinct work and the collector reassembles the parts, which is fan-out and fan-in over a computation rather than a competition. The classic EIP names sit on a different axis from that — they describe how the request goes out, a router-controlled recipient list versus a broadcast on a publish-subscribe channel — and either dispatch style can feed either kind of gather. The gather itself closes on one of three policies: every reply in, a quorum, or a deadline.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>Reach for it when the answer lives in several places and serial querying would multiply latency by the recipient count: you trade a sum of latencies for a maximum. The price is N-fold load on every call, even where you keep one reply and discard the rest. The decision that matters is the gather policy — all, quorum or deadline — because it fixes the tail latency and the meaning of a missing reply, and those differ: an unanswered quote can be dropped, an unanswered sanctions list decides nothing and must never read as clean. Budget for correlation state with a TTL, and for stragglers arriving after the aggregate closed.</p>
+          <p>Reach for it when the answer lives in several places and serial querying would multiply latency by the recipient count: you trade a sum of latencies for a maximum, and you get partial-failure tolerance for free whenever the gather does not need everyone. The bill starts with N-fold load on every call, including the auction case where you keep one reply and throw the rest away — size the recipients for the amplified rate, not for your request rate, and cap the fan-out breadth before it caps you. The decision that actually matters is the gather policy, because it fixes both the tail latency and the meaning of a missing reply, and that meaning is domain-specific: an unanswered price quote can be dropped, while an unanswered sanctions list decides nothing and must never be read as clean. So write the missing-reply semantics down next to the timeout, not in someone's head. Two more lines: correlation state needs a TTL or a request that never completes leaks the aggregation forever, and stragglers will arrive after the aggregate closed, so give a late reply a defined destination instead of a silent drop. Then run the loop — tune the deadline, the quorum and the fan-out breadth, watch reply completeness and p99 gather latency, expect the slowest recipient to set your tail first, and gate the release on a hard timeout with a written meaning for absence.</p>
         </div>
       </div>
     </section>
@@ -155,14 +155,14 @@ flowchart LR
         <dd>Every recipient answers the same question — a price, a bid, a route — and gather keeps only the winning reply, discarding the rest.</dd>
         <dt id="variations-item-2">Distribution</dt>
         <dd>The request is partitioned so each recipient handles distinct work; gather reassembles the pieces into one complete result rather than picking a winner.</dd>
-        <dt id="variations-item-3">Static vs. dynamic recipient list</dt>
-        <dd>Recipients are a fixed, known set, or resolved at runtime from a directory or service registry — trading simplicity for the ability to add participants without redeploying.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Static vs. dynamic recipient list</dt>
+        <dd data-kb-level="advanced">Recipients are a fixed, known set, or resolved at runtime from a directory or service registry — trading simplicity for the ability to add participants without redeploying.</dd>
         <dt id="variations-item-4"><a href="./correlation-identifier.html">Correlation Identifier</a></dt>
         <dd>Each reply carries the id of the request that produced it, so gather can match interleaved replies back to the right in-flight scatter.</dd>
-        <dt id="variations-item-5">Timeout / quorum gather</dt>
-        <dd>Rather than block for every reply, gather closes after a deadline or once a minimum count has arrived, treating stragglers as absent instead of stalling the whole exchange.</dd>
-        <dt id="variations-item-6">Recipient-list vs. broadcast dispatch</dt>
-        <dd>The EIP book splits the pattern on how the request goes out, and its variant names describe that axis: its <em>Distribution</em> sends to a recipient list the router controls, while its <em>Auction</em> broadcasts on a publish-subscribe channel for any interested participant to answer. Dispatch is independent of what gather does with the replies — either style can feed a winner-picking or a reassembling gather — so note that the book's Auction/Distribution label the dispatch, where this page's label the gather.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced">Timeout / quorum gather</dt>
+        <dd data-kb-level="advanced">Rather than block for every reply, gather closes after a deadline or once a minimum count has arrived, treating stragglers as absent instead of stalling the whole exchange.</dd>
+        <dt id="variations-item-6" data-kb-level="expert">Recipient-list vs. broadcast dispatch</dt>
+        <dd data-kb-level="expert">The EIP book splits the pattern on how the request goes out, and its variant names describe that axis: its <em>Distribution</em> sends to a recipient list the router controls, while its <em>Auction</em> broadcasts on a publish-subscribe channel for any interested participant to answer. Dispatch is independent of what gather does with the replies — either style can feed a winner-picking or a reassembling gather — so note that the book's Auction/Distribution label the dispatch, where this page's label the gather.</dd>
       </dl>
     </section>
 
@@ -175,16 +175,18 @@ flowchart LR
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Parallelizes the fan-out, so overall latency isn't the sum of every recipient's response time.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Surfaces the best or most complete answer by consulting several sources instead of trusting one.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">Keeps the caller's contract simple — one request, one merged reply — no matter how many recipients answered.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Tolerant of partial failure when gather doesn't require every recipient to respond.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Tolerant of partial failure when gather doesn't require every recipient to respond.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">Latency is still bounded by the slowest recipient, or by whatever timeout gather enforces.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Aggregation logic must handle partial, duplicate, or out-of-order replies correctly.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Every call multiplies load N-fold across recipients and network, even when only one reply is kept.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Latency is still bounded by the slowest recipient, or by whatever timeout gather enforces — the deadline is what turns an unbounded wait into a known one, so it is not optional.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Aggregation logic must handle partial, duplicate, or out-of-order replies correctly, which is what the <a href="./correlation-identifier.html">correlation identifier</a> on every reply is for.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Every call multiplies load N-fold across recipients and network, even when only one reply is kept — size the recipients for the amplified rate, and cap the fan-out breadth rather than discovering the cap in an incident.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Needs correlation, timeout, and partial-failure handling — real machinery, not a plain request/reply.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">What a missing reply <em>means</em> is a domain decision the pattern cannot make for you: dropping an unanswered price quote is fine, reading an unanswered sanctions check as clean is not. Write the semantics down beside the timeout.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="advanced">Stragglers arrive after the aggregate has closed, for a request that no longer exists — give a late reply a defined destination, because the alternative is a silent drop nobody counts.</li>
           </ul>
         </div>
       </div>
@@ -214,7 +216,19 @@ flowchart LR
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1">
+      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+        <summary>TypeScript — ask everyone at once, then combine</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">async function cheapestQuote(parcel: Parcel, carriers: Carrier[]) {
+  // scatter: every carrier is asked in the same tick, not one after another
+  const asked = carriers.map((carrier) =&gt; carrier.quote(parcel));
+
+  // gather: wait once, for the slowest, instead of once per carrier
+  const quotes = await Promise.all(asked);
+
+  return quotes.reduce((best, q) =&gt; (q.price &lt; best.price ? q : best));
+}</code></pre>
+      </details>
+      <details class="sketch" id="sketch-variant-2" data-kb-level="advanced">
         <summary>TypeScript — screening one persona against every sanctions list</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">interface LegResult { list: string; hit: boolean; }
 
@@ -252,7 +266,7 @@ async function screen(
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="elasticsearch" id="wild-elasticsearch"><strong>Elasticsearch</strong><span>A coordinating node scatters each search to every relevant shard in parallel, gathers the top hits from each, and merges them into one ranked result set; the two-phase query-then-fetch design is scatter-gather over shards.</span></div>
-        <div class="wild-item" data-kb-example="apollo-federation" id="wild-apollo-federation"><strong>Apollo Federation</strong><span>The gateway compiles one client query into a query plan of parallel fetches against the owning subgraphs, then stitches their partial responses into a single result by entity keys.</span></div>
+        <div class="wild-item" data-kb-example="apollo-federation" id="wild-apollo-federation" data-kb-level="advanced"><strong>Apollo Federation</strong><span>The gateway compiles one client query into a query plan of parallel fetches against the owning subgraphs, then stitches their partial responses into a single result by entity keys.</span></div>
       </div>
     </section>
 
@@ -263,37 +277,41 @@ async function screen(
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Gather timeout / deadline</strong> — How long to wait for replies before closing the aggregate and treating stragglers as absent.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Quorum / minimum reply count</strong> — Close the gather once a minimum number of replies has arrived, rather than waiting for every recipient.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Fan-out breadth (recipient count)</strong> — How many recipients each request is scattered to; sets the load-amplification factor per call.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Correlation state TTL</strong> — How long the gather keeps an in-flight aggregation before discarding it, bounding memory from requests that never complete.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Quorum / minimum reply count</strong> — The number of replies that closes the gather early, instead of waiting for every recipient.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Fan-out breadth (recipient count)</strong> — How many recipients each request is scattered to — it sets the load-amplification factor per call.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Correlation state TTL</strong> — How long the gather holds an in-flight aggregation before discarding it.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Missing-reply semantics</strong> — What the aggregate does with an absent recipient: omit it, substitute a default, or fail the whole exchange. A domain decision, not a default.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Reply completeness</strong> — Replies received divided by recipients scattered to, before the deadline; a falling ratio means recipients are timing out.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>End-to-end gather latency (p99)</strong> — Bounded by the slowest reply or the timeout, whichever comes first.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Timeout / straggler rate</strong> — How often the gather closes on the deadline instead of on full completion.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>In-flight aggregation count</strong> — Open scatters awaiting replies; a climbing count signals orphaned or stuck aggregations.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>End-to-end gather latency (p99)</strong> — Bounded by the slowest reply or the timeout, whichever comes first — so it tells you which of the two is binding.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Timeout / straggler rate</strong> — How often the gather closes on the deadline instead of on full completion.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>In-flight aggregation count</strong> — Open scatters awaiting replies; a climbing count signals orphaned or stuck aggregations.</li>
+            <li id="production-signal-5" data-kb-polarity="signal" data-kb-level="expert"><strong>Per-recipient reply latency</strong> — The distribution across recipients, not just the aggregate — this is what names the one participant setting your tail.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Slowest recipient dominates</strong> — Tail latency of the whole exchange tracks the slowest responder up to the gather timeout.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Orphaned aggregations</strong> — Replies that never arrive leave gather state open, leaking memory unless a correlation TTL expires it.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Late reply after close</strong> — A straggler answers after the aggregate was already sent, arriving for a request that no longer exists.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Load amplification</strong> — Every call multiplies N-fold across recipients; a request burst multiplies broadcast load on all of them at once.</li>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Slowest recipient dominates</strong> — Tail latency of the whole exchange tracks the slowest responder up to the gather timeout, so one degraded participant sets the p99 for every call.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Orphaned aggregations</strong> — Replies that never arrive leave gather state open, leaking memory unless a correlation TTL expires it.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Late reply after close</strong> — A straggler answers after the aggregate was already sent, arriving for a request that no longer exists.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Load amplification</strong> — Every call multiplies N-fold across recipients; a request burst arrives at all of them simultaneously, so they saturate together rather than one at a time.</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Absence read as an answer</strong> — A gather that closes on a deadline and treats a missing reply as an empty or negative result reports a conclusion nobody computed.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
-            <li id="production-check-1" data-kb-polarity="check">The gather has a hard timeout and a defined behavior for missing replies — partial result or fail</li>
-            <li id="production-check-2" data-kb-polarity="check">Each reply carries a correlation id matched to its in-flight request</li>
-            <li id="production-check-3" data-kb-polarity="check">In-flight aggregation state is bounded and expires orphaned requests</li>
-            <li id="production-check-4" data-kb-polarity="check">Duplicate and late replies are handled — ignored or reconciled</li>
-            <li id="production-check-5" data-kb-polarity="check">Downstream capacity is sized for N-fold amplification per request</li>
+            <li id="production-check-1" data-kb-polarity="check">The gather has a hard timeout, and the meaning of a missing reply is written down beside it rather than implied by the code</li>
+            <li id="production-check-2" data-kb-polarity="check">Every reply carries a correlation id matched to its in-flight request</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">In-flight aggregation state is bounded and expires, verified by running the case where a recipient never answers</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Duplicate and late replies have a defined destination and are counted, not dropped silently</li>
+            <li id="production-check-5" data-kb-polarity="check">Recipients are sized for the amplified request rate, not for the caller's rate</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Fan-out breadth has a cap, so a recipient list that grows at runtime cannot multiply load without a limit</li>
           </ul>
         </div>
       </div>

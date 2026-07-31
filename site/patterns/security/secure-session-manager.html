@@ -93,8 +93,8 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1">A <strong>secure session manager</strong> issues a session identifier the moment a user authenticates, keeps the session's real state — who they are, what they're allowed to do, when it expires — on the server side (or inside a signed, tamper-evident token), and attaches that identifier to every subsequent request through a cookie or header. The client carries nothing but an opaque handle; the manager is the single place that creates, validates, renews, and kills it.</p>
-        <p id="description-p-2">The force it resolves is that HTTP itself has no memory. Every request arrives with no notion of who sent the last one, so something has to carry identity forward without forcing a re-login on every call. Do that carelessly — a session ID that never expires, one that's guessable, one that survives logout — and you've built a standing key to the account that a network sniff, an XSS payload, or a shared machine can pick up and reuse indefinitely.</p>
+        <p id="description-p-1" data-kb-register="basic">HTTP has no memory. The request after you sign in arrives knowing nothing about the one where you proved who you were, so something has to carry that decision forward — or the user types their password again on every page. The obvious fix is to hand out a code and let the browser send it back each time, and the obvious fix is where the damage happens. A code that never expires is a standing key to the account. A code that is easy to guess is a key anyone can cut. A code that still works after logout is a key that was never handed back. A <strong>secure session manager</strong> is the one component that issues these codes, decides how long each stays good, and can cancel one on demand.</p>
+        <p id="description-p-2" data-kb-level="advanced">The manager issues a session identifier the moment a user authenticates, keeps the session's real state — subject, scopes, expiry — server-side or inside a signed, tamper-evident token, and attaches only that identifier to each subsequent request through a cookie or header. The client carries an opaque handle and nothing else. Creation, validation, renewal and destruction all live in that one place, which is what makes a policy change one edit rather than an audit of every route.</p>
         <p id="description-p-3">A secure session manager treats the session ID itself as a secret: generated from a cryptographically strong random source, sent only over TLS, marked <code>HttpOnly</code> and <code>Secure</code> so script and plaintext channels can't touch it, and regenerated whenever the user's privilege changes — most critically right after login, which closes the session-fixation hole where an attacker plants a known ID before the victim authenticates into it.</p>
         <p id="description-p-4">It sits downstream of authentication, not inside it — an <a href="./authentication-enforcer.html">Authentication Enforcer</a> decides who the caller is; the session manager decides how long that decision stays valid and how it travels between requests. Confuse the two and you either re-check credentials on every call, or trust a session that was never properly revoked.</p>
       </div>
@@ -105,15 +105,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>When you sign in, you are handed something like a hotel key card. It carries no name, just a code the front desk recognises; it stops working at checkout, and if it is lost the desk can cancel it and cut a new one. A website does the same, so you prove who you are once instead of on every page.</p>
+          <p>The web has no memory. The page you load after signing in arrives knowing nothing about the moment you typed your password, so unless something carries that forward you would type it again on every click. So the site hands you a code when you sign in and your browser sends it back with every request. That code is now as good as your password, which is where things go wrong: if it never expires, it is a key to your account that works forever; if it is short or predictable, someone can guess it; if it keeps working after you press log out, you never really logged out. It is a hotel key card — no name on it, just a number the front desk knows, useless after checkout, and cancellable the moment you report it lost. The point of having one component in charge of these cards is that all of those rules live in a single place instead of being half-remembered on every page.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>At authentication the manager mints a high-entropy identifier, keeps the real state — subject, scopes, expiry — server-side or in a signed token, and attaches only that opaque handle to each request over TLS with HttpOnly and Secure set; it regenerates the identifier at login and on privilege change to close session fixation. In a KYC onboarding flow the subject has no account: the emailed single-use link is the session, stored only as its hash, which is what lets the server expire it, spend it once and revoke it on resend.</p>
+          <p>At authentication the manager mints a high-entropy identifier, keeps the real state — subject, scopes, expiry — server-side or inside a signed token, and attaches only that opaque handle to each request over TLS with HttpOnly, Secure and SameSite set. It regenerates the identifier at login and on any privilege change, which is what closes session fixation: an attacker who planted a known id before the victim authenticated finds it invalid afterwards. The variants split on where the state lives. An opaque id over a server-side store means the id reveals nothing and can be deleted mid-session. A signed token carries its own claims and needs no lookup, at the price of surviving until expiry unless a denylist is added. Expiry itself is two dials, not one: a sliding idle timeout keeps active users signed in, and an absolute maximum caps total age regardless of activity. A short access token paired with a longer-lived refresh token narrows what a leaked access token is worth.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>The real decision is revocability versus a stateful dependency. A server-side store buys instant, mid-session lockout and pays with a component on the path of every authenticated request, whose outage logs everyone out at once and whose tail latency is everyone's latency. A signed token buys the lookup back and pays by being unrevokable until expiry, unless you add the denylist that reintroduces the store. Either way, cap sliding sessions with an absolute lifetime — an attacker holding a live session renews it forever otherwise — and treat the store or the signing key as one blast radius covering every session at once.</p>
+          <p>The real decision is revocability against a stateful dependency, and it is a threat-model decision rather than an architectural taste. A server-side store buys instant mid-session lockout — the control you need the day an account is confirmed compromised — and pays with a component on the path of every authenticated request, whose outage logs the entire user base out at once and whose tail latency is everyone's latency. A signed token buys that lookup back and pays by being unrevokable until expiry; adding the denylist that fixes it reintroduces the store you were avoiding, so the honest version of the stateless choice is a short expiry you are willing to wait out. Three costs follow whichever way you go. Cap sliding sessions with an absolute lifetime, because an attacker holding a live session renews it forever otherwise. Treat the store and the signing key as one blast radius: a single leak compromises every active session at once, so key rotation has to be a rehearsed operation and not a theoretical one. And keep the identifier out of URLs entirely — a session id in a query string leaks through access logs, browser history, bookmarks and the Referer header, none of which are places you can revoke. Then run the loop: tune the idle and absolute timeouts, watch store latency and concurrent sessions per user, expect a store outage to read as a total authentication outage first, and gate the release on rotation at login and a revocation you have actually watched work.</p>
         </div>
       </div>
     </section>
@@ -142,14 +142,14 @@ stateDiagram-v2
       <dl class="variations">
         <dt id="variations-item-1">Opaque token, server-side store</dt>
         <dd>The session ID is a random, unguessable string; all real state — user, roles, expiry — lives server-side in Redis or a database, so the ID alone reveals nothing if intercepted.</dd>
-        <dt id="variations-item-2">Stateless signed session (JWT)</dt>
-        <dd>Claims are encoded and signed directly into the token, so validation needs no store lookup — at the cost of being unable to revoke a single token before it expires without a separate denylist.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Stateless signed session (JWT)</dt>
+        <dd data-kb-level="advanced">Claims are encoded and signed directly into the token, so validation needs no store lookup — at the cost of being unable to revoke a single token before it expires without a separate denylist.</dd>
         <dt id="variations-item-3">Sliding vs. fixed expiration</dt>
         <dd>Sliding renews the timeout on every request, keeping active users signed in indefinitely; a fixed absolute expiry caps how long a hijacked session stays usable regardless of activity.</dd>
         <dt id="variations-item-4">Session ID rotation on privilege change</dt>
         <dd>Issue a fresh ID at login and again at any escalation, invalidating the old one immediately — the standard defense against session fixation.</dd>
-        <dt id="variations-item-5">Refresh token / access token pair</dt>
-        <dd>A short-lived access token authorizes each call; a longer-lived refresh token, stored more carefully, mints new ones — narrowing the blast radius of a leaked access token.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced">Refresh token / access token pair</dt>
+        <dd data-kb-level="advanced">A short-lived access token authorizes each call; a longer-lived refresh token, stored more carefully, mints new ones — narrowing the blast radius of a leaked access token.</dd>
       </dl>
     </section>
 
@@ -162,16 +162,16 @@ stateDiagram-v2
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Confines identity state to one component instead of scattering ad hoc cookies across the app.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Expiration and revocation are enforced in one place, closing the window a stolen token stays useful.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">Rotating the session ID at login defeats session fixation outright.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Server-side sessions can be revoked instantly; a compromised account can be locked out mid-session.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Server-side sessions can be revoked instantly; a compromised account can be locked out mid-session.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">A server-side session store adds a stateful dependency and a scaling and availability concern of its own.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A server-side session store adds a stateful dependency and a scaling and availability concern of its own — its outage reads to users as a total logout, so it needs the availability budget of the login path, not of a cache.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Stateless signed tokens can't be revoked before expiry without an extra denylist, undermining "stateless."</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Sliding expiration keeps a hijacked-but-active session alive indefinitely unless capped by an absolute max age.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Session data is a high-value target — a leaked store or signing key compromises every active session at once.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Session data is a high-value target — a leaked store or signing key compromises every active session at once, so key rotation has to be an operation somebody has rehearsed rather than a paragraph in a design doc.</li>
             <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">The identifier must never travel in a URL: a session ID in a query string leaks through server logs, browser history and bookmarks, the Referer header, and any shared link — and hands an attacker a fixation vector the cookie-or-header transport doesn't expose.</li>
           </ul>
         </div>
@@ -201,7 +201,29 @@ stateDiagram-v2
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1">
+      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+        <summary>TypeScript — issue, validate, destroy</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">import { randomBytes } from "node:crypto";
+
+// The id is a secret: unguessable random bytes, and nothing about the user in it.
+function login(res: Response, userId: string) {
+  const id = randomBytes(32).toString("base64url");
+  sessions.set(id, { userId, expiresAt: Date.now() + 30 * 60_000 });
+  res.cookie("sid", id, { httpOnly: true, secure: true, sameSite: "lax" });
+}
+
+function currentUser(req: Request): string | null {
+  const s = sessions.get(req.cookies.sid);
+  if (!s || s.expiresAt &lt; Date.now()) return null;  // unknown or expired
+  return s.userId;
+}
+
+// Logout deletes the server's copy, so the cookie in the browser is now worthless.
+function logout(req: Request) {
+  sessions.delete(req.cookies.sid);
+}</code></pre>
+      </details>
+      <details class="sketch" id="sketch-variant-2" data-kb-level="advanced">
         <summary>TypeScript — a magic link whose session state lives on the server</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">import { createHash, randomBytes } from "node:crypto";
 
@@ -248,8 +270,8 @@ class SessionStore {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="django-sessions" id="wild-django-sessions"><strong>Django session framework</strong><span>Stores a random session key in the cookie while keeping session data in the backend chosen by SESSION_ENGINE (database, cache, or signed cookie). SESSION_COOKIE_HTTPONLY defaults to on, SESSION_COOKIE_SECURE and SESSION_COOKIE_AGE are configurable, and the login flow cycles the session key to defeat fixation.</span></div>
-        <div class="wild-item" data-kb-example="spring-session" id="wild-spring-session"><strong>Spring Session</strong><span>Replaces the container HttpSession with an implementation backed by a SessionRepository, with Redis, JDBC, and Hazelcast backends, so any application instance in a cluster can validate, look up, and revoke the same session independently of which node created it.</span></div>
-        <div class="wild-item" data-kb-example="express-session" id="wild-express-session"><strong>express-session</strong><span>Middleware that stores a session ID in a cookie signed with a configured secret and keeps state in a pluggable store (connect-redis and others). Cookie options cover httpOnly, secure, sameSite, and maxAge, and req.session.regenerate() rotates the ID on demand.</span></div>
+        <div class="wild-item" data-kb-example="spring-session" id="wild-spring-session" data-kb-level="advanced"><strong>Spring Session</strong><span>Replaces the container HttpSession with an implementation backed by a SessionRepository, with Redis, JDBC, and Hazelcast backends, so any application instance in a cluster can validate, look up, and revoke the same session independently of which node created it.</span></div>
+        <div class="wild-item" data-kb-example="express-session" id="wild-express-session" data-kb-level="advanced"><strong>express-session</strong><span>Middleware that stores a session ID in a cookie signed with a configured secret and keeps state in a pluggable store (connect-redis and others). Cookie options cover httpOnly, secure, sameSite, and maxAge, and req.session.regenerate() rotates the ID on demand.</span></div>
       </div>
     </section>
 
@@ -259,40 +281,42 @@ class SessionStore {
         <div class="prod-group prod-knobs">
           <h3>Tuning knobs</h3>
           <ul>
-            <li id="production-knob-1" data-kb-polarity="knob"><strong>Idle (sliding) timeout</strong> — How long a session survives without activity before expiring. Shorter shrinks the window a stolen or abandoned session is usable; longer keeps active users signed in but leaves a hijacked-but-active session alive.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Absolute maximum session lifetime</strong> — A hard cap on total session age regardless of activity. Without it, a sliding session renewed on every request lives forever — including a hijacked one. It bounds the worst case a stolen token can be reused.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Cookie security flags (HttpOnly, Secure, SameSite)</strong> — HttpOnly keeps script from reading the session ID (blunting XSS theft), Secure keeps it off plaintext HTTP, SameSite limits cross-site sending (blunting CSRF). These are the attributes that keep the handle out of the wrong channels.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Session ID entropy</strong> — Bytes of cryptographically strong randomness in the identifier. Too few and the ID becomes guessable or brute-forceable; the session ID is a secret and must be sized like one.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Store model (server-side vs stateless signed token)</strong> — A server-side store allows instant revocation but adds a stateful dependency; a stateless signed token needs no lookup but cannot be revoked before expiry without a separate denylist. The choice trades revocability against a scaling dependency.</li>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Idle (sliding) timeout</strong> — How long a session survives without activity before it expires. It sets the window an abandoned session on a shared machine stays usable.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Absolute maximum session lifetime</strong> — A hard cap on total session age regardless of activity. It bounds the worst case for a stolen identifier, because nothing else does.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Cookie security flags (HttpOnly, Secure, SameSite)</strong> — HttpOnly keeps script from reading the identifier, Secure keeps it off plaintext HTTP, SameSite limits cross-site sending. These decide which channels the handle can reach at all.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>Session ID entropy</strong> — Bytes of cryptographically strong randomness in the identifier — it is a secret, so size it like one rather than like a database key.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="advanced"><strong>Store model (server-side vs stateless signed token)</strong> — A server-side store allows deletion mid-session; a signed token validates without a lookup. This is the revocability-versus-dependency choice, and it is the one that shapes everything else.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
-            <li id="production-signal-1" data-kb-polarity="signal"><strong>Active session count / store size</strong> — Number of live sessions the store holds. Its growth drives store memory and latency, and a sharp climb can signal session-fixation spraying or a token leak being exercised.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Session store latency</strong> — Time to read/validate a session on the store (e.g. a Redis round trip) — paid on every authenticated request, so its tail latency is user-facing latency everywhere.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Expired / invalid session rate</strong> — Rate of requests bounced for an expired or unknown session ID. A spike can mean a timeout misconfiguration, a store flush, or brute-force guessing of IDs.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Concurrent sessions per user</strong> — How many simultaneous sessions a single account holds. An unusual jump for one user is a classic hijack or credential-sharing signal.</li>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Active session count / store size</strong> — Live sessions the store holds — it drives store memory and latency, and a sharp climb can mean fixation spraying or a leaked token being exercised.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Session store latency</strong> — Time to read and validate a session, paid on every authenticated request — so its tail latency is user-facing latency across the whole product.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Expired / invalid session rate</strong> — Requests bounced for an expired or unknown identifier. A spike can mean a timeout misconfiguration, a store flush, or someone guessing ids.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Concurrent sessions per user</strong> — How many simultaneous sessions one account holds; an unusual jump for a single user is a classic hijack or credential-sharing signal.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Session store outage</strong> — A server-side store is a stateful dependency and a single point of failure: if it goes down, every user is effectively logged out at once (or requests hang), turning a cache incident into a full authentication outage.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Leaked store or signing key</strong> — The session data — or the key that signs stateless tokens — is a high-value target; a single leak compromises every active session simultaneously, not just one.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Stateless token cannot be revoked before expiry</strong> — A compromised JWT stays valid until it expires because there is no store to delete it from; without a denylist, forced logout and mid-session lockout are impossible.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Sliding session with no absolute cap</strong> — An attacker with a hijacked-but-active session keeps it alive indefinitely by making periodic requests, because every request renews the idle timeout and nothing caps total age.</li>
-            <li id="production-failure-5" data-kb-polarity="failure"><strong>Missing rotation at login (session fixation)</strong> — The session ID is not regenerated after authentication, so an attacker who planted a known ID before login rides the victim into an authenticated session on that same ID.</li>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Session store outage</strong> — The store is on the path of every authenticated request, so if it goes down every user is logged out at once (or their requests hang) — a cache incident becomes a full authentication outage.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="expert"><strong>Leaked store or signing key</strong> — One leak compromises every active session simultaneously rather than one, and until the key is rotated the attacker can mint sessions at will.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Stateless token cannot be revoked before expiry</strong> — A compromised signed token stays valid until it expires because there is no record to delete, so forced logout and mid-session lockout are simply unavailable.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Sliding session with no absolute cap</strong> — An attacker holding a hijacked-but-active session keeps it alive indefinitely with periodic requests, because every request renews the idle timeout and nothing caps total age.</li>
+            <li id="production-failure-5" data-kb-polarity="failure"><strong>Missing rotation at login (session fixation)</strong> — The identifier is not regenerated after authentication, so an attacker who planted a known id before login rides the victim into an authenticated session on that same id.</li>
+            <li id="production-failure-6" data-kb-polarity="failure" data-kb-level="advanced"><strong>Identifier leaked through a URL</strong> — A session id in a query string is copied into access logs, browser history, bookmarks and the Referer header — places with no expiry and no revocation.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
-            <li id="production-check-1" data-kb-polarity="check">Generate session IDs from a CSPRNG with enough entropy that guessing is infeasible.</li>
-            <li id="production-check-2" data-kb-polarity="check">Set HttpOnly, Secure, and SameSite on session cookies and serve them only over TLS.</li>
-            <li id="production-check-3" data-kb-polarity="check">Regenerate the session ID at login and on any privilege change to close session fixation.</li>
-            <li id="production-check-4" data-kb-polarity="check">Cap sliding sessions with an absolute maximum lifetime, not just an idle timeout.</li>
-            <li id="production-check-5" data-kb-polarity="check">Confirm revocation actually kills a session — instantly for server-side stores, via a denylist for stateless tokens.</li>
+            <li id="production-check-1" data-kb-polarity="check">Session identifiers come from a CSPRNG — the framework default was read and confirmed, not assumed</li>
+            <li id="production-check-2" data-kb-polarity="check">HttpOnly, Secure and SameSite were verified on a real response from the production configuration, not only in source</li>
+            <li id="production-check-3" data-kb-polarity="check">The session id is regenerated at login and on any privilege change, and the old one stops working immediately</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">An absolute lifetime is configured alongside the idle timeout, and a session was watched actually expiring under continuous activity</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Revocation was exercised end to end — a live session killed and the next request rejected — for whichever model you chose</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">No route accepts or emits the session id in a URL, checked against the routing table rather than remembered</li>
           </ul>
         </div>
       </div>

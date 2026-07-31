@@ -68,6 +68,13 @@
       "kb:note": "Safe retries require idempotent operations"
     }
   ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../../hazards/retry-storm.html#retry-storm",
+      "name": "Retry Storm",
+      "kb:note": "Backoff without jitter still returns the whole crowd together"
+    }
+  ],
   "kb:demonstrated-by": [
     {
       "@id": "../../../designs/web-crawler.html#web-crawler",
@@ -88,6 +95,11 @@
       "@id": "../../../designs/persona-identification.html#persona-identification",
       "name": "Persona Identification & Sanction Check",
       "kb:note": "backing off vendor calls and webhook delivery attempts in a persona-verification saga before giving up to a DLQ"
+    },
+    {
+      "@id": "../../../designs/gopuff.html#gopuff",
+      "name": "Gopuff",
+      "kb:note": "bounding the replay is what stops contention on a promoted item becoming a retry storm"
     }
   ],
   "kb:in-theme": [
@@ -130,9 +142,10 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1"><strong>Retry with Backoff</strong> wraps a call that can fail transiently and, on failure, waits before trying it again — each wait longer than the last, typically growing exponentially (<code>base × 2^attempt</code>) up to some ceiling. Control returns to the caller only on success, once attempts are exhausted, or the moment an error is recognized as non-transient and not worth retrying at all.</p>
-        <p id="description-p-2">The force it resolves is a mismatch between failure and response speed. A dropped packet, a momentary overload, a lock held a beat too long — these clear on their own, and an immediate retry often succeeds. But immediate, synchronized retries from many clients at once do the opposite of helping: they pile onto a dependency at the exact moment it's already struggling, turning a brief blip into a self-inflicted retry storm. Backoff spreads that load out over time; adding jitter — randomizing the delay rather than following a fixed curve — desynchronizes clients further so they don't all retry in lockstep.</p>
-        <p id="description-p-3">Backoff alone isn't sufficient. Each attempt still needs its own <a href="./timeout-deadline.html">Timeout / Deadline</a>, or a hung attempt stalls the whole retry loop instead of failing into it. And because retrying re-executes the call, safety depends on <a href="../../messaging/idempotency.html">Idempotency</a> — a retried write that isn't idempotent can duplicate its effect the moment a response is lost after the operation actually succeeded.</p>
+        <p id="description-p-1" data-kb-register="basic">A call fails, and by the time you read the error the reason for it has already passed — a dropped packet, a lock held a beat too long, a service that was busy for a second. Running the same call again works. Running it again <em>immediately</em>, from every client whose call failed at that same instant, does not: they all arrive together and finish off a dependency that was only stumbling. <strong>Retry with Backoff</strong> tries again after a wait, and waits longer before each further attempt.</p>
+        <p id="description-p-2" data-kb-level="advanced">The loop wraps one call and classifies what comes back. A transient failure — a timeout, a 429, a 503 — waits <code>base × 2^attempt</code>, capped at a ceiling and randomized with jitter, then re-executes. A permanent one — a malformed request, a rejected credential — returns to the caller straight away and spends no attempt. Control comes back on success, on a permanent error, or once the attempt budget is gone; and where the wait is long, the delay belongs on a scheduled row rather than in a held thread.</p>
+        <p id="description-p-3">What the growing delay buys is a thinner second wave. Retries are load, and they arrive exactly when the dependency has least to spare — un-jittered, they arrive in lockstep, so a blip the system would have absorbed becomes an outage the retries themselves keep alive.</p>
+        <p id="description-p-4">Backoff alone isn't enough. Each attempt needs its own <a href="./timeout-deadline.html">Timeout / Deadline</a>, or a hung attempt stalls the loop instead of failing into it. And the operation has to be <a href="../../messaging/idempotency.html">idempotent</a>, because a retry after a lost success response repeats an effect that already happened.</p>
       </div>
     </section>
 
@@ -141,15 +154,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Some calls fail for a passing reason — a moment of network trouble, or a service saying it is too busy right now — and would have worked a second later. So try again, but wait before each attempt, and wait longer each time. It is what you do when a phone line is engaged: you do not redial every second, partly because everyone redialing at once is a large part of why nobody is getting through.</p>
+          <p>A call fails for a reason that has already gone away — the network hiccupped, or the service on the other end was busy for a moment. Ask again and it works. The trap is asking again straight away: everyone whose call failed at that instant asks again at that instant too, and a service that was briefly busy is now properly buried. So wait before trying again, and wait longer each time — the way you would not redial an engaged number every second, since constant redialling is a good part of why nobody is getting through. After a few tries, stop and say the call failed, rather than trying forever.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>Re-execute a failed call after a growing wait — a base delay doubling per attempt, capped at a ceiling and randomized with jitter so clients that failed together do not retry together. Only transient errors qualify; a bad request or an auth failure should fail immediately. In a KYC screening system the delay is a column, not a sleep: a failed vendor call writes an attempt count and a pushed-out run_after onto the task row, the worker moves on, and whichever replica claims that row next is the one that retries.</p>
+          <p>Classify the failure, then re-execute after a growing wait: a base delay doubling per attempt, capped at a ceiling and randomized with jitter so clients that failed together do not retry together. Only transient errors qualify — a timeout, a 429, a 503; a malformed request or a rejected credential returns immediately and spends no attempt. The variants differ in where the wait lives and who chooses it. A fixed interval is the simplest and never eases off under sustained failure; a server's own Retry-After outranks any curve you compute locally; and for work that outlives a request the delay belongs on a queue row rather than a sleeping thread — write an attempt count and a pushed-out run_after, release the worker, and whichever replica claims that row next is the one that retries.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>Retry only where the failure is plausibly transient and the operation is idempotent or dedup-keyed, since a retried write whose success response was lost duplicates its effect. Backoff buys automatic recovery from blips and pays for it with a slower, far less predictable failure path — and it is most dangerous exactly where it looks most useful: unbounded or un-jittered retries amplify load on a dependency already struggling, and retries nested at client, gateway and service multiply together. Budget them at one tier, cap attempts and delay, trip a breaker on sustained failure, and let a server's own Retry-After outrank your curve.</p>
+          <p>Retry where the failure is plausibly transient and the call is idempotent or dedup-keyed. Where it is neither, fail and hand the outcome to a compensating transaction or a dead-letter channel — a retry loop over a non-repeatable write buys availability with duplicated effects. The bill comes in three parts, each with a counter-move. The failure path gets slower and much less predictable, so cap the attempts and the ceiling and bound every attempt with a timeout, checked against the caller's remaining deadline. Retries are load arriving at the worst moment, so jitter the curve, cap retries as a share of traffic, and trip a circuit breaker once failure stops being transient. And retries nested at client, gateway and mesh multiply — three tiers of three attempts is 27 calls for one request — so pick the tier that owns retry and turn the others off. Then run the loop: tune the curve and the retryable set, watch retry rate against success-after-retry, find the tier that amplifies first under load, and gate the release on a dedup key for every write the loop can repeat.</p>
         </div>
       </div>
     </section>
@@ -174,17 +187,17 @@ flowchart TB
       <h2 class="doc-h" id="h-var">Variations</h2>
       <dl class="variations">
         <dt id="variations-item-1">Fixed delay</dt>
-        <dd>Retry after the same interval every time. Simplest to reason about, but it doesn't ease off under sustained failure and can still synchronize a flood of retries.</dd>
+        <dd>Retry after the same interval every time. Simplest to reason about, and the only variant that never eases off as the failure persists.</dd>
         <dt id="variations-item-2">Exponential backoff</dt>
         <dd>Each retry's wait multiplies the last, usually doubling, capped at a maximum delay so the curve doesn't grow unbounded on a long outage.</dd>
         <dt id="variations-item-3">Jittered backoff</dt>
         <dd>Randomize the delay around the backoff curve — full jitter, equal jitter, or decorrelated jitter — so clients that failed at the same instant don't all retry at the same instant too.</dd>
-        <dt id="variations-item-4">Retry budgets</dt>
-        <dd>Cap total retry volume as a share of overall traffic, independent of any single caller's attempt count, so retries collectively can never outgrow the load they're meant to smooth over.</dd>
-        <dt id="variations-item-5">Server-directed timing</dt>
-        <dd>Honour a delay the server hands back — a Retry-After header or a protocol-level pushback signal — and let it win over the locally computed wait. The overloaded side knows when it wants traffic back; doubling your own curve against its advice retries on the wrong schedule.</dd>
-        <dt id="variations-item-6">Declarative retry</dt>
-        <dd>The curve is configuration on the step, not a loop inside the handler. A Step Functions retrier declares which errors it matches plus the first interval, the attempt cap, the multiplier, a ceiling on the interval and whether to jitter — so what counts as retryable and how long the tail runs are reviewable in one place instead of scattered across call sites. It also moves the wait off your own process, which is what you want when the retryable unit is a durable step rather than an in-flight request.</dd>
+        <dt id="variations-item-4" data-kb-level="expert">Retry budgets</dt>
+        <dd data-kb-level="expert">Cap total retry volume as a share of overall traffic, independent of any single caller's attempt count, so retries collectively can never outgrow the load they're meant to smooth over.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced">Server-directed timing</dt>
+        <dd data-kb-level="advanced">Honour a delay the server hands back — a Retry-After header or a protocol-level pushback signal — and let it win over the locally computed wait. The overloaded side knows when it wants traffic back; doubling your own curve against its advice retries on the wrong schedule.</dd>
+        <dt id="variations-item-6" data-kb-level="advanced">Declarative retry</dt>
+        <dd data-kb-level="advanced">The curve is configuration on the step, not a loop inside the handler. A Step Functions retrier declares which errors it matches plus the first interval, the attempt cap, the multiplier, a ceiling on the interval and whether to jitter — so what counts as retryable and how long the tail runs are reviewable in one place instead of scattered across call sites. It also moves the wait off your own process, which is what you want when the retryable unit is a durable step rather than an in-flight request.</dd>
       </dl>
     </section>
 
@@ -204,9 +217,10 @@ flowchart TB
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Only helps with transient failures — retrying a permanent error just delays it and wastes time.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="expert">Naive or unbounded retries under a real outage amplify load exactly when the dependency needs it least.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Requires idempotent operations, or a retried write can duplicate its side effects.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Adds latency variance — the failure path gets slower, and less predictably so, with every attempt.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="expert">Unbounded or un-jittered retries amplify load exactly when the dependency has least to spare — cap the attempts, jitter the curve, and trip a <a href="./circuit-breaker.html">circuit breaker</a> once the failure stops being transient.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Requires idempotent operations, or a retried write duplicates its effect the moment a success response goes missing — carry a dedup key on anything the loop can repeat.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Adds latency variance — the failure path gets slower, and less predictably so, with every attempt, so bound the whole loop with the caller's deadline and not just each attempt.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Retries nested at client, gateway and mesh multiply — three tiers of three attempts is 27 calls for one request. Pick the tier that owns retry, turn it off in the others, and record which one it is.</li>
           </ul>
         </div>
       </div>
@@ -236,7 +250,28 @@ flowchart TB
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1">
+      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+        <summary>TypeScript — the smallest retry loop that works, waiting in this process</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">const MAX_ATTEMPTS = 5, BASE_MS = 200, MAX_MS = 30_000;
+
+const sleep = (ms: number) =&gt; new Promise(done =&gt; setTimeout(done, ms));
+
+async function withRetry&lt;T&gt;(call: () =&gt; Promise&lt;T&gt;): Promise&lt;T&gt; {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await call();                       // the call carries its own timeout
+    } catch (err) {
+      const lastTry = attempt + 1 &gt;= MAX_ATTEMPTS;
+      if (lastTry || !isTransient(err)) throw err;   // permanent: fail now, not later
+      const backoff = Math.min(MAX_MS, BASE_MS * 2 ** attempt);
+      await sleep(Math.random() * backoff);      // full jitter: anywhere in 0…backoff
+    }
+  }
+}
+
+await withRetry(() =&gt; verifyDocument(personaId, deadline));</code></pre>
+      </details>
+      <details class="sketch" id="sketch-variant-2" data-kb-level="advanced">
         <summary>TypeScript — backoff with full jitter, written to a queue column</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">const MAX_ATTEMPTS = 5, BASE_MS = 200, MAX_MS = 15 * 60_000;
 
@@ -288,7 +323,7 @@ function isTransient(err: unknown): boolean {
       <div class="wild-list">
         <div class="wild-item" data-kb-example="aws-sdk" id="wild-aws-sdk"><strong>AWS SDK</strong><span>The retry curve is configuration, not code: retry_mode picks standard, the default, which retries transient and throttling errors with exponential backoff and jitter bounded by max_attempts (3 by default). Its retry quota is a token bucket charged per retry and refunded on success, so sustained failure drains it and the client fails fast instead of adding load to a service already struggling. Adaptive mode adds a client-side rate limiter that can delay even the initial request once the service signals throttling — useful against one hot resource, harmful on a client that fans out across many.</span></div>
         <div class="wild-item" data-kb-example="p-retry" id="wild-p-retry"><strong>p-retry</strong><span>The Node wrapper for the same curve as options rather than a loop: retries (10 by default), factor (2), minTimeout (1 s), maxTimeout (unbounded) and randomize for jitter. A shouldRetry predicate and an AbortError stop the loop immediately on an error that will never succeed — the non-transient case backoff must never paper over.</span></div>
-        <div class="wild-item" data-kb-example="grpc" id="wild-grpc"><strong>gRPC</strong><span>Service config declares a retryPolicy with maxAttempts, initialBackoff, maxBackoff, backoffMultiplier, and the set of retryable status codes, applied by the client library — plus channel-level retry throttling (a token bucket) that disables retries when failures dominate, guarding against storms.</span></div>
+        <div class="wild-item" data-kb-example="grpc" id="wild-grpc" data-kb-level="advanced"><strong>gRPC</strong><span>Service config declares a retryPolicy with maxAttempts, initialBackoff, maxBackoff, backoffMultiplier, and the set of retryable status codes, applied by the client library — plus channel-level retry throttling (a token bucket) that disables retries when failures dominate, guarding against storms.</span></div>
         <div class="wild-item" data-kb-example="kubernetes" id="wild-kubernetes"><strong>Kubernetes</strong><span>The kubelet restarts a crashing container on an exponential back-off that doubles each failure up to a five-minute cap, surfaced as the CrashLoopBackOff state until a start succeeds.</span></div>
       </div>
     </section>
@@ -299,39 +334,44 @@ function isTransient(err: unknown): boolean {
         <div class="prod-group prod-knobs">
           <h3>Tuning knobs</h3>
           <ul>
-            <li id="production-knob-1" data-kb-polarity="knob"><strong>Max attempts / retry budget</strong> — The cap on attempts per call, and ideally a fleet-wide retry budget (retries as a share of total traffic) so retries collectively cannot outgrow the load they smooth.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Base delay and multiplier</strong> — The initial wait and its growth factor (base × 2^attempt) — the shape of the backoff curve.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Max delay ceiling</strong> — A cap on the per-attempt wait so the exponential curve does not grow unbounded during a long outage.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Jitter strategy</strong> — Full, equal, or decorrelated jitter randomizes the delay so clients that failed together do not retry together.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>Retryable classification</strong> — Which errors count as transient and worth retrying (timeouts, 429, 503) versus permanent ones (400, 401, 404) that should fail immediately.</li>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Max attempts</strong> — How many tries a call gets before the caller is told it failed — the hard end of the curve.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Base delay and multiplier</strong> — The first wait and its growth factor (base × 2^attempt) — the shape of the curve.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Max delay ceiling</strong> — A cap on the per-attempt wait, so the exponential does not run away during a long outage.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Jitter strategy</strong> — Full, equal or decorrelated jitter — how much randomness is mixed into each delay.</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Retryable classification</strong> — Which errors count as transient (timeouts, 429, 503) and which fail straight through (400, 401, 404).</li>
+            <li id="production-knob-6" data-kb-polarity="knob" data-kb-level="expert"><strong>Retry budget</strong> — A fleet-wide cap on retries as a share of total traffic, independent of any one caller's attempt count.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
-            <li id="production-signal-1" data-kb-polarity="signal"><strong>Retry rate / amplification</strong> — Retries as a fraction of total requests — how much extra load the retry layer is adding, especially during an incident.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Success-after-retry rate</strong> — Whether retried calls actually recover; a low rate means the failures are not transient and retrying is just waste.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Failure-path latency</strong> — The added tail latency (p99) contributed by waiting through the backoff curve before giving up.</li>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Retry rate</strong> — Retries as a fraction of total requests, per dependency — the extra load the retry layer is adding right now.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Success-after-retry rate</strong> — The share of retried calls that eventually succeed. A low share means the failures were never transient.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Attempt distribution</strong> — How deep into the budget calls are going. A shift from attempt 1 to attempt 3 is the dependency degrading before it fails.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>Failure-path latency</strong> — The p99 of calls that exhaust the curve — what a user waits for an error.</li>
+            <li id="production-signal-5" data-kb-polarity="signal" data-kb-level="advanced"><strong>Server pushback rate</strong> — How often the callee returns 429 or Retry-After, and whether your schedule respects the delay it asks for.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Retry storm</strong> — Unbounded or un-jittered retries pile onto a struggling dependency at the worst moment, turning a blip into a self-inflicted outage.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Cross-layer amplification</strong> — Retries nested at multiple tiers multiply — client × gateway × service — so three attempts each becomes many times the original load.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Non-idempotent duplication</strong> — Retrying a write whose success response was lost duplicates its effect unless the operation is idempotent or dedup-keyed.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Retrying permanent errors</strong> — Retrying a 4xx or an auth failure never succeeds; it only delays the error and wastes the attempt budget.</li>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Retry storm</strong> — Un-jittered retries return in lockstep and pile onto a dependency at the worst moment, so the blip is sustained by the retries themselves.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="expert"><strong>Cross-layer amplification</strong> — Retries nested at client, gateway and mesh multiply, so a few attempts each becomes tens of calls for one request.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Non-idempotent duplication</strong> — A success response lost in transit looks like a failure, so the retry repeats an effect that already happened — a second charge, a second email.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Budget burnt on permanent errors</strong> — Every attempt spent on a 4xx that will never succeed is an attempt the transient failures do not get.</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Retrying past the caller's deadline</strong> — The client gave up mid-curve, so the remaining attempts do work nobody is waiting for — pure load with no possible payoff.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
-            <li id="production-check-1" data-kb-polarity="check">Cap attempts and set a max-delay ceiling so backoff cannot grow unbounded.</li>
-            <li id="production-check-2" data-kb-polarity="check">Add jitter to desynchronize clients that failed at the same instant.</li>
-            <li id="production-check-3" data-kb-polarity="check">Classify errors and retry only transient ones — never a 4xx client error.</li>
-            <li id="production-check-4" data-kb-polarity="check">Ensure the operation is idempotent or dedup-keyed before retrying a write.</li>
-            <li id="production-check-5" data-kb-polarity="check">Pair with a circuit breaker so retries stop when a dependency is sustainedly down.</li>
-            <li id="production-check-6" data-kb-polarity="check">Budget retries at a single tier to avoid cross-layer amplification.</li>
+            <li id="production-check-1" data-kb-polarity="check">Every operation the loop can repeat carries a dedup key or is provably idempotent, verified by replaying a call whose success response was dropped</li>
+            <li id="production-check-2" data-kb-polarity="check">The retryable error set was checked against the errors this dependency actually returns, not the HTTP defaults</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Exactly one tier retries this call and the others are configured off, written down where the next team will find it</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">A load test with the dependency made slow, not switched off, shows retry volume staying inside the budget</li>
+            <li id="production-check-5" data-kb-polarity="check">Retry rate and success-after-retry are exported per dependency, with an alert on retries climbing while successes do not</li>
+            <li id="production-check-6" data-kb-polarity="check">Exhausted retries land somewhere a person sees — a dead-letter channel or an escalation — rather than a log line</li>
+            <li id="production-check-7" data-kb-polarity="check" data-kb-level="expert">The caller's remaining deadline is checked before each attempt, so no attempt starts that cannot finish in time</li>
           </ul>
         </div>
       </div>
@@ -340,7 +380,7 @@ function isTransient(err: unknown): boolean {
     <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
-        <div class="fluency-item" data-kb-theme="resilience" id="fluency-resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Ride out transient failures</span></div>
+        <div class="fluency-item" data-kb-theme="resilience" id="fluency-resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Ride out transient failures, so a blip that clears on its own never reaches the caller as an error.</span></div>
       </div>
     </section>
 
@@ -366,13 +406,21 @@ function isTransient(err: unknown): boolean {
         </div>
       </div>
 
-            <div class="rel-group">
+                  <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="retry-storm"><a href="../../../hazards/retry-storm.html">Retry Storm</a><span class="rel-note">Backoff without jitter still returns the whole crowd together</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
         <p class="rel-type">Demonstrated by</p>
         <div class="rel-list">
           <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="web-crawler"><a href="../../../designs/web-crawler.html">Web Crawler</a><span class="rel-note">transient fetch failures are retried with growing delays instead of hammering a struggling origin</span></div>
           <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="payment-system"><a href="../../../designs/payment-system.html">Payment System</a><span class="rel-note">unreliable server-to-server delivery is a textbook case for capped exponential retry</span></div>
           <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="job-scheduler"><a href="../../../designs/job-scheduler.html">Job Scheduler</a><span class="rel-note">transient job failures are absorbed by spacing retries out exponentially instead of hammering</span></div>
           <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="persona-identification"><a href="../../../designs/persona-identification.html">Persona Identification &amp; Sanction Check</a><span class="rel-note">backing off vendor calls and webhook delivery attempts in a persona-verification saga before giving up to a DLQ</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="gopuff"><a href="../../../designs/gopuff.html">Gopuff</a><span class="rel-note">bounding the replay is what stops contention on a promoted item becoming a retry storm</span></div>
         </div>
       </div>
 

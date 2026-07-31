@@ -90,6 +90,13 @@
       "kb:note": "Domain events as truth vs. a durability log"
     }
   ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/dual-write-inconsistency.html#dual-write-inconsistency",
+      "name": "Dual-Write Inconsistency",
+      "kb:note": "Dissolves the dual write by making the log the state"
+    }
+  ],
   "kb:demonstrated-by": [
     {
       "@id": "../../designs/ad-click-aggregator.html#ad-click-aggregator",
@@ -154,9 +161,9 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1">In <strong>event sourcing</strong>, an entity's state is never written directly — every change is captured as an immutable event and appended to a log in the order it happened. Current state is derived, not stored: it's rebuilt by replaying the log from the beginning (or from the last snapshot) and folding each event into a fresh copy of the state.</p>
-        <p id="description-p-2">The problem it resolves is loss of history. A conventional CRUD store keeps only the latest row — an <code>UPDATE</code> overwrites whatever came before, and the reason a change happened survives, if at all, in a separate audit table that's easy to forget and easy to let drift out of sync. Event sourcing makes the history itself the system of record: nothing is ever deleted or overwritten, so the full sequence of what happened is always available.</p>
-        <p id="description-p-3">That log unlocks what a snapshot can't: reconstruct any past state by replaying up to a point in time, answer "how did we get here" without bolting on auditing after the fact, and derive more than one read model from the same events. The cost is that "what is true right now" is no longer a single row read — it means folding a stream — so most real systems pair the log with periodic snapshots or projections.</p>
+        <p id="description-p-1" data-kb-register="basic">The balance is wrong and nobody can say why. Each <code>UPDATE</code> wrote over the value before it, so the row holds today's number and no trace of the six changes that produced it; the audit table that was supposed to record them stopped being written to two releases ago and nobody noticed. In <strong>event sourcing</strong> you never overwrite the number. You keep the list of changes — deposited, withdrawn, corrected — and add them up whenever you need the answer, the way a bank statement gives you the balance and the reason for it at once.</p>
+        <p id="description-p-2" data-kb-level="advanced">Every state change is captured as an immutable event and appended to an ordered log, which becomes the system of record. Current state is not stored but derived: fold the stream from the beginning, or from the last snapshot, into a fresh copy of the state. Because the events are the truth rather than a side record, an audit trail cannot drift out of sync with the data — it <em>is</em> the data — and any number of read models can be projected from the same log without touching the write path.</p>
+        <p id="description-p-3">What a stored current value can never answer is a question about the past. Keep the whole sequence and you can rebuild the state as it stood at any moment by replaying up to it, and say how it got there without having bolted auditing on afterwards. The cost lands on the other side: "what is true right now" stops being a single row read and becomes a fold over a stream, which is why real systems pair the log with snapshots and projections.</p>
       </div>
     </section>
 
@@ -165,15 +172,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Instead of saving only the latest version of your data, keep a permanent list of every change ever made, in order — like a bank statement rather than just a balance. Whenever you need the current picture, you add the entries up again. Nothing is ever erased, so you can always show exactly how things got to where they are, and rebuild what the picture looked like on any past day.</p>
+          <p>Someone asks why an account is short by forty pounds, and all you have is the number it is now. Each save wrote over the one before it, so the six changes that got you here are gone, and the separate history table meant to record them quietly stopped being filled in months ago. Keep the changes instead of the answer: write down every deposit, withdrawal and correction in order, and add them up whenever you need the current figure. It is a bank statement rather than a balance. Nothing is erased, so you can always show how things got here, and rebuild what the picture looked like on any past day.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>Every state change is captured as an immutable event appended to an ordered log, which becomes the system of record; current state is a fold over the stream, cached via periodic snapshots. The log yields a complete audit trail, point-in-time reconstruction, and any number of read models projected from the same events. Events are versioned or upcast forever, since they can never be rewritten. It almost always ships with snapshotting and projections, and pairs naturally with CQRS, where the projections become the read side.</p>
+          <p>Each state change is an immutable event appended to an ordered log, and that log is the system of record; current state is a fold over the stream, cached with periodic snapshots so a cold load does not scan from event zero. One stream per aggregate instance keeps replays short and writes parallel, while a single global stream gives cross-aggregate ordering and concentrates contention. Appends carry the version the writer last read, so two concurrent writers conflict loudly instead of interleaving. Events are versioned and upcast on read rather than rewritten, because a written event never changes. And because the same log can be folded more than once, read models are projections you can add, rebuild or throw away without touching the write path — which is why it pairs so naturally with CQRS, where those projections become the read side.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>Choose it when the sequence of changes is itself a business asset — regulatory audit, temporal queries, or rules that depend on how state was reached — because it makes history the system of record instead of a bolt-on. Its leverage compounds when several read models must be derived from one write path. The bill is permanent: event schemas can never be rewritten, only versioned or upcast, so every shape you emit is a forever contract; replay and snapshot tooling must exist before the first long stream; reads are eventually consistent; and every side effect a handler performs has to be suppressible, because a replay re-runs them and the outside world does not know it is a rehearsal. Applied to plain CRUD it buys nothing and costs the team a paradigm — reserve it for aggregates where history genuinely pays.</p>
+          <p>Choose it when the sequence of changes is itself a business asset — a regulatory record, temporal queries, or rules that depend on how the state was reached — and the leverage compounds when several read models must come off one write path. Applied to plain CRUD it buys nothing and costs the team a paradigm. The bill is permanent, and each part has a counter-move. Every event shape you emit is a forever contract, so put a version on the first one and decide between upcasters and tolerant readers before the log is long. Replay tooling is not optional: snapshot with a memento of the aggregate, and rehearse a full projection rebuild in staging, because that timing is your recovery number when a projection bug ships. Reads are eventually consistent, so route the one screen that must show a user their own change straight at the aggregate and mark it as the exception it is. Every side effect a handler performs has to be suppressible, since a replay re-runs it and the outside world does not know it is a rehearsal. And personal data in an immutable log meets a deletion request that the log cannot honour — keep it outside the events or encrypt it under a per-subject key you can destroy, decided before the first event is written. Then run the loop: tune the snapshot interval and stream granularity, watch projection lag and append conflicts, find whether the longest stream or the rebuild time breaks first, and gate the release on a timed rebuild.</p>
         </div>
       </div>
     </section>
@@ -197,16 +204,16 @@ flowchart LR
       <dl class="variations">
         <dt id="variations-item-1">Snapshotting</dt>
         <dd>Periodically persist the folded state so replay resumes from the latest snapshot instead of scanning the full log from event zero.</dd>
-        <dt id="variations-item-2">Per-aggregate stream vs. single log</dt>
-        <dd>One ordered stream per aggregate instance (per order, per account) scales writes and reads; a single global stream simplifies cross-aggregate ordering but becomes a bottleneck.</dd>
-        <dt id="variations-item-3">Event versioning / upcasting</dt>
-        <dd>Old event shapes are transformed to the current schema when read — upcast, not rewritten — since events must stay immutable forever.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Per-aggregate stream vs. single log</dt>
+        <dd data-kb-level="advanced">One ordered stream per aggregate instance (per order, per account) scales writes and reads; a single global stream simplifies cross-aggregate ordering but becomes a bottleneck.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Event versioning / upcasting</dt>
+        <dd data-kb-level="advanced">Old event shapes are transformed to the current schema when read — upcast, not rewritten — since events must stay immutable forever.</dd>
         <dt id="variations-item-4"><a href="../distributed/coordination/materialized-view.html">Materialized View</a> projections</dt>
         <dd>Fold the event stream into one or more read-optimized views instead of querying the log directly for every read.</dd>
-        <dt id="variations-item-5">Replay-safe side effects</dt>
-        <dd>A replay re-runs handlers that once called the outside world, and the outside world does not know it is a rehearsal. Gate outbound calls behind a flag the replay turns off, and store the response of any time-sensitive inbound call in the event itself, so a replay reads the value that was true then rather than the one that is true now. Without both, replay quietly re-charges cards and folds today's exchange rate into last year's state.</dd>
-        <dt id="variations-item-6">Archival tier</dt>
-        <dd>Move cold events off the hot store onto cheap object storage on a schedule, keeping the recent tail where reads are fast. It bounds the cost of a log that only ever grows, at the price of a replay that reaches back far enough having to read from the slow tier.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced">Replay-safe side effects</dt>
+        <dd data-kb-level="advanced">Handlers are written so that re-running them touches nothing outside the system: outbound calls sit behind a flag the replay turns off, and the response of any time-sensitive inbound call is stored in the event itself, so a replay folds the value that was true then rather than the one that is true now.</dd>
+        <dt id="variations-item-6" data-kb-level="expert">Archival tier</dt>
+        <dd data-kb-level="expert">Move cold events off the hot store onto cheap object storage on a schedule, keeping the recent tail where reads are fast. It bounds the cost of a log that only ever grows, at the price of a replay that reaches back far enough having to read from the slow tier.</dd>
       </dl>
     </section>
 
@@ -226,10 +233,10 @@ flowchart LR
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Replaying a long stream from scratch is slow without snapshotting.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Schema evolution is harder — events are immutable, so shapes must be versioned or upcast forever.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Schema evolution is harder — events are immutable, so shapes must be versioned or upcast forever. Put a version field on every event from the first one, because retrofitting it onto an unversioned log means guessing.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">Querying "current state" isn't a single row read; it needs a projection or a fold.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Read models built from the log are eventually consistent with the write side, not immediate.</li>
-            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">Replay re-runs whatever the handlers did, so every call to an outside system has to be suppressed or recorded before the first replay.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Read models built from the log are eventually consistent with the write side — for the one screen that must show a user their own change immediately, read the aggregate itself rather than the projection, and accept that it is a deliberate exception.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">Replay re-runs whatever the handlers did, so every call to an outside system has to be gated behind a flag the replay turns off, and every time-sensitive value read from outside has to be stored in the event that used it.</li>
           </ul>
         </div>
       </div>
@@ -297,7 +304,7 @@ const state = log.reduce(apply, {} as AccountState);
       <div class="wild-list">
         <div class="wild-item" data-kb-example="eventstoredb" id="wild-eventstoredb"><strong>EventStoreDB</strong><span>A database purpose-built for append-only event streams: appends take an expected revision so concurrent writers conflict instead of interleaving, and catch-up subscriptions feed projections that fold streams into current state.</span></div>
         <div class="wild-item" data-kb-example="kinesis" id="wild-kinesis"><strong>Amazon Kinesis Data Streams</strong><span>AWS documents this as the event store itself: application changes are published to the stream as they happen, partitioned across shards for throughput, and archived to S3 so the durable history outlives the stream's own retention. Downstream consumers project the same events into whatever read store each one needs — a relational materialized view for queries, a payment processor for completed transactions.</span></div>
-        <div class="wild-item" data-kb-example="datomic" id="wild-datomic"><strong>Datomic</strong><span>Stores immutable facts with transaction time; as-of hands you the entire database as a value at any past instant, and the history API exposes the full record of assertions and retractions for an entity.</span></div>
+        <div class="wild-item" data-kb-example="datomic" id="wild-datomic" data-kb-level="advanced"><strong>Datomic</strong><span>Stores immutable facts with transaction time; as-of hands you the entire database as a value at any past instant, and the history API exposes the full record of assertions and retractions for an entity.</span></div>
       </div>
     </section>
 
@@ -309,10 +316,10 @@ const state = log.reduce(apply, {} as AccountState);
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>snapshot interval</strong> — how many events between snapshots; too sparse and a cold load replays thousands of events, too dense and the snapshot store becomes a second write path to keep correct</li>
             <li id="production-knob-2" data-kb-polarity="knob"><strong>stream granularity</strong> — one stream per aggregate instance keeps replay short and writes parallel; coarser streams give you cross-entity ordering but concentrate contention and grow without bound</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>event store partitioning</strong> — the shard or partition key the store spreads writes and reads across. The log is the single hottest write path in the system, so a key that concentrates traffic on one partition caps throughput no amount of hardware raises</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="expert"><strong>event store partitioning</strong> — the shard or partition key the store spreads writes and reads across. The log is the single hottest write path in the system, so a key that concentrates traffic on one partition caps throughput no amount of hardware raises</li>
             <li id="production-knob-4" data-kb-polarity="knob"><strong>expected-version check on append</strong> — append with the version you last read; a mismatch means a concurrent writer got there first — reject and retry rather than silently interleave events</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>archive threshold</strong> — the age or offset past which cold events move to cheap object storage. It bounds the cost of a log that only ever grows; set it inside the range a real replay needs and those replays start reading from the slow tier</li>
-            <li id="production-knob-6" data-kb-polarity="knob"><strong>versioning strategy</strong> — upcasters that rewrite old shapes on read, or tolerant readers that ignore unknown fields; either way the choice is forever, because written events never change</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>archive threshold</strong> — the age or offset past which cold events move to cheap object storage. It bounds the cost of a log that only ever grows; set it inside the range a real replay needs and those replays start reading from the slow tier</li>
+            <li id="production-knob-6" data-kb-polarity="knob" data-kb-level="advanced"><strong>versioning strategy</strong> — upcasters that rewrite old shapes on read, or tolerant readers that ignore unknown fields; either way the choice is forever, because written events never change</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
@@ -321,7 +328,7 @@ const state = log.reduce(apply, {} as AccountState);
             <li id="production-signal-1" data-kb-polarity="signal"><strong>projection lag</strong> — events appended minus events projected — the read model's staleness as a measured number, not an assumption</li>
             <li id="production-signal-2" data-kb-polarity="signal"><strong>longest-stream replay time</strong> — the aggregate with the most events sets worst-case load latency; it grows silently until someone opens a five-year-old account</li>
             <li id="production-signal-3" data-kb-polarity="signal"><strong>append conflict rate</strong> — expected-version failures per minute; a rising rate marks a hot aggregate that concurrent writers are fighting over</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>event store size and per-partition skew</strong> — total retained bytes plus the spread across partitions; a single partition running ahead of the others is the throughput ceiling arriving early</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>event store size and per-partition skew</strong> — total retained bytes plus the spread across partitions; a single partition running ahead of the others is the throughput ceiling arriving early</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
@@ -330,9 +337,9 @@ const state = log.reduce(apply, {} as AccountState);
             <li id="production-failure-1" data-kb-polarity="failure"><strong>unbounded stream growth</strong> — an aggregate that lives forever — a ledger, a device — accumulates events until load time breaks; for those, snapshotting is survival, not optimization</li>
             <li id="production-failure-2" data-kb-polarity="failure"><strong>replay reaches the outside world</strong> — a replay re-runs the handlers, and an ungated one re-sends the email, re-charges the card, or re-notifies the partner. The system under replay looks fine; the damage lands entirely outside it</li>
             <li id="production-failure-3" data-kb-polarity="failure"><strong>replay reads today instead of then</strong> — a handler that called an external service for a rate, a price or a score gets the current answer during replay, so the reconstructed state silently differs from the state that actually existed</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>projection rebuild measured in days</strong> — fixing a projection bug means replaying the whole log; at billions of events that is a multi-day outage of the read model unless rebuild speed was designed for</li>
-            <li id="production-failure-5" data-kb-polarity="failure"><strong>schema regret</strong> — a badly shaped event is permanent — every future reader carries its upcast chain, and one missed upcaster folds wrong state without an error</li>
-            <li id="production-failure-6" data-kb-polarity="failure"><strong>personal data in an immutable log</strong> — a deletion request meets a log that never deletes; crypto-shredding or storing PII outside the events must be designed in before the first event is written</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>projection rebuild measured in days</strong> — fixing a projection bug means replaying the whole log; at billions of events that is a multi-day outage of the read model unless rebuild speed was designed for</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>schema regret</strong> — a badly shaped event is permanent — every future reader carries its upcast chain, and one missed upcaster folds wrong state without an error</li>
+            <li id="production-failure-6" data-kb-polarity="failure" data-kb-level="expert"><strong>personal data in an immutable log</strong> — a deletion request meets a log that never deletes; crypto-shredding or storing PII outside the events must be designed in before the first event is written</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -343,8 +350,8 @@ const state = log.reduce(apply, {} as AccountState);
             <li id="production-check-3" data-kb-polarity="check">every outbound side effect in a handler is behind a flag the replay can turn off</li>
             <li id="production-check-4" data-kb-polarity="check">every time-sensitive external read is stored in the event, so a replay reads the value that was true then</li>
             <li id="production-check-5" data-kb-polarity="check">keep personal data out of events, or encrypt it with a per-subject key you can destroy</li>
-            <li id="production-check-6" data-kb-polarity="check">rehearse a full projection rebuild in staging and time it — that number is your recovery time when a projection bug ships</li>
-            <li id="production-check-7" data-kb-polarity="check">append with an expected version so concurrent writers fail loudly instead of interleaving</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="advanced">rehearse a full projection rebuild in staging and time it — that number is your recovery time when a projection bug ships</li>
+            <li id="production-check-7" data-kb-polarity="check" data-kb-level="advanced">append with an expected version so concurrent writers fail loudly instead of interleaving</li>
           </ul>
         </div>
       </div>
@@ -353,7 +360,7 @@ const state = log.reduce(apply, {} as AccountState);
     <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
-        <div class="fluency-item" data-kb-theme="streaming" id="fluency-streaming"><a href="../../themes/streaming.html">Streaming</a><span>A durable, replayable stream of events</span></div>
+        <div class="fluency-item" data-kb-theme="streaming" id="fluency-streaming"><a href="../../themes/streaming.html">Streaming</a><span>A durable, replayable stream of events — the log is the state, so re-reading it rebuilds anything derived from it.</span></div>
       </div>
     </section>
 
@@ -389,7 +396,14 @@ const state = log.reduce(apply, {} as AccountState);
         </div>
       </div>
 
-            <div class="rel-group">
+                  <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="dual-write-inconsistency"><a href="../../hazards/dual-write-inconsistency.html">Dual-Write Inconsistency</a><span class="rel-note">Dissolves the dual write by making the log the state</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
         <p class="rel-type">Demonstrated by</p>
         <div class="rel-list">
           <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="ad-click-aggregator"><a href="../../designs/ad-click-aggregator.html">Ad Click Aggregator</a><span class="rel-note">immutable events retained and replayed to rebuild derived aggregates</span></div>

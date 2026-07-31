@@ -53,6 +53,23 @@
       "kb:note": "Isolate resources vs. cap request rate"
     }
   ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../../hazards/noisy-neighbour.html#noisy-neighbour",
+      "name": "Noisy Neighbour",
+      "kb:note": "One shared pool lets a tenant's burst queue everyone else's work"
+    },
+    {
+      "@id": "../../../hazards/cascading-failure.html#cascading-failure",
+      "name": "Cascading Failure",
+      "kb:note": "Isolation stops a failed peer's load landing on everyone"
+    },
+    {
+      "@id": "../../../hazards/connection-pool-exhaustion.html#connection-pool-exhaustion",
+      "name": "Connection-Pool Exhaustion",
+      "kb:note": "Partitioned pools contain exhaustion to one compartment"
+    }
+  ],
   "kb:demonstrated-by": [
     {
       "@id": "../../../designs/leetcode.html#leetcode",
@@ -110,8 +127,8 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1">A <strong>bulkhead</strong> partitions a shared, finite resource — a thread pool, a connection pool, a semaphore's permits — into separate compartments, one per downstream dependency, tenant, or call type. Each compartment has its own bounded capacity, and calls that use it can only ever exhaust that compartment, never the whole system's supply.</p>
-        <p id="description-p-2">The problem it resolves is <strong>resource exhaustion by a noisy neighbor</strong>. When every call shares one pool, a single slow or hanging dependency can occupy every thread or connection in it while it waits, and unrelated calls that happen to use the same pool queue up and time out behind it too. One bad dependency effectively takes down every other one it never even talked to.</p>
+        <p id="description-p-1" data-kb-register="basic">One dependency you call goes slow — not down, just slow. Every call to it takes a thread from the pool your whole service shares and holds it for the full wait, and there are enough of those calls to take every thread there is. Now checkout is failing because the recommendation service is slow, and the two share nothing but a pool. A <strong>bulkhead</strong> gives each dependency its own small, fixed allowance, so the slow one can only ever run out of its own.</p>
+        <p id="description-p-2" data-kb-level="advanced">The mechanism is a partition of a finite resource — a thread pool, a connection pool, a semaphore's permits — into bounded compartments, one per downstream dependency, tenant or call type. A call takes a permit from its own compartment or is refused on the spot, so exhaustion stops at the compartment boundary and the refusal names the dependency that caused it. Nothing here detects a failure: the bound holds against a dependency that is merely slow, which is the case an error-driven mechanism never sees.</p>
         <p id="description-p-3">The name comes from a ship's hull: watertight bulkheads divide it into sealed compartments, so a hole below the waterline floods one compartment and the ship still stays afloat. Applied to software, the compartments are resource pools instead of steel walls, but the effect is the same — containment, not prevention.</p>
       </div>
     </section>
@@ -121,15 +138,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Share one pot of workers between every job and a single stuck job can swallow all of them, leaving everything else queued behind it. So give each job its own small, fixed set instead. A ship is built the same way: the hull is split into sealed compartments, so a hole floods one of them and the ship still floats.</p>
+          <p>Every call your service makes takes a worker from the same pot. One dependency starts answering slowly — not failing, just slow — and each call to it keeps its worker busy for the whole wait. Enough of those and the pot is empty, so a request that never touches the slow thing waits in the queue and fails too. Give each dependency its own small, fixed set of workers instead. The slow one can then only run out of its own set, and you can see which one it was: its compartment is the full one.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>Partition a finite resource — threads, connections, semaphore permits — into one bounded compartment per dependency, tenant or call type, so exhaustion is confined to whatever caused it. In a KYC screening system, each external vendor gets its own worker pool: sanction-screening tasks hung on a stalled list provider hold only sanction-pool permits, so ID verification keeps claiming and running. Implement it as a dedicated pool per dependency, or more cheaply as a counting semaphore over a shared executor.</p>
+          <p>Partition the finite resource — threads, connections, semaphore permits — into one bounded compartment per dependency, tenant or call type, and refuse a call the moment its own compartment is full. Exhaustion is then confined to whatever caused it, and the rejection is attributable: a full pool names the unhealthy dependency without a dashboard search. The variants differ in how hard the wall is. A dedicated thread pool per dependency gives true isolation and reserves threads that idle; a counting semaphore over a shared executor costs nothing extra but leaves a slow caller sitting on shared threads while it holds its permit; a separate process or container hands enforcement to the OS, so a memory leak or a CPU spike is contained too. The partition axis is a separate decision from the mechanism — split by downstream service to contain a failure, by tenant or priority class to contain a noisy customer.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>Reach for it when a dependency can stall rather than fail outright: capping arrivals per second does not help, because admitted calls that hang still pile up, and only a bounded compartment stops that. You buy fast, attributable rejection instead of a system-wide stall, plus a saturation metric that names the culprit. You pay in reserved capacity that idles, per-dependency sizing that stays a guess until peak concurrency is measured, and compartments that can total more threads than the host supplies. Undersize one and you have rebuilt the starvation you meant to prevent; semaphore isolation still leaves a slow caller occupying shared threads.</p>
+          <p>Choose it when a dependency can stall rather than fail: a rate limiter caps arrivals per second, but admitted calls that hang still accumulate, and only a bounded in-flight count stops that. What you buy is fast attributable rejection instead of a system-wide stall; what you pay is capacity reserved per compartment that idles the rest of the day, and a per-dependency size that stays a guess until peak concurrency is measured under real load. Three costs carry counter-moves. Undersize a compartment and you have rebuilt the starvation you meant to prevent, so alarm on saturation before rejection rather than on rejection alone. A bulkhead contains the damage and never fixes the dependency, so pair it with a circuit breaker that stops dialling once the compartment's failures are sustained. And compartments that share an underlying resource — one database, one egress path — saturate together, so the isolation on the diagram is not the isolation at runtime. Then run the loop: size each compartment from measured concurrency, watch saturation and rejections per compartment, find which one fills first under a stalled dependency, and gate the release on a load test that stalls one dependency on purpose.</p>
         </div>
       </div>
     </section>
@@ -178,10 +195,11 @@ flowchart LR
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con">More pools mean more configuration, and reserved capacity that often sits idle.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">Static sizing is a guess; undersize a pool and you've recreated the starvation it was meant to prevent.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">More pools mean more configuration, and reserved capacity that often sits idle — compartment the dependencies that can stall, not every call you make.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Static sizing is a guess; undersize a pool and you've recreated the starvation it was meant to prevent, so measure peak concurrency per dependency before fixing the number.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">Extra threads, connections, or processes cost more overall than one generously-sized shared pool.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Isolates the damage but does nothing to fix the failing dependency itself.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Isolates the damage but does nothing to fix the failing dependency — pair it with a <a href="./circuit-breaker.html">circuit breaker</a> so the compartment stops dialling a dependency that is already down.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Compartments that share an underlying resource — one database, one egress path, one host's file descriptors — saturate together, so the isolation on the diagram is not the isolation at runtime. Partition the shared resource too, or write the correlation down where the next incident will find it.</li>
           </ul>
         </div>
       </div>
@@ -267,35 +285,41 @@ for (const [type, pool] of Object.entries(pools)) {
         <div class="prod-group prod-knobs">
           <h3>Tuning knobs</h3>
           <ul>
-            <li id="production-knob-1" data-kb-polarity="knob"><strong>Compartment size (maxConcurrentCalls / pool size)</strong> — The ceiling of in-flight calls one dependency may hold. Size it from each dependency's measured peak concurrency, not a shared guess.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Wait budget (maxWaitDuration / queue capacity)</strong> — How long or how many callers block for a permit before being rejected. Zero means fail-fast; a bounded queue trades latency for fewer rejections under bursts.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Partition dimension</strong> — Whether compartments split by downstream service, tenant tier, or request priority — the axis along which one noisy consumer must not starve the rest.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Isolation mechanism</strong> — Semaphore (bounded permits on a shared executor, cheap) versus a dedicated thread pool per dependency (true thread isolation, higher overhead).</li>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Compartment size</strong> — The ceiling of in-flight calls one dependency may hold (maxConcurrentCalls, pool size). Size it from that dependency's measured peak concurrency, not from a shared round number.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Wait budget</strong> — How long a caller blocks for a permit before it is rejected (maxWaitDuration, queue capacity). Zero is fail-fast; a bounded wait trades latency for fewer rejections in a burst.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>Partition dimension</strong> — The axis compartments split along — downstream service, tenant tier, or request priority. It decides which noisy neighbour you are protected from.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>Isolation mechanism</strong> — Semaphore permits on a shared executor, or a dedicated thread pool per dependency. The first is cheap and leaves callers on shared threads; the second isolates the threads and reserves them.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Total allocation</strong> — The sum of every compartment against the threads, connections and file descriptors the host actually supplies — the bound is only real if the sum fits.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
-            <li id="production-signal-1" data-kb-polarity="signal"><strong>Compartment saturation</strong> — Permits or threads in use versus the compartment ceiling; sustained near-full means the dial is too tight or the dependency is degrading.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Rejection rate per compartment</strong> — Calls turned away because the compartment was full — attributable directly to one dependency.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Permit acquisition wait / queue depth</strong> — How long callers block before entering a full compartment; rising wait precedes rejections.</li>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Compartment saturation</strong> — Permits or threads in use against the ceiling, per compartment. Sustained near-full is the dial being too tight or the dependency degrading.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>Rejection rate per compartment</strong> — Calls turned away because a compartment was full — attributable to one dependency without further digging.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Permit wait and queue depth</strong> — How long callers block before entering a compartment. Rising wait is the leading indicator; rejections are the lagging one.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="advanced"><strong>Permit hold time</strong> — How long a call keeps its permit. A hold time drifting upward is the dependency slowing down before any compartment is full.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Undersized compartment</strong> — Set too small, it rejects calls under normal load and recreates the very starvation it was meant to prevent.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Semaphore isolation still shares threads</strong> — With semaphore-based bulkheads callers run on a shared executor, so a slow dependency still ties up shared threads while holding its permits — only thread-pool isolation truly separates them.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Sum of compartments exceeds the host</strong> — Over-provisioning every compartment can total more threads or connections than the node can supply, defeating the bound.</li>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Undersized compartment</strong> — Set too small, it rejects calls at ordinary load and recreates the starvation it was there to prevent.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Semaphore isolation still shares threads</strong> — Callers run on a shared executor, so a slow dependency ties up shared threads while holding its permits. Only thread-pool isolation separates them.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Sum of compartments exceeds the host</strong> — Generous compartments can total more threads or connections than the node supplies, so the process runs out before any single bound is reached.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Correlated compartments</strong> — Compartments over one database or one egress path fill together, and isolation that exists on the diagram does not exist at runtime.</li>
+            <li id="production-failure-5" data-kb-polarity="failure"><strong>Fail-fast under a brief burst</strong> — With a zero wait budget, a burst that would have drained in seconds becomes user-visible rejections — the compartment has no give in it.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
-            <li id="production-check-1" data-kb-polarity="check">Size each compartment from measured peak concurrency, not a round number.</li>
-            <li id="production-check-2" data-kb-polarity="check">Emit per-compartment saturation and rejection metrics before rollout.</li>
-            <li id="production-check-3" data-kb-polarity="check">Decide fail-fast versus bounded wait explicitly for each compartment.</li>
-            <li id="production-check-4" data-kb-polarity="check">Load-test with one dependency artificially stalled to confirm isolation actually holds.</li>
+            <li id="production-check-1" data-kb-polarity="check">A load test with one dependency artificially stalled shows the other compartments still serving — isolation proven rather than assumed</li>
+            <li id="production-check-2" data-kb-polarity="check">Every compartment exports saturation and rejections under its own name, so a full pool names its dependency with no dashboard search</li>
+            <li id="production-check-3" data-kb-polarity="check">Rejection has a user-visible behaviour someone approved — an error, a queued job, a cached answer — and that path runs in tests</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">The sum of all compartments was checked against the host's real thread, connection and descriptor limits</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Peak concurrency was observed per dependency during an actual peak, not inferred from average traffic</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Compartments sharing one database, cache or egress path are documented as correlated, so nobody reads more isolation into the diagram than the runtime provides</li>
           </ul>
         </div>
       </div>
@@ -304,8 +328,8 @@ for (const [type, pool] of Object.entries(pools)) {
     <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
-        <div class="fluency-item" data-kb-theme="spike-handling" id="fluency-spike-handling"><a href="../../../themes/spike-handling.html">Handling Spikes</a><span>Contain the blast radius of overload</span></div>
-        <div class="fluency-item" data-kb-theme="resilience" id="fluency-resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Isolate failures to one compartment</span></div>
+        <div class="fluency-item" data-kb-theme="spike-handling" id="fluency-spike-handling"><a href="../../../themes/spike-handling.html">Handling Spikes</a><span>Contain the blast radius of overload — a burst aimed at one dependency cannot spend the capacity the others need.</span></div>
+        <div class="fluency-item" data-kb-theme="resilience" id="fluency-resilience"><a href="../../../themes/resilience.html">Resilience</a><span>Isolate failures to one compartment, so the rest of the service keeps serving while that one is stuck.</span></div>
       </div>
     </section>
 
@@ -325,6 +349,15 @@ for (const [type, pool] of Object.entries(pools)) {
         <p class="rel-type">Often confused with</p>
         <div class="rel-list">
           <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="rate-limiter"><a href="./rate-limiter.html">Rate Limiter</a><span class="rel-note">Isolate resources vs. cap request rate</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="noisy-neighbour"><a href="../../../hazards/noisy-neighbour.html">Noisy Neighbour</a><span class="rel-note">One shared pool lets a tenant's burst queue everyone else's work</span></div>
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="cascading-failure"><a href="../../../hazards/cascading-failure.html">Cascading Failure</a><span class="rel-note">Isolation stops a failed peer's load landing on everyone</span></div>
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="connection-pool-exhaustion"><a href="../../../hazards/connection-pool-exhaustion.html">Connection-Pool Exhaustion</a><span class="rel-note">Partitioned pools contain exhaustion to one compartment</span></div>
         </div>
       </div>
 

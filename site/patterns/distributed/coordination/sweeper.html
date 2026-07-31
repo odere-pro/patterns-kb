@@ -54,6 +54,16 @@
       "@id": "./leader-election.html#leader-election",
       "name": "Leader Election",
       "kb:note": "the sweep is a singleton: elect one runner, or N replicas escalate the same row N times"
+    },
+    {
+      "@id": "./saga.html#saga",
+      "name": "Saga",
+      "kb:note": "A stalled saga step is the canonical non-event: the sweep enforces the deadline the flow cannot enforce for itself"
+    },
+    {
+      "@id": "../routing/object-storage.html#object-storage",
+      "name": "Object Storage",
+      "kb:note": "Orphan collection across a row and its blob is the two-sided sweep, with a grace period long enough for a slow upload"
     }
   ],
   "kb:alternative-to": [
@@ -61,6 +71,11 @@
       "@id": "./conditional-write.html#conditional-write",
       "name": "Conditional Write",
       "kb:note": "check-and-act on read leaves no timing dependency; a sweep is for when something must actively happen at the deadline"
+    },
+    {
+      "@id": "./workflow-orchestration.html#workflow-orchestration",
+      "name": "Workflow Orchestration",
+      "kb:note": "A durable timer inside an orchestration engine does the same job with no scan, once you already run the engine"
     }
   ],
   "kb:demonstrated-by": [
@@ -73,6 +88,16 @@
       "@id": "../../../designs/bookmyshow.html#bookmyshow",
       "name": "BookMyShow",
       "kb:note": "seat holds expire on a clock: the sweep is what makes an abandoned checkout release inventory instead of stranding it"
+    },
+    {
+      "@id": "../../../designs/gopuff.html#gopuff",
+      "name": "Gopuff",
+      "kb:note": "reserved inventory in a delivery network is reclaimed by one indexed sweep on held_until rather than by whoever notices"
+    },
+    {
+      "@id": "../../../designs/design-distributed-cache.html#design-distributed-cache",
+      "name": "Distributed Cache",
+      "kb:note": "a cache fleet needs an active pass as well as read-time checks, or dead entries evict live ones"
     }
   ]
 }
@@ -105,10 +130,11 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1">A sweeper is a scheduled job whose entire input is a query for records that should have moved on by now. It runs every N seconds or minutes, selects rows matching a staleness predicate — <code>locked_at &lt; now() - interval</code>, <code>attempts &gt; budget</code>, <code>state = 'pending' AND created_at &lt; deadline</code> — and applies one resolution per row: reclaim it for another worker, escalate it to a dead state and tell somebody, or expire it and release whatever it was holding. It is the janitor of a distributed system, and it is almost always a handful of indexed queries rather than a service.</p>
-        <p id="description-p-2">The force it resolves is that <strong>failure by absence produces no event</strong>. Every other component in a system is driven by something happening: a request arrives, a message is delivered, a callback fires. But the worker that died mid-task sends nothing. The user who abandoned checkout clicks nothing. The vendor that never called back generates no callback. These failures announce themselves with silence, and silence has no listener — so the only way to notice is for someone to go looking on a clock. That is the whole pattern: a periodic scan is the event source for non-events.</p>
-        <p id="description-p-3">The hard part is what the sweeper does to your failure model. Once it exists, correctness depends on a background job running on time. A sweep that lags, crashes, or silently stops leaves leases held and resources locked — and because sweeps fall behind precisely when the system is busiest, it degrades exactly when the damage is worst. This is why mature designs push work out of the sweeper wherever they can: give the record a TTL so the store expires it, or check expiry lazily when the record is next read, so no external actor decides correctness. What stays in the sweeper is what genuinely needs an <em>action</em> — notifying a client that their request failed, alerting an operator, releasing a resource that nobody will read again soon. A sweeper that only had to answer "is this expired?" should not have been a sweeper.</p>
-        <p id="description-p-4">Two properties are non-negotiable in the implementation. It must be <strong>idempotent</strong> — the same row swept twice, or swept by two instances, must not double-escalate or double-release. And it must <strong>guard its writes against live workers</strong>, because it is racing them by design: the task it judges abandoned may be a slow worker still holding it. A conditional update (<code>WHERE locked_by = $seen AND locked_at = $seen</code>) turns that race into a write that affects zero rows rather than a task stolen from a healthy worker.</p>
+        <p id="description-p-1" data-kb-register="basic">A worker picks up a task and its machine dies. Nothing raises an error, because nothing happened: the task sits there marked as in progress, the customer waiting on it hears nothing, and no amount of logging will tell you, because there is nothing to log. The only way to find out is to go and look. So run a small job every minute or so that asks one question — what should have moved on by now and has not? — and does one thing to each row it finds: hand the task back so another worker can take it, give up on it out loud so a person hears, or release whatever it was holding.</p>
+        <p id="description-p-2" data-kb-level="advanced">A sweeper is a scheduled job whose entire input is a query for records that should have moved on by now. It runs every N seconds or minutes, selects rows matching a staleness predicate — <code>locked_at &lt; now() - interval</code>, <code>attempts &gt; budget</code>, <code>state = 'pending' AND created_at &lt; deadline</code> — and applies one resolution per row: reclaim it for another worker, escalate it to a dead state and tell somebody, or expire it and release whatever it was holding. It is the janitor of a distributed system, and it is almost always a handful of indexed queries rather than a service.</p>
+        <p id="description-p-3">The force it resolves is that <strong>failure by absence produces no event</strong>. Every other component in a system is driven by something happening: a request arrives, a message is delivered, a callback fires. But the worker that died mid-task sends nothing. The user who abandoned checkout clicks nothing. The vendor that never called back generates no callback. These failures announce themselves with silence, and silence has no listener — so the only way to notice is for someone to go looking on a clock. That is the whole pattern: a periodic scan is the event source for non-events.</p>
+        <p id="description-p-4" data-kb-level="advanced">The hard part is what the sweeper does to your failure model. Once it exists, correctness depends on a background job running on time. A sweep that lags, crashes, or silently stops leaves leases held and resources locked — and because sweeps fall behind precisely when the system is busiest, it degrades exactly when the damage is worst. This is why mature designs push work out of the sweeper wherever they can: give the record a TTL so the store expires it, or check expiry lazily when the record is next read, so no external actor decides correctness. What stays in the sweeper is what genuinely needs an <em>action</em> — notifying a client that their request failed, alerting an operator, releasing a resource that nobody will read again soon. A sweeper that only had to answer "is this expired?" should not have been a sweeper.</p>
+        <p id="description-p-5" data-kb-level="advanced">Two properties are non-negotiable in the implementation. It must be <strong>idempotent</strong> — the same row swept twice, or swept by two instances, must not double-escalate or double-release. And it must <strong>guard its writes against live workers</strong>, because it is racing them by design: the task it judges abandoned may be a slow worker still holding it. A conditional update (<code>WHERE locked_by = $seen AND locked_at = $seen</code>) turns that race into a write that affects zero rows rather than a task stolen from a healthy worker.</p>
       </div>
     </section>
 
@@ -117,15 +143,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>Some things fail by simply never happening: nobody clicked, nobody called back, the machine doing the job died without a word. Silence tells no one, so a small job runs every so often and looks for work that should have moved on by now, then puts it back, gives up on it out loud, or frees whatever it was holding. Like a caretaker walking the building at closing time.</p>
+          <p>Ask, on a timer, what should have moved on by now and has not. That single question is the whole job, because the answers are the failures nothing else reports — nobody clicked, nobody called back, the machine doing the work stopped without a word. Give each answer one of three endings: hand the work back so somebody else can take it, give up on it out loud so a person is told, or free whatever it was holding. It is the caretaker walking the building at closing time, trying doors. No alarm goes off; somebody just goes and looks.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
-          <p>A scheduled job whose entire input is a staleness query — expired leases, attempts over budget, a row past its deadline — and one resolution per match: return the claim to the pending pool, park exhausted work in a dead state, or escalate to a human. In a KYC flow one tick reclaims a dead worker's task, dead-letters one that burned its retries, and tells the client their check failed. Every write is guarded on the values the row was selected with, so a slow-but-alive holder is never robbed.</p>
+          <p>A scheduled job whose entire input is a staleness query — expired leases, attempts over budget, a row sitting past its deadline — with one resolution per match: return the claim to the pending pool, park exhausted work in a dead state, or escalate to a human. Two properties are not optional. Every write is guarded on the values the row was selected with, so the update lands on zero rows if the holder moved on, and a slow-but-alive worker is never robbed of its task. And every resolution is idempotent — stamp the escalated-at or dead marker in the statement that selects the row — so the same row swept twice, or swept by two replicas at once, resolves once. Where the store can do the work itself, prefer that: a TTL on the key or an expiry checked on read keeps correctness off a clock entirely.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>Choose it only when something must actively happen at the deadline — a customer told, an operator paged, capacity released. If the question is merely whether a record is still valid, answer it on read or let the store expire it, keeping correctness off a clock. Adopting one moves correctness into a background job that falls behind when the system is busiest, and that wants to be a singleton — so you buy leader election and the question of who notices when the sweeper dies quietly. Its cost scales with table size rather than stuck work, and the staleness threshold is a permanent bind between killing merely slow work and stranding resources.</p>
+          <p>Choose it only when something must actively happen at the deadline — a customer told, an operator paged, capacity released. If the question is merely whether a record is still valid, answer it on read or let the store expire it, and keep correctness off a background job. Adopting one has a bill worth naming. Correctness now depends on a job that falls behind exactly when the system is busiest, so cap rows per tick and let a backlog drain over several passes instead of one long transaction competing with live workers. It wants to be a singleton, so it brings leader election with it, and its own death is a non-event — stamp a heartbeat at the end of each successful pass and alert on the absence, because nothing else will. Cost tracks table size rather than stuck work, so the predicate must be index-backed at next year's row count. And the staleness threshold is a permanent bind between killing merely slow work and stranding resources: derive it from measured worker duration, not from a round number. Then run the loop — tune the interval, the threshold and the rows per tick, watch tick duration against its period and the age past deadline at resolution, expect the first tick after an outage to fire an escalation storm, and rehearse that tick before it happens for real.</p>
         </div>
       </div>
     </section>
@@ -160,14 +186,14 @@ flowchart LR
         <dt id="variations-item-3">Retry exhaustion</dt>
         <dd>Find work whose attempts exceeded budget and park it in a dead state — inspectable, re-runnable once the cause is fixed, never silently dropped. This is the <a href="../../messaging/dead-letter-channel.html">dead-letter channel</a> implemented as a table plus a sweep, for systems with no broker to provide one.</dd>
 
-        <dt id="variations-item-4">Orphan collection</dt>
-        <dd>Find records whose counterpart never arrived: an upload row with no blob, a blob with no row, a reservation whose payment never came. Usually a two-sided query with a grace period long enough that in-flight work is never mistaken for an orphan.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Orphan collection</dt>
+        <dd data-kb-level="advanced">Find records whose counterpart never arrived: an upload row with no blob, a blob with no row, a reservation whose payment never came. Usually a two-sided query with a grace period long enough that in-flight work is never mistaken for an orphan.</dd>
 
         <dt id="variations-item-5">Lazy expiry instead of a sweep</dt>
         <dd>No job at all: store the expiry timestamp, and treat the record as expired the next time anything reads it. Correctness stops depending on a job running on time, and the cost moves into every read path. The right default when nothing needs to <em>happen</em> at the moment of expiry — but it leaves the resource nominally held until someone looks, so it cannot free capacity on its own.</dd>
 
-        <dt id="variations-item-6">Self-expiring records</dt>
-        <dd>Let the store do it: a TTL on the key, a visibility timeout on the message, a session-bound ephemeral node. Zero code and no timing dependency, at the cost of needing a store that offers it and giving up any hook at the moment of expiry — nobody is told, nothing is escalated.</dd>
+        <dt id="variations-item-6" data-kb-level="advanced">Self-expiring records</dt>
+        <dd data-kb-level="advanced">Let the store do it: a TTL on the key, a visibility timeout on the message, a session-bound ephemeral node. Zero code and no timing dependency, at the cost of needing a store that offers it and giving up any hook at the moment of expiry — nobody is told, nothing is escalated.</dd>
       </dl>
     </section>
 
@@ -191,7 +217,7 @@ flowchart LR
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">It races the live workers it inspects: without a guarded, idempotent update it will steal a task from a slow-but-healthy holder, or escalate the same record twice.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Polling cost scales with table size, not with the amount of stuck work — an unindexed predicate turns into a full scan on a timer.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">It is usually a singleton, so it needs a lock or leader election to avoid running N times — and a sweeper that dies quietly fails silently, which raises the question of who sweeps the sweeper.</li>
-            <li id="tradeoffs-con-5" data-kb-polarity="con">The staleness threshold is a tuning bind: too aggressive kills work that was merely slow, too lax leaves resources stranded past the point anyone cares.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con">The staleness threshold is a tuning bind: too aggressive kills work that was merely slow, too lax leaves resources stranded past the point anyone cares — derive it from measured worker duration at the p99, and let a live worker renew its lease rather than race the clock.</li>
           </ul>
         </div>
       </div>
@@ -207,7 +233,7 @@ flowchart LR
             <li id="usage-when-2" data-kb-polarity="when">Something must actively happen at the deadline: a customer told, an operator paged, a queue of held resources released.</li>
             <li id="usage-when-3" data-kb-polarity="when">Work is claimed under a lease that can outlive the process holding it, and an unreclaimed claim blocks progress.</li>
             <li id="usage-when-4" data-kb-polarity="when">An SLA is promised per state, and a breach has to reach somebody rather than sit in a table.</li>
-            <li id="usage-when-5" data-kb-polarity="when">The store cannot expire records itself — a relational system of record with no TTL, holding the queue as a table.</li>
+            <li id="usage-when-5" data-kb-polarity="when" data-kb-level="advanced">The store cannot expire records itself — a relational system of record with no TTL, holding the queue as a table.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -225,7 +251,26 @@ flowchart LR
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
       <h2 class="doc-h" id="h-sketch">Code sketch</h2>
-      <details class="sketch" id="sketch-variant-1">
+      <details class="sketch" id="sketch-variant-1" data-kb-register="basic">
+        <summary>TypeScript — every 30 seconds, hand back the tasks whose worker went quiet</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">const LEASE_MS = 60_000;   // a claim not renewed within a minute is presumed dead
+
+async function sweepOnce() {
+  const stale = await tasks.find({
+    status: "processing",
+    lockedBefore: Date.now() - LEASE_MS,
+  });
+
+  for (const task of stale) {
+    // Hands it back only if nothing changed since we read it — so a slow
+    // worker that is still alive keeps the task it is working on.
+    await tasks.releaseIfUnchanged(task);
+  }
+}
+
+setInterval(sweepOnce, 30_000);</code></pre>
+      </details>
+      <details class="sketch" id="sketch-variant-2" data-kb-level="advanced">
         <summary>TypeScript — one tick, three predicates, every write guarded</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">const LEASE_MS = 60_000;      // a claim not renewed within this is presumed dead
 const MAX_ATTEMPTS = 5;
@@ -277,10 +322,10 @@ setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="redis-active-expiry" id="wild-redis-active-expiry"><strong>Redis</strong><span>A key with a TTL is removed two ways at once — lazily, when a read touches an already-expired key, and by a background cycle that repeatedly samples keys from the set carrying an expiry and deletes the ones that have passed; without the active sweep, keys nobody ever reads again would hold memory forever.</span></div>
-        <div class="wild-item" data-kb-example="postgres-autovacuum" id="wild-postgres-autovacuum"><strong>PostgreSQL autovacuum</strong><span>The autovacuum launcher wakes on a timer and starts workers against tables that have accumulated enough dead row versions, reclaiming the space left by UPDATE and DELETE once no live transaction can still see it — a scheduled scan for state everyone has finished with, and one that famously falls behind under heavy write load.</span></div>
+        <div class="wild-item" data-kb-example="postgres-autovacuum" id="wild-postgres-autovacuum" data-kb-level="advanced"><strong>PostgreSQL autovacuum</strong><span>The autovacuum launcher wakes on a timer and starts workers against tables that have accumulated enough dead row versions, reclaiming the space left by UPDATE and DELETE once no live transaction can still see it — a scheduled scan for state everyone has finished with, and one that famously falls behind under heavy write load.</span></div>
         <div class="wild-item" data-kb-example="kubernetes-ttl-after-finished" id="wild-kubernetes-ttl-after-finished"><strong>Kubernetes TTL-after-finished controller</strong><span>A Job that sets .spec.ttlSecondsAfterFinished is deleted, along with the pods it owns, once that long has elapsed since it completed or failed — and the documentation is explicit that cleanup happens some time after the TTL rather than at it, which is the sweeper's timing bargain stated in the API.</span></div>
         <div class="wild-item" data-kb-example="s3-abort-incomplete-multipart-upload" id="wild-s3-abort-incomplete-multipart-upload"><strong>Amazon S3 lifecycle rules</strong><span>A multipart upload that is never completed or aborted leaves its uploaded parts in the bucket — billed, and invisible to an ordinary object listing — and the AbortIncompleteMultipartUpload lifecycle action is a scheduled sweep that reclaims them a configured number of days after the upload was initiated: orphan collection with a grace period.</span></div>
-        <div class="wild-item" data-kb-example="django-clearsessions" id="wild-django-clearsessions"><strong>Django clearsessions</strong><span>Django's database and file session backends never purge a session once it expires; the docs say plainly that expired records accumulate and it is your job to run the django-admin clearsessions management command regularly, typically from cron — the sweeper shipped as a command because the store cannot expire the row itself.</span></div>
+        <div class="wild-item" data-kb-example="django-clearsessions" id="wild-django-clearsessions" data-kb-level="advanced"><strong>Django clearsessions</strong><span>Django's database and file session backends never purge a session once it expires; the docs say plainly that expired records accumulate and it is your job to run the django-admin clearsessions management command regularly, typically from cron — the sweeper shipped as a command because the store cannot expire the row itself.</span></div>
       </div>
     </section>
 
@@ -291,10 +336,10 @@ setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>sweep interval</strong> — how often the tick fires — it sets the worst-case delay between a deadline passing and anything happening, and it bounds how much work one tick must absorb; it has to stay comfortably above the tick's own runtime or ticks overlap</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>staleness threshold</strong> — the interval in the predicate that decides when work is presumed abandoned — a lease age, an SLA window, an orphan grace period; derive it from measured worker duration rather than guessing, because too short reclaims slow-but-alive work and too long strands resources</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>rows per tick</strong> — the cap on how many matches one pass resolves — it bounds transaction size and lock footprint so a backlog drains over several ticks instead of one long write that blocks the live workers the sweep exists to help</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>retry budget</strong> — how many attempts a record may burn before the sweep parks it in a dead state instead of reclaiming it again — the dial between rescuing transient failures and letting a poison record cycle forever</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>leader-lock TTL</strong> — how long the singleton runner's own lock lives before another replica may take the sweep — too short and two sweepers overlap on the same rows, too long and a crashed sweeper leaves nothing swept for that duration</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>staleness threshold</strong> — the interval in the predicate that decides when work is presumed abandoned — a lease age, an SLA window, an orphan grace period; derive it from measured worker duration at the p99, so the threshold sits above the work you expect rather than on top of it</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>rows per tick</strong> — the cap on how many matches one pass resolves — it bounds transaction size and lock footprint so a backlog drains over several ticks instead of one long write that blocks the live workers the sweep exists to help</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="advanced"><strong>retry budget</strong> — how many attempts a record may burn before the sweep parks it in a dead state instead of reclaiming it again — the dial between rescuing transient failures and letting a poison record cycle forever</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>leader-lock TTL</strong> — how long the singleton runner's own lock lives before another replica may take the sweep — too short and two sweepers overlap on the same rows, too long and a crashed sweeper leaves nothing swept for that duration</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
@@ -302,18 +347,18 @@ setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>tick duration against the interval</strong> — how long one pass takes as a fraction of its period; as it approaches the interval the sweep is one busy hour away from overlapping ticks and a growing backlog</li>
             <li id="production-signal-2" data-kb-polarity="signal"><strong>backlog matching the predicate</strong> — the count of records currently past the staleness threshold, measured by running the select without acting — sustained growth means the sweep is not clearing what accumulates</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>age past deadline at resolution</strong> — now() minus the deadline at the moment a record is actually acted on — this is the delay the customer or the held resource experienced, and it diverges from the interval as soon as sweeps run late</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>guarded writes that affect zero rows</strong> — the share of updates that matched nothing because the holder moved on between select and update — the sweeper losing its race with live workers, and a rising rate says the staleness threshold is too aggressive</li>
-            <li id="production-signal-5" data-kb-polarity="signal"><strong>time since the last completed sweep</strong> — the heartbeat stamped at the end of a successful pass; the only observable that catches a sweeper that stopped, since its failure is itself a non-event</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>age past deadline at resolution</strong> — now() minus the deadline at the moment a record is actually acted on — this is the delay the customer or the held resource experienced, and it diverges from the interval as soon as sweeps run late</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>guarded writes that affect zero rows</strong> — the share of updates that matched nothing because the holder moved on between select and update — the sweeper losing its race with live workers, and a rising rate says the staleness threshold is too aggressive</li>
+            <li id="production-signal-5" data-kb-polarity="signal" data-kb-level="advanced"><strong>time since the last completed sweep</strong> — the heartbeat stamped at the end of a successful pass; the only observable that catches a sweeper that stopped, since its failure is itself a non-event</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>the sweep falls behind when it matters most</strong> — the scan and its writes take longest exactly when the table is largest and the database busiest, so ticks queue or overlap and leases expire unreclaimed — the pattern degrades in proportion to the damage</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>unindexed predicate turns into a scan</strong> — cost tracks table size rather than the amount of stuck work; a tick that was free at ten thousand rows saturates the database at ten million and competes with the very workers it is meant to unblock</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>mass false reclaim</strong> — under load healthy workers slow past the staleness threshold, and one tick returns a wave of live tasks to the pending pool; guarded writes stop the theft, but the duplicate work and the re-queued rows still land mid-incident</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>backlog flush after downtime</strong> — the first tick after the sweeper was stopped for an hour matches everything that piled up at once — one oversized transaction, a wave of dead-lettering, and an escalation storm to customers or an on-call operator in a single burst</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>unindexed predicate turns into a scan</strong> — cost tracks table size rather than the amount of stuck work; a tick that was free at ten thousand rows saturates the database at ten million and competes with the very workers it is meant to unblock</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>mass false reclaim</strong> — under load healthy workers slow past the staleness threshold, and one tick returns a wave of live tasks to the pending pool; guarded writes stop the theft, but the duplicate work and the re-queued rows still land mid-incident</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>backlog flush after downtime</strong> — the first tick after the sweeper was stopped for an hour matches everything that piled up at once — one oversized transaction, a wave of dead-lettering, and an escalation storm to customers or an on-call operator in a single burst</li>
             <li id="production-failure-5" data-kb-polarity="failure"><strong>silent death</strong> — the sweeper stops and nothing reports it, because noticing non-events is precisely the job it was doing; the symptoms surface hours later as stuck records and capacity nobody released</li>
           </ul>
         </div>
@@ -321,12 +366,12 @@ setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Keep in the sweeper only what needs an action at the deadline — if the question is merely whether a record is still valid, answer it on read or let the store expire it</li>
-            <li id="production-check-2" data-kb-polarity="check">Confirm the staleness predicate is index-backed at the table size you expect in a year, not the size it is today</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Confirm the staleness predicate is index-backed at the table size you expect in a year, not the size it is today</li>
             <li id="production-check-3" data-kb-polarity="check">Guard every write on the values the row was selected with, so a slow-but-alive holder's row updates zero rows instead of being robbed</li>
             <li id="production-check-4" data-kb-polarity="check">Make each resolution idempotent — stamp the escalated-at or dead marker in the same statement that selects the row, so a second pass is a no-op</li>
-            <li id="production-check-5" data-kb-polarity="check">Run it as a singleton under a lock or leader election, and still stay correct if two instances run anyway</li>
-            <li id="production-check-6" data-kb-polarity="check">Cap rows per tick so a backlog drains across several passes rather than one long transaction holding locks against live workers</li>
-            <li id="production-check-7" data-kb-polarity="check">Emit a heartbeat on successful completion and alert on its absence, and rehearse the first tick after an outage — including how many notifications it would send</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Run it as a singleton under a lock or leader election, and still stay correct if two instances run anyway</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">The cap was chosen by draining a real backlog and counting the ticks it took, and somebody accepted that number</li>
+            <li id="production-check-7" data-kb-polarity="check" data-kb-level="advanced">Emit a heartbeat on successful completion and alert on its absence, and rehearse the first tick after an outage — including how many notifications it would send</li>
           </ul>
         </div>
       </div>
@@ -342,6 +387,8 @@ setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="dead-letter-channel"><a href="../../messaging/dead-letter-channel.html">Dead Letter Channel</a><span class="rel-note">where work that exhausted its retries is parked — the sweeper is what decides it is exhausted</span></div>
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="timeout-deadline"><a href="../resilience/timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">the deadline is the line; the sweeper is what enforces it when the call simply never returns</span></div>
           <div class="rel-item" data-kb-rel="combines-with" data-kb-to="leader-election"><a href="./leader-election.html">Leader Election</a><span class="rel-note">the sweep is a singleton: elect one runner, or N replicas escalate the same row N times</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="saga"><a href="./saga.html">Saga</a><span class="rel-note">A stalled saga step is the canonical non-event: the sweep enforces the deadline the flow cannot enforce for itself</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="object-storage"><a href="../routing/object-storage.html">Object Storage</a><span class="rel-note">Orphan collection across a row and its blob is the two-sided sweep, with a grace period long enough for a slow upload</span></div>
         </div>
       </div>
 
@@ -349,6 +396,7 @@ setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 
         <p class="rel-type">Alternative to</p>
         <div class="rel-list">
           <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="conditional-write"><a href="./conditional-write.html">Conditional Write</a><span class="rel-note">check-and-act on read leaves no timing dependency; a sweep is for when something must actively happen at the deadline</span></div>
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="workflow-orchestration"><a href="./workflow-orchestration.html">Workflow Orchestration</a><span class="rel-note">A durable timer inside an orchestration engine does the same job with no scan, once you already run the engine</span></div>
         </div>
       </div>
 
@@ -357,6 +405,8 @@ setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 
         <div class="rel-list">
           <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="persona-identification"><a href="../../../designs/persona-identification.html">Persona Identification &amp; Sanction Check</a><span class="rel-note">a long-running KYC flow where every failure is silence — a dead worker, an onboardee who never uploaded, a vendor that never called back</span></div>
           <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="bookmyshow"><a href="../../../designs/bookmyshow.html">BookMyShow</a><span class="rel-note">seat holds expire on a clock: the sweep is what makes an abandoned checkout release inventory instead of stranding it</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="gopuff"><a href="../../../designs/gopuff.html">Gopuff</a><span class="rel-note">reserved inventory in a delivery network is reclaimed by one indexed sweep on held_until rather than by whoever notices</span></div>
+          <div class="rel-item" data-kb-rel="demonstrated-by" data-kb-to="design-distributed-cache"><a href="../../../designs/design-distributed-cache.html">Distributed Cache</a><span class="rel-note">a cache fleet needs an active pass as well as read-time checks, or dead entries evict live ones</span></div>
         </div>
       </div>
 
