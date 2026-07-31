@@ -15,7 +15,6 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { BUILDER_PRESETS } from "../lib/model.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
@@ -81,26 +80,8 @@ test("build.mjs emits graphdata.js whose relations all target real nodes", () =>
         assert.ok(ids.has(rel.to), `${n.id} relation points at missing node "${rel.to}"`);
       }
     }
-    // Presets ship filtered to pages that exist, so a fixture corpus never carries a
-    // candidate it cannot draw.
-    for (const p of data.presets) {
-      for (const c of p.candidates) assert.ok(ids.has(c), `preset ${p.id} kept unknown "${c}"`);
-    }
   } finally {
     rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("builder presets name only live pages (preset rot fails here and in make check)", () => {
-  /* build.mjs enforces this on every real build; this pins the same invariant in
-   * `make test` against the live graph.json, since the fixture corpus is too small to
-   * exercise it. */
-  const graph = JSON.parse(readFileSync(join(REPO, "site", "assets", "graph.json"), "utf8"));
-  for (const p of BUILDER_PRESETS) {
-    assert.ok(p.id && p.label && p.candidates.length, `preset ${p.id} is incomplete`);
-    for (const c of p.candidates) {
-      assert.ok(graph.nodes[c], `preset "${p.id}": candidate "${c}" has no page`);
-    }
   }
 });
 

@@ -1,18 +1,19 @@
 #!/usr/bin/env node
 /* build-graph-page.mjs — AUTHORING-TIME tool. Emits site/map/graph.html: the shell of
- * the interactive relationship graph + architecture builder. The page replaced the old
- * static per-theme mermaid clusters — all 260 nodes and their typed edges now render as
- * one d3-force canvas with two modes (Explore / Build).
+ * the interactive graph explorer. All 260 nodes and their typed edges render as one
+ * live d3-force canvas, tuned from an Obsidian-style settings panel.
  *
- * This script emits STRUCTURE ONLY: header, mode tabs, the verb legend (which doubles
- * as an edge filter), explore/build controls, the empty SVG + panel skeletons, and a
- * noscript fallback. All runtime behavior is hand-authored in assets/graph-view.js and
- * styled in assets/graph.css; the data ships as assets/graphdata.js (window.KB_GRAPH),
- * emitted by build.mjs — a script, not a fetch, so file:// keeps working. */
+ * This script emits STRUCTURE ONLY: header, the empty SVG, the settings panel skeleton
+ * (Filters / Links / Groups / Display / Forces, with the verb legend inside Links), and
+ * a noscript fallback. All runtime behavior is hand-authored in assets/graph-view.js
+ * and styled in assets/graph.css; the data ships as assets/graphdata.js
+ * (window.KB_GRAPH), emitted by build.mjs — a script, not a fetch, so file:// keeps
+ * working. Control ids and slider ranges here are the contract graph-view.js binds to;
+ * slider default values are baked to match its DEFAULTS so nothing jumps at load. */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { BANDS, DESIGN_ORDER, RELATION_TYPES, REL_ORDER, BUILDER_PRESETS, esc } from "./lib/model.mjs";
+import { BANDS, RELATION_TYPES, REL_ORDER, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json"), "utf8"));
@@ -40,26 +41,23 @@ families.sort((a, b) =>
   REL_ORDER.indexOf(a.label.split(" / ")[0]) - REL_ORDER.indexOf(b.label.split(" / ")[0]));
 
 const legend = families.map((f) =>
-  `        <button type="button" class="legend-btn fam-${f.canonical}" data-family="${f.canonical}" aria-pressed="true"><span class="swatch" aria-hidden="true"></span>${esc(f.label)}</button>`,
+  `          <button type="button" class="legend-btn fam-${f.canonical}" data-family="${f.canonical}" aria-pressed="true"><span class="swatch" aria-hidden="true"></span>${esc(f.label)}</button>`,
 ).join("\n");
 
-/* ---- controls ---- */
+/* ---- panel controls ---- */
 const KIND_LABELS = { pattern: "Patterns", hazard: "Hazards", theme: "Themes", principle: "Principles", design: "Case studies" };
 const kindBtns = Object.entries(KIND_LABELS).map(([kind, label]) =>
-  `        <button type="button" class="gbtn kind-btn" data-kind="${kind}" aria-pressed="true">${esc(label)}</button>`,
+  `          <button type="button" class="gbtn kind-btn" data-kind="${kind}" aria-pressed="true">${esc(label)}</button>`,
 ).join("\n");
 
 const bandOptions = BANDS.map((b) =>
-  `          <option value="${b.id}">${esc(b.kind === "elevation" ? `${b.numeral} · ${b.label}` : b.label)}</option>`,
+  `            <option value="${b.id}">${esc(b.kind === "elevation" ? `${b.numeral} · ${b.label}` : b.label)}</option>`,
 ).join("\n");
 
-const presetBtns = BUILDER_PRESETS.map((p) =>
-  `        <button type="button" class="gbtn preset-btn" data-preset="${p.id}" aria-pressed="false">${esc(p.label)}</button>`,
-).join("\n");
-
-const designOptions = DESIGN_ORDER.filter((id) => N[id]).map((id) =>
-  `          <option value="${id}">${esc(N[id].name)}</option>`,
-).join("\n");
+const slider = (id, label, min, max, step, value) =>
+  `        <label class="panel-slider">${esc(label)}
+          <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${value}">
+        </label>`;
 
 /* ---- noscript fallback: the most connected patterns, as plain links ---- */
 const ranked = Object.values(N)
@@ -77,7 +75,7 @@ const html = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Interactive Graph · Map</title>
-  <meta name="description" content="Every pattern, hazard, theme, principle and case study on one interactive canvas — explore the ${graph.meta.relationships} typed relationships, or build an architecture and watch suggestions, exclusions and hazard coverage derive live.">
+  <meta name="description" content="Every pattern, hazard, theme, principle and case study on one live force-directed canvas — filter by kind, band, tag or favourites, color your own groups, tune the physics, and follow the ${graph.meta.relationships} typed relationships.">
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
   <link rel="stylesheet" href="../assets/graph.css">
@@ -85,7 +83,7 @@ const html = `<!doctype html>
   <!-- no lens.js: this page carries no leveled prose, so the reading-level toggle would
        render three dead buttons here -->
 </head>
-<body class="doc theme mode-explore">
+<body class="doc theme">
   <main class="doc-wrap graph-page">
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../index.html">Map</a>
@@ -96,45 +94,59 @@ const html = `<!doctype html>
     <header class="doc-head">
       <p class="doc-kicker">Map · The whole web</p>
       <h1 class="doc-title">Interactive Graph</h1>
-      <p class="doc-essence">${counts.pattern} patterns, ${counts.design} case studies, ${counts.theme} themes, ${counts.hazard} hazards and ${counts.principle} principles, wired by ${graph.meta.relationships} typed relationships — one canvas. <strong>Explore</strong> the whole web with filters and search, or <strong>Build</strong>: seed an architecture, apply patterns, and watch suggestions, exclusions and hazard coverage derive live. Double-click any node to open its page.</p>
+      <p class="doc-essence">${counts.pattern} patterns, ${counts.design} case studies, ${counts.theme} themes, ${counts.hazard} hazards and ${counts.principle} principles, wired by ${graph.meta.relationships} typed relationships — one live canvas. Drag, zoom, filter by kind, band, tag (<code>tag:caching</code>) or favourites, color your own groups, and tune the forces. Click a node to trace its neighbourhood; double-click to open its page.</p>
       <div class="doc-metarow">
         <span class="badge">Interactive</span>
         <span class="badge muted">${graph.meta.relationships} relationships</span>
       </div>
     </header>
 
-    <div class="graph-controls">
-      <div class="mode-tabs" role="group" aria-label="Mode">
-        <button type="button" class="mode-tab" data-mode="explore" aria-pressed="true">Explore</button>
-        <button type="button" class="mode-tab" data-mode="build" aria-pressed="false">Build</button>
-      </div>
-      <div class="explore-controls" role="group" aria-label="Explore filters">
-${kindBtns}
-        <select class="graph-select" id="band-select" aria-label="Filter patterns by band">
-          <option value="">All bands</option>
-${bandOptions}
-        </select>
-        <button type="button" class="gbtn" id="fav-btn" aria-pressed="false">★ Favourites</button>
-        <input class="graph-input" id="graph-search" type="search" placeholder="Search — a name, or a symptom" aria-label="Search the graph by name or symptom" autocomplete="off" spellcheck="false">
-      </div>
-      <div class="build-controls" role="group" aria-label="Builder seed">
-${presetBtns}
-        <select class="graph-select" id="design-select" aria-label="Seed from a case study">
-          <option value="">Seed from a case study…</option>
-${designOptions}
-        </select>
-        <input class="graph-input" id="symptom-search" type="search" placeholder="Describe a symptom to seed suggestions" aria-label="Describe a symptom to seed suggestions" autocomplete="off" spellcheck="false">
-        <span class="build-hint">…or click any node to start from it</span>
-      </div>
-    </div>
-
-    <div class="graph-legend" role="group" aria-label="Relationship families — click to show or hide edges">
-${legend}
-    </div>
-
     <div class="graph-stage">
-      <svg id="kb-graph" role="application" aria-label="Pattern relationship graph. Tab to a node, Enter to select or apply, o to open its page."></svg>
-      <aside id="build-panel" aria-label="Your architecture stack"></aside>
+      <svg id="kb-graph" role="application" aria-label="Pattern relationship graph. Tab to a node, Enter to select, o to open its page."></svg>
+      <aside id="graph-panel" aria-label="Graph settings">
+        <details class="panel-sec" open>
+          <summary>Filters</summary>
+          <input class="graph-input" id="graph-search" type="search" placeholder="Search — name, symptom, tag:x, kind:x" aria-label="Filter the graph: free text, tag:x, kind:x, band:x, fav:true; prefix - negates" autocomplete="off" spellcheck="false">
+          <div class="panel-row">
+${kindBtns}
+          </div>
+          <select class="graph-select" id="band-select" aria-label="Filter patterns by band">
+            <option value="">All bands</option>
+${bandOptions}
+          </select>
+          <label class="panel-toggle"><input type="checkbox" id="fav-toggle"> ★ Favourites only</label>
+          <label class="panel-toggle"><input type="checkbox" id="orphans-toggle"> Hide orphans</label>
+        </details>
+        <details class="panel-sec">
+          <summary>Links</summary>
+          <div class="panel-row" role="group" aria-label="Relationship families — click to show or hide edges">
+${legend}
+          </div>
+        </details>
+        <details class="panel-sec">
+          <summary>Groups</summary>
+          <div id="group-list"></div>
+          <button type="button" class="gbtn" id="group-add">+ New group</button>
+        </details>
+        <details class="panel-sec">
+          <summary>Display</summary>
+          <label class="panel-toggle"><input type="checkbox" id="arrows-toggle"> Arrows</label>
+${slider("sl-label", "Text fade threshold", 0.5, 3, 0.05, 1.4)}
+${slider("sl-node", "Node size", 0.5, 2.5, 0.05, 1)}
+${slider("sl-edge", "Link thickness", 0.5, 3, 0.1, 1)}
+        </details>
+        <details class="panel-sec">
+          <summary>Forces</summary>
+${slider("sl-center", "Centre force", 0, 0.3, 0.01, 0.05)}
+${slider("sl-repel", "Repel force", 0, 500, 10, 140)}
+${slider("sl-link", "Link force", 0, 1, 0.05, 0.5)}
+${slider("sl-dist", "Link distance", 30, 200, 5, 80)}
+        </details>
+        <div class="panel-foot">
+          <button type="button" class="gbtn" id="fit-btn">Fit to view</button>
+          <button type="button" class="gbtn" id="reset-btn">Restore defaults</button>
+        </div>
+      </aside>
     </div>
 
     <noscript>
@@ -172,5 +184,5 @@ if (process.argv.includes("--check")) {
   console.log("map/graph.html is up to date.");
 } else {
   writeFileSync(OUT, html);
-  console.log(`site/map/graph.html written: ${Object.keys(N).length} nodes, ${families.length} relation families, ${BUILDER_PRESETS.length} presets.`);
+  console.log(`site/map/graph.html written: ${Object.keys(N).length} nodes, ${families.length} relation families.`);
 }

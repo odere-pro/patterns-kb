@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, FACETS, chipMatches, folderFor, LEVELS, BLOCK_LEVELS, BUILDER_PRESETS, SITE_URL } from "./lib/model.mjs";
+import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, FACETS, chipMatches, folderFor, LEVELS, BLOCK_LEVELS, SITE_URL } from "./lib/model.mjs";
 import { mergedSynonyms, corpusVocabulary, validateExpansions, loadExpansions } from "./lib/expansions.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
@@ -353,17 +353,7 @@ const catalog = {
  * the graph links there instead of duplicating them. Relations to stub neighbours are
  * dropped so every drawn edge joins two real nodes. */
 
-/* Preset rot fails the build: a candidate id that no longer names a page is a curation
- * bug, caught here rather than as a silently missing suggestion. Scoped to real builds —
- * the fixture corpus (KB_ROOT) is a two-page miniature that cannot carry the live
- * preset ids; builders.test.mjs pins the same invariant against the live graph.json. */
 if (!process.env.KB_ROOT) {
-  for (const p of BUILDER_PRESETS) {
-    for (const c of p.candidates) {
-      if (!nodes[c]) fail(`builder preset "${p.id}": candidate "${c}" has no page — fix BUILDER_PRESETS in scripts/lib/model.mjs`);
-    }
-  }
-
   /* The expansion table must stay structurally sound against the live corpus: a target
    * word nothing contains any more (a rename, a rewrite) is a hard failure; vocabulary
    * drift since generation only degrades coverage, so it warns. Skipped for the fixture
@@ -384,7 +374,6 @@ const graphdata = {
     relationships: uniq.size,
   },
   relationTypes: RELATION_TYPES,
-  presets: BUILDER_PRESETS.map((p) => ({ ...p, candidates: p.candidates.filter((c) => nodes[c]) })),
   nodes: Object.values(nodes).map((n) => {
     const e = { id: n.id, name: n.name, kind: n.kind, essence: n.essence, path: n.path };
     if (n.band) e.band = n.band;
