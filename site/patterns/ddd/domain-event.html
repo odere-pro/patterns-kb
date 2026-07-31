@@ -97,8 +97,9 @@
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
         <p>A <strong>domain event</strong> is a fact, not a request: something that already happened in the business, named in the past tense with the words domain experts actually use — <code>OrderShipped</code>, <code>PaymentDeclined</code>, <code>SeatReserved</code>. Once raised it's immutable; you don't edit history, you only append to it. It carries whatever data makes the occurrence meaningful on its own, not just a bare signal that something changed.</p>
-        <p>The force it resolves is a coupling problem inside the <a href="./aggregate.html">Aggregate</a> that owns the change. The aggregate enforces the invariant and knows precisely when something worth telling the rest of the system just happened — but if it calls the logger, the cache, and every other interested context directly, its own transaction boundary swells to include all of them, and adding one more consumer means editing the aggregate again. A domain event lets the aggregate simply record what happened and hand the list to infrastructure, which dispatches it once the transaction commits. The aggregate never learns who, if anyone, is listening.</p>
+        <p>The force it resolves is a coupling problem inside the <a href="./aggregate.html">Aggregate</a> that owns the change. The aggregate enforces the invariant and knows precisely when something worth telling the rest of the system just happened — but if it calls the logger, the cache, and every other interested context directly, its own transaction boundary swells to include all of them, and adding one more consumer means editing the aggregate again. A domain event lets the aggregate simply record what happened and hand the list to infrastructure, which decides when and to whom it is dispatched. The aggregate never learns who, if anyone, is listening.</p>
         <p>Scope matters: inside its own bounded context a domain event can be nothing more than a plain in-process value object. It only earns the heavier name <em>integration event</em>, with a stable, versioned public shape, once it crosses into another team's context.</p>
+        <p>Scope also settles when to dispatch. Hand the collected events to in-process handlers just ahead of the commit and their work joins the same transaction, so the reactions are atomic with the change that caused them. An event that leaves the process has no such option — publish it before the commit and a rollback leaves a fact you cannot retract, so it waits until the commit succeeds.</p>
       </div>
     </section>
 
@@ -111,11 +112,11 @@
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>An immutable fact named in the past tense with the words domain experts use — OrderShipped, PaymentDeclined — carrying enough data to be meaningful on its own. The aggregate that enforced the change records it and hands the list to infrastructure, which dispatches once the transaction commits, so the aggregate's boundary never swells to include its consumers. Scope decides the weight: inside one bounded context it can be a plain in-process value object; crossing into another team's context it becomes an integration event with a versioned public shape.</p>
+          <p>An immutable fact named in the past tense with the words domain experts use — OrderShipped, PaymentDeclined — carrying enough data to be meaningful on its own. The aggregate that enforced the change records it and hands the list to infrastructure, so the aggregate's boundary never swells to include its consumers. Scope decides both the weight and the dispatch timing: inside one bounded context it can be a plain in-process value object handed to handlers just ahead of the commit, so their work joins the same transaction; crossing into another team's context it becomes an integration event with a versioned public shape, published only once the commit has succeeded.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when a state change should cause work the owning aggregate has no business knowing about, and skip it when the reaction must happen inside the same transaction — an event published before commit is a lie waiting to happen. The value is that a new consumer costs the producer nothing. The bill is delivery and time: ordering and at-least-once semantics become your problem the moment events leave the process, consumers always see the fact after the fact rather than inside it, and a published shape is a contract forever — you version it, you never edit it.</p>
+          <p>Choose it when a state change should cause work the owning aggregate has no business knowing about. Dispatch timing is the real decision, and it follows the boundary: in-process handlers called just before the commit keep their reactions atomic with the change, while anything published outside the process must wait, because a fact you have already announced cannot be rolled back. The value is that a new consumer costs the producer nothing. The bill is delivery and time: ordering and at-least-once semantics become your problem the moment events leave the process, consumers always see the fact after the fact rather than inside it, and a published shape is a contract forever — you version it, you never edit it.</p>
         </div>
       </div>
     </section>
@@ -131,7 +132,7 @@ flowchart LR
     Log -->|"after commit"| Disp["Dispatcher"]
     Disp -->|"notifies"| Sub["Subscribers"]
         </pre>
-        <figcaption>The aggregate records the event as a side effect of its own behavior. Nothing is dispatched until the transaction that produced it has actually committed.</figcaption>
+        <figcaption>The aggregate records the event as a side effect of its own behavior. Dispatching after the commit is the safe default, and the only choice once the event leaves the process; an in-process handler can instead run just ahead of the commit, inside the same transaction.</figcaption>
       </figure>
     </section>
 
@@ -188,7 +189,7 @@ flowchart LR
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The reaction is purely local and synchronous — a direct method call is simpler and easier to trace.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">The side effect must stay inside the same transaction as the change — model it there instead.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">A subscriber in another process must react inside the same transaction as the change — once the event leaves the process that atomicity is gone.</li>
             <li id="usage-avoid-3" data-kb-polarity="avoid">The "event" is really just an internal implementation detail nobody outside needs to know about.</li>
           </ul>
         </div>
@@ -225,7 +226,9 @@ class Order {
     this.events.push(new OrderShipped(this.id, trackingCode));
   }
 
-  // Infrastructure calls this after the commit succeeds, never before.
+  // Infrastructure drains this at commit time: just before the commit to keep
+  // in-process handlers in the same transaction, after it for anything published
+  // outside the process.
   pullEvents(): DomainEvent[] {
     const pending = this.events;
     this.events = [];
