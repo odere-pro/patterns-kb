@@ -100,6 +100,16 @@ a thin one. What must never be tagged out of basic: the failure story, the one-l
 mechanism, the primary topology diagram, at least one item in every mandatory list, and the
 plainest pro/con pair.
 
+**Where the failure story lives is your choice of two.** Much of this corpus opens
+`description` definitionally ("Leader election is a protocol by which…") and puts the force
+it resolves in `p-2` — which is exactly the paragraph the sizing band pushes to `advanced`.
+That is allowed. The rule is that **one** of the description lead and the explain `basic`
+rung tells the failure-first story at basic, and the other does the complementary job; it
+is not a requirement that the description lead be the one. What fails the page is both of
+them doing the same job, or neither. So when you tag a definitional lead's `p-2` away,
+re-read the `basic` rung and confirm it still carries the failure concretely — if it does
+not, the paragraph stays and you pay for it elsewhere.
+
 ## The per-lens audit procedure
 
 1. `node scripts/kb.mjs get <id> --level basic` — read the OUTPUT as a junior's whole page,
@@ -130,9 +140,17 @@ its bands are close together and the work is differentiation, not reduction.
 - **The substitution test** (for `register` variants): would the deeper text read as a
   stutter if the reader had just read the simpler one? Only then is it a replacement.
   Otherwise tag with `level` and let them stack.
-- **Never let a block go lens-empty.** If every item in a list is tagged above basic, make
-  check fails the page — keep at least one basic-visible item in every mandatory list (that
-  floor item is usually the block's plainest, most useful line anyway).
+- **Never let a block — or a labelled list inside one — go lens-empty.** If every item in a
+  list is tagged above basic, make check fails the page. Keep at least one basic-visible
+  item in every mandatory list (that floor item is usually the block's plainest, most useful
+  line anyway). **`production` is the trap**: it renders four independently labelled cards —
+  Tuning knobs, Signals to watch, Failure modes under load, Readiness checklist — and the
+  sizing bands push you to tag all of the first three away. Do that and the block still
+  passes on its surviving checklist items while a reader at basic meets "Tuning knobs" with
+  no knobs under it. Each card is checked by name, so basic keeps **one knob, one signal,
+  one failure mode and two checklist gates** — budget ~110–130 words for production, and
+  pick the three that read as one operating story (the dial, the thing you would alert on,
+  the failure that bites first).
 
 ### Addressability — what ids exist
 
@@ -172,8 +190,9 @@ orchestrator runs `make all && make check` once per batch, and all lens QA runs 
 ## Self-check (per page)
 
 1. All three lens reads done, judged as pages for their audience — not skimmed as diffs.
-2. Basic output: in its sizing band, every block present, failure-first story up top, the
-   topology diagram visible, no unexplained jargon.
+2. Basic output: in its sizing band, every block present, the failure-first story carried by
+   either the description lead or the `basic` rung (not both, not neither), the topology
+   diagram visible, no unexplained jargon.
 3. Advanced and expert read as basic grown, not as separate pages: no sentence repeated
    across rungs, no added paragraph that restates what a lower lens already said.
 4. Expert argues selection, costs and counter-moves, not the mechanism again.

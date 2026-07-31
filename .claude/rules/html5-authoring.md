@@ -191,9 +191,15 @@ with `node scripts/kb.mjs register <id> <element-id> <basic|advanced|expert|none
 
 An element with neither attribute is universal. One element carries at most ONE of the
 two (`make check` enforces the XOR), sections never carry either (blocks always show),
-and **no block may render empty at any lens** — `make check` fails a section whose
+and **nothing labelled may render empty at any lens** — `make check` fails a section whose
 lens-filtered content comes back blank, which is what forces at least one
-basic-visible item into every mandatory list. Element ids are minted by `make all`
+basic-visible item into every mandatory list. The test runs at two granularities,
+because `production` renders **four independently labelled cards** and the block-level
+test alone cannot see them: tag every knob, signal and failure mode up a lens and the
+block still passes on its surviving checklist items, while a reader at basic meets
+"Tuning knobs" with no knobs under it. So each `.prod-group` is checked by name too —
+basic keeps one knob, one signal, one failure mode and its checklist gates. Element ids
+are minted by `make all`
 (`<block>-p-N` on prose paragraphs, keyed ids like `wild-envoy`, `tour-<member>`,
 `deepdives-dive-N`) — positional ids renumber when a paragraph is inserted, so re-run
 `make all` before tagging. Figures take these attributes too — the primary topology
