@@ -228,9 +228,9 @@ for (const { root, id, kind } of raw) {
 
   const explain = root.querySelector('[data-kb-block="explain"]');
   if (explain) {
-    const got = explain.querySelectorAll(".explain-item").map((e) => e.getAttribute("data-kb-register"));
+    const got = explain.querySelectorAll(".explain-item").map((e) => e.getAttribute("data-kb-level"));
     if (JSON.stringify(got) !== JSON.stringify(LEVELS))
-      fail(`${id}: explain block must hold exactly one .explain-item per register, in ` +
+      fail(`${id}: explain block must hold exactly one .explain-item per level, in ` +
            `${LEVELS.join(" → ")} order (got: ${got.join(", ") || "none"})`);
     node.hasExplain = true;
   }

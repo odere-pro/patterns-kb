@@ -217,7 +217,7 @@ test("build.mjs rejects a data-kb-level outside the closed vocabulary", () => {
 test("build.mjs rejects an incomplete explain ladder", () => {
   const root = withFixture((r) =>
     edit(r, ALPHA,
-      '<div class="explain-item" id="explain-advanced" data-kb-register="advanced"><h3>Advanced</h3><p>Alpha with architectural teeth for seniors.</p></div>\n',
+      '<div class="explain-item" id="explain-advanced" data-kb-level="advanced"><h3>Advanced</h3><p>Alpha with architectural teeth for seniors.</p></div>\n',
       ""));
   try {
     const r = run("build.mjs", root);
@@ -228,7 +228,9 @@ test("build.mjs rejects an incomplete explain ladder", () => {
   }
 });
 
-test("kb.mjs get --level basic prunes above-level elements and blocks", () => {
+test("kb.mjs get --level prunes above-level elements; the ladder stacks", () => {
+  /* Accretion, both ways round: a higher lens ADDS. basic hides the expert-tagged
+   * tradeoff and shows one rung; advanced reads basic+advanced stacked; expert all three. */
   const root = built();
   try {
     const basic = run("kb.mjs", root, "get", "alpha", "--level", "basic");
@@ -236,7 +238,18 @@ test("kb.mjs get --level basic prunes above-level elements and blocks", () => {
     assert.match(basic.stdout, /universal drawback/, "untagged items stay visible");
     assert.doesNotMatch(basic.stdout, /expert-only nuance/, "expert-tagged item is pruned at basic");
     assert.match(basic.stdout, /for beginners/, "the basic explain rung shows");
-    assert.doesNotMatch(basic.stdout, /architectural teeth|for staff/, "higher explain rungs are pruned");
+    assert.doesNotMatch(basic.stdout, /architectural teeth|for staff/, "higher rungs are not there yet");
+
+    const advanced = run("kb.mjs", root, "get", "alpha", "--level", "advanced");
+    assert.equal(advanced.status, 0, advanced.stderr);
+    assert.match(advanced.stdout, /for beginners[\s\S]*architectural teeth/,
+      "advanced reads the basic rung and the advanced one, in that order");
+    assert.doesNotMatch(advanced.stdout, /for staff/, "the expert rung waits for the expert lens");
+
+    const expert = run("kb.mjs", root, "get", "alpha", "--level", "expert");
+    assert.equal(expert.status, 0, expert.stderr);
+    assert.match(expert.stdout, /for beginners[\s\S]*architectural teeth[\s\S]*for staff/,
+      "expert reads all three rungs");
 
     const full = run("kb.mjs", root, "get", "alpha");
     assert.equal(full.status, 0, full.stderr);

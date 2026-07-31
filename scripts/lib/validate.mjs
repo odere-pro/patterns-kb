@@ -6,6 +6,7 @@
  */
 import { parse } from "../vendor/node-html-parser.mjs";
 import { BLOCKS, OPTIONAL_BLOCKS, TAGS, RELATION_TYPES, LEVELS, folderFor } from "./model.mjs";
+import { pruneForLens } from "./lens.mjs";
 
 /** Block-vocabulary problems for one page: missing, unknown, out of order. */
 export function blockProblems(present, kind) {
@@ -67,7 +68,8 @@ export function lensProblems(root) {
 
   /* No block may come back empty at any lens. Clone the section, prune what the
    * lens would hide (min-level accretion + exact-match registers), drop the
-   * headings, and demand some text survives. */
+   * headings, and demand some text survives. The basic lens is the one that bites:
+   * it is what forces at least one untagged item into every mandatory list. */
   for (const sec of root.querySelectorAll("[data-kb-block]")) {
     const block = sec.getAttribute("data-kb-block");
     /* relationships renders link cards written by kb.mjs link — a freshly scaffolded
@@ -75,13 +77,7 @@ export function lensProblems(root) {
     if (block === "relationships") continue;
     for (const lens of LEVELS) {
       const clone = parse(sec.toString(), { comment: true });
-      for (const el of clone.querySelectorAll("[data-kb-level]")) {
-        if (el.getAttribute("data-kb-block")) continue;
-        if (LEVELS.indexOf(el.getAttribute("data-kb-level")) > LEVELS.indexOf(lens)) el.remove();
-      }
-      for (const el of clone.querySelectorAll("[data-kb-register]")) {
-        if (el.getAttribute("data-kb-register") !== lens) el.remove();
-      }
+      pruneForLens(clone, lens);
       for (const h of clone.querySelectorAll("h2, h3")) h.remove();
       if (!clone.text.trim()) {
         problems.push(`block "${block}" renders empty at the ${lens} lens`);
@@ -159,11 +155,13 @@ export function validatePage(root, relPath) {
     if (!LEVELS.includes(lv)) p(`data-kb-level "${lv}" is not in the closed vocabulary (${LEVELS.join("/")})`);
   }
   for (const msg of lensProblems(root)) p(msg);
+  /* The ladder is cumulative: its rungs carry data-kb-level, so advanced reads
+   * basic+advanced and expert reads all three. */
   const explain = root.querySelector('[data-kb-block="explain"]');
   if (explain) {
-    const got = explain.querySelectorAll(".explain-item").map((e) => e.getAttribute("data-kb-register"));
+    const got = explain.querySelectorAll(".explain-item").map((e) => e.getAttribute("data-kb-level"));
     if (JSON.stringify(got) !== JSON.stringify(LEVELS))
-      p(`explain block needs one .explain-item per register, in ${LEVELS.join(" → ")} order`);
+      p(`explain block needs one .explain-item per level, in ${LEVELS.join(" → ")} order`);
   }
 
   /* The sketch's code declares its language (pre is a raw-text element, so the

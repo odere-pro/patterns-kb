@@ -22,9 +22,11 @@
  *   kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
  *   kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
  *   kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   the three-level ladder
- *                                 (all three empty strings removes the block)
- *   kb.mjs level <id> <element-id> <basic|advanced|expert|none>      accretion: visible from this level up
- *   kb.mjs register <id> <element-id> <basic|advanced|expert|none>   variant: rendered at exactly this lens
+ *                                 (cumulative: the rungs stack; all three empty removes the block)
+ *   kb.mjs level <id> <element-id> <basic|advanced|expert|none>      THE mechanism —
+ *                                 accretion: visible from this level up. Untagged is the basic core.
+ *   kb.mjs register <id> <element-id> <basic|advanced|expert|none>   RARE — variant: rendered at
+ *                                 exactly this lens, for the few places where showing both would be wrong
  *                                 (elements only — sections always show, at every lens)
  *   kb.mjs link <from> <verb> <to> [--note "…"] [--note-back "…"]   both sides at once
  *   kb.mjs unlink <a> <b>         drop the edge from both pages, whatever verb each used
@@ -38,6 +40,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, esc, folderFor, band as bandOf } from "./lib/model.mjs";
+import { pruneForLens } from "./lib/lens.mjs";
 import { mergedSynonyms, STOP } from "./lib/expansions.mjs";
 import { validatePage } from "./lib/validate.mjs";
 import { pageSkeleton } from "./lib/template.mjs";
@@ -70,21 +73,6 @@ const LEVEL = opt("level");
 if (LEVEL && !LEVELS.includes(LEVEL)) {
   console.error(`--level "${LEVEL}" is not a level — use ${LEVELS.join("/")}`);
   process.exit(1);
-}
-const visibleAt = (elLevel, lens) => !elLevel || LEVELS.indexOf(elLevel) <= LEVELS.indexOf(lens);
-/* data-kb-register = "rendered at exactly this lens" (variant); an element with no
- * register is universal. With no lens requested, the editor view keeps every rung. */
-const registerVisible = (elReg, lens) => !elReg || !lens || elReg === lens;
-/** Prune everything a lens would hide — both semantics — under `scope`. */
-function pruneForLens(scope, lens) {
-  if (!lens) return;
-  for (const n of scope.querySelectorAll("[data-kb-level]")) {
-    if (n.getAttribute("data-kb-block")) continue; // section stamps are retired; ignore
-    if (!visibleAt(n.getAttribute("data-kb-level"), lens)) n.remove();
-  }
-  for (const n of scope.querySelectorAll("[data-kb-register]")) {
-    if (!registerVisible(n.getAttribute("data-kb-register"), lens)) n.remove();
-  }
 }
 
 /* ---------------- html -> text ---------------- */
@@ -515,9 +503,11 @@ ${rows}
       console.log(`${node.id}: production = ${groups.map(([c, , i]) => `${c.replace("prod-", "")}:${i.length}`).join(" ")}`);
     }
   } else if (cmd === "explain") {
-    /* explain — the three-level reading ladder. One prose paragraph per level; the
-     * writer replaces the whole block, so re-supply all three on edit. All three
-     * empty removes it. */
+    /* explain — the three-level reading ladder. One prose paragraph per level, each
+     * carrying data-kb-level, so the lenses STACK: advanced reads basic+advanced,
+     * expert reads all three. Write the rungs to continue one another rather than
+     * re-tell the same story. The writer replaces the whole block, so re-supply all
+     * three on edit. All three empty removes it. */
     const texts = LEVELS.map((l) => opt(l));
     if (texts.some((t) => t == null)) {
       console.error(`pass all three: ${LEVELS.map((l) => `--${l} "…"`).join(" ")} (all empty to remove)`);
@@ -531,7 +521,7 @@ ${rows}
     } else {
       if (texts.some((t) => !t.trim())) { console.error("explain needs all three levels — a partial ladder is invalid"); process.exit(1); }
       const items = LEVELS.map((l, i) =>
-        `        <div class="explain-item" id="explain-${l}" data-kb-register="${l}">
+        `        <div class="explain-item" id="explain-${l}" data-kb-level="${l}">
           <h3>${LEVEL_LABELS[l]}</h3>
           <p>${esc(texts[i])}</p>
         </div>`).join("\n");
@@ -559,9 +549,11 @@ ${items}
     }
   } else {
     /* level | register — the two authored per-element lens attributes.
-     *   level    = min-level accretion: "visible from this level up".
+     *   level    = min-level accretion: "visible from this level up". THE mechanism:
+     *              untagged is the basic core, and tagging pushes depth up a lens.
      *   register = exact-match variant: "rendered at exactly this lens"; adjacent
-     *              registered siblings form one variant group.
+     *              registered siblings form one variant group. RARE — reach for it
+     *              only where showing both versions at once would be wrong.
      * An element carries at most ONE of the two (make check enforces the XOR).
      * Sections and the explain ladder's own items are refused — sections always
      * show, and the ladder is written whole via kb.mjs explain. */
