@@ -25,7 +25,7 @@
  *                                 (all three empty strings removes the block)
  *   kb.mjs level <id> <element-id> <basic|advanced|expert|none>      accretion: visible from this level up
  *   kb.mjs register <id> <element-id> <basic|advanced|expert|none>   variant: rendered at exactly this lens
- *                                 (sections get theirs from BLOCK_LEVELS in lib/model.mjs)
+ *                                 (elements only — sections always show, at every lens)
  *   kb.mjs link <from> <verb> <to> [--note "…"] [--note-back "…"]   both sides at once
  *   kb.mjs unlink <a> <b>         drop the edge from both pages, whatever verb each used
  *   kb.mjs new <id> --kind pattern|hazard|theme|principle|design --band <b> [--group <g>] --name "…" --order <n>
@@ -344,7 +344,10 @@ if (cmd === "get") {
         if (n.name.toLowerCase().includes(t)) s += W.name;
         if ((n.solves ?? []).some((x) => x.toLowerCase().includes(t))) s += W.solves;
         if ((n.tags ?? []).some((x) => x.toLowerCase().includes(t))) s += W.tags;
-        if (n.essence.toLowerCase().includes(t)) s += W.essence;
+        /* A page with no solves (hazards, themes) carries its symptom vocabulary in the
+         * essence — score it at the solves weight there, or symptom queries could never
+         * reach the very pages that NAME the symptom. Mirrored in search.js. */
+        if (n.essence.toLowerCase().includes(t)) s += (n.solves?.length ? W.essence : W.solves);
         else if (curated.includes(t)) s += W.curated;
         const hits = body.hits.get(t);
         if (hits) { s += Math.min(hits.n, 3) * W.body; line = hits.line; }
