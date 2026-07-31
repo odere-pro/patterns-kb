@@ -20,43 +20,21 @@ mitigation blocks want the edge); a fluency↔tour make-check integrity rule.
 
 ## 1. Give hazards symptom vocabulary the search can score
 
-**What.** The search stack now bridges searcher vocabulary to catalog vocabulary (curated
-`SYNONYMS` in `scripts/lib/model.mjs` layered under a machine-generated table in
-`scripts/data/expansion-synonyms.json`), and a page with no `solves` scores its essence at
-the solves weight — together those lifted, e.g., "one giant class does everything" →
-`god-object` and "everyone piles on at once after the cache expires" → `cache-stampede`.
-But hazards still carry no `solves` by contract, and a few hazard essences lack the words a
-sufferer would type: "memory keeps growing until we restart" ranks `resource-leak` ~20th
-(its essence never says *leak*), and "intermittent failures we cannot reproduce" misses
-`race-condition` (no *flaky*/*intermittent* anywhere in its metadata).
+**What.** Hazards carry no `solves` by contract, and a few hazard essences lack the words
+a sufferer would actually type — so even with the synonym-expansion layer and the
+no-`solves` essence weight, "memory keeps growing until we restart" ranks `resource-leak`
+~20th (its essence never says *leak*), and "intermittent failures we cannot reproduce"
+misses `race-condition` (no *flaky*/*intermittent* anywhere in its metadata). The
+expansion table cannot fix this side: it only bridges to words a page actually has.
 
 **Options.** Either allow hazards a small `solves` list (contract change in
 `.claude/rules/html5-authoring.md` plus authoring ~22×4 phrases — hazards *are* symptoms,
 so this is the natural fix); or keep the contract and tune the weakest hazard essences to
-carry their symptom words. The expansion table cannot fix this side: it only bridges to
-words a page actually has.
+carry their symptom words.
 
 **Effort.** Small (essence tuning) to medium (contract change + authoring pass).
 
-## 2. Semantic search — iterate the expansion table
-
-**What.** The semantic layer shipped: ~400 word → nearest-corpus-words entries, authored by
-agent fan-out and review, merged under the curated map at build time (curated keys win),
-consumed identically by the hub, the CLI and the graph search. `make check` fails on
-structural rot (a target word no page carries any more) and warns on vocabulary drift; the
-regeneration procedure lives in the file's own `meta.regenerate`. The two scorers are
-pinned to each other by `scripts/test/search-parity.test.mjs` and covered behaviorally by
-`search-features.test.mjs`.
-
-**Left open.** Iterate entries as real queries reveal gaps — add a bridge when a miss
-shows up, prune one that pollutes. True vector search was **rejected, not deferred**:
-client-side query embedding needs a vendored WASM model (tens of MB) or a query-time API,
-and either breaks the double-click-`index.html` contract. Revisit only if word-level
-bridging proves insufficient.
-
-**Effort.** Ongoing, minutes per entry.
-
-## 3. Automated browser tests for the graph runtime
+## 2. Automated browser tests for the graph runtime
 
 **What.** `site/assets/graph-view.js` (the interactive graph explorer's hand-authored
 runtime) has no automated tests — `make test` covers the data projection
@@ -72,7 +50,7 @@ untested.
 
 **Effort.** Small (extract + unit-test the pure logic) to medium (real browser harness).
 
-## 4. Surface mentions / mentionedBy?
+## 3. Surface mentions / mentionedBy?
 
 **What.** Prose links that are not typed relations are derived into `graph.json`
 (`mentions` / `mentionedBy`, `scripts/build.mjs`) but never shown on pages. The old ratio
@@ -91,5 +69,10 @@ that the typed graph carries 800 relationships.
 
 - **Mermaid pre-rendering to SVG** was considered and **dropped** (owner decision,
   2026-07): the vendored client-side renderer stays. Do not re-propose it.
+- **True vector search** was **rejected, not deferred**, when the synonym-expansion layer
+  (`scripts/data/expansion-synonyms.json`, regeneration procedure in its `meta`) shipped:
+  client-side query embedding needs a vendored WASM model (tens of MB) or a query-time
+  API, and either breaks the double-click-`index.html` contract. Revisit only if
+  word-level bridging proves insufficient.
 - **`elevation-map.html`** (the old prototype) was never tracked in git — there is nothing
   to recover. If ever wanted, it would be rebuilt from scratch.
