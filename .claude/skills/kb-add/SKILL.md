@@ -85,7 +85,7 @@ guards against an anti-pattern, e.g. `single-responsibility` → `god-object`). 
 node scripts/kb.mjs set <id> \
   --aliases '["real alternate names, or [] "]' \
   --tags '["from the closed vocabulary only"]' \
-  --solves '["the symptom, in the words of someone who does not know this pattern yet"]'
+  --solves '["the symptom, in the words of someone who does not know this page yet"]'
 ```
 
 Tags must be in `TAGS` (`scripts/lib/model.mjs`) — `make check` rejects anything else. Add a

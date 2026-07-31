@@ -41,7 +41,7 @@
     if (n.name.toLowerCase().indexOf(t) >= 0) s += naming ? 5 : 2;
     if (solves.some(function (x) { return x.toLowerCase().indexOf(t) >= 0; })) s += naming ? 5 : 6;
     if (tags.some(function (x) { return x.toLowerCase().indexOf(t) >= 0; })) s += 3;
-    // A page with no solves (hazards, themes) carries its symptom vocabulary in the
+    // A page with no solves (themes) carries what symptom vocabulary it has in the
     // essence — score it at the solves weight there. Mirrors kb.mjs.
     if (n.essence.toLowerCase().indexOf(t) >= 0) s += solves.length ? 3 : (naming ? 5 : 6);
     else if (hay.indexOf(t) >= 0) s += naming ? 2 : 1;

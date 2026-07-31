@@ -321,6 +321,48 @@ test("register variants show at exactly their lens; both-attrs and empty blocks 
   }
 });
 
+test('build-pages.mjs renders "Mentioned by" and never feeds it back into the graph', () => {
+  /* A prose link only counts as a mention when no typed relation already explains it,
+   * so drop the fixture edge before pointing alpha's prose at beta. The rendered list
+   * is a page full of internal links: the guard that matters is that a second build
+   * does not read them back as mentions of their own. */
+  const root = built();
+  const mentions = (r) => JSON.parse(readFileSync(join(r, "site", "assets", "graph.json"), "utf8")).nodes;
+  try {
+    assert.equal(run("kb.mjs", root, "unlink", "alpha", "beta").status, 0);
+    edit(root, ALPHA, "<p>A minimal fixture page.",
+      '<p>Prose that points at <a href="./beta.html">Beta</a>. A minimal fixture page.');
+    /* Beta gets a footer nav, so the list has to land ahead of it rather than at the
+     * end of <main> — the placement every real page uses. */
+    edit(root, BETA, "</main>", '<nav class="docnav"><span>fixture nav</span></nav>\n</main>');
+    assert.equal(run("build.mjs", root).status, 0);
+    assert.equal(run("build-pages.mjs", root).status, 0);
+
+    const beta = readFileSync(join(root, BETA), "utf8");
+    assert.match(beta, /<aside class="mentions"/, "the mentioned page carries the list");
+    assert.match(beta, /<a href="\.\/alpha\.html">Alpha<\/a>/, "and links back to the mentioning page");
+    assert.match(beta, /<\/aside>\s*<nav class="docnav"/, "the list sits ahead of the footer nav");
+    assert.doesNotMatch(readFileSync(join(root, ALPHA), "utf8"), /class="mentions"/,
+      "the mentioning page gets nothing — the list is inbound only");
+
+    /* Feedback loop: rebuild the graph from pages that now contain the rendered list. */
+    assert.equal(run("build.mjs", root).status, 0);
+    assert.deepEqual(mentions(root).alpha.mentions, ["beta"]);
+    assert.equal(mentions(root).beta.mentions, undefined,
+      "links inside the generated list are not prose mentions");
+    assert.equal(run("build-pages.mjs", root, "--check").status, 0, "a second pass is a no-op");
+
+    /* Retract the prose link: the region must go with it, byte for byte. */
+    edit(root, ALPHA, 'Prose that points at <a href="./beta.html">Beta</a>. ', "");
+    assert.equal(run("build.mjs", root).status, 0);
+    assert.equal(run("build-pages.mjs", root).status, 0);
+    assert.doesNotMatch(readFileSync(join(root, BETA), "utf8"), /mentions/,
+      "a page that lost its last mention loses the region");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("kb.mjs refs reports each carrier separately", () => {
   const root = built();
   try {

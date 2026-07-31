@@ -223,6 +223,14 @@ export const SYNONYMS = {
   redelivery: ["replay", "redelivered"],
 };
 
+/* A prose link is any internal link that is NOT one of the typed carriers rendering
+ * itself as a link, page furniture, or the generated "Mentioned by" list. That last
+ * exclusion is load-bearing: the list is derived FROM prose links, so indexing it
+ * would feed the derivation its own output and grow a new mention every build. Shared
+ * by the derivation in build.mjs and by `kb.mjs refs`, which must agree on what counts. */
+export const PROSE_LINK_EXCLUDE =
+  "[data-kb-rel], [data-kb-member], .fluency-item, .crumb, .docnav, .mentions";
+
 export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes", principle: "principles", design: "designs" };
 
 /* ---- taxonomy ----

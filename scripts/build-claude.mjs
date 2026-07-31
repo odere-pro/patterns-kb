@@ -74,9 +74,11 @@ Every one is what the patterns elsewhere exist to prevent.
 Pages here: ${list.map((n) => n.id).sort().join(", ")}
 
 Blocks, in order: ${BLOCKS.hazard.map((b) => `\`${b}\``).join(" → ")}.
-Hazards carry no \`data-kb-solves\` — a hazard solves nothing, it *is* the problem — and no
-"In the wild" block. They relate to patterns through \`mitigated-by\`, whose inverse
-\`prevents-hazard\` must be declared on the pattern's page too.
+Hazards carry \`data-kb-solves\`, but pointing the other way: the phrases are what the
+sufferer *observes* ("we restart the service every night to keep it healthy"), and the page
+they reach names the problem rather than fixing it. Keep them out of the \`essence\`, which
+stays the terse definition. No "In the wild" block. They relate to patterns through
+\`mitigated-by\`, whose inverse \`prevents-hazard\` must be declared on the pattern's page too.
 
 Read with \`node ../../scripts/kb.mjs get <id>\`. See the root CLAUDE.md for the contract.
 `;

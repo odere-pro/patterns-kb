@@ -39,7 +39,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, esc, folderFor, band as bandOf } from "./lib/model.mjs";
+import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, esc, folderFor, band as bandOf, PROSE_LINK_EXCLUDE } from "./lib/model.mjs";
 import { pruneForLens } from "./lib/lens.mjs";
 import { mergedSynonyms, STOP } from "./lib/expansions.mjs";
 import { validatePage } from "./lib/validate.mjs";
@@ -76,7 +76,9 @@ if (LEVEL && !LEVELS.includes(LEVEL)) {
 }
 
 /* ---------------- html -> text ---------------- */
-const NOISE = "script, style, link, .crumb, .docnav, .doc-metarow, .practice";
+/* .mentions is the generated "Mentioned by" list: navigation derived from other pages'
+ * prose, so indexing it would score a page against words it never wrote. */
+const NOISE = "script, style, link, .crumb, .docnav, .doc-metarow, .practice, .mentions";
 const inline = (el) => el.text.replace(/\s+/g, " ").trim();
 
 /* STOP lives in lib/expansions.mjs now, shared with the vocabulary extractor; the hub
@@ -335,9 +337,9 @@ if (cmd === "get") {
         if (n.name.toLowerCase().includes(t)) s += W.name;
         if ((n.solves ?? []).some((x) => x.toLowerCase().includes(t))) s += W.solves;
         if ((n.tags ?? []).some((x) => x.toLowerCase().includes(t))) s += W.tags;
-        /* A page with no solves (hazards, themes) carries its symptom vocabulary in the
-         * essence — score it at the solves weight there, or symptom queries could never
-         * reach the very pages that NAME the symptom. Mirrored in search.js. */
+        /* A page with no solves (themes) carries what symptom vocabulary it has in the
+         * essence — score it at the solves weight there, so a one-field page is not
+         * silently outranked by pages with five. Mirrored in search.js. */
         if (n.essence.toLowerCase().includes(t)) s += (n.solves?.length ? W.essence : W.solves);
         else if (curated.includes(t)) s += W.curated;
         const hits = body.hits.get(t);
@@ -700,7 +702,7 @@ ${items}
    * rendering itself as a link — the same exclusion build.mjs uses to derive mentions. */
   const proseLinks = [];
   for (const a of root.querySelectorAll("main a[href]")) {
-    if (a.closest("[data-kb-rel], [data-kb-member], .fluency-item, .crumb, .docnav")) continue;
+    if (a.closest(PROSE_LINK_EXCLUDE)) continue;
     const to = toId(a.getAttribute("href"));
     if (to && to !== id && !proseLinks.includes(to)) proseLinks.push(to);
   }

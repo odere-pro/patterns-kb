@@ -110,15 +110,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Show someone a single stream of the newest posts from everyone they follow. It sounds like nothing: look up who they follow, gather those posts, sort by time. The numbers spoil it. One reader may follow thousands of accounts, and one popular account may be followed by tens of millions of people, so a single new post — or a single refresh — can turn into an avalanche of work.</p>
+          <p>Think of a newspaper printed for you before you ask for it. Rather than chase every account you follow the moment you open the app, the system keeps a short ready-made list of the newest posts for each person, a couple of hundred entries and no more. When someone posts, background helpers slot that post onto the top of each follower's list, so opening the app is one quick read instead of thousands. The rare account followed by millions gets an exception: skip it while the post is being spread, then fetch its handful of recent posts live when a reader asks. The cost is patience, because a post reaches its followers a moment later rather than instantly.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>Two extremes pull in opposite directions and get opposite answers. Assembling at read time explodes into thousands of queries for someone who follows a lot, so each feed is precomputed into a stored list of roughly two hundred post ids and a read collapses to one lookup. Precomputation then breaks on the giant account, whose single post would mean ninety million feed writes, so those few edges are excluded and merged in live instead. The writes move to asynchronous workers, and the prepend must be idempotent because redelivery is expected.</p>
+          <p>The ready-made list is a materialized view, a per-user row of roughly two hundred post ids, so a read is one point lookup plus a cache hydration however many accounts the reader follows. The spreading moves off the request path: creating a post enqueues a small message and a fleet of competing consumers drains it, which keeps creation in milliseconds and still lands the feed inside the one-minute staleness budget. Delivery is at-least-once, so a second prepend of the same post has to be a no-op. Skipping the giant accounts is fan-out-on-read merged at query time, and where the two strategies meet is a follower-count threshold you set.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>The signal is refusing one uniform answer: the follower count above which an author stops being precomputed is a deliberate, tunable knob, because write amplification and read amplification are the same problem seen from opposite ends. What not to build is deep pagination — beyond about two hundred posts the design falls back to the slow query on purpose, since almost nobody scrolls there — and the storage arithmetic, roughly two kilobytes per user and four terabytes across two billion, shows precomputation itself is nearly free. The interesting edge is the hot post: a cache in front merely relocates the hot key to one cache shard, so the cache is replicated rather than sharded, which buys headroom at the price of colder starts and fewer distinct posts held.</p>
+          <p>Set that threshold by measuring: write amplification and read amplification are one cost seen from opposite ends, so it moves with your follower distribution and with what a feed write costs. The bill has three lines. Derived copies are the cheap one, two kilobytes a user and four terabytes across two billion, so precomputing at all is close to free. The dear one is a read path that now merges two sources and a worker fleet whose task sizes vary by six orders of magnitude; pay it down by chopping a giant fan-out into bounded chunks. Deep pagination is refused rather than solved, falling back to the slow query past the stored window on the bet that almost nobody scrolls there. And a viral post pins one shard even behind a cache, so replicate the cache rather than shard it and trade colder starts for N times the headroom.</p>
         </div>
       </div>
     </section>
@@ -153,7 +153,7 @@
       <div class="prose">
         <p id="sizing-p-1"><strong>Reads dominate.</strong> With a large fraction of 2B users opening the feed several times a day, the read path faces on the order of hundreds of thousands of feed assemblies per second at peak. The saving grace is that almost everyone reads only the first handful of items before losing interest — so caching the top of each feed pays off enormously.</p>
         <p id="sizing-p-2"><strong>Writes amplify.</strong> A post is one write until you ask who must see it. An author with <em>F</em> followers turns a single post into <em>F</em> feed updates. For an ordinary account that is a few hundred; for a mega-account with 90M+ followers it is 90M writes for one post — the number that breaks the naive design and forces everything downstream.</p>
-        <p id="sizing-p-3"><strong>Storage is the easy part.</strong> Precompute each user's feed as a list of ~200 post IDs at ~10&nbsp;bytes each ≈ 2&nbsp;KB/user; across 2B users that is roughly <strong>4&nbsp;TB</strong> — trivial for a modern fleet. At a fraction of a cent per user per month against something like ~$100/year of ad revenue per active user, the storage spend is a rounding error next to the latency it buys.</p>
+        <p id="sizing-p-3" data-kb-level="advanced"><strong>Storage is the easy part.</strong> Precompute each user's feed as a list of ~200 post IDs at ~10&nbsp;bytes each ≈ 2&nbsp;KB/user; across 2B users that is roughly <strong>4&nbsp;TB</strong> — trivial for a modern fleet. At a fraction of a cent per user per month against something like ~$100/year of ad revenue per active user, the storage spend is a rounding error next to the latency it buys.</p>
       </div>
     </section>
 
@@ -175,7 +175,7 @@
       <div class="prose">
         <p id="interface-p-1">One endpoint per requirement. The auth token rides in the header and is not spelled out here.</p>
       </div>
-      <details class="sketch">
+      <details class="sketch" id="interface-sketch-1">
         <summary>HTTP — post, follow, read</summary>
 <pre><code class="language-http" data-kb-lang="http">POST /posts
 { "content": { } }
@@ -188,7 +188,7 @@ GET /feed?pageSize={n}&amp;cursor={oldestSeenTimestamp}
 &rarr; 200 { "items": [ Post ], "nextCursor": "..." }</code></pre>
       </details>
       <div class="prose">
-        <p id="interface-p-2">The follow verb is a <strong>PUT</strong> on purpose: following someone twice must be the same as following them once. Pagination uses a <strong>cursor</strong> rather than a page number — because the feed is strictly chronological, the timestamp of the oldest post you have already seen is all the state a page needs, and each request returns the next <em>n</em> posts older than it.</p>
+        <p id="interface-p-2" data-kb-level="advanced">The follow verb is a <strong>PUT</strong> on purpose: following someone twice must be the same as following them once. Pagination uses a <strong>cursor</strong> rather than a page number — because the feed is strictly chronological, the timestamp of the oldest post you have already seen is all the state a page needs, and each request returns the next <em>n</em> posts older than it.</p>
       </div>
     </section>
 
@@ -228,21 +228,21 @@ flowchart TB
         <h3 id="deepdives-dive-1">1 · A user who follows thousands of accounts</h3>
         <p id="deepdives-p-1">Assembling a feed at read time <em>fans out on read</em>: one request explodes into a query per followed account, then a merge-sort of everything they posted. Tens to hundreds of downstream queries is tolerable; thousands is not, given a 500&nbsp;ms budget. Flip the work to write time instead. Maintain a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of each feed — the <strong>PrecomputedFeed</strong> table, keyed by <code>userId</code>, holding roughly the last 200 post IDs in reverse-chronological order. A read becomes a single point lookup plus a cache hydration, no matter how many accounts the user follows. Paging past the 200th post is deliberately unsupported and falls back to the slow naive query; real users almost never scroll that deep, the same bet a search engine makes by refusing to show you page 100 of results. The cost of this move is that all the work now lands on the write side — which is the next problem.</p>
 
-        <h3 id="deepdives-dive-2">2 · An author with millions of followers</h3>
-        <p id="deepdives-p-2">Precomputing feeds means a single post from a high-follower account must be written into millions of feed records, all inside the one-minute staleness window.</p>
+        <h3 id="deepdives-dive-2" data-kb-level="advanced">2 · An author with millions of followers</h3>
+        <p id="deepdives-p-2" data-kb-level="advanced">Precomputing feeds means a single post from a high-follower account must be written into millions of feed records, all inside the one-minute staleness window.</p>
         <ul>
-          <li id="deepdives-li-1"><strong>Bad — blast synchronously.</strong> Have the Post Service push all the fan-out writes itself at creation time. It collapses on connection limits and the latency budget, and load lands wildly unevenly — one host drowning in millions of writes while the rest idle — which is exactly what you cannot scale.</li>
-          <li id="deepdives-li-2"><strong>Good — async workers.</strong> Enqueue <code>{ postId, creatorId }</code> and let a fleet of <a href="../patterns/messaging/competing-consumers.html">competing consumers</a> drain the <a href="../patterns/messaging/message-queue.html">queue</a>, each looking up the author's followers and prepending the post to their feeds. The queue smooths the burst so post creation never blocks. At-least-once delivery means a message can be redelivered, so the prepend must be <a href="../patterns/messaging/idempotency.html">idempotent</a> — applying the same post to a feed twice has to be a no-op. Worker load still varies enormously between a small account and a giant one, so very large fan-outs may be split into smaller tasks.</li>
-          <li id="deepdives-li-3"><strong>Great — hybrid feeds.</strong> Stop precomputing for the extreme accounts. Flag specific follow edges as "not precomputed" (a Justin-Bieber-scale account with 90M+ followers), and the workers simply skip them. At read time the Feed Service merges the precomputed feed with the recent posts of those few celebrity accounts, fetched live. In other words, choose <a href="../patterns/messaging/fan-out.html">fan-out</a>-on-write for the many ordinary authors and fan-out-on-read for the handful of giants — the precomputation threshold is a tunable knob. The price is more work at read time and a more complex Feed Service.</li>
+          <li id="deepdives-li-1" data-kb-level="advanced"><strong>Bad — blast synchronously.</strong> Have the Post Service push all the fan-out writes itself at creation time. It collapses on connection limits and the latency budget, and load lands wildly unevenly — one host drowning in millions of writes while the rest idle — which is exactly what you cannot scale.</li>
+          <li id="deepdives-li-2" data-kb-level="advanced"><strong>Good — async workers.</strong> Enqueue <code>{ postId, creatorId }</code> and let a fleet of <a href="../patterns/messaging/competing-consumers.html">competing consumers</a> drain the <a href="../patterns/messaging/message-queue.html">queue</a>, each looking up the author's followers and prepending the post to their feeds. The queue smooths the burst so post creation never blocks. At-least-once delivery means a message can be redelivered, so the prepend must be <a href="../patterns/messaging/idempotency.html">idempotent</a> — applying the same post to a feed twice has to be a no-op. Worker load still varies enormously between a small account and a giant one, so very large fan-outs may be split into smaller tasks.</li>
+          <li id="deepdives-li-3" data-kb-level="advanced"><strong>Great — hybrid feeds.</strong> Stop precomputing for the extreme accounts. Flag specific follow edges as "not precomputed" (a Justin-Bieber-scale account with 90M+ followers), and the workers simply skip them. At read time the Feed Service merges the precomputed feed with the recent posts of those few celebrity accounts, fetched live. In other words, choose <a href="../patterns/messaging/fan-out.html">fan-out</a>-on-write for the many ordinary authors and fan-out-on-read for the handful of giants — the precomputation threshold is a tunable knob. The price is more work at read time and a more complex Feed Service.</li>
         </ul>
 
-        <h3 id="deepdives-dive-3">3 · Uneven reads on the post store</h3>
-        <p id="deepdives-p-3">Whichever way feeds are built, the Feed Service eventually reads post bodies from the key-value store, and those reads are lopsided: most posts are read hard for a day or two then never again, while a viral post draws a spike of traffic in its first hours. A key-value store sustains throughput only when load is spread evenly across the keyspace; one post ID at 500&nbsp;req/s against its neighbours at 0 is a textbook <a href="../hazards/hot-key.html">hot key</a> that pins a single physical shard.</p>
+        <h3 id="deepdives-dive-3" data-kb-level="expert">3 · Uneven reads on the post store</h3>
+        <p id="deepdives-p-3" data-kb-level="expert">Whichever way feeds are built, the Feed Service eventually reads post bodies from the key-value store, and those reads are lopsided: most posts are read hard for a day or two then never again, while a viral post draws a spike of traffic in its first hours. A key-value store sustains throughput only when load is spread evenly across the keyspace; one post ID at 500&nbsp;req/s against its neighbours at 0 is a textbook <a href="../hazards/hot-key.html">hot key</a> that pins a single physical shard.</p>
         <ul>
-          <li id="deepdives-li-4"><strong>Good — a post cache.</strong> Put a <a href="../patterns/caching/cache-aside.html">cache-aside</a> layer (Redis, keyed by post ID) in front of the store, with a long TTL because posts are rarely edited, and invalidate an entry only on the occasional edit. It absorbs most reads — but the hot key just moves to whichever cache shard owns the viral post, which is as hard to scale as the store shard was.</li>
-          <li id="deepdives-li-5"><strong>Great — replicate, don't shard, the cache.</strong> Keep the same long-TTL scheme but <a href="../patterns/distributed/coordination/replication.html">replicate</a> the cache so every instance can serve any post ID, with a load balancer spreading requests across all of them. A viral post's traffic now splits across all <em>N</em> replicas with zero coordination between them — <em>N×</em> the headroom for a hot key. The trade is a colder start (a newly viral post can miss on up to <em>N</em> instances, costing <em>N</em> store reads instead of 1) and fewer distinct posts cached overall; both are dwarfed by the millions of origin reads avoided.</li>
+          <li id="deepdives-li-4" data-kb-level="expert"><strong>Good — a post cache.</strong> Put a <a href="../patterns/caching/cache-aside.html">cache-aside</a> layer (Redis, keyed by post ID) in front of the store, with a long TTL because posts are rarely edited, and invalidate an entry only on the occasional edit. It absorbs most reads — but the hot key just moves to whichever cache shard owns the viral post, which is as hard to scale as the store shard was.</li>
+          <li id="deepdives-li-5" data-kb-level="expert"><strong>Great — replicate, don't shard, the cache.</strong> Keep the same long-TTL scheme but <a href="../patterns/distributed/coordination/replication.html">replicate</a> the cache so every instance can serve any post ID, with a load balancer spreading requests across all of them. A viral post's traffic now splits across all <em>N</em> replicas with zero coordination between them — <em>N×</em> the headroom for a hot key. The trade is a colder start (a newly viral post can miss on up to <em>N</em> instances, costing <em>N</em> store reads instead of 1) and fewer distinct posts cached overall; both are dwarfed by the millions of origin reads avoided.</li>
         </ul>
-        <figure class="diagram" id="deepdives-fig-1">
+        <figure class="diagram" id="deepdives-fig-1" data-kb-level="expert">
           <pre class="mermaid">
 flowchart TB
     FS["Feed Service"] -->|"get viral post body"| LB["Load balancer"]
@@ -264,16 +264,16 @@ flowchart TB
           <h3>What it buys</h3>
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Feed reads collapse to a single lookup plus cache hydration, holding under 500&nbsp;ms no matter how many accounts a user follows.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">The queue absorbs write bursts, so a post is created in milliseconds while fan-out happens off the critical path.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Hybrid fan-out means a celebrity post costs one write, not ninety million, and a replicated cache spreads viral reads without coordination.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">The queue absorbs write bursts, so a post is created in milliseconds while fan-out happens off the critical path.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="expert">Hybrid fan-out means a celebrity post costs one write, not ninety million, and a replicated cache spreads viral reads without coordination.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>What it gives up</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Eventual consistency — a new post can take up to a minute to appear in a follower's feed.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="expert">Precomputed feeds are millions of derived copies that must be kept updated, paying real storage and write amplification for the read speed.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">The read path is no longer simple: it merges precomputed feeds with live celebrity posts, and deep pagination past ~200 posts drops back to the slow naive query.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Precomputed feeds are millions of derived copies that must be kept updated, paying real storage and write amplification for the read speed.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">The read path is no longer simple: it merges precomputed feeds with live celebrity posts, and deep pagination past ~200 posts drops back to the slow naive query.</li>
           </ul>
         </div>
       </div>
@@ -284,8 +284,8 @@ flowchart TB
       <div class="prose">
         <ul>
           <li id="levels-li-1"><strong>Mid-level</strong> — clearly defined endpoints and data model, landing on a working high-level design that meets the functional requirements. May reach fan-out-on-write as the fix for expensive reads, but is not expected to work through every scaling edge case; mostly breadth, some depth.</li>
-          <li id="levels-li-2"><strong>Senior</strong> — moves briskly through the high-level design to spend real time on two or more deep dives. Surfaces the fan-out and hot-key bottlenecks without being prompted, argues the write-time versus read-time trade-off, and justifies each choice on scalability and latency.</li>
-          <li id="levels-li-3"><strong>Staff+</strong> — covers essentially all the deep dives, including ones not enumerated here (thundering herds on a newly viral post, where feed ranking would slot in), volunteers the hybrid fan-out and replicated-cache mitigations up front, and talks concretely about tuning the precomputation threshold and cache replication factor.</li>
+          <li id="levels-li-2" data-kb-level="advanced"><strong>Senior</strong> — moves briskly through the high-level design to spend real time on two or more deep dives. Surfaces the fan-out and hot-key bottlenecks without being prompted, argues the write-time versus read-time trade-off, and justifies each choice on scalability and latency.</li>
+          <li id="levels-li-3" data-kb-level="expert"><strong>Staff+</strong> — covers essentially all the deep dives, including ones not enumerated here (thundering herds on a newly viral post, where feed ranking would slot in), volunteers the hybrid fan-out and replicated-cache mitigations up front, and talks concretely about tuning the precomputation threshold and cache replication factor.</li>
         </ul>
       </div>
     </section>
@@ -318,6 +318,7 @@ flowchart TB
   <script src="../assets/vendor/mermaid.min.js"></script>
   <script src="../assets/diagram.js"></script>
   <script src="../assets/progress.js"></script>
+  <script src="../assets/favourites.js"></script>
   <script src="../assets/vendor/highlight.min.js"></script>
   <script src="../assets/sketch.js"></script>
 </body>

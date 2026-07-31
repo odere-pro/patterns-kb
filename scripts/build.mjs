@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, FACETS, chipMatches, folderFor, LEVELS, BLOCK_LEVELS, SITE_URL } from "./lib/model.mjs";
+import { RELATION_TYPES, ELEVATION_BANDS, KIND_DIR, TAGS, SYNONYMS, FACETS, chipMatches, folderFor, LEVELS, BLOCK_LEVELS, SITE_URL, PROSE_LINK_EXCLUDE } from "./lib/model.mjs";
 import { mergedSynonyms, corpusVocabulary, validateExpansions, loadExpansions } from "./lib/expansions.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
@@ -259,7 +259,8 @@ for (const { root, id, kind } of raw) {
  * on the page for those. But prose links are not: hundreds of links across the corpus point
  * at another page from inside a sentence, and nothing records them. They are real connections
  * — singleton's prose points at factory-method — and they were invisible. Derived, so no
- * one has to maintain them. */
+ * one has to maintain them, and rendered back onto the target page as the generated
+ * "Mentioned by" list (build-pages.mjs), which PROSE_LINK_EXCLUDE keeps out of here. */
 const byPath = {};
 for (const n of Object.values(nodes)) byPath[n.path] = n.id;
 
@@ -273,7 +274,7 @@ for (const { root, id } of raw) {
   const seen = new Set();
   for (const a of root.querySelectorAll("main a[href]")) {
     // A typed relation renders as a link too — skip those, they are already on the page.
-    if (a.closest("[data-kb-rel], [data-kb-member], .fluency-item, .crumb, .docnav")) continue;
+    if (a.closest(PROSE_LINK_EXCLUDE)) continue;
     const href = a.getAttribute("href").split("#")[0];
     if (!href.endsWith(".html")) continue;
     const target = byPath[relative(SITE, resolve(join(SITE, dirname(node.path)), href))];

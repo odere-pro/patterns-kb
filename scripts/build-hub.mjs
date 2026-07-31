@@ -21,10 +21,20 @@ const bandTotal = (band) =>
   Object.values(N).filter((n) => n.kind === "pattern" && n.band === band).length;
 
 /* The favourite marker is one thing rendered in two shapes — a pattern chip and a
- * theme/principle/design card — so both read it from here rather than drifting apart. */
+ * theme/principle/design card — so both read it from here rather than drifting apart.
+ *
+ * `data-kb-favourite` on the page is the DEFAULT, not the answer: favourites.js reads the
+ * rendered state as the seed and then applies the visitor's own toggles over it. So the
+ * star ships on every card, pressed or not, and stays a real button — a visitor curating
+ * from the map needs something to click on the ones nobody starred yet. Without JS the
+ * markup still shows the authored picks and the buttons simply do nothing. */
 const favAttrOf = (n) => (n.favourite ? ' data-fav="1"' : "");
 const favStarOf = (n) =>
-  n.favourite ? '<span class="chip-fav" title="Favourite" aria-label="Favourite">★</span>' : "";
+  `<button class="chip-fav" type="button" data-fav-id="${n.id}" aria-pressed="${
+    n.favourite ? "true" : "false"
+  }" aria-label="${n.favourite ? "Favourite — click to unmark" : "Mark favourite"}: ${esc(
+    n.name,
+  )}">★</button>`;
 
 function chip(n) {
   // n.path is site-relative and the hub sits at site/, so it needs no adjustment.
@@ -115,9 +125,12 @@ ${DESIGNS.map(themeCard).join("\n")}
 const designJump = DESIGNS.length ? `\n      <a href="#design-cases-h">Case Studies</a>` : "";
 
 /* ---- hazards ---- */
+/* A hazard is not practised, so its chip carries no checkbox — but a hazard page does
+ * carry a favourite toggle, so its chip carries the star. Without it, favouriting a
+ * hazard would be a click with no visible consequence anywhere on the map. */
 function hazardChip(id) {
   const h = N[id];
-  return `        <div class="chip chip--plain hazard-chip"><a class="chip-name" href="${h.path}">${esc(h.name)}</a><span class="chip-note">${esc(h.essence)}</span></div>`;
+  return `        <div class="chip chip--plain hazard-chip"${favAttrOf(h)}><a class="chip-name" href="${h.path}">${esc(h.name)}</a><span class="chip-note">${esc(h.essence)}</span>${favStarOf(h)}</div>`;
 }
 
 const totalPatterns = Object.values(N).filter((n) => n.kind === "pattern").length;

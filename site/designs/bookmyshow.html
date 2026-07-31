@@ -110,15 +110,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>People search for a film, pick a showing at a nearby cinema, see which seats are still free, and take a few in one go, getting a confirmation they can later cancel. The hard part is not the searching. On a busy opening night two people tap the same seat at the same instant, and the system must hand it to exactly one of them, never both.</p>
+          <p>Two shoppers are staring at the same seat map for tonight's showing. Both see seat A5 free, both tap book, and the two requests land a millisecond apart. If each one asks "is A5 still free?" and only then writes down that A5 is taken, both questions get answered before either answer is recorded, and two strangers turn up holding a ticket for one chair. The fix is to let one booking at a time touch a given showing: ask and record as a single uninterrupted step, the way one till serves one customer before starting the next. Ask for three seats together and the same rule makes it all or nothing — if any one of them has gone, you get none of them. Other showings keep selling, because each has its own till.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>Seat availability is derived from the screening's reservation list rather than kept in a parallel booked-seat set: a linear scan in exchange for a state that cannot desynchronise. The check-then-act window closes under one lock the screening itself owns, covering validation and append together; per-seat locks would let a packed night book in parallel but promote seats from strings to objects and demand an ordered acquisition. Seats and screens stay strings until that day. The orchestrator holds only routing indexes, never seat state. The dominating axis is concurrency correctness, not scale.</p>
+          <p>The mechanism is a monitor: each screening carries its own lock, and every path that touches its seats — book, cancel, check availability — runs inside it, so a check and the append that follows cannot be pulled apart. Locking is pessimistic on purpose; the lock is held across the read and the write rather than letting two bookings race and then unwinding the loser. Placement does the rest of the work. Cancellation lives on the screening because that is where the list it edits lives, seats stay plain strings because nothing below the screening holds state worth guarding, and the orchestrator above keeps only lookup indexes, so it routes by hash and never reaches into seat state itself.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>What separates answers is confining mutation: every change to a screening's seats happens inside that screening, under its own lock, which is what makes a multi-seat booking all-or-nothing. Validate every seat before touching anything, so a rejected request leaves no half-claimed row. Deriving free seats from reservations removes the second field that could disagree with the first. Strong candidates also defer: no seat class, no per-seat locks, no payment, no tiers, until measurement asks. The interesting extension is a checkout hold, which turns a binary seat state three-way and adds an expiry sweep plus a timeout that is really a business dial. The cost is that the coarse lock serialises exactly the screening everybody wants.</p>
+          <p>Choose the coarse lock for as long as the critical section stays a scan and an append. It costs you exactly the screening everybody wants: a sold-out opening night serialises on one lock. Buy that throughput back only after you have measured the contention, and pay for it in a Seat class carrying its own lock plus a sorted acquisition order to keep the multi-seat path deadlock-free. Deriving availability costs a scan of the booked seats on every check; a cached set makes it constant-time and hands back the drift you designed out, so cache against a profile or not at all. The checkout hold is the extension that actually ships, and it is cheaper than it looks: it reuses the lock you already have, and asks only for a third seat state, a sweep for abandoned carts, and a timeout the business owns rather than engineering.</p>
         </div>
       </div>
     </section>
@@ -169,7 +169,7 @@
       <div class="prose">
         <p id="interface-p-1">The <code>BookingSystem</code> is the public surface; entities like <code>Showtime</code> expose their booking methods to it but not to callers. Four operations cover every requirement:</p>
       </div>
-      <details class="sketch">
+      <details class="sketch" id="interface-sketch-1">
         <summary>Pseudocode — the orchestrator's public API</summary>
 <pre><code class="language-python" data-kb-lang="python">class BookingSystem:
     searchMovies(title)               -&gt; List[Showtime]   # case-insensitive substring, future screenings only
@@ -178,7 +178,7 @@
     cancelReservation(confirmationId) -&gt; None             # follows the back-reference, frees the seats</code></pre>
       </details>
       <div class="prose">
-        <p id="interface-p-2"><code>book</code> creates the <code>Reservation</code> up front — it is only a data object at that point — then hands it to the target <code>Showtime</code> for atomic validation and storage. If the screening rejects it, the reservation is never registered, so a failed booking leaves no trace anywhere.</p>
+        <p id="interface-p-2" data-kb-level="advanced"><code>book</code> creates the <code>Reservation</code> up front — it is only a data object at that point — then hands it to the target <code>Showtime</code> for atomic validation and storage. If the screening rejects it, the reservation is never registered, so a failed booking leaves no trace anywhere.</p>
       </div>
     </section>
 
@@ -241,11 +241,11 @@ classDiagram
         <h3 id="deepdives-dive-1">1 · Where seat availability lives</h3>
         <p id="deepdives-p-1">A <code>Reservation</code> already carries its own seat list, so the screening's <code>reservations</code> list alone tells you everything: booking is an append, cancellation is a remove, and a seat is free exactly when no reservation names it. <code>getAvailableSeats</code> generates the fixed grid (A–Z × 0–20, 546 seats) and subtracts the booked set. The tempting alternative is a persistent <code>bookedSeats</code> set for O(1) checks — but that is a second piece of mutable state that must be updated in lockstep with <code>reservations</code>, and the moment the two drift you get a phantom or a double-sold seat. Deriving one truth from the other keeps the invariant impossible to break; it is the <a href="../principles/dry.html">don't-repeat-yourself</a> choice, trading a linear scan for a state you can never desynchronise.</p>
 
-        <h3 id="deepdives-dive-2">2 · The booking race — exactly one winner</h3>
-        <p id="deepdives-p-2">The naïve <code>book</code> checks each seat, then appends the reservation. Between the check and the append sits a classic check-then-act window: two threads both read seat <code>A5</code> as free, both append, and the seat is sold twice. The requirement demands one winner, so the check and the store must happen as one indivisible step.</p>
-        <p id="deepdives-p-3">The default answer wraps the whole sequence in a lock the <code>Showtime</code> owns — validate the seat ids, confirm every requested seat is free, then append — all mutually exclusive. Because <code>book</code>, <code>cancel</code>, and <code>isAvailable</code> all run under the same per-screening lock, the object is a self-contained <a href="../patterns/concurrency/monitor-object.html">monitor</a>: only one booking touches a given screening at a time, while different screenings never contend. This is deliberate <a href="../patterns/distributed/coordination/pessimistic-locking.html">pessimistic</a> control — you assume a collision and hold the lock across the read-and-write rather than gambling on optimistic retries. The critical section is a short scan-and-append, so a coarse per-screening lock costs almost nothing.</p>
-        <p id="deepdives-p-4">The validation is all-or-nothing: every seat is checked before any state changes, so a request for <code>["A5","A6","A7"]</code> where A6 is taken throws immediately and A5 is never claimed. A finer design gives each seat its own lock so bookings for different seats of a packed opening night proceed in parallel — real throughput, but it promotes <code>Seat</code> from a string to a class with a lock and a <code>bookedBy</code> field, and demands sorted lock acquisition to avoid <a href="../hazards/deadlock.html">deadlock</a>. That is the answer to a measured hot-screening bottleneck, not the starting point.</p>
-        <details class="sketch">
+        <h3 id="deepdives-dive-2" data-kb-level="advanced">2 · The booking race — exactly one winner</h3>
+        <p id="deepdives-p-2" data-kb-level="advanced">The naïve <code>book</code> checks each seat, then appends the reservation. Between the check and the append sits a classic check-then-act window: two threads both read seat <code>A5</code> as free, both append, and the seat is sold twice. The requirement demands one winner, so the check and the store must happen as one indivisible step.</p>
+        <p id="deepdives-p-3" data-kb-level="advanced">The default answer wraps the whole sequence in a lock the <code>Showtime</code> owns — validate the seat ids, confirm every requested seat is free, then append — all mutually exclusive. Because <code>book</code>, <code>cancel</code>, and <code>isAvailable</code> all run under the same per-screening lock, the object is a self-contained <a href="../patterns/concurrency/monitor-object.html">monitor</a>: only one booking touches a given screening at a time, while different screenings never contend. This is deliberate <a href="../patterns/distributed/coordination/pessimistic-locking.html">pessimistic</a> control — you assume a collision and hold the lock across the read-and-write rather than gambling on optimistic retries. The critical section is a short scan-and-append, so a coarse per-screening lock costs almost nothing.</p>
+        <p id="deepdives-p-4" data-kb-level="expert">The validation is all-or-nothing: every seat is checked before any state changes, so a request for <code>["A5","A6","A7"]</code> where A6 is taken throws immediately and A5 is never claimed. A finer design gives each seat its own lock so bookings for different seats of a packed opening night proceed in parallel — real throughput, but it promotes <code>Seat</code> from a string to a class with a lock and a <code>bookedBy</code> field, and demands sorted lock acquisition to avoid <a href="../hazards/deadlock.html">deadlock</a>. That is the answer to a measured hot-screening bottleneck, not the starting point.</p>
+        <details class="sketch" id="deepdives-sketch-1" data-kb-level="advanced">
           <summary>Pseudocode — Showtime.book under the lock</summary>
 <pre><code class="language-python" data-kb-lang="python">def book(self, reservation):
     with self._lock:                       # the screening owns its lock
@@ -261,13 +261,13 @@ classDiagram
         self._reservations.append(reservation)   # only now do we mutate</code></pre>
         </details>
 
-        <h3 id="deepdives-dive-3">3 · Modelling only what earns a class</h3>
-        <p id="deepdives-p-5">Two decisions keep the object graph honest. First, <code>Seat</code> and <code>Screen</code> stay plain strings — with no per-seat behaviour and one shared layout, a class would add ceremony without state, so it is deferred until fine-grained locking actually needs it (<a href="../principles/yagni.html">you aren't gonna need it</a>). Second, <code>BookingSystem</code> stays a pure orchestrator: it never holds seat state, only routing and the indexes that make routing cheap. Layering the rules this way — orchestration on top, seat state inside each screening, dumb records below — is textbook <a href="../principles/separation-of-concerns.html">separation of concerns</a>, and it is why cancellation lives on <code>Showtime</code> (which owns the list it must modify) rather than on <code>Reservation</code>, keeping every mutation of a screening in one lockable place. The indexes are denormalised state — faster reads at the cost of more careful writes — but they turn what would be an O(theaters × screenings) scan on every search or cancellation into a hash lookup, and sidestep the N+1 trap of resolving screenings one id at a time.</p>
+        <h3 id="deepdives-dive-3" data-kb-level="advanced">3 · Modelling only what earns a class</h3>
+        <p id="deepdives-p-5" data-kb-level="advanced">Two decisions keep the object graph honest. First, <code>Seat</code> and <code>Screen</code> stay plain strings — with no per-seat behaviour and one shared layout, a class would add ceremony without state, so it is deferred until fine-grained locking actually needs it (<a href="../principles/yagni.html">you aren't gonna need it</a>). Second, <code>BookingSystem</code> stays a pure orchestrator: it never holds seat state, only routing and the indexes that make routing cheap. Layering the rules this way — orchestration on top, seat state inside each screening, dumb records below — is textbook <a href="../principles/separation-of-concerns.html">separation of concerns</a>, and it is why cancellation lives on <code>Showtime</code> (which owns the list it must modify) rather than on <code>Reservation</code>, keeping every mutation of a screening in one lockable place. The indexes are denormalised state — faster reads at the cost of more careful writes — but they turn what would be an O(theaters × screenings) scan on every search or cancellation into a hash lookup, and sidestep the N+1 trap of resolving screenings one id at a time.</p>
 
-        <h3 id="deepdives-dive-4">4 · Extending toward a real checkout</h3>
-        <p id="deepdives-p-6">Today's <code>book</code> is instantaneous — succeed or fail on the spot. A real flow needs to hold seats while the shopper pays. That turns seat status from a binary into a three-way <a href="../patterns/gof/behavioral/state.html">state</a> — free, held, or booked — with a <code>holds</code> map alongside <code>reservations</code>: <code>isAvailable</code> now rejects a seat claimed by either a reservation or a non-expired hold, <code>holdSeats</code> and <code>confirmHold</code> run under the same per-screening lock (no new lock type), and an expiry sweep returns abandoned holds to the pool. The hold timeout is a business dial — too short cancels people mid-payment, too long freezes seats other buyers want — the kind of policy a strategy would eventually own. Immutability guards the records underneath all of this: <code>Movie</code> has no setters, and <code>Reservation</code> defensively copies its seat list on the way in and the way out, so shared references can never mutate a booking from the outside (<a href="../patterns/functional/immutability.html">immutability</a>).</p>
+        <h3 id="deepdives-dive-4" data-kb-level="expert">4 · Extending toward a real checkout</h3>
+        <p id="deepdives-p-6" data-kb-level="expert">Today's <code>book</code> is instantaneous — succeed or fail on the spot. A real flow needs to hold seats while the shopper pays. That turns seat status from a binary into a three-way <a href="../patterns/gof/behavioral/state.html">state</a> — free, held, or booked — with a <code>holds</code> map alongside <code>reservations</code>: <code>isAvailable</code> now rejects a seat claimed by either a reservation or a non-expired hold, <code>holdSeats</code> and <code>confirmHold</code> run under the same per-screening lock (no new lock type), and an expiry sweep returns abandoned holds to the pool. The hold timeout is a business dial — too short cancels people mid-payment, too long freezes seats other buyers want — the kind of policy a strategy would eventually own. Immutability guards the records underneath all of this: <code>Movie</code> has no setters, and <code>Reservation</code> defensively copies its seat list on the way in and the way out, so shared references can never mutate a booking from the outside (<a href="../patterns/functional/immutability.html">immutability</a>).</p>
       </div>
-      <figure class="diagram" id="deepdives-fig-1">
+      <figure class="diagram" id="deepdives-fig-1" data-kb-level="expert">
         <pre class="mermaid">
 stateDiagram-v2
     [*] --> Held: holdSeats (under per-screening lock)
@@ -288,15 +288,15 @@ stateDiagram-v2
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">One source of truth for seats: availability is derived from reservations, so there is no second field to fall out of sync.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">A per-screening lock makes booking atomic and correct under concurrency, while different screenings never contend.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">A pure orchestrator plus lookup indexes turns search, booking, and cancellation into O(1) routing rather than nested scans.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">A pure orchestrator plus lookup indexes turns search, booking, and cancellation into O(1) routing rather than nested scans.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>What it gives up</h3>
           <ul>
-            <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="expert">A coarse per-screening lock serialises a packed opening night; per-seat locking recovers the throughput but adds a Seat class and deadlock-avoiding lock order.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Deriving availability means an O(booked-seats) scan per check instead of an O(1) set lookup.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">The denormalised indexes are fast to read but must be updated on every structural change, and past screenings accumulate in memory with no cleanup in this in-memory build.</li>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A coarse per-screening lock serialises a packed opening night; per-seat locking recovers the throughput but adds a Seat class and deadlock-avoiding lock order.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Deriving availability means an O(booked-seats) scan per check instead of an O(1) set lookup.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">The denormalised indexes are fast to read but must be updated on every structural change, and past screenings accumulate in memory with no cleanup in this in-memory build.</li>
           </ul>
         </div>
       </div>
@@ -307,8 +307,8 @@ stateDiagram-v2
       <div class="prose">
         <ul>
           <li id="levels-li-1"><strong>Junior</strong> — a working flow: BookingSystem orchestrates, Showtime tracks seats, Reservation records the booking; <code>book</code> checks availability and stores, <code>cancel</code> removes and frees, with basic rejection of bad seat ids. May need a hint to spot the concurrency issue.</li>
-          <li id="levels-li-2"><strong>Mid-level</strong> — clean split between orchestrator and screening, recognises the reservations list as the single source of truth, implements synchronized booking, handles all-or-nothing multi-seat requests, and uses lookup indexes instead of scanning every theater.</li>
-          <li id="levels-li-3"><strong>Senior</strong> — nails the check-then-act race unprompted and explains why the check and store must be atomic, weighs per-screening against per-seat locking (and the deadlock-avoiding sort), lets the Reservation→Showtime back-reference fall out naturally, and walks the seat-hold extension without changing the locking model.</li>
+          <li id="levels-li-2" data-kb-level="advanced"><strong>Mid-level</strong> — clean split between orchestrator and screening, recognises the reservations list as the single source of truth, implements synchronized booking, handles all-or-nothing multi-seat requests, and uses lookup indexes instead of scanning every theater.</li>
+          <li id="levels-li-3" data-kb-level="expert"><strong>Senior</strong> — nails the check-then-act race unprompted and explains why the check and store must be atomic, weighs per-screening against per-seat locking (and the deadlock-avoiding sort), lets the Reservation→Showtime back-reference fall out naturally, and walks the seat-hold extension without changing the locking model.</li>
         </ul>
       </div>
     </section>
@@ -341,6 +341,7 @@ stateDiagram-v2
   <script src="../assets/vendor/mermaid.min.js"></script>
   <script src="../assets/diagram.js"></script>
   <script src="../assets/progress.js"></script>
+  <script src="../assets/favourites.js"></script>
   <script src="../assets/vendor/highlight.min.js"></script>
   <script src="../assets/sketch.js"></script>
 </body>

@@ -18,7 +18,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { VOCAB_NS, KB_NAME, BLOCK_LEVELS } from "./lib/model.mjs";
+import { VOCAB_NS, KB_NAME, BLOCK_LEVELS, esc } from "./lib/model.mjs";
 import { blockProblems, lensProblems } from "./lib/validate.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
@@ -35,6 +35,10 @@ const CHECK = process.argv.includes("--check");
 const graph = JSON.parse(readFileSync(join(SITE, "assets", "graph.json"), "utf8"));
 
 const MARK = "kb:generated — derived from data-kb-*; edit the page, not this";
+const MENTIONS_MARK = "kb:generated — mentions; derived from other pages' prose links, edit the prose, not this";
+/* The whole region, leading newline included, so stripping it restores the page byte for
+ * byte and a rebuild is idempotent. */
+const MENTIONS_RE = /\n[ \t]*<!-- kb:generated — mentions[\s\S]*?<\/aside>\n/;
 /* Which elements get stable ids, keyed by the block they live in. `idOf` mints the
  * id; rows with a natural key (a wild item's example slug, a tour step's member) are
  * reorder-proof, positional rows (list items, prose paragraphs) renumber on insert.
@@ -117,7 +121,33 @@ function jsonLdFor(node) {
   return ld;
 }
 
-let changed = 0, stale = [], idsStamped = 0, levelsStamped = 0;
+/* "Mentioned by": the pages that link here in prose without declaring a typed relation.
+ * build.mjs derives both directions into graph.json; this renders the inbound half back
+ * onto the target page, because a mention is a real connection its own page could not
+ * otherwise show. Nothing here carries data-kb-* — these links are the OUTPUT of the
+ * derivation, and PROSE_LINK_EXCLUDE keeps them out of its input. Returns "" when a page
+ * has none, which is what removes a region that no longer applies. */
+function mentionsFor(node) {
+  const from = (node.mentionedBy ?? [])
+    .map((id) => graph.nodes[id])
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  if (!from.length) return "";
+  const items = from.map((m) =>
+    `        <li class="mention-item"><a href="${hop(node.path, m.path)}">${esc(m.name)}</a>` +
+    `<span class="mention-kind">${m.kind}</span></li>`).join("\n");
+  return `    <!-- ${MENTIONS_MARK} -->
+    <aside class="mentions" id="mentioned-by" aria-labelledby="h-mentions">
+      <h2 class="mentions-h" id="h-mentions">Mentioned by</h2>
+      <p class="mentions-lead">These pages link here from their prose without declaring a typed relationship.</p>
+      <ul class="mention-list">
+${items}
+      </ul>
+    </aside>
+
+`;
+}
+
+let changed = 0, stale = [], idsStamped = 0, levelsStamped = 0, mentionsRendered = 0;
 const problems = [];
 
 for (const node of Object.values(graph.nodes)) {
@@ -184,6 +214,17 @@ for (const node of Object.values(graph.nodes)) {
       el.setAttribute("id", `${b}-fig-${i + 1}`);
       idsStamped++;
     });
+    /* A collapsed sketch outside the dedicated `sketch` block — a design's HTTP
+     * contract, a deep dive's code sample — is prose like any other and a lens has to
+     * be able to move it. Without an address it renders at basic forever, so tagging
+     * the dive around it leaves an orphan code block under a heading that is gone.
+     * The ITEMS table owns the `sketch` block itself (sketch-variant-N). */
+    if (b !== "sketch") {
+      sec.querySelectorAll("details.sketch").forEach((el, i) => {
+        el.setAttribute("id", `${b}-sketch-${i + 1}`);
+        idsStamped++;
+      });
+    }
   }
 
   /* ---- reading-level stamps ----
@@ -220,6 +261,20 @@ for (const node of Object.values(graph.nodes)) {
     ? out.replace(existing, block)
     : out.replace("</head>", block + "</head>");
 
+  /* ---- "Mentioned by" ----
+   * Strip first, then re-insert, so a page that lost its last mention loses the region
+   * too. It goes last in <main> but ahead of the prev/next nav, which stays the final
+   * word on the page; a fixture page with no nav falls back to the end of <main>. */
+  const mentions = mentionsFor(node);
+  out = out.replace(MENTIONS_RE, "");
+  if (mentions) {
+    const anchor = /\n([ \t]*<nav class="docnav")/.test(out)
+      ? /\n([ \t]*<nav class="docnav")/
+      : /\n([ \t]*<\/main>)/;
+    out = out.replace(anchor, `\n${mentions}$1`);
+    mentionsRendered++;
+  }
+
   if (out !== src) {
     if (CHECK) stale.push(node.path);
     else { writeFileSync(file, out); changed++; }
@@ -239,5 +294,6 @@ if (CHECK) {
   }
   console.log("pages are up to date.");
 } else {
-  console.log(`pages refreshed: ${changed} written, ${idsStamped} element ids + ${levelsStamped} level stamps.`);
+  console.log(`pages refreshed: ${changed} written, ${idsStamped} element ids + ${levelsStamped} level stamps, ` +
+              `${mentionsRendered} "Mentioned by" list(s).`);
 }

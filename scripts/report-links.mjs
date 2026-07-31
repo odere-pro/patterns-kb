@@ -79,9 +79,12 @@ for (const file of walk(SITE)) {
   if (!self) continue;
   if (only.size && !only.has(self)) continue;
 
-  /* Everything this page already links, anywhere — one link per target is enough. */
+  /* Everything this page already links, anywhere — one link per target is enough. The
+   * generated "Mentioned by" list does not count: it links the pages that link HERE, so
+   * reading it as this page's own links would silence the very suggestions it earns. */
   const linked = new Set();
   for (const a of root.querySelectorAll("a[href]")) {
+    if (a.closest(".mentions")) continue;
     const href = a.getAttribute("href") ?? "";
     const slug = href.split("#")[0].split("/").pop()?.replace(/\.html$/, "");
     if (slug) linked.add(slug);
