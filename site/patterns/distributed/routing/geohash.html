@@ -96,9 +96,9 @@
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
         <p id="description-p-1">A geohash encodes a point on Earth — a latitude and longitude — as a single short string. Recursively bisect the globe: the first character selects one of 32 top-level cells, each further character subdivides the chosen cell into 32 smaller ones. More characters means a smaller cell, so a five-character hash pins you to roughly a five-kilometre box and a nine-character hash to a few metres. The crucial property is <strong>prefix locality</strong>: two points that share a longer prefix are guaranteed to sit in the same cell at that depth, so a shared prefix means physical nearness.</p>
-        <p id="description-p-2">The force it resolves is that ordinary indexes cannot answer "what is near here". A range query on one sorted column — ages 20 to 25 — is cheap on a B-tree because the keys are physically ordered and packed onto adjacent pages: one seek, a short sequential read. But distance depends on latitude and longitude jointly. Index latitude alone and you get a horizontal band of the planet; a composite <code>(lat, lon)</code> index still sorts primarily by the first column and only tie-breaks on the second, so it is effectively a one-dimensional sort that returns a huge band of unranked rows and forces a brute-force distance check on every one. A one-dimensional sort order simply cannot preserve two-dimensional adjacency.</p>
-        <p id="description-p-3">Geohash sidesteps the problem instead of building a dedicated spatial index. Because the encoded key is just a string (or the same bits read as an integer), "find things nearby" becomes an ordinary prefix or range scan on the B-tree or sorted set the database already ships — no spatial extension required, and a moving point's update is a single small key write.</p>
-        <p id="description-p-4">The catch is the cell boundary. Two points a few metres apart can straddle a cell edge and receive different prefixes, so scanning a single cell can miss a very close neighbour. The standard correction is the <strong>3×3 ring</strong>: compute the query point's own cell plus its eight neighbours, scan all nine, then post-filter by exact distance to discard the far corners that only matched the window. The index never gives the final answer on its own — it narrows "scan everything" down to a small candidate set, and exact distance math finishes the job.</p>
+        <p id="description-p-2" data-kb-level="advanced">The force it resolves is that ordinary indexes cannot answer "what is near here". A range query on one sorted column — ages 20 to 25 — is cheap on a B-tree because the keys are physically ordered and packed onto adjacent pages: one seek, a short sequential read. But distance depends on latitude and longitude jointly. Index latitude alone and you get a horizontal band of the planet; a composite <code>(lat, lon)</code> index still sorts primarily by the first column and only tie-breaks on the second, so it is effectively a one-dimensional sort that returns a huge band of unranked rows and forces a brute-force distance check on every one. A one-dimensional sort order simply cannot preserve two-dimensional adjacency.</p>
+        <p id="description-p-3" data-kb-level="advanced">Geohash sidesteps the problem instead of building a dedicated spatial index. Because the encoded key is just a string (or the same bits read as an integer), "find things nearby" becomes an ordinary prefix or range scan on the B-tree or sorted set the database already ships — no spatial extension required, and a moving point's update is a single small key write.</p>
+        <p id="description-p-4" data-kb-level="advanced">The catch is the cell boundary. Two points a few metres apart can straddle a cell edge and receive different prefixes, so scanning a single cell can miss a very close neighbour. The standard correction is the <strong>3×3 ring</strong>: compute the query point's own cell plus its eight neighbours, scan all nine, then post-filter by exact distance to discard the far corners that only matched the window. The index never gives the final answer on its own — it narrows "scan everything" down to a small candidate set, and exact distance math finishes the job.</p>
       </div>
     </section>
 
@@ -125,12 +125,22 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    P["Query point (lat, lon)"] -->|"encode"| E["Geohash 'dr5ru'"]
-    E -->|"expand to 3×3 ring"| R["This cell + 8 neighbours"]
-    R -->|"prefix / range scan index"| C["Candidate set — points in those 9 cells"]
-    C -->|"filter by exact distance"| A["Answer — points within the radius"]
+    Device["Moving device"]:::ext
+    Svc["Location Service"]
+    Client["Nearby query"]:::ext
+    subgraph Narrow["Narrow to nine cells, then verify"]
+        Index[("Sorted index on geohash key")]
+        Filter["Exact-distance check"]
+    end
+    Device --&gt;|"1 report lat/lon"| Svc
+    Svc --&gt;|"2 write encoded key"| Index
+    Client --&gt;|"3 ask for points within 2 km"| Svc
+    Svc --&gt;|"4 scan this cell + 8 neighbours"| Index
+    Index --&gt;|"5 candidate points"| Filter
+    Filter --&gt;|"6 points inside the radius"| Client
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>The index shrinks "scan the whole planet" to nine small cells; exact distance math on that candidate set produces the real answer. The neighbour ring is what makes points near a cell edge findable.</figcaption>
+        <figcaption>How does an ordinary sorted index answer "what is near here"? Step 2 collapses two dimensions into one sortable key, and steps 4 and 5 are inseparable — the scan narrows the planet to nine cells, and the distance check turns candidates into the answer.</figcaption>
       </figure>
     </section>
 
@@ -139,12 +149,12 @@ flowchart LR
       <dl class="variations">
         <dt id="variations-item-1">String vs. integer encoding</dt>
         <dd>Each base-32 character is five bits, so the same value is either text (a <code>LIKE 'dr5ru%'</code> prefix scan on a B-tree) or an interleaved integer (a numeric range scan). They index identically; Redis keeps it as a 52-bit integer on a sorted-set score, Postgres can keep it as text.</dd>
-        <dt id="variations-item-2">Precision by prefix length</dt>
-        <dd>Cell size shrinks with each added character — roughly 5 km at five characters, a few metres at nine. Choose a length that matches your search radius so the neighbour ring stays small and the candidate set stays cheap to post-filter.</dd>
-        <dt id="variations-item-3">S2 (Google) — spherical cells on a Hilbert curve</dt>
-        <dd>Geohash treats latitude and longitude as a flat rectangle, so its cells distort by latitude (wide near the equator, narrow near the poles). S2 projects the sphere onto the six faces of a cube and threads a Hilbert space-filling curve through them, giving cells of roughly uniform area anywhere on Earth and 64-bit hierarchical ids that truncate to a parent cell. It also models the sphere, so it handles shapes that cross the antimeridian.</dd>
-        <dt id="variations-item-4">H3 (Uber) — a hexagonal grid</dt>
-        <dd>Uses hexagonal cells instead of squares: a hexagon has six neighbours all at roughly equal distance, which is cleaner for "N rings out" queries and heatmap analytics than a square's mix of edge and corner neighbours. Its 64-bit ids are <em>not</em> laid out along a space-filling curve, so instead of a range scan you call grid-math functions to compute the ring of neighbour cell ids and look them up explicitly with an <code>IN</code> list.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Precision by prefix length</dt>
+        <dd data-kb-level="advanced">Cell size shrinks with each added character — roughly 5 km at five characters, a few metres at nine. Choose a length that matches your search radius so the neighbour ring stays small and the candidate set stays cheap to post-filter.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">S2 (Google) — spherical cells on a Hilbert curve</dt>
+        <dd data-kb-level="advanced">Geohash treats latitude and longitude as a flat rectangle, so its cells distort by latitude (wide near the equator, narrow near the poles). S2 projects the sphere onto the six faces of a cube and threads a Hilbert space-filling curve through them, giving cells of roughly uniform area anywhere on Earth and 64-bit hierarchical ids that truncate to a parent cell. It also models the sphere, so it handles shapes that cross the antimeridian.</dd>
+        <dt id="variations-item-4" data-kb-level="expert">H3 (Uber) — a hexagonal grid</dt>
+        <dd data-kb-level="expert">Uses hexagonal cells instead of squares: a hexagon has six neighbours all at roughly equal distance, which is cleaner for "N rings out" queries and heatmap analytics than a square's mix of edge and corner neighbours. Its 64-bit ids are <em>not</em> laid out along a space-filling curve, so instead of a range scan you call grid-math functions to compute the ring of neighbour cell ids and look them up explicitly with an <code>IN</code> list.</dd>
       </dl>
     </section>
 
@@ -155,18 +165,18 @@ flowchart LR
           <h3>Pros</h3>
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Reuses the B-tree or sorted-set index every database already ships — no dedicated spatial extension to install and operate.</li>
-            <li id="tradeoffs-pro-2" data-kb-polarity="pro">A location update is a single short key write, so it absorbs very high update rates from constantly moving points.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">A location update is a single short key write, so it absorbs very high update rates from constantly moving points.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">A shared prefix guarantees spatial nearness, so "nearby" is a cheap prefix or range scan rather than a full-table distance computation.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Prefix length tunes precision on the fly — coarser or finer cells without rebuilding any structure.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Prefix length tunes precision on the fly — coarser or finer cells without rebuilding any structure.</li>
           </ul>
         </div>
         <div class="col cons">
           <h3>Cons</h3>
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Cell boundaries break naive queries: two close points can differ in prefix, so a correct search must scan the cell plus its eight neighbours and post-filter by exact distance.</li>
-            <li id="tradeoffs-con-2" data-kb-polarity="con">It encodes points only — it cannot represent a line or a polygon, so containment and intersection questions need a real spatial tree instead.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">The flat latitude/longitude grid distorts cell area toward the poles, which is why uniform-area systems like S2 and H3 exist.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">A fixed grid ignores density — a cell in a dense city holds far more candidates than a rural one, so you post-filter more where data is thickest.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">It encodes points only — it cannot represent a line or a polygon, so containment and intersection questions need a real spatial tree instead.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">The flat latitude/longitude grid distorts cell area toward the poles, which is why uniform-area systems like S2 and H3 exist.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">A fixed grid ignores density — a cell in a dense city holds far more candidates than a rural one, so you post-filter more where data is thickest.</li>
           </ul>
         </div>
       </div>
@@ -179,16 +189,16 @@ flowchart LR
           <h3>Reach for it when</h3>
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Your data is mostly moving points — drivers, live users, devices — updated constantly, and you want each update to be a cheap key write.</li>
-            <li id="usage-when-2" data-kb-polarity="when">You want proximity search on a plain key-value store or relational index without adopting a spatial extension.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The question is point-and-radius ("what is within N km of here"), not polygon containment.</li>
-            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="expert">You want to shard or colocate nearby points, using the prefix as a locality-preserving partition key.</li>
+            <li id="usage-when-2" data-kb-polarity="when" data-kb-level="advanced">You want proximity search on a plain key-value store or relational index without adopting a spatial extension.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The question is point-and-radius ("what is within N km of here"), not polygon containment.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">You want to shard or colocate nearby points, using the prefix as a locality-preserving partition key.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">You need true geometry — polygon containment, line intersection, "is this address inside this delivery zone" — where an R-tree (PostGIS) is the right tool.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Uniform cell area across latitudes matters, for example spatial analytics that compares counts per cell — prefer S2 or H3.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">Uniform cell area across latitudes matters, for example spatial analytics that compares counts per cell — prefer S2 or H3.</li>
             <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The data is static geometry managed inside the database — a BKD or R-tree index built for shapes fits better than an encoded key.</li>
           </ul>
         </div>
@@ -238,9 +248,9 @@ function geohash(lat: number, lon: number, precision = 9): string {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="redis-geo" id="wild-redis-geo"><strong>Redis geospatial</strong><span>GEOADD encodes a longitude/latitude pair into a 52-bit geohash integer and stores it as the score of a sorted set; GEOSEARCH (and the older GEORADIUS) then returns members within a radius or box — a range scan over those scores.</span></div>
-        <div class="wild-item" data-kb-example="elasticsearch-geohash-grid" id="wild-elasticsearch-geohash-grid"><strong>Elasticsearch geohash_grid</strong><span>The geohash_grid aggregation buckets documents by geohash cell at a chosen precision, and geo_point fields answer geo_distance and geo_bounding_box queries — the same encode-then-scan idea over its index.</span></div>
-        <div class="wild-item" data-kb-example="google-s2" id="wild-google-s2"><strong>Google S2</strong><span>The s2geometry library models Earth as cells on a Hilbert space-filling curve over the six faces of a cube, giving roughly uniform-area cells and 64-bit hierarchical ids; it is the cell system underneath MongoDB's 2dsphere index.</span></div>
-        <div class="wild-item" data-kb-example="uber-h3" id="wild-uber-h3"><strong>Uber H3</strong><span>An open-source hexagonal hierarchical geospatial index: each cell is a 64-bit id with grid-traversal functions to walk the ring of neighbours. Uber uses it operationally for dispatch and surge pricing.</span></div>
+        <div class="wild-item" data-kb-example="elasticsearch-geohash-grid" id="wild-elasticsearch-geohash-grid" data-kb-level="advanced"><strong>Elasticsearch geohash_grid</strong><span>The geohash_grid aggregation buckets documents by geohash cell at a chosen precision, and geo_point fields answer geo_distance and geo_bounding_box queries — the same encode-then-scan idea over its index.</span></div>
+        <div class="wild-item" data-kb-example="google-s2" id="wild-google-s2" data-kb-level="advanced"><strong>Google S2</strong><span>The s2geometry library models Earth as cells on a Hilbert space-filling curve over the six faces of a cube, giving roughly uniform-area cells and 64-bit hierarchical ids; it is the cell system underneath MongoDB's 2dsphere index.</span></div>
+        <div class="wild-item" data-kb-example="uber-h3" id="wild-uber-h3" data-kb-level="expert"><strong>Uber H3</strong><span>An open-source hexagonal hierarchical geospatial index: each cell is a 64-bit id with grid-traversal functions to walk the ring of neighbours. Uber uses it operationally for dispatch and surge pricing.</span></div>
       </div>
     </section>
 
@@ -251,28 +261,28 @@ function geohash(lat: number, lon: number, precision = 9): string {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Prefix length (precision)</strong> — How many characters of the hash you index and match on — each added character subdivides the cell into 32, so roughly 5 km at five characters and a few metres at nine. Set it from the search radius you actually serve.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Encoding: string or integer</strong> — The same value indexes either as text for a prefix scan or as the interleaved bits read as a number for a numeric range scan — pick whichever matches the index the store already runs.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Neighbour ring width</strong> — How many rings of surrounding cells a query scans. One ring — the cell plus its eight neighbours — is the standard correction for the boundary problem; a radius large relative to the cell needs more.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Candidate cap per query</strong> — A bound on how many rows the scan may return before the exact-distance post-filter runs, so a dense cell cannot hand the post-filter an unbounded candidate set.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Encoding: string or integer</strong> — The same value indexes either as text for a prefix scan or as the interleaved bits read as a number for a numeric range scan — pick whichever matches the index the store already runs.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Neighbour ring width</strong> — How many rings of surrounding cells a query scans. One ring — the cell plus its eight neighbours — is the standard correction for the boundary problem; a radius large relative to the cell needs more.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Candidate cap per query</strong> — A bound on how many rows the scan may return before the exact-distance post-filter runs, so a dense cell cannot hand the post-filter an unbounded candidate set.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Candidate set size per query</strong> — Rows returned by the cell scan before post-filtering, against rows actually within the radius — the ratio is how much work the index is wasting.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Post-filter discard rate</strong> — The share of scanned candidates thrown away by the exact-distance check; a rate climbing over time means the prefix length no longer matches the radius being asked for.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Query latency by region</strong> — Read latency split by area rather than averaged, since a dense city cell and an empty rural one do very different amounts of post-filtering.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Points per cell skew</strong> — Maximum against median occupancy across cells — the spread that tells you whether a fixed grid is still an acceptable fit for the data.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Post-filter discard rate</strong> — The share of scanned candidates thrown away by the exact-distance check; a rate climbing over time means the prefix length no longer matches the radius being asked for.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Query latency by region</strong> — Read latency split by area rather than averaged, since a dense city cell and an empty rural one do very different amounts of post-filtering.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Points per cell skew</strong> — Maximum against median occupancy across cells — the spread that tells you whether a fixed grid is still an acceptable fit for the data.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Dense-cell post-filter blowup</strong> — A cell over a city centre holds far more candidates than a rural one, so the same query does much more distance math exactly where traffic is heaviest.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Radius outgrows the cell</strong> — A search radius large relative to the cell size pulls in rings of neighbours well beyond the standard nine, and the candidate set grows with the area scanned.</li>
+            <li id="production-failure-1" data-kb-polarity="failure" data-kb-level="advanced"><strong>Dense-cell post-filter blowup</strong> — A cell over a city centre holds far more candidates than a rural one, so the same query does much more distance math exactly where traffic is heaviest.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="expert"><strong>Radius outgrows the cell</strong> — A search radius large relative to the cell size pulls in rings of neighbours well beyond the standard nine, and the candidate set grows with the area scanned.</li>
             <li id="production-failure-3" data-kb-polarity="failure"><strong>Boundary misses</strong> — A query that scans only the point's own cell silently omits neighbours a few metres away on the far side of a cell edge — wrong answers rather than slow ones.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Shard hotspot on the prefix</strong> — Using the prefix as a partition key colocates nearby points by design, so a dense region concentrates its load onto one partition.</li>
-            <li id="production-failure-5" data-kb-polarity="failure"><strong>Latitude distortion</strong> — The flat latitude/longitude grid makes cells vary in real area toward the poles, so one prefix length does not mean one ground distance everywhere.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Shard hotspot on the prefix</strong> — Using the prefix as a partition key colocates nearby points by design, so a dense region concentrates its load onto one partition.</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Latitude distortion</strong> — The flat latitude/longitude grid makes cells vary in real area toward the poles, so one prefix length does not mean one ground distance everywhere.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -280,10 +290,10 @@ function geohash(lat: number, lon: number, precision = 9): string {
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Scan the cell plus its eight neighbours and post-filter by exact distance — never the single cell alone.</li>
             <li id="production-check-2" data-kb-polarity="check">Derive prefix length from the search radius you serve, and re-check it when that radius changes.</li>
-            <li id="production-check-3" data-kb-polarity="check">Bound the candidate set per query so one dense cell cannot hand the post-filter unbounded rows.</li>
-            <li id="production-check-4" data-kb-polarity="check">Match the encoding — text or integer — to the index the datastore already operates.</li>
-            <li id="production-check-5" data-kb-polarity="check">If the prefix doubles as a partition key, measure the densest region's share before going live.</li>
-            <li id="production-check-6" data-kb-polarity="check">Where per-cell counts are compared against each other, use a uniform-area system instead.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Bound the candidate set per query so one dense cell cannot hand the post-filter unbounded rows.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Match the encoding — text or integer — to the index the datastore already operates.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">If the prefix doubles as a partition key, measure the densest region's share before going live.</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Where per-cell counts are compared against each other, use a uniform-area system instead.</li>
           </ul>
         </div>
       </div>

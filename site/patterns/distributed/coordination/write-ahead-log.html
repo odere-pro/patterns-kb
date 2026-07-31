@@ -110,9 +110,9 @@
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
         <p id="description-p-1">A <strong>write-ahead log</strong> (WAL) is an append-only, durable record of every change, written and fsynced <em>before</em> the change is applied to the actual data structure — a B-tree page, an in-memory table, a key-value store. Once the log record has survived on disk, the system is free to apply the change lazily, batch it, or even lose it from memory, because the log can always reconstruct it.</p>
-        <p id="description-p-2">The force it resolves is durability without paying for a random write on every mutation. Applying updates directly to a data structure means writing scattered pages in place — slow, and if the process dies mid-write, a torn or partial page can corrupt the structure permanently. Appending a record to a log is a single sequential write, cheap on disks and SSDs alike, and it either lands whole or not at all once it's checksummed.</p>
+        <p id="description-p-2" data-kb-level="advanced">The force it resolves is durability without paying for a random write on every mutation. Applying updates directly to a data structure means writing scattered pages in place — slow, and if the process dies mid-write, a torn or partial page can corrupt the structure permanently. Appending a record to a log is a single sequential write, cheap on disks and SSDs alike, and it either lands whole or not at all once it's checksummed.</p>
         <p id="description-p-3">Recovery follows directly from that guarantee: after a crash, replay the log from the last known-consistent point, reapplying every committed record until the data structure catches up to where the log says it should be. Everything the system knows it did lives in the log; the data structure itself is just a cache of it that can always be rebuilt.</p>
-        <p id="description-p-4">WAL is the mechanism behind the ACID "durability" of most relational databases (PostgreSQL's WAL, InnoDB's redo log), sits inside LSM-tree stores, and underlies consensus logs in distributed systems — anywhere "did this actually happen" has to survive a crash.</p>
+        <p id="description-p-4" data-kb-level="advanced">WAL is the mechanism behind the ACID "durability" of most relational databases (PostgreSQL's WAL, InnoDB's redo log), sits inside LSM-tree stores, and underlies consensus logs in distributed systems — anywhere "did this actually happen" has to survive a crash.</p>
       </div>
     </section>
 
@@ -139,14 +139,45 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    C["Caller writes"] -->|"append record"| L["Log record"]
-    L -->|"flush"| F["fsync, durable"]
-    F -->|"ack"| K["Ack caller"]
-    F -->|"apply"| S["Apply to data structure"]
-    R["Crash, restart"] -->|"replay from checkpoint"| P["Read log records"]
-    P -->|"reapply"| S
+    Client["Client"]:::ext
+    Engine["Database engine"]
+    subgraph Durable["Durable before it is applied"]
+        WAL[("Write-ahead log")]
+    end
+    Store[("Data pages / memtable")]
+    Ckpt["Checkpointer"]
+    Client --&gt;|"1 write balance = 100"| Engine
+    Engine --&gt;|"2 append record, fsync"| WAL
+    Engine --&gt;|"3 ack the write"| Client
+    Engine --&gt;|"4 apply the change"| Store
+    Ckpt --&gt;|"5 flush applied state"| Store
+    Ckpt --&gt;|"6 truncate the replayed prefix"| WAL
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>A write is durable the moment its log record is fsynced — only then is it acknowledged or applied. Recovery replays the log to rebuild state after a crash.</figcaption>
+        <figcaption>How does a crash never lose a write the client was told succeeded? Step 2 makes the record durable before step 3 promises anything and before step 4 touches a page, so the log always knows at least as much as the data does.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant E as Engine
+    participant W as Write-ahead log
+    participant S as Data pages
+    C-&gt;&gt;E: write
+    E-&gt;&gt;W: append record, fsync
+    W--&gt;&gt;E: durable
+    E--&gt;&gt;C: ack
+    alt normal running
+        E-&gt;&gt;S: apply lazily, batched
+    else crash before the apply
+        Note over E,S: pages are behind the log
+        E-&gt;&gt;W: read forward from the last checkpoint
+        W--&gt;&gt;E: committed records
+        E-&gt;&gt;S: reapply until the pages catch up
+    end
+        </pre>
+        <figcaption>The ack is owed to the fsync, not to the page write. After a crash the pages sit behind the log, so recovery replays from the last checkpoint until they catch up — which is why the checkpoint interval sets the restart time.</figcaption>
       </figure>
     </section>
 
@@ -155,14 +186,14 @@ flowchart LR
       <dl class="variations">
         <dt id="variations-item-1">Physical vs. logical logging</dt>
         <dd>Physical records capture the exact bytes changed on a page, redone by copying; logical records capture the operation performed. Physical is simple and deterministic to replay; logical is more compact but replay must be idempotent.</dd>
-        <dt id="variations-item-2">Redo-only vs. redo/undo</dt>
-        <dd>A redo-only log lets recovery replay forward to the last durable state. A redo/undo log also records the before-image, so an in-flight transaction can be rolled back as cleanly as a committed one is replayed.</dd>
-        <dt id="variations-item-3">Checkpointing</dt>
-        <dd>Periodically flush the state the log implies into the data structure itself, then truncate everything before that point — bounding how far recovery ever has to replay.</dd>
-        <dt id="variations-item-4">Group commit</dt>
-        <dd>Batch several concurrent appends into one fsync instead of one per writer, trading a little added latency per write for far higher durable throughput.</dd>
-        <dt id="variations-item-5"><a href="./replication.html">Log shipping</a></dt>
-        <dd>Ship the WAL itself to follower nodes and have them replay it, rather than transferring snapshots — continuous replication built directly on the durability log.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Redo-only vs. redo/undo</dt>
+        <dd data-kb-level="advanced">A redo-only log lets recovery replay forward to the last durable state. A redo/undo log also records the before-image, so an in-flight transaction can be rolled back as cleanly as a committed one is replayed.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Checkpointing</dt>
+        <dd data-kb-level="advanced">Periodically flush the state the log implies into the data structure itself, then truncate everything before that point — bounding how far recovery ever has to replay.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Group commit</dt>
+        <dd data-kb-level="advanced">Batch several concurrent appends into one fsync instead of one per writer, trading a little added latency per write for far higher durable throughput.</dd>
+        <dt id="variations-item-5" data-kb-level="expert"><a href="./replication.html">Log shipping</a></dt>
+        <dd data-kb-level="expert">Ship the WAL itself to follower nodes and have them replay it, rather than transferring snapshots — continuous replication built directly on the durability log.</dd>
       </dl>
     </section>
 
@@ -175,7 +206,7 @@ flowchart LR
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Turns random, in-place writes into a single sequential append — close to a disk or SSD's best case.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">Durability is bounded to one fsync per commit, not one per touched page.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">Recovery is deterministic: replay the log and the data structure converges to a known state.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">The log doubles as a natural feed for replication, auditing, and point-in-time recovery.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">The log doubles as a natural feed for replication, auditing, and point-in-time recovery.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -183,8 +214,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con" data-kb-level="advanced">The log itself must be crash-safe — a torn write there defeats the whole scheme, so entries need checksums and length prefixes.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Unbounded logs slow recovery and burn disk; checkpointing and truncation are mandatory, not optional.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Every commit still pays for at least one fsync — a latency floor no batching fully removes.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Doubles the conceptual write path, log now, apply later, adding a second place logic can drift out of sync.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Every commit still pays for at least one fsync — a latency floor no batching fully removes.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="expert">Doubles the conceptual write path, log now, apply later, adding a second place logic can drift out of sync.</li>
           </ul>
         </div>
       </div>
@@ -198,15 +229,15 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">You need durability across a crash, but writing directly to the primary structure would be slow or unsafe.</li>
             <li id="usage-when-2" data-kb-polarity="when">You want recovery to be a deterministic replay rather than bespoke per-structure recovery code.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The log itself is useful downstream — for replication, replay, or audit — not just for recovery.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The log itself is useful downstream — for replication, replay, or audit — not just for recovery.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">The data is disposable or fully rebuildable from another durable source, so write-time durability isn't worth the overhead.</li>
-            <li id="usage-avoid-2" data-kb-polarity="avoid">Writes are already inherently atomic and durable — a single fsync'd file write needs no second log on top.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">Sub-microsecond latency matters more than survivability and losing recent writes is acceptable.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">Writes are already inherently atomic and durable — a single fsync'd file write needs no second log on top.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Sub-microsecond latency matters more than survivability and losing recent writes is acceptable.</li>
           </ul>
         </div>
       </div>
@@ -255,9 +286,9 @@ for (const entry of wal.replay()) store.set(entry.key, entry.value);</code></pre
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="postgresql-wal" id="wild-postgresql-wal"><strong>PostgreSQL WAL</strong><span>Every change is written to the WAL and fsynced before the heap page is touched; the same log (default 16 MB segments) drives streaming replication and point-in-time recovery. synchronous_commit tunes the durability/latency tradeoff, and checkpoint_timeout with max_wal_size governs how far recovery ever replays.</span></div>
-        <div class="wild-item" data-kb-example="sqlite-wal" id="wild-sqlite-wal"><strong>SQLite WAL mode</strong><span>journal_mode=WAL sends changes to a separate -wal file with a shared-memory index (-shm), so readers keep reading a consistent snapshot of the main database while a writer appends. A checkpoint (auto-triggered around 1000 pages by default, or PRAGMA wal_checkpoint) folds the log back into the db file.</span></div>
-        <div class="wild-item" data-kb-example="innodb-redo-log" id="wild-innodb-redo-log"><strong>MySQL InnoDB redo log</strong><span>Commits land in the redo log first; dirty buffer-pool pages are flushed lazily and replayed from the log after a crash. innodb_flush_log_at_trx_commit picks whether every commit fsyncs (1, fully durable) or batches flushes for throughput (0 or 2).</span></div>
-        <div class="wild-item" data-kb-example="rocksdb" id="wild-rocksdb"><strong>RocksDB</strong><span>Writes hit the WAL before the in-memory memtable, so an unflushed memtable is rebuildable after a restart. Once a memtable is flushed to an SST file its WAL segment can be discarded, and WriteOptions.sync chooses per-write whether the append is fsynced.</span></div>
+        <div class="wild-item" data-kb-example="sqlite-wal" id="wild-sqlite-wal" data-kb-level="advanced"><strong>SQLite WAL mode</strong><span>journal_mode=WAL sends changes to a separate -wal file with a shared-memory index (-shm), so readers keep reading a consistent snapshot of the main database while a writer appends. A checkpoint (auto-triggered around 1000 pages by default, or PRAGMA wal_checkpoint) folds the log back into the db file.</span></div>
+        <div class="wild-item" data-kb-example="innodb-redo-log" id="wild-innodb-redo-log" data-kb-level="advanced"><strong>MySQL InnoDB redo log</strong><span>Commits land in the redo log first; dirty buffer-pool pages are flushed lazily and replayed from the log after a crash. innodb_flush_log_at_trx_commit picks whether every commit fsyncs (1, fully durable) or batches flushes for throughput (0 or 2).</span></div>
+        <div class="wild-item" data-kb-example="rocksdb" id="wild-rocksdb" data-kb-level="expert"><strong>RocksDB</strong><span>Writes hit the WAL before the in-memory memtable, so an unflushed memtable is rebuildable after a restart. Once a memtable is flushed to an SST file its WAL segment can be discarded, and WriteOptions.sync chooses per-write whether the append is fsynced.</span></div>
       </div>
     </section>
 
@@ -268,27 +299,27 @@ for (const entry of wal.replay()) store.set(entry.key, entry.value);</code></pre
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Commit durability / fsync policy</strong> — Whether each commit fsyncs the log before acking (durable) or defers the flush for throughput (e.g. PostgreSQL synchronous_commit, InnoDB innodb_flush_log_at_trx_commit). Relaxing it trades a window of possibly-lost recent commits for lower commit latency.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Group commit delay</strong> — How long a committer waits to batch its fsync with others (e.g. PostgreSQL commit_delay). A small delay lets many writers share one fsync, lifting durable throughput at the cost of a bit of latency per commit.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Checkpoint interval</strong> — How often the state the log implies is flushed into the data structure so the log before it can be truncated (checkpoint_timeout, max_wal_size). Longer intervals cut steady write amplification but lengthen crash recovery.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>WAL retention / segment sizing</strong> — How much log is kept before recycling, for replication and point-in-time recovery (wal_keep_size, log segment size). Too little breaks a lagging replica; too much risks filling the disk.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Group commit delay</strong> — How long a committer waits to batch its fsync with others (e.g. PostgreSQL commit_delay). A small delay lets many writers share one fsync, lifting durable throughput at the cost of a bit of latency per commit.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Checkpoint interval</strong> — How often the state the log implies is flushed into the data structure so the log before it can be truncated (checkpoint_timeout, max_wal_size). Longer intervals cut steady write amplification but lengthen crash recovery.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>WAL retention / segment sizing</strong> — How much log is kept before recycling, for replication and point-in-time recovery (wal_keep_size, log segment size). Too little breaks a lagging replica; too much risks filling the disk.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Un-checkpointed WAL size</strong> — Bytes of log accumulated since the last checkpoint — the amount recovery would have to replay, and a direct read on how long a restart takes.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Commit latency p99</strong> — Tail latency of the fsync on the commit path — the durability floor that no batching fully removes, and the first thing to rise when the log device is stressed.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Checkpoint duration and frequency</strong> — How long a checkpoint takes and how often it runs. Frequent or slow checkpoints signal the WAL is filling faster than the data structure absorbs it.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Replication lag (log shipping)</strong> — How many bytes or seconds a follower trails the primary's log position. Growing lag means followers replay slower than the primary appends.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Commit latency p99</strong> — Tail latency of the fsync on the commit path — the durability floor that no batching fully removes, and the first thing to rise when the log device is stressed.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Checkpoint duration and frequency</strong> — How long a checkpoint takes and how often it runs. Frequent or slow checkpoints signal the WAL is filling faster than the data structure absorbs it.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Replication lag (log shipping)</strong> — How many bytes or seconds a follower trails the primary's log position. Growing lag means followers replay slower than the primary appends.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>WAL fills the disk</strong> — Log is generated faster than checkpointing recycles it or archiving drains it; the volume fills and the database halts writes rather than lose durability. Free space on the log device is the thing to watch.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Checkpoint I/O storm</strong> — A checkpoint flushes a large backlog of dirty pages at once, spiking disk I/O and stalling foreground commits — the classic sawtooth when checkpoints are too infrequent.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>fsync latency spike</strong> — The log device slows and, because every commit waits on its fsync, commit latency across the whole system rises together — the durability floor moving up under load.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Slow recovery after crash</strong> — A large un-checkpointed log means a long replay before the system accepts traffic again; recovery time is bounded by the checkpoint interval, not by how the crash happened.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Checkpoint I/O storm</strong> — A checkpoint flushes a large backlog of dirty pages at once, spiking disk I/O and stalling foreground commits — the classic sawtooth when checkpoints are too infrequent.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>fsync latency spike</strong> — The log device slows and, because every commit waits on its fsync, commit latency across the whole system rises together — the durability floor moving up under load.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Slow recovery after crash</strong> — A large un-checkpointed log means a long replay before the system accepts traffic again; recovery time is bounded by the checkpoint interval, not by how the crash happened.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -296,9 +327,9 @@ for (const entry of wal.replay()) store.set(entry.key, entry.value);</code></pre
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Log entries are checksummed and length-prefixed so a torn write is detected, not replayed as truth</li>
             <li id="production-check-2" data-kb-polarity="check">Checkpointing and truncation are configured — an unbounded log is mandatory to prevent, not optional</li>
-            <li id="production-check-3" data-kb-polarity="check">The log lives on storage whose fsync is honored, not a write-back cache that lies about durability</li>
-            <li id="production-check-4" data-kb-polarity="check">Recovery time is bounded by the checkpoint interval and has been tested with a real crash-and-replay</li>
-            <li id="production-check-5" data-kb-polarity="check">WAL disk free space and replication lag are monitored with alerts before the volume fills</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">The log lives on storage whose fsync is honored, not a write-back cache that lies about durability</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Recovery time is bounded by the checkpoint interval and has been tested with a real crash-and-replay</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">WAL disk free space and replication lag are monitored with alerts before the volume fills</li>
           </ul>
         </div>
       </div>
