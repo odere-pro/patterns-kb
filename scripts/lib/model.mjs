@@ -317,16 +317,20 @@ export const DESIGN_ORDER = [
 export const HAZARD_ORDER = [
   "god-object", "spaghetti-code", "big-ball-of-mud", "anemic-domain-model",
   "golden-hammer", "boat-anchor",
-  "cache-stampede", "hot-key", "stale-cache",
+  "cache-stampede", "hot-key", "stale-cache", "hot-partition",
+  "split-brain", "dual-write-inconsistency",
   "race-condition", "deadlock", "unbounded-queue", "resource-leak", "n-plus-1-query",
+  "connection-pool-exhaustion",
+  "retry-storm", "thundering-herd", "cascading-failure", "noisy-neighbour",
 ];
 /* Editorial order for the principle section: universal heuristics first, then SOLID,
  * then the OO-structural maxims. Drives the hub's Principles grid. */
 export const PRINCIPLE_ORDER = [
-  "dry", "kiss", "yagni",
+  "dry", "kiss", "yagni", "least-astonishment", "fail-fast",
   "single-responsibility", "open-closed", "liskov-substitution",
   "interface-segregation", "dependency-inversion",
   "composition-over-inheritance", "law-of-demeter", "separation-of-concerns",
+  "postels-law",
 ];
 
 /* ---- derived lookups ---- */

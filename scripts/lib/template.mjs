@@ -97,17 +97,17 @@ const PROSE_SECTION = (id, anchor, heading, block) => `    <section class="doc-s
 const EXPLAIN_SECTION = () => `    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+        <div class="explain-item" id="explain-basic" data-kb-register="basic">
           <h3>Basic</h3>
-          <p>TODO — plain words, everyday comparison, no jargon.</p>
+          <p>TODO — the failure-first story in plain words, no jargon.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
           <h3>Advanced</h3>
           <p>TODO — name the mechanism precisely in one breath.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+        <div class="explain-item" id="explain-expert" data-kb-register="expert">
           <h3>Expert</h3>
-          <p>TODO — impact, selection criteria, the tradeoff bill.</p>
+          <p>TODO — selection criteria, the tradeoff bill, the counter-moves.</p>
         </div>
       </div>
     </section>`;

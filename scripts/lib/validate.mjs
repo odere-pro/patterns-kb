@@ -70,6 +70,9 @@ export function lensProblems(root) {
    * headings, and demand some text survives. */
   for (const sec of root.querySelectorAll("[data-kb-block]")) {
     const block = sec.getAttribute("data-kb-block");
+    /* relationships renders link cards written by kb.mjs link — a freshly scaffolded
+     * page legitimately has none yet, and its content is never lens-tagged. */
+    if (block === "relationships") continue;
     for (const lens of LEVELS) {
       const clone = parse(sec.toString(), { comment: true });
       for (const el of clone.querySelectorAll("[data-kb-level]")) {
