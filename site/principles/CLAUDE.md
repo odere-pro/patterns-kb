@@ -1,9 +1,9 @@
 # site/principles
 
-**Principles** — 11 design maxims. Not a rung, not a lens, not a pattern: each is a
+**Principles** — 14 design maxims. Not a rung, not a lens, not a pattern: each is a
 rule of thumb for writing good code at any elevation (SOLID, DRY, KISS, YAGNI, and friends).
 
-Pages here: composition-over-inheritance, dependency-inversion, dry, interface-segregation, kiss, law-of-demeter, liskov-substitution, open-closed, separation-of-concerns, single-responsibility, yagni
+Pages here: composition-over-inheritance, dependency-inversion, dry, fail-fast, interface-segregation, kiss, law-of-demeter, least-astonishment, liskov-substitution, open-closed, postels-law, separation-of-concerns, single-responsibility, yagni
 
 Blocks, in order: `description` → `explain` → `rationale` → `applying` → `overreach` → `relationships`.
 
