@@ -121,15 +121,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>When another service keeps failing, stop calling it for a while. Like a fuse in a house: after too many faults it trips, your calls fail instantly instead of hanging, and every so often it lets one call through to check whether things have recovered.</p>
+          <p>When another service keeps failing, stop calling it for a while — otherwise every request sits waiting on it and your own service runs out of room to serve anyone. Like a fuse in a house: after too many faults it trips, your calls fail instantly instead of hanging, and every so often it lets one call through to check whether things have recovered.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A stateful proxy around a remote dependency counts recent failures. Past a threshold it opens: calls fail fast without touching the network, protecting threads, sockets and latency budgets. After a cooldown it half-opens, lets a probe request through, and closes again on success. It is usually combined with timeouts, retries with backoff, and a fallback.</p>
+          <p>A stateful proxy around a remote dependency counts recent failures. Past a threshold it opens: calls fail fast without touching the network, protecting threads, sockets and latency budgets. After a cooldown it half-opens, lets a probe request through, and closes again on success. Those counters sit in process memory or in a record every replica reads, and the breaker is usually combined with timeouts, retries with backoff, and a fallback.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when a dependency's failure mode is slow-or-flapping rather than cleanly down — its real value is converting resource exhaustion into fast, bounded failure while giving the dependency room to recover. The cost is tuning: thresholds, windows and probe policy are workload-specific, a mis-tuned breaker flaps or masks recovery, and every open breaker needs a designed fallback path and an alert, or the product degrades silently.</p>
+          <p>Choose it when a dependency's failure mode is slow-or-flapping rather than cleanly down — its real value is converting resource exhaustion into fast, bounded failure while giving the dependency room to recover. The cost is tuning: thresholds, windows and probe policy are workload-specific, a mis-tuned breaker flaps or masks recovery, and every open breaker needs a designed fallback path and an alert, or the product degrades silently. Where the state lives is the second decision — in-process costs nothing but leaves each replica to learn the outage on its own, while a shared expiring record trips the whole fleet on one replica's evidence and lets a recovered callee or an operator clear it directly, at the price of a lookup in the failure path.</p>
         </div>
       </div>
     </section>
@@ -163,6 +163,12 @@ stateDiagram-v2
         <dd>An open breaker can return a cached value, a default, or a queued request instead of a bare error — pairs naturally with the <a href="../../gof/extra/null-object.html">Null Object</a> idea.</dd>
         <dt id="variations-item-4">Per-endpoint vs. per-dependency</dt>
         <dd>One breaker per remote host, or a finer breaker per operation. Finer granularity isolates a single bad endpoint without cutting off a whole service.</dd>
+        <dt id="variations-item-5">Per-instance vs. shared state</dt>
+        <dd>Counters and the open flag live in process memory, or in a store every replica reads — a row or key per dependency that expires on its own, so the open state clears without anyone sweeping it. In-process is free and instant but uncoordinated: each replica must learn the dependency is down by failing against it itself, and the fleet trips at different times. Shared state trips the whole fleet on one replica's evidence and costs a lookup on the hot path plus a dependency of its own.</dd>
+        <dt id="variations-item-6">Who closes the breaker</dt>
+        <dd>Normally the breaker closes itself after a successful probe. Two extensions matter under a tight recovery objective: let the recovered dependency clear its own open record rather than waiting out someone else's cooldown, and give operators an explicit force-open and force-close so a known-bad dependency can be cut off, or a healthy one restored, without a deploy. Both need shared state to act on.</dd>
+        <dt id="variations-item-7">Service-agnostic breaker</dt>
+        <dd>One breaker implementation, parameterised by the name of the callee, rather than bespoke breaker code at each call site. It keeps the policy in one reviewable place and stops the same thresholds being re-guessed in every service — the difference between a breaker you can reason about fleet-wide and a dozen that only their authors understand.</dd>
       </dl>
     </section>
 
@@ -183,7 +189,7 @@ stateDiagram-v2
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Another stateful component to tune — bad thresholds cause flapping or false trips.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">An open breaker can mask a dependency that's only mildly degraded.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Per-instance breakers don't share state; a cluster may trip unevenly.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Where the state lives is a real choice: in-process breakers trip unevenly across a cluster, and shared state fixes that at the cost of a lookup on the hot path and a dependency of its own.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Needs sensible fallbacks, or "fail fast" just becomes "fail loudly."</li>
             <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">A single breaker over sharded or cell-based backends reads one bad partition as total failure and cuts off healthy ones; finer-grained breakers cost more state.</li>
           </ul>
@@ -275,7 +281,9 @@ await idBreaker.call(flowId, () =&gt; verifyDocument(personaId, deadline));</cod
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="netflix-hystrix"><strong>Netflix Hystrix</strong><span>Popularized the pattern in the JVM world: trips on an error percentage over a rolling window once a minimum request volume is met (errorThresholdPercentage, requestVolumeThreshold), then waits a sleep window before probing. Now in maintenance mode, with Resilience4j the usual successor.</span></div>
+        <div class="wild-item" data-kb-example="opossum"><strong>opossum</strong><span>The Node circuit breaker: wrap an async function and it trips on errorThresholdPercentage (50 by default) measured over a rollingCountTimeout window split into rollingCountBuckets, holds open for resetTimeout (30 s) then goes half-open, and counts a call that exceeds timeout (10 s) as a failure. A volumeThreshold keeps a quiet endpoint from tripping on one error, .fallback() supplies the degraded path, and open, halfOpen and close are events you can export as metrics.</span></div>
+        <div class="wild-item" data-kb-example="aws-step-functions"><strong>AWS Step Functions + DynamoDB</strong><span>AWS documents the breaker as shared state rather than a per-process counter: a workflow reads a CircuitStatus table before calling, fails fast if an unexpired record exists for that callee, and writes one with an expiry timestamp after the retries are exhausted. DynamoDB TTL deletes the expired records, so the breaker closes itself with no sweeper — and every replica sees the same state.</span></div>
+        <div class="wild-item" data-kb-example="hystrix"><strong>Netflix Hystrix</strong><span>Popularized the pattern in the JVM world: trips on an error percentage over a rolling window once a minimum request volume is met (errorThresholdPercentage, requestVolumeThreshold), then waits a sleep window before probing. Now in maintenance mode, with Resilience4j the usual successor.</span></div>
         <div class="wild-item" data-kb-example="envoy"><strong>Envoy</strong><span>Outlier detection ejects an upstream host after consecutive 5xx or gateway failures, holds it out for a base ejection time that grows with repeat ejections, then probes it back in — with max_ejection_percent capping how much of the pool can be removed at once.</span></div>
         <div class="wild-item" data-kb-example="polly"><strong>Polly</strong><span>The .NET resilience library; its circuit-breaker strategy trips on a failure ratio measured over a sampling duration above a minimum throughput, and composes in a pipeline with retry and timeout.</span></div>
       </div>
@@ -288,10 +296,11 @@ await idBreaker.call(flowId, () =&gt; verifyDocument(personaId, deadline));</cod
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Failure threshold</strong> — The count of consecutive failures or the failure-rate percentage over a window that trips the breaker open (failureRateThreshold, errorThresholdPercentage).</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Open-state duration (cooldown)</strong> — How long the breaker stays open before admitting a half-open probe (waitDurationInOpenState, sleepWindow).</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>Open-state duration (cooldown)</strong> — How long the breaker stays open before admitting a half-open probe (waitDurationInOpenState, resetTimeout, sleepWindow). Set it once, when the breaker opens; extending it on every later failure means the probe never runs.</li>
             <li id="production-knob-3" data-kb-polarity="knob"><strong>Half-open trial count</strong> — How many probe calls are permitted while half-open before deciding to close or re-open — limiting this prevents a rush on a recovering dependency.</li>
             <li id="production-knob-4" data-kb-polarity="knob"><strong>Rolling window and minimum volume</strong> — The count or time span over which failures are measured, plus a minimum call count before the rate applies (slidingWindowSize, minimumNumberOfCalls, requestVolumeThreshold) so a single failure on a quiet endpoint does not trip it.</li>
-            <li id="production-knob-5" data-kb-polarity="knob"><strong>What counts as a failure</strong> — Which exceptions and timeouts increment the counter, and whether slow calls above a latency threshold count as failures too (slowCallDurationThreshold).</li>
+            <li id="production-knob-5" data-kb-polarity="knob"><strong>Where the state lives</strong> — In-process counters, or a shared record per dependency that expires on its own. Shared state trips the fleet together and lets a recovered callee or an operator clear it directly; it also puts a lookup on every call and a store in the failure path.</li>
+            <li id="production-knob-6" data-kb-polarity="knob"><strong>What counts as a failure</strong> — Which exceptions and timeouts increment the counter, and whether slow calls above a latency threshold count as failures too (slowCallDurationThreshold).</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
@@ -299,26 +308,29 @@ await idBreaker.call(flowId, () =&gt; verifyDocument(personaId, deadline));</cod
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Breaker state</strong> — Closed / open / half-open per breaker — a first-class health signal; a stuck-open breaker names the unhealthy dependency directly.</li>
             <li id="production-signal-2" data-kb-polarity="signal"><strong>Failure / error rate in the window</strong> — The measured failure or slow-call percentage the trip decision is based on.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Fast-failed call count</strong> — Calls rejected immediately while the breaker is open — the load shed off the downstream.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>Fast-failed call count</strong> — Calls rejected immediately while the breaker is open — the load shed off the downstream, and the log line that explains a user-facing error with no downstream request behind it.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Threshold-induced flapping</strong> — Thresholds set too tight make the breaker oscillate open and closed under marginal load, adding failures instead of preventing them.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Per-instance state divergence</strong> — Breakers are usually per-process and share no state, so a cluster trips unevenly and the aggregate load on a downstream is still uncoordinated.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Thundering herd at half-open</strong> — If half-open trials are not limited, the instant the cooldown ends every caller rushes the still-fragile dependency at once.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Never-trips on low traffic</strong> — A minimum-volume window set too high means a low-traffic endpoint never accumulates enough calls to trip, and the breaker silently does nothing.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>Cooldown that never expires</strong> — Concurrent callers each push the expiry out as they fail, so the open window is renewed faster than it elapses and the probe never fires. The first failure to open the breaker sets the deadline; the rest must read it, not rewrite it.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>Per-instance state divergence</strong> — With in-process breakers each replica must independently fail enough times to learn the dependency is down, so the fleet trips at different moments and the aggregate load on the downstream stays uncoordinated.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>Thundering herd at half-open</strong> — If half-open trials are not limited, the instant the cooldown ends every caller rushes the still-fragile dependency at once.</li>
+            <li id="production-failure-5" data-kb-polarity="failure"><strong>Never-trips on low traffic</strong> — A minimum-volume window set too high means a low-traffic endpoint never accumulates enough calls to trip, and the breaker silently does nothing.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
-            <li id="production-check-1" data-kb-polarity="check">Set the failure window and minimum request volume so low-traffic endpoints do not trip on a single error.</li>
-            <li id="production-check-2" data-kb-polarity="check">Limit half-open trial calls to avoid a thundering herd when the cooldown ends.</li>
-            <li id="production-check-3" data-kb-polarity="check">Export breaker state and its transitions as metrics with alerts.</li>
-            <li id="production-check-4" data-kb-polarity="check">Define a fallback for the open state rather than returning a bare error.</li>
-            <li id="production-check-5" data-kb-polarity="check">Pair with a timeout so slow calls actually register as failures.</li>
+            <li id="production-check-1" data-kb-polarity="check">Set the failure window and minimum request volume so low-traffic endpoints do not trip on a single error</li>
+            <li id="production-check-2" data-kb-polarity="check">The open-state deadline is set once per trip and not extended by subsequent failures</li>
+            <li id="production-check-3" data-kb-polarity="check">Limit half-open trial calls to avoid a thundering herd when the cooldown ends</li>
+            <li id="production-check-4" data-kb-polarity="check">Export breaker state and its transitions as metrics, with an alert and a log line naming the rejected calls</li>
+            <li id="production-check-5" data-kb-polarity="check">Define a fallback for the open state rather than returning a bare error</li>
+            <li id="production-check-6" data-kb-polarity="check">Operators can force a breaker open or closed without a deploy</li>
+            <li id="production-check-7" data-kb-polarity="check">Pair with a timeout so slow calls actually register as failures</li>
           </ul>
         </div>
       </div>

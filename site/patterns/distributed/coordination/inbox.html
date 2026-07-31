@@ -71,12 +71,24 @@
       "name": "Persona Identification & Sanction Check",
       "kb:note": "a KYC flow deduping vendor callbacks on the sender's request id in the same transaction as the effect, closing the duplicate-that-arrives-first window"
     }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/consistency-and-replication.html#consistency-and-replication",
+      "name": "Consistency & Replication",
+      "kb:role": "Make the receipt and the write atomic"
+    },
+    {
+      "@id": "../../../themes/multi-step-processes.html#multi-step-processes",
+      "name": "Multi-Step Processes",
+      "kb:role": "Apply a received step exactly once"
+    }
   ]
 }
   </script>
 </head>
 <body class="doc">
-  <main class="doc-wrap" data-kb-id="inbox" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Persists a received message and applies its effects in one local transaction, then acknowledges safely" data-kb-order="68" data-kb-aliases="[&quot;received event log&quot;,&quot;inbound outbox&quot;,&quot;transactional inbox&quot;]" data-kb-tags="[&quot;messaging&quot;,&quot;consistency&quot;,&quot;buffering&quot;,&quot;decoupling&quot;]" data-kb-solves="[&quot;I received a message but my database commit rolled back and I cannot tell if I already processed it&quot;,&quot;a message arrived twice and both times updated my state so now I have duplicate orders&quot;,&quot;my service crashed mid-process and the message got redelivered but I have no way to know what I already applied&quot;,&quot;the broker confirmed delivery but my write failed and now I have lost or orphaned messages&quot;,&quot;I need the receipt and the write to happen together but they are two different systems&quot;]" data-kb-favourite="true">
+  <main class="doc-wrap" data-kb-id="inbox" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Persists a received message and applies its effects in one local transaction, then acknowledges safely" data-kb-order="68" data-kb-aliases="[&quot;idempotent receiver&quot;,&quot;transactional inbox&quot;,&quot;received event log&quot;,&quot;inbound outbox&quot;]" data-kb-tags="[&quot;messaging&quot;,&quot;consistency&quot;,&quot;buffering&quot;,&quot;decoupling&quot;]" data-kb-solves="[&quot;I received a message but my database commit rolled back and I cannot tell if I already processed it&quot;,&quot;a message arrived twice and both times updated my state so now I have duplicate orders&quot;,&quot;my service crashed mid-process and the message got redelivered but I have no way to know what I already applied&quot;,&quot;the broker confirmed delivery but my write failed and now I have lost or orphaned messages&quot;,&quot;I need the receipt and the write to happen together but they are two different systems&quot;]" data-kb-favourite="true">
 
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="../../../index.html">Map</a>
@@ -116,7 +128,7 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>When a message arrives, record that you received it and do the work it asks for in one single save, then tell the sender it landed. Like signing for a parcel only once it is actually inside the house: if you collapse on the doorstep nobody signed, so the courier brings it again, and your own note tells you whether it is a copy you already handled.</p>
+          <p>A message arrives, and you have two things to do that can fail separately: the work it asks for, and the note that says you have handled it. Record the note without the work and the message is gone but nothing happened; do the work without the note and the sender sends it again, so it happens twice. So do both in one single save, and only then tell the sender it landed — like signing for a parcel once it is actually inside the house, not on the doorstep.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
@@ -124,7 +136,7 @@
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the receive side has a dual-write to close and the sender promises only at-least-once — its real value is that arrival order stops mattering: whichever copy commits first wins, the loser rolls back whole. The bill: this is deduplication, not exactly-once, so every handler carries an idempotency contract you must test with the duplicate staged; the key must be the sender's, because one minted at publish time cannot catch a duplicate racing ahead of the first write; and you inherit a growing table whose cleanup lag surfaces as a slow poll long before it surfaces as disk.</p>
+          <p>Choose it when the receive side has a dual-write to close and the sender promises only at-least-once — its real value is that arrival order stops mattering: whichever copy commits first wins, the loser rolls back whole. A broker's own deduplication window narrows the job without removing it, because it drops a resend of the same message, not a redelivery after your process died between applying the effect and acknowledging. The bill: this is deduplication, not exactly-once, so every handler carries an idempotency contract you must test with the duplicate staged; the key must be the sender's, because one minted at publish time cannot catch a duplicate racing ahead of the first write; and you inherit a growing table whose cleanup lag surfaces as a slow poll long before it surfaces as disk.</p>
         </div>
       </div>
     </section>
@@ -166,6 +178,8 @@ sequenceDiagram
         <dd>Each aggregate (domain object) gets its own inbox table instead of a shared one. Ordering guarantees stay scoped to one aggregate's queue, and hot tables don't block each other.</dd>
         <dt id="variations-item-4">CDC (Change Data Capture)</dt>
         <dd>A tool like Debezium tails the database's write-ahead log and turns each inbox insert into a message to a processing topic or trigger, eliminating the processing poll.</dd>
+        <dt id="variations-item-5">Broker-side deduplication</dt>
+        <dd>Some brokers drop the duplicate for you inside a window — SQS FIFO queues deduplicate on a message deduplication id over a five-minute interval. That covers a publisher that retried its send, but not a redelivery hours later and not a crash between applying the effect and acknowledging, so it narrows the receiver's job without removing it.</dd>
       </dl>
     </section>
 
@@ -267,6 +281,7 @@ async function cleanupInbox(db: Db, retentionDays: number) {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="masstransit"><strong>MassTransit</strong><span>The .NET messaging library ships the inbox as part of its transactional outbox: one AddEntityFrameworkOutbox call installs both sides, and received MessageIds land in an InboxState table so a message the broker redelivers inside the duplicate-detection window is recognised as already handled instead of being run again.</span></div>
+        <div class="wild-item" data-kb-example="sqs-fifo"><strong>Amazon SQS FIFO queues</strong><span>Deduplication moved to the broker rather than the receiver: a send is dropped if the same message deduplication id arrives within the five-minute deduplication interval, supplied explicitly or derived by SQS as a SHA-256 hash of the message body. It covers a publisher that retried its send; it does not cover a redelivery after the receiver died between applying the effect and acknowledging, which is what the inbox table exists for.</span></div>
         <div class="wild-item" data-kb-example="temporal"><strong>Temporal</strong><span>The workflow engine records an activity result exactly once in the workflow event history and retries the activity when a worker fails — but execution itself is at-least-once, and Temporal advises writing activities to be idempotent rather than promising any deduplication of runs.</span></div>
       </div>
     </section>
@@ -371,6 +386,7 @@ flowchart LR
       <h2 class="doc-h" id="h-flu">Where it shows up</h2>
       <div class="fluency-list">
         <div class="fluency-item" data-kb-theme="consistency-and-replication"><a href="../../../themes/consistency-and-replication.html">Consistency &amp; Replication</a><span>Make the receipt and the write atomic</span></div>
+        <div class="fluency-item" data-kb-theme="multi-step-processes"><a href="../../../themes/multi-step-processes.html">Multi-Step Processes</a><span>Apply a received step exactly once</span></div>
       </div>
     </section>
 
