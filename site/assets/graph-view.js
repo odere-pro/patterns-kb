@@ -2,7 +2,9 @@
  *
  * Reads window.KB_GRAPH (assets/graphdata.js — loaded as a script because fetch() is
  * blocked on file://), window.KB_CATALOG (tags/aliases for metadata queries),
- * window.KB_MATCHES (the hub's lexical scorer, from search.js) and the vendored d3.
+ * window.KB_MATCHES (the hub's lexical scorer, from search.js), the vendored d3, and
+ * window.KB_GRAPH_CORE (assets/graph-core.js — the pure, unit-tested half: edge dedupe
+ * and orientation, the query language, settings migration, the visibility pass).
  *
  * Obsidian-style: the force simulation stays LIVE — dragging tugs neighbours along,
  * and the Forces sliders retune the layout in real time. The settings panel filters
@@ -18,28 +20,32 @@
 (function () {
   "use strict";
   var DATA = window.KB_GRAPH;
-  if (!DATA || !window.d3 || !document.getElementById("kb-graph")) return;
+  var core = window.KB_GRAPH_CORE;
+  if (!DATA || !core || !window.d3 || !document.getElementById("kb-graph")) return;
   var d3 = window.d3;
 
   var PAGE_PREFIX = "../";        // graph.html lives in site/map/
   var ZOOM_EXTENT = [0.25, 4];
   var AMBIENT = 0.01;             // alphaTarget while idle: gentle drift, never asleep
-  var PALETTE_SIZE = 8;           // grp-1..grp-8 color classes in graph.css
+  var PALETTE_SIZE = core.PALETTE_SIZE;   // grp-1..grp-8 color classes in graph.css
   var LS_KEY = "kb-graph-settings";
+  var clamp = core.clamp;
 
   /* ---------------- model prep ---------------- */
   var REL = DATA.relationTypes;
   // Same canonicalization as build-graph-page.mjs: a pair collapses onto its
   // sorted-first verb; the fam-* classes in graph.css use the same ids.
-  function familyOf(type) {
-    var def = REL[type];
-    return def.symmetric ? type : [type, def.inverse].sort()[0];
-  }
+  function familyOf(type) { return core.familyOf(REL, type); }
   var DEMO_FAMILY = familyOf("demonstrates");
 
-  var nodes = DATA.nodes.map(function (n) { return Object.assign({}, n); });
-  var byId = {};
-  nodes.forEach(function (n) { byId[n.id] = n; });
+  // Nodes copied, relations deduped to one drawable edge per (pair, family) and
+  // oriented along the canonical verb — see graph-core.js.
+  var model = core.buildGraph(DATA);
+  var nodes = model.nodes;
+  var byId = model.byId;
+  var edges = model.edges;
+  var neighbors = model.neighbors;   // id -> {id: 1} across every family (ego-highlight)
+  var degree = model.degree;
 
   // Tags and aliases live in the catalog (the hub's search index, already loaded on
   // this page) — join them by id once instead of duplicating them into graphdata.
@@ -52,71 +58,19 @@
   });
   function metaOf(id) { return meta[id] || { tags: [], aliases: [] }; }
 
-  /* Directed relations dedupe to one drawable edge per (pair, family). Directional
-   * families are ORIENTED along their canonical verb — "a generalizes b" always draws
-   * a → b whichever page declared it — so the arrows toggle can mean something. */
-  var edges = [];
-  var neighbors = {};   // id -> {id: 1} across every family (ego-highlight)
-  (function () {
-    var seen = {};
-    nodes.forEach(function (n) {
-      (n.relations || []).forEach(function (r) {
-        if (!byId[r.to] || !REL[r.type]) return;
-        (neighbors[n.id] || (neighbors[n.id] = {}))[r.to] = 1;
-        var fam = familyOf(r.type);
-        var key = (n.id < r.to ? n.id + "|" + r.to : r.to + "|" + n.id) + "#" + fam;
-        if (seen[key]) return;
-        seen[key] = true;
-        var symmetric = REL[r.type].symmetric;
-        var src = n.id, tgt = r.to;
-        if (!symmetric && r.type !== fam) { src = r.to; tgt = n.id; }
-        edges.push({ source: src, target: tgt, family: fam, dir: symmetric ? 0 : 1 });
-      });
-    });
-  })();
-
-  var degree = {};
-  edges.forEach(function (e) {
-    degree[e.source] = (degree[e.source] || 0) + 1;
-    degree[e.target] = (degree[e.target] || 0) + 1;
-  });
   function radius(d) { return Math.min(15, 4 + 1.9 * Math.sqrt(degree[d.id] || 1)); }
 
   function esc(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
       .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
-  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
   /* ---------------- settings (persisted) ---------------- */
-  function defaults() {
-    var families = {};
-    families[DEMO_FAMILY] = false;   // 323 of 638 edges — the main hairball source
-    return {
-      v: 1,
-      filters: { kinds: { pattern: 1, hazard: 1, theme: 1, principle: 1, design: 1 }, bands: {}, favs: false, orphans: false },
-      families: families,            // family -> false when hidden; absent means visible
-      groups: [],                    // [{q, color}] — first match wins, color 1..8
-      display: { arrows: false, labelZoom: 1.4, nodeScale: 1, edgeScale: 1 },
-      forces: { center: 0.05, repel: 140, link: 0.5, dist: 80 },
-    };
-  }
-  var settings = defaults();
-  (function load() {
+  function defaults() { return core.defaultSettings(DEMO_FAMILY); }
+  var settings = (function load() {
     var raw = null;
     try { raw = localStorage.getItem(LS_KEY); } catch (e) { /* storage denied */ }
-    if (!raw) return;
-    var s = null;
-    try { s = JSON.parse(raw); } catch (e) { /* corrupt — fall back to defaults */ }
-    if (!s || s.v !== 1) return;
-    // Merge section by section so a missing key never leaves a hole.
-    ["filters", "families", "display", "forces"].forEach(function (k) {
-      if (s[k] && typeof s[k] === "object") settings[k] = Object.assign({}, settings[k], s[k]);
-    });
-    if (Array.isArray(s.groups)) {
-      settings.groups = s.groups.filter(function (g) { return g && typeof g.q === "string"; })
-        .map(function (g) { return { q: g.q, color: clamp(g.color | 0, 1, PALETTE_SIZE) }; });
-    }
+    return core.loadSettings(raw, DEMO_FAMILY);
   })();
   var saveTimer = null;
   function save() {
@@ -134,57 +88,15 @@
   var selectedId = null;    // ego highlight + pinned tooltip + #n= deep link
 
   /* ---------------- query language ----------------
-   * AND of space-separated terms; "-" negates a term. Operators: tag:x (substring of
-   * any tag), kind:x / band:x (exact), fav:true|false. Bare words form one phrase
-   * matched by substring against id/name/aliases OR by the hub scorer (KB_MATCHES) —
-   * so both "circuit" and "one slow dependency blocks my threads" work. An unknown
-   * op: prefix is treated as plain text. */
-  function textMatch(n, s) {
-    if (n.id.indexOf(s) >= 0) return true;
-    if (n.name.toLowerCase().indexOf(s) >= 0) return true;
-    var al = metaOf(n.id).aliases;
-    for (var i = 0; i < al.length; i++) if (al[i].indexOf(s) >= 0) return true;
-    return false;
-  }
+   * The grammar lives in graph-core.js; this binds it to the page's two data sources —
+   * the catalog join for tag:/alias matching, and the hub's lexical scorer for the
+   * free-text phrase. Returns null for an empty query; the caller decides what that
+   * means (match-all as a filter, match-nothing as a group). */
   function compileQuery(query) {
-    var s = (query || "").trim().toLowerCase();
-    if (!s) return null;   // caller decides what "no query" means
-    var preds = [];
-    var words = [];
-    s.split(/\s+/).forEach(function (t) {
-      var neg = t.charAt(0) === "-";
-      if (neg) t = t.slice(1);
-      if (!t) return;
-      var m = t.match(/^(tag|kind|band|fav):(.+)$/);
-      var f = null;
-      if (m) {
-        var v = m[2];
-        if (m[1] === "tag") f = function (n) {
-          var tags = metaOf(n.id).tags;
-          for (var i = 0; i < tags.length; i++) if (tags[i].indexOf(v) >= 0) return true;
-          return false;
-        };
-        else if (m[1] === "kind") f = function (n) { return n.kind === v; };
-        else if (m[1] === "band") f = function (n) { return n.band === v; };
-        else f = function (n) { return !!n.favourite === (v === "true"); };
-      } else if (neg) {
-        f = function (n) { return textMatch(n, t); };
-      } else {
-        words.push(t);
-        return;
-      }
-      preds.push(neg ? (function (g) { return function (n) { return !g(n); }; })(f) : f);
+    return core.compileQuery(query, {
+      metaOf: metaOf,
+      matches: window.KB_MATCHES || null,
     });
-    if (words.length) {
-      var phrase = words.join(" ");
-      var hits = window.KB_MATCHES ? (window.KB_MATCHES(phrase) || {}) : {};
-      preds.push(function (n) { return !!hits[n.id] || textMatch(n, phrase); });
-    }
-    if (!preds.length) return null;
-    return function (n) {
-      for (var i = 0; i < preds.length; i++) if (!preds[i](n)) return false;
-      return true;
-    };
   }
   function recompileGroups() {
     groupTests = settings.groups.map(function (g) {
@@ -410,29 +322,14 @@
   var st = {};   // id -> {off, dim, lit, selected}
   var lastVisSig = null;   // signature of the visible subgraph the sim currently holds
   function render() {
-    st = {};
-    nodes.forEach(function (n) {
-      var s = {};
-      if (!settings.filters.kinds[n.kind]) s.off = 1;
-      if (n.band && settings.filters.bands[n.band] === false) s.off = 1;
-      if (settings.filters.favs && !n.favourite) s.off = 1;
-      if (qTest && !qTest(n)) s.off = 1;
-      st[n.id] = s;
+    // The filter pass (kinds, bands, favourites, query, orphans) is pure — see
+    // graph-core.js — and hands back the per-node state plus the visible subgraph.
+    var vis = core.computeVisibility(nodes, edges, {
+      filters: settings.filters,
+      famHidden: famHidden,
+      qTest: qTest,
     });
-
-    /* Orphans: a node with no visible edge — family on, other endpoint on. One pass,
-     * deliberately not iterated (hiding an orphan can orphan its ex-neighbour; the
-     * cascade would be unpredictable while filtering). */
-    if (settings.filters.orphans) {
-      var hasEdge = {};
-      edges.forEach(function (e) {
-        if (famHidden(e.family)) return;
-        if (st[e.source.id].off || st[e.target.id].off) return;
-        hasEdge[e.source.id] = 1;
-        hasEdge[e.target.id] = 1;
-      });
-      nodes.forEach(function (n) { if (!st[n.id].off && !hasEdge[n.id]) st[n.id].off = 1; });
-    }
+    st = vis.st;
 
     /* Rebalance on every filter change, like Obsidian: the sim only ever holds the
      * VISIBLE subgraph, so hidden nodes stop repelling and hidden(-family) edges stop
@@ -440,16 +337,11 @@
      * toggles — funnels through render(), so one signature check covers them all.
      * Selection (dim/lit) is not a filter and never perturbs the layout. Hidden nodes
      * freeze at their last position and rejoin there when a filter is cleared. */
-    var visNodes = nodes.filter(function (n) { return !st[n.id].off; });
-    var visEdges = edges.filter(function (e) {
-      return !famHidden(e.family) && !st[e.source.id].off && !st[e.target.id].off;
-    });
-    var sig = visNodes.map(function (n) { return n.id; }).join(",") + "|" + visEdges.length;
-    if (sig !== lastVisSig) {
+    if (vis.sig !== lastVisSig) {
       var firstRender = lastVisSig === null;
-      lastVisSig = sig;
-      sim.nodes(visNodes);
-      sim.force("link").links(visEdges);
+      lastVisSig = vis.sig;
+      sim.nodes(vis.visNodes);
+      sim.force("link").links(vis.visEdges);
       if (firstRender) {
         // Init: the constructor pre-settled with every edge; re-settle silently on the
         // default-visible subgraph so the first paint is already balanced.

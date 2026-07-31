@@ -88,7 +88,8 @@ site/hazards/<id>.html · site/themes/<id>.html · site/principles/<id>.html
 site/designs/<id>.html                     worked case studies (system-design & LLD katas)
 site/assets/graph.json · catalog.json · graphdata.js   DERIVED
 site/index.html · vocab.html · map/graph.html   DERIVED (graph.html = interactive graph explorer shell;
-                                                its runtime is hand-authored assets/graph-view.js + graph.css)
+                                                its runtime is hand-authored assets/graph-view.js + graph.css,
+                                                over the unit-tested assets/graph-core.js)
 scripts/kb.mjs        the reader/writer — your interface to all of it
 scripts/lib/model.mjs the taxonomy and both closed vocabularies
 ```

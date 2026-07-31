@@ -176,6 +176,7 @@ ${rankedHtml}
   <script src="../assets/graphdata.js"></script>
   <script src="../assets/search.js"></script>
   <script src="../assets/vendor/d3.min.js"></script>
+  <script src="../assets/graph-core.js"></script>
   <script src="../assets/graph-view.js"></script>
 </body>
 </html>
