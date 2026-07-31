@@ -201,7 +201,7 @@ GET /feed?cursor={cursor}&amp;limit={page_size}
     <section class="doc-section" id="architecture" aria-labelledby="h-arch" data-kb-block="architecture">
       <h2 class="doc-h" id="h-arch">How the system is built</h2>
       <div class="prose">
-        <p id="architecture-p-1">Clients hit an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> that routes, authenticates, and rate-limits. Behind it, the write and read halves of the feed are deliberately separate. A <strong>Post Service</strong> stores metadata and hands out a pre-signed URL so the client uploads media <em>directly</em> to the <a href="../patterns/distributed/routing/object-storage.html">object store</a> (S3), keeping multi-gigabyte transfers off the app servers. A <strong>Follow Service</strong> owns the (much lower-frequency) follow graph. The pivotal piece is the <strong>Feed Fan-out worker</strong>: every new post is enqueued, and the worker pushes that post's id into the precomputed feed of each follower, held in Redis as a per-user sorted set. A <strong>Feed Service</strong> then serves a read by slicing the top of that sorted set and hydrating post ids into full posts. Media is fronted by a <a href="../patterns/distributed/routing/cdn.html">CDN</a> so bytes are served from an edge near the viewer.</p>
+        <p id="architecture-p-1">Clients hit an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> that routes, authenticates, and rate-limits. Behind it, the write and read halves of the feed are deliberately separate. A <strong>Post Service</strong> stores metadata and hands out a pre-signed URL so the client uploads media <em>directly</em> to the <a href="../patterns/distributed/routing/object-storage.html">object store</a> (S3), keeping multi-gigabyte transfers off the app servers. A <strong>Follow Service</strong> owns the (much lower-frequency) follow graph. The pivotal piece is the <strong>Feed Fan-out workers</strong>: every new post is enqueued, and whichever worker claims it pushes that post's id into the precomputed feed of each follower, held in Redis as a per-user sorted set. They are interchangeable <a href="../patterns/messaging/competing-consumers.html">competing consumers</a> on one queue, so throughput is a question of how many you run. A <strong>Feed Service</strong> then serves a read by slicing the top of that sorted set and hydrating post ids into full posts. Media is fronted by a <a href="../patterns/distributed/routing/cdn.html">CDN</a> so bytes are served from an edge near the viewer.</p>
         <p id="architecture-p-2">Post metadata lives in a horizontally scalable store — DynamoDB here for its scale and tolerance of eventual consistency, though the real Instagram famously runs PostgreSQL at this scale, a reminder that "SQL doesn't scale" is folklore, not fact. Post and Follow services may even share a database: the domains are naturally coupled, and the textbook "database per service" rule is one large systems routinely break where the coupling is real.</p>
       </div>
       <figure class="diagram" id="architecture-fig-1">
@@ -211,7 +211,7 @@ flowchart TB
     Post["Post Service"]
     Feed["Feed Service"]
     Q[["Fan-out queue"]]
-    Fanout["Feed Fan-out worker"]
+    Fanout["Feed Fan-out workers"]
     DDB[("Posts DB")]
     Redis[("Redis feeds (ZSET)")]
     Media["Blob store + CDN edge · S3"]:::ext
@@ -268,7 +268,7 @@ metas += dynamo.batch_get_item(miss)                          # only the misses<
 flowchart TB
     Post["New post"] -->|"always store post_id"| DDB[("Posts DB")]
     Post -->|"author &lt; 100k followers: enqueue"| Q[["Fan-out queue"]]
-    Q -->|"deliver"| Fanout["Feed Fan-out worker"]
+    Q -->|"deliver"| Fanout["Feed Fan-out workers"]
     Fanout -->|"prepend to each follower feed"| Redis[("Redis feeds (ZSET)")]
     Feed["Feed Service"] -->|"top N precomputed"| Redis
     Feed -->|"merge celebrities' recent posts live"| DDB
