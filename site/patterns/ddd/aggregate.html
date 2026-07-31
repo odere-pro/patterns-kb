@@ -93,7 +93,7 @@
     <header class="doc-head">
       <p class="doc-kicker">Lens · Domain-Driven Design</p>
       <h1 class="doc-title">Aggregate</h1>
-      <p class="doc-essence">A cluster of associated entities and value objects, bound behind a single root and treated as one unit whenever data changes, so invariants that span the cluster are never left half-enforced.</p>
+      <p class="doc-essence">A cluster of entities and value objects bound behind one root and saved as a unit, so a rule that spans them is never left half-enforced.</p>
       <div class="doc-metarow">
         <span class="badge">DDD</span>
         <span class="badge muted">Lens</span>
@@ -107,10 +107,10 @@
     <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
-        <p id="description-p-1">An <strong>aggregate</strong> is a cluster of associated domain objects — one or more entities and value objects — that the model treats as a single unit whenever its data changes. Exactly one entity inside the cluster is the <strong>aggregate root</strong>: it's the only member that code outside the boundary is allowed to hold a reference to, and every command that touches the cluster arrives through it.</p>
-        <p id="description-p-2">The force it resolves is an <em>invariant that spans more than one object</em>. An order's total must equal the sum of its line items; an account's balance can never go negative once a withdrawal lands. If any code can reach into the line items or the ledger entries directly, no single piece of code owns keeping those rules true, and some path that touches the parts without touching the whole will eventually violate them. The aggregate closes that gap by hiding everything except the root — internal entities and value objects are only ever reached and mutated through methods the root exposes, and the root refuses any change that would break its own invariants.</p>
-        <p id="description-p-3">The boundary doubles as the unit of transaction and concurrency. Loading, saving, and locking happen one aggregate at a time: a repository fetches the whole cluster, the root's methods apply a change and check invariants in memory, and the cluster is written back atomically, usually guarded by an optimistic version on the root. Consistency between separate aggregates is deliberately left eventual, closed later by domain events or a process manager, because holding several aggregates' transactions open at once to keep them in lockstep doesn't scale.</p>
-        <p id="description-p-4">The design fails in either direction. Draw the boundary too small and invariants leak back out into services that reach across several roots by hand; draw it too large and unrelated data gets dragged into every transaction, turning each write into a lock that competes with everything else touching that root.</p>
+        <p id="description-p-1">An <strong>aggregate</strong> is a cluster of domain objects — entities and value objects — that the model treats as one unit whenever its data changes. One entity in it is the <strong>aggregate root</strong>: the only member outside code may reference, and the door every command comes through.</p>
+        <p id="description-p-2">It exists for an <em>invariant that spans more than one object</em>: an order's total must equal the sum of its lines. If any code can edit a line directly, nobody owns that rule — one path adds a line and forgets the total, another writes a total from a stale read, and a customer finds the mismatch. Hiding the internals behind the root leaves one place that can break the rule and one that checks it, at the price of reaching line items only through the order's own methods.</p>
+        <p id="description-p-3" data-kb-level="advanced">Persistence follows the boundary. A repository loads the whole cluster and writes it back as one atomic save, and a version on the root turns two concurrent writers into one success and one rejected save rather than a half-applied change. An event-sourced root swaps that stored snapshot for a fold over its past events, with periodic snapshots to bound the cost of the fold.</p>
+        <p id="description-p-4" data-kb-level="advanced">The design fails in either direction. Draw the boundary too small and invariants leak back out into services that reach across several roots by hand; draw it too large and unrelated data gets dragged into every transaction, turning each write into a lock that competes with everything else touching that root.</p>
       </div>
     </section>
 
@@ -119,15 +119,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Some rules only make sense across several pieces of data at once — an order's total has to match the items on it. So wrap the whole group behind one object and make every change go through it. Nothing outside may reach in and edit a part directly, so there is exactly one place that can break the rule, and one place that checks it.</p>
+          <p>Picture a paper order form: the total at the bottom must match the lines above it. Let three clerks scribble on separate lines and the total drifts until a customer complains. So one person holds the form — every change is asked of them, and they re-add the total before handing it back. One object owns the data and refuses any edit that leaves the numbers disagreeing.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A cluster of entities and value objects with one root entity as its only external reference; commands arrive at the root, which applies them in memory and refuses any change that would violate its invariants. The boundary doubles as the unit of transaction and concurrency — a repository loads the whole cluster and the write goes back atomically, usually guarded by an optimistic version on the root. Consistency between separate aggregates is deliberately eventual, closed afterwards by domain events or a process manager.</p>
+          <p>The rule that makes this work is one cluster per transaction. A command arrives at the root, which validates and commits alone; anything it needs to change in another cluster is deferred rather than joined in. So clusters hold each other by identity, never by object reference, and agreement across a boundary is eventual by construction — a domain event carries the change and a second transaction applies it.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Draw the boundary from the invariants that must hold inside one transaction, not from how the data happens to be related — that single decision sets your lock granularity and your write throughput, and its value is giving a rule that spans several objects exactly one owner. It fails in both directions: too small and the rules leak back into services that stitch several roots together by hand; too large and every command drags unrelated data into the same lock, so a hot root serializes work that never conflicted. Redrawing it later touches persistence, concurrency and every consumer at once.</p>
+          <p>Choose the boundary from the invariants that must hold inside a single transaction and let everything else be eventual, because that one choice sets your lock granularity. A boundary drawn around a contended field serializes commands that never conflicted; pay for it by splitting that field into its own root, or by budgeting conflict retries. Eventual agreement between roots buys the throughput and costs machinery: an outbox to publish reliably, a process manager to close the gap, and consumers that tolerate a window where the two sides disagree. Reference neighbours by identity from the first line, so redrawing a boundary later is a change to one root's methods rather than to every consumer's object graph.</p>
         </div>
       </div>
     </section>
@@ -151,12 +151,12 @@ flowchart TB
       <dl class="variations">
         <dt id="variations-item-1">Reference by identity</dt>
         <dd>An aggregate holds other aggregates by ID, never by object reference, so each cluster stays small and independently transactional.</dd>
-        <dt id="variations-item-2"><a href="./domain-event.html">Domain events on commit</a></dt>
-        <dd>The root records events internally as it mutates; they're published only after the transaction that saved it has actually succeeded.</dd>
-        <dt id="variations-item-3">Event-sourced aggregate</dt>
-        <dd>State is derived by folding a stored stream of past events rather than loaded as a snapshot; a command only ever produces new events, never a direct field write.</dd>
-        <dt id="variations-item-4">Aggregate factory</dt>
-        <dd>Multi-step construction — assembling an Order from a cart, say — is delegated to a dedicated factory, so the root's constructor stays a simple, valid-by-construction call.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced"><a href="./domain-event.html">Domain events on commit</a></dt>
+        <dd data-kb-level="advanced">The root records events internally as it mutates; they're published only after the transaction that saved it has actually succeeded.</dd>
+        <dt id="variations-item-3" data-kb-level="expert">Event-sourced aggregate</dt>
+        <dd data-kb-level="expert">State is derived by folding a stored stream of past events rather than loaded as a snapshot; a command only ever produces new events, never a direct field write.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Aggregate factory</dt>
+        <dd data-kb-level="advanced">Multi-step construction — assembling an Order from a cart, say — is delegated to a dedicated factory, so the root's constructor stays a simple, valid-by-construction call.</dd>
       </dl>
     </section>
 
@@ -168,8 +168,8 @@ flowchart TB
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Invariants spanning multiple objects are enforced in one place, not scattered across services.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">A clear transaction boundary — one aggregate is one atomic load and save, no partial updates.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Encapsulation: internal entities are hidden, so their rules can't be bypassed from outside.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Concurrency control stays tractable — version or lock the root, not a web of related tables.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Encapsulation: internal entities are hidden, so their rules can't be bypassed from outside.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Concurrency control stays tractable — version or lock the root, not a web of related tables.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -178,7 +178,7 @@ flowchart TB
             <li id="tradeoffs-con-1" data-kb-polarity="con">An aggregate that grows too large drags unrelated data into every transaction and lock.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Cross-aggregate consistency becomes eventual, which needs real machinery — events, sagas — to close.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">Choosing the right boundary is genuinely hard, and a wrong one is expensive to redraw later.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Loading a large aggregate can pull in far more data than a single command actually needs.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Loading a large aggregate can pull in far more data than a single command actually needs.</li>
           </ul>
         </div>
       </div>
@@ -191,20 +191,20 @@ flowchart TB
           <h3>Reach for it when</h3>
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Several objects share an invariant that must never be violated, like a total matching its parts.</li>
-            <li id="usage-when-2" data-kb-polarity="when">You need a clear transaction boundary for saving and loading a related cluster of data.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The domain has a natural grouping that only makes sense together, like an order and its line items.</li>
+            <li id="usage-when-2" data-kb-polarity="when" data-kb-level="advanced">You need a clear transaction boundary for saving and loading a related cluster of data.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The domain has a natural grouping that only makes sense together, like an order and its line items.</li>
           </ul>
         </div>
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
-            <li id="usage-avoid-1" data-kb-polarity="avoid">The objects share no real invariant — plain <a href="./entity.html">Entities</a> or <a href="./value-object.html">Value Objects</a> are enough on their own.</li>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The objects share no real invariant — plain <a href="./entity.html">Entities</a> or <a href="./value-object.html">Value Objects</a> suffice.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="expert">You're tempted to widen the boundary "just in case" — that's exactly how aggregates balloon and lock contention appears.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The true consistency requirement is eventual, not immediate — reference the other side by ID and let a <a href="./domain-event.html">Domain Event</a> synchronize it later.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The true consistency requirement is eventual, not immediate — reference the other side by ID and let a <a href="./domain-event.html">Domain Event</a> synchronize it later.</li>
           </ul>
         </div>
       </div>
-      <p class="smell">Prevents the smell of an <a href="../../hazards/anemic-domain-model.html">Anemic Domain Model</a>, where entities are reduced to data bags and the invariants meant to live on the aggregate root leak out into service-layer code instead.</p>
+      <p class="smell">Prevents the smell of an <a href="../../hazards/anemic-domain-model.html">Anemic Domain Model</a>, where the rules that belong on the root leak into service code.</p>
     </section>
 
     <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
@@ -213,17 +213,10 @@ flowchart TB
         <summary>TypeScript — an Order aggregate root</summary>
 <pre><code class="language-typescript" data-kb-lang="typescript">class Order { // aggregate root
   private readonly items: LineItem[] = [];
-  private status: "draft" | "placed" = "draft";
 
   addItem(sku: string, quantity: number, unitPrice: Money): void {
-    if (this.status !== "draft") throw new Error("order already placed");
     if (quantity &lt;= 0) throw new Error("quantity must be positive");
     this.items.push(new LineItem(sku, quantity, unitPrice));
-  }
-
-  place(): void {
-    if (this.items.length === 0) throw new Error("cannot place an empty order");
-    this.status = "placed";
   }
 
   get total(): Money {
@@ -231,14 +224,9 @@ flowchart TB
   }
 }
 
-// LineItem is reachable only through Order — never constructed
-// or mutated directly by code outside the aggregate.
+// LineItem is reachable only through Order.
 class LineItem {
-  constructor(
-    readonly sku: string,
-    readonly quantity: number,
-    readonly unitPrice: Money,
-  ) {}
+  constructor(readonly sku: string, readonly quantity: number, readonly unitPrice: Money) {}
   get subtotal(): Money { return this.unitPrice.times(this.quantity); }
 }</code></pre>
       </details>
@@ -247,7 +235,7 @@ class LineItem {
     <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
-        <div class="wild-item" data-kb-example="axon-framework" id="wild-axon-framework"><strong>Axon Framework</strong><span>Java/JVM framework where an @Aggregate class is the sole command-handling entry point into its cluster: @AggregateIdentifier marks the root identity, @AggregateMember the entities inside the boundary, commands route to one loaded instance, and its event stream can be snapshotted to bound replay cost.</span></div>
+        <div class="wild-item" data-kb-example="axon-framework" id="wild-axon-framework"><strong>Axon Framework</strong><span>A Java class annotated @Aggregate is the only entry point for commands into its cluster; @AggregateMember marks the entities inside the boundary.</span></div>
       </div>
     </section>
 
@@ -257,35 +245,35 @@ class LineItem {
         <div class="prod-group prod-knobs">
           <h3>Tuning knobs</h3>
           <ul>
-            <li id="production-knob-1" data-kb-polarity="knob"><strong>Aggregate boundary size</strong> — How many entities and value objects fall inside one root. The most consequential dial: a wider boundary drags more data into every load and lock, a narrower one pushes invariants out into service code.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Optimistic concurrency version</strong> — A version field or timestamp on the root that each write checks against the loaded value, rejecting the save on mismatch. The alternative, pessimistic locks held across the transaction, trades throughput for fewer conflicts.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Conflict retry policy</strong> — How many times a command is replayed when an optimistic version check fails before the failure surfaces to the caller.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Snapshot frequency</strong> — For an event-sourced root, how many events accumulate before a state snapshot is written, so a load does not re-fold the entire history every time.</li>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Aggregate boundary size</strong> — How much sits inside one root. Wider locks more on every command; narrower pushes invariants out into service code.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Optimistic concurrency version</strong> — A version field or timestamp on the root that each write checks against the loaded value, rejecting the save on mismatch. The alternative, pessimistic locks held across the transaction, trades throughput for fewer conflicts.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Conflict retry policy</strong> — How many times a command is replayed when an optimistic version check fails before the failure surfaces to the caller.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Snapshot frequency</strong> — For an event-sourced root, how many events accumulate before a state snapshot is written, so a load does not re-fold the entire history every time.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
-            <li id="production-signal-1" data-kb-polarity="signal"><strong>Version-conflict rate</strong> — How often saves are rejected because the root version moved underneath them. A climbing rate flags a hot aggregate or a boundary drawn too coarse.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Aggregate hydration cost</strong> — Rows or bytes pulled to reconstruct one aggregate, and the time to do it. Growth signals a boundary that has ballooned.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Command retry count</strong> — Retries per command driven by conflict, a proxy for contention on the hottest roots.</li>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Version-conflict rate</strong> — How often a save is rejected because another writer changed the same root first. A climbing rate flags a hot root.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Aggregate hydration cost</strong> — Rows or bytes pulled to reconstruct one aggregate, and the time to do it. Growth signals a boundary that has ballooned.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="expert"><strong>Command retry count</strong> — Retries per command driven by conflict, a proxy for contention on the hottest roots.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
-            <li id="production-failure-1" data-kb-polarity="failure"><strong>Hot aggregate contention</strong> — Many concurrent commands target one root, such as a popular product stock or a shared counter. Optimistic conflicts and retries pile up until throughput collapses on that single aggregate.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Oversized aggregate</strong> — A boundary drawn too wide loads and locks unrelated data on every command, so each write competes with everything else touching the root and transactions slow.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Unbounded event replay</strong> — An event-sourced aggregate with a long history and no snapshotting re-folds thousands of events on each load, and hydration time creeps upward.</li>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Hot aggregate contention</strong> — Commands crowd onto one root — a shared counter, say — and retries pile up until throughput collapses there.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Oversized aggregate</strong> — A boundary drawn too wide loads and locks unrelated data on every command, so each write competes with everything else touching the root and transactions slow.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Unbounded event replay</strong> — An event-sourced aggregate with a long history and no snapshotting re-folds thousands of events on each load, and hydration time creeps upward.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
-            <li id="production-check-1" data-kb-polarity="check">Reference other aggregates by identity, never by object reference, so each stays independently loadable and transactional.</li>
-            <li id="production-check-2" data-kb-polarity="check">Guard the root with an optimistic version and settle the conflict-retry policy before load appears.</li>
-            <li id="production-check-3" data-kb-polarity="check">Publish domain events only after the aggregate transaction has committed, never inside it.</li>
-            <li id="production-check-4" data-kb-polarity="check">Confirm each invariant genuinely spans the cluster; if it does not, the boundary is too wide.</li>
+            <li id="production-check-1" data-kb-polarity="check">Reference other aggregates by identity, never by object reference.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Guard the root with an optimistic version and settle the conflict-retry policy before load appears.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Publish domain events only after the aggregate transaction has committed, never inside it.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Confirm each invariant genuinely spans the cluster; if it does not, the boundary is too wide.</li>
           </ul>
         </div>
       </div>
