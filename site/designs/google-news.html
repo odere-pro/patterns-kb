@@ -108,15 +108,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Gather headlines from thousands of publishers, each with its own feed format and its own rhythm, and show hundreds of millions of readers a single scrolling list of what is new where they live. Tap a headline and you leave for the publisher's own site — none of the writing is stored here. The lopsidedness is the point: a trickle of new stories against a flood of people reading them.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Reads outrun writes by roughly a million to one, so nothing is queried at read time. A change event on ingestion pushes each article into a per-region sorted set trimmed to the newest couple of thousand, and a page read becomes one range scan of a few milliseconds. That is chosen over an expiring cache, whose expiry on a hot region stampedes the database. Pagination rides on time-ordered ids as the cursor rather than an offset, which shifts under the reader as articles are inserted above.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The signal is noticing that news consumption is structurally regional, which is what makes ten million concurrent readers tractable: deploy per region and a spike in one leaves the others at baseline. What not to build is sharding — a region's working set is a couple of thousand articles, a few megabytes, so the axis is pure read throughput and the answer is roughly a hundred read replicas. Freshness is not wholly in your hands either: publisher push buys seconds but needs their cooperation, with tiered polling as the backstop. Categories can then be filtered in memory out of that one regional set rather than cached per pair. The bill is a pipeline that must stay operable and rebuildable when a worker dies.</p>
         </div>
@@ -200,7 +200,7 @@ GET /article/{id}   &rarr; 302 Found  Location: https://publisher.example/story<
         <p id="architecture-p-2">The <strong>Data Collection Service</strong> polls each publisher's RSS feed (a lightweight XML-over-HTTP syndication format), extracts and normalises each article, downloads its lead image, and writes two places: article metadata to the <strong>article store</strong>, and a resized thumbnail to <a href="../patterns/distributed/routing/object-storage.html">object storage</a> — the system keeps its <em>own</em> copy rather than hotlinking, so a slow or vanished publisher image never breaks the feed UI. Every write to the store emits a <a href="../patterns/distributed/coordination/change-data-capture.html">change-data-capture</a> event; <strong>Feed Generation Workers</strong> consume those events and splice the new article into each affected region's feed. That regional feed is the heart of the design — a Redis sorted set, ordered by publish time, holding just the recent articles a region needs. It is a <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of the store, maintained incrementally, so a read never has to assemble it.</p>
         <p id="architecture-p-3">On the serving side, the client hits an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> (routing, auth, rate limiting, validation), which forwards to the <strong>Feed Service</strong>. That service does almost nothing: one <code>ZREVRANGE</code> against the region's sorted set and it has the page. Thumbnails are served straight from a <a href="../patterns/distributed/routing/cdn.html">CDN</a> in front of object storage, never touching the application tier.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart TB
     Pub["Publishers · RSS feeds"]:::ext
@@ -275,7 +275,7 @@ ZREVRANGEBYSCORE  "feed:US"  (cursor_id  -inf  LIMIT 0 20</code></pre>
           <li id="deepdives-li-13"><strong>Cache tier.</strong> This is the real scaling target, since it now absorbs essentially all read traffic. A region holds only ~2,000 articles, so a single master fits the whole dataset — no sharding needed. The axis is pure read throughput, solved by <a href="../patterns/distributed/coordination/replication.html">replication</a>: writes hit the master, reads fan out across a fleet of read replicas (~100 in a peak region), and Redis Sentinel promotes a replica if the master dies. Replication lag stays under ~200&nbsp;ms — invisible on a news feed.</li>
           <li id="deepdives-li-14"><strong>Database.</strong> Never in the read path once the cache is precomputed, so it never sees 10M concurrent reads at all — the cache shields it entirely.</li>
         </ul>
-        <figure class="diagram">
+        <figure class="diagram" id="deepdives-fig-1">
           <pre class="mermaid">
 flowchart TB
     Workers["Feed Generation Workers"] -->|"ZADD + trim, writes only"| Master[("Redis master · region feed")]

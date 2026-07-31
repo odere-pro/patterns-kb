@@ -108,15 +108,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>You type a question and an answer appears a few words at a time; old conversations can be reopened and carried on. The system does not build the model that writes those answers — it calls one. Two facts decide everything else: the specialised chips that generate text are scarce and hugely expensive, and a blank screen right after you press enter feels broken, even when the whole answer fairly takes half a minute.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Three pivotal decisions. Transport is server-sent events over ordinary HTTP rather than polling, which at this concurrency generates hundreds of thousands of near-empty requests a second, or full-duplex sockets, which overpay for one-way traffic. Generation is decoupled from the connection by an append-only per-run log, so a client landing on a different instance replays exactly the deltas it missed instead of being pinned to one box. Work reaches the accelerators through a bounded queue of pull-based workers. The dominant axis is accelerator utilisation under bursty load.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The signal is naming the scarce resource and designing everything around it: fleet utilisation, not request rate, is the number that matters, and batching many sequences through one forward pass is the biggest lever, because that pass hauls the entire weight set out of memory however many sequences ride along. What not to build is per-token durability or a client pinned to the box generating its answer — only the final message is persisted, and pinning would sever streams on every routine deploy. The interesting edges are metering token cost rather than request count for fairness, and a rolling summary that must update slowly or it invalidates the cached prefix it depends on. The bill is a budget enforced on estimates of a cost nobody knows until generation ends.</p>
         </div>
@@ -200,7 +200,7 @@ POST /chats/{chatId}/runs/{runId}/cancel   # plain HTTP side-channel
       <div class="prose">
         <p id="architecture-p-1">The naïve version is fully synchronous: the <strong>Chat Service</strong> writes the user's message to Postgres, calls the <strong>Inference Service</strong> and blocks until the full completion returns, then writes the assistant message back. That satisfies the two functional requirements and nothing else — the client hangs for up to thirty seconds, and a GPU worker is called directly with no admission control. Two moves fix it, and both live in the deep dives. Streaming replaces the blocking call: a per-<code>runId</code> Redis Stream carries token deltas out of the worker, and any <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> Chat Service instance relays them to the browser over SSE. A <a href="../patterns/messaging/message-queue.html">queue</a> replaces the direct call: the Chat Service enqueues a generation and returns immediately, and GPU workers pull work when they have room. The one deliberate split — cheap, stateless Chat Service versus GPU-bound, expensive Inference Service — lets each scale on its own axis.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart LR
     Client["Web client"]
@@ -239,7 +239,7 @@ flowchart LR
         <p id="deepdives-p-6">The naïve "replay everything each turn" grows cost and latency turn over turn and eventually exceeds the context window. Truncation — keep the newest N turns, drop the rest — bounds the prompt with a simple <code>ORDER BY createdAt DESC LIMIT N</code>, but makes the assistant visibly forgetful, a bad look for a product whose appeal is that it remembers. The better pairing keeps memory without paying full price. <strong>Prefix caching</strong> exploits that most of the prompt (system prompt plus everything already said) is identical turn to turn: the inference server caches the model's intermediate state — the KV cache — for a stable prefix and only processes the new tail, cutting both cost and the time-to-first-token, and it pairs naturally with routing a conversation's turns back to a worker that already has its prefix warm. A <strong>rolling summary</strong> handles the hard context-window ceiling that caching can't: older history is compressed into a running summary while recent turns stay verbatim, so the prompt shape becomes system prompt → summary of old turns → last few turns → new message. The two complement each other, but the summary must update on a slower cadence, because rewriting it every turn would invalidate the prefix cache it depends on.</p>
         <p id="deepdives-p-7"><strong>Cancellation, and why a dropped tab isn't one.</strong> When a user hits stop, the client calls the plain-HTTP <code>cancel</code> side-channel; the Chat Service flips the Generation to <code>cancelled</code> and publishes a signal on a control channel keyed by <code>runId</code>, and the worker — checking between token batches — drops the sequence and reclaims the GPU immediately rather than burning compute on an abandoned answer. Crucially, closing the tab is <em>not</em> a cancel: the Redis-Stream-plus-reconnect design exists precisely so a dropped connection isn't read as termination. Generation continues in the background, and the user can reconnect or refetch the finished message from Postgres. Cancellation must be an explicit signal, never inferred from a network drop.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-1">
         <pre class="mermaid">
 sequenceDiagram
     autonumber

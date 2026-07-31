@@ -98,15 +98,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Several people type into the same document at once, in a browser, and each sees the others' letters land straight away, cursors included. The content is plain text, so the difficulty is not drawing the page but agreeing on it: keystrokes arrive from many keyboards over a network that delays and reorders them, and yet everybody has to end up looking at exactly the same text.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Convergence is the axis. Shipping whole snapshots lets one editor's change silently overwrite another's; shipping raw edits misapplies them, because a position only means anything against the state it was typed against. The chosen answer reinterprets each incoming edit against those already applied, which requires one server to fix the canonical order — so every socket for a document is pinned to a single owner chosen off a consistent hash ring. Conflict-free replicated types are the alternative, paid for in tombstones that never go away.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The signal is reading the hundred-editor cap as a gift: no single document is ever write-hot, so the scaling story is connection count and document count, not throughput — millions of held-open sockets against tens of thousands a box. What not to build is the replicated-type approach here; with a central server already required and no offline or peer-to-peer requirement, it buys only memory that grows forever. The interesting edges are running the same transform on the client, because a hundred-millisecond budget forbids waiting for the server before showing your own keystroke, and compacting the operation log the moment the last editor disconnects, so that work never inflates live tail latency. The cost is a disruptive rebalance: sockets are force-reconnected and operations migrate.</p>
         </div>
@@ -193,7 +193,7 @@ RECV { "type": "presence", … }           # cursors joining, moving, leaving</c
       <div class="prose">
         <p id="architecture-p-1">Creation is the boring half: a horizontally-scaled CRUD service behind an API gateway writes document metadata to Postgres and hands back an id. The interesting half is the <strong>Document Service</strong>. For a given document, every editor's socket lands on the <em>same</em> instance of it — that instance owns the document while it is live, holds a <code>documentId → sockets</code> map, and is the single point that decides the final order of operations. Each incoming edit is transformed against the edits already applied, appended to the operations store, and only then broadcast to the other sockets and acknowledged to its author. The operations store is Cassandra: append-only writes, partitioned by <code>documentId</code> and ordered by a server-assigned timestamp, so the log <em>is</em> the document and the text is a projection of it — the <a href="../patterns/architecture/event-sourcing.html">event-sourcing</a> shape at the heart of the design.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart TB
     Client["Editor in browser"]
@@ -235,7 +235,7 @@ flowchart TB
 
         <h3 id="deepdives-dive-3">3 · Scaling to millions of sockets</h3>
         <p id="deepdives-p-4">One Document Service instance is both a bottleneck and a single point of failure. The constraint that makes this tricky is that all sockets for a document must converge on one owner — they cannot be sprayed across the fleet by a plain load balancer. The answer is a <a href="../patterns/distributed/routing/consistent-hashing.html">consistent hash ring</a>: each server owns a range of the hash space, ZooKeeper holds the ring configuration and coordinates membership, and <code>hash(documentId)</code> picks the owner. A client opens a plain HTTP connection to any server; if that server does not own the document's hash range it replies with a redirect to the one that does; the client connects there directly, the connection upgrades to a WebSocket, and that owner loads the operations and starts serving — a <a href="../patterns/distributed/routing/sticky-session.html">document-pinned session</a> where every collaborator on one document deterministically shares a server. Consistent hashing keeps churn small: adding or removing a server reshuffles only a slice of documents rather than all of them. The cost is that a scaling event is not free — displaced sockets must be dropped and reconnected, and the moving document's operations must migrate to the new owner, so robust reconnect logic and hotspot monitoring are part of the deal. Terminating the sockets at the edge and exposing a plain internal API keeps the rest of the system from having to know about connections at all.</p>
-        <figure class="diagram">
+        <figure class="diagram" id="deepdives-fig-1">
           <pre class="mermaid">
 sequenceDiagram
     autonumber

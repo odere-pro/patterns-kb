@@ -113,15 +113,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Start from a handful of web addresses, download each page, keep the readable words, collect the links you find, and repeat — walking outward across the web. The catch: there are around ten billion pages to visit and only a few days to do it, so it has to run on many machines at once, pick up cleanly after every failed download, and never pound any one site hard enough to be shut out.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Splitting fetch from parse is the pivotal move: the download is by far the flakiest step, so it becomes its own retryable stage and the message carries only a row id while the bytes sit in blob storage. Retry and crash recovery then come from a queue's visibility timeout rather than in-memory timers or a hand-rolled retry topic, with a dead-letter queue capping failures. Politeness needs an atomic per-domain claim, because several fetchers reading the same last-crawl time is check-then-act. The dominant axis is sustained throughput under per-host restraint.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The signal is doing the arithmetic and then distrusting it: twenty-three thousand pages a second sustained for five days, about eight network-optimised machines once you assume real utilisation near thirty percent — assumption-laden reasoning a real deployment would load-test. The surprise is that DNS, not bandwidth, becomes the bottleneck across millions of unique domains, answered with per-fetcher caches and several resolvers. Per-domain limits do not cap aggregate throughput, because millions of domains are in flight. Watch for herds when a window resets, and traps that hold a worker forever. Content hashing avoids re-parsing duplicates; a probabilistic set trades occasionally skipping a page for tiny memory.</p>
         </div>
@@ -211,7 +211,7 @@ def extract(id):
       <div class="prose">
         <p id="architecture-p-1">The naïve shape — one crawler that resolves DNS, fetches, extracts text and extracts links in a single process — is where the design begins and immediately gets refactored, because a failure in any step throws away the whole unit of work. The built system pulls those responsibilities apart into two queue-separated stages. A pool of interchangeable <strong>URL Fetchers</strong> pull URLs off the frontier, download the HTML and drop it in blob storage; a pool of <strong>Parser Workers</strong> read that HTML back, extract the text, and feed newly discovered links to the frontier. Because every worker in a pool is stateless and pulls from a shared queue, they are <a href="../patterns/messaging/competing-consumers.html">competing consumers</a> — add machines to add throughput, and a dead worker just leaves its message for the next one. The frontier and the extraction hand-off are managed queues (SQS is the choice, argued below); the raw HTML and extracted text live in <a href="../patterns/distributed/routing/object-storage.html">object storage</a> (S3) for its durability and cost at this volume; a Metadata DB (DynamoDB, or Postgres/MySQL) tracks every URL and domain.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart TB
     Seeds["Seed URLs"] -->|"seed"| Frontier[("Frontier queue")]
@@ -248,7 +248,7 @@ flowchart TB
         <p id="deepdives-p-8">Efficiency also means not crawling the same thing twice. Two layers of deduplication: <strong>URL-level</strong> — check the Metadata DB before enqueueing and skip URLs already seen; and <strong>content-level</strong> — different URLs can serve identical bytes (<code>example.com</code> vs <code>www.example.com</code>, mirrors, syndicated pages), so hash the fetched content and check membership before the expensive parse. Either index the hash column in the Metadata DB (simple, and modern indexes handle the scale fine) or keep a <a href="../patterns/distributed/coordination/bloom-filter.html">bloom filter</a> of seen hashes — a probabilistic set that says "definitely never seen" or "probably seen," trading a small false-positive rate (occasionally skipping a page you didn't actually crawl) for tiny memory. RedisBloom's <code>BF.ADD</code>/<code>BF.EXISTS</code> is the ready-made tool, though for this case the indexed column is arguably enough.</p>
         <p id="deepdives-p-9">Finally, crawler traps — self-linking loops and link farms — can hold a fetcher on one site forever. Cap the crawl <em>depth</em> (link hops from a seed, not URL path segments) by carrying a <code>depth</code> field per URL and abandoning a branch once it passes a threshold (~15–20). Beyond the core, a few natural extensions: a <code>HEAD</code> request to read <code>Content-Length</code> and skip oversized files before downloading them; a headless browser (Puppeteer) for JavaScript-rendered pages; and, if the one-time crawl becomes a recurring one, a URL Scheduler that decides what to re-crawl from last-crawl-time and popularity instead of parsers writing links straight to the frontier.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-1">
         <pre class="mermaid">
 stateDiagram-v2
     [*] --> Queued: URL on the frontier

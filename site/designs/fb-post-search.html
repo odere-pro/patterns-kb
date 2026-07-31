@@ -108,15 +108,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Millions of people write short public messages every second. Build the search box over them: type a word, get back the messages containing it, ordered either newest first or most liked first. Two things make it hard. Nothing off the shelf may be used, so the lookup has to be built from scratch, and the pile is trillions of messages deep while new ones keep pouring in.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Scanning text is dead on arrival, so the layout is inverted: a dictionary from each keyword to the ids of the messages containing it, maintained on the way in rather than computed on the way out. Both orderings are precomputed as well — an append-ordered list for recency, a score-ordered set for likes — so no request-time sort happens at all. Phrases are answered by indexing adjacent word pairs, falling back to intersecting single-word sets. A durable log in front of ingestion absorbs the bursts.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The signal is spotting that this is a write problem wearing a search costume: a hundred thousand likes a second against ten thousand searches, and one message fanning out into as many as a thousand index appends. What not to build is an exact stored like count — persist only at milestones so a thousand increments become ten writes, label the value approximate, then over-fetch and re-rank against the authoritative service so the visible answer is still precise. Completeness is likewise bounded: capping each entry at a few thousand ids and demoting unsearched keywords to object storage shrinks petabytes to something affordable. Dropping personalisation is the quiet enabler, since identical answers for everyone are cacheable at the edge. It costs a silently truncated long tail and a slow cold tier.</p>
         </div>
@@ -197,7 +197,7 @@ GET /search?keyword=taylor&amp;sortBy=likes   # sortBy = recency | likes
       <div class="prose">
         <p id="architecture-p-1">The two paths are wired independently because they scale differently. On the <strong>write path</strong>, posts and likes are published to a Kafka log; an <strong>Ingestion service</strong> consumes it, tokenizes each post into keywords, and appends the post ID into two Redis-backed inverted indexes — a <em>creation index</em> ordered by time and a <em>likes index</em> ordered by score. On the <strong>read path</strong>, requests hit an <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> for auth and <a href="../patterns/distributed/resilience/rate-limiter.html">rate limiting</a>, fan out to a horizontally scaled, <a href="../patterns/distributed/routing/stateless-service.html">stateless</a> Search service, and read the relevant index — fronted by a cache so identical queries never re-touch it. Splitting ingestion from queries, and creation writes from like writes, is what lets each side absorb its own very different volume.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart TB
     Gateway["API gateway (auth, rate limit)"]
@@ -231,7 +231,7 @@ flowchart TB
         <p id="deepdives-p-2">Sorting at request time is the trap. A keyword like "taylor" might match tens of millions of posts; fetching every ID, looking up its timestamp and like count, and sorting in the Search service means hundreds of megabytes on the wire and millions of lookups — nowhere near the 500&nbsp;ms budget. Instead, keep the results pre-ordered by storing two indexes per keyword. The <strong>creation index</strong> is a Redis list: writes append, and because posts arrive roughly in time order, the most recent results are simply the tail. The <strong>likes index</strong> is a Redis sorted set keyed on the like count, which keeps entries ordered as scores change with comparable insert and read cost. A search reads from whichever index matches <code>sortBy</code> and takes the top slice — no query-time sort at all. The price is doubled index storage and, because likes are so frequent, a steady stream of score updates into the sorted set.</p>
         <h3 id="deepdives-dive-3">3 · Multi-word phrases</h3>
         <p id="deepdives-p-3">A query like "Taylor Swift" is two keywords that must appear together. The straightforward approach is <em>intersect and filter</em>: pull the ID set for each word, intersect them, hydrate the survivors, and keep only those where the words are actually adjacent (ruling out "my friend Taylor made a swift exit"). It works but the per-word sets are enormous, so the intersection and the false-positive filtering are both expensive. The sharper move is to index <strong>bigrams</strong> (adjacent word pairs, borrowing Lucene's "shingles"): "I saw Taylor Swift" yields "i saw", "saw taylor", "taylor swift", so the phrase query hits a single entry directly with no intersection. Bigrams are far more numerous than single words, though — the key space can jump from ~10M to 100M+ — so you only index the pairs likely to be searched, estimating that frequency with a <a href="../patterns/distributed/coordination/count-min-sketch.html">count-min sketch</a> and falling back to intersect-and-filter when no bigram entry exists.</p>
-        <figure class="diagram">
+        <figure class="diagram" id="deepdives-fig-1">
           <pre class="mermaid">
 sequenceDiagram
     autonumber

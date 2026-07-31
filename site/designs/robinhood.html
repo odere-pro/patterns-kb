@@ -108,15 +108,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Build an app that shows the live price of a share and lets people buy or sell. The twist is what it does not do: the actual trading happens on an outside marketplace you neither own nor can call cheaply. So prices must reach millions of screens instantly without everyone asking that marketplace directly, and an order's true status lives on the other side of that fence.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Two pivots. Prices: polling upstream per client multiplies identical calls, so one processor holds a single subscription per symbol and publishes ticks on a per-symbol channel; each streaming server subscribes only while it has a watcher, so demand drives the topology and cold symbols cost nothing. Orders: they partition by user, but fills arrive keyed by the exchange's own id, so a small secondary index maps that id back to the owning shard. Placement is a forward-completed saga — persist, submit, record — with a reconciler for stalls. The dominant axis is fan-out against upstream frugality.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The signal is the number nobody quotes: twenty million clients polling every fifth of a second would be a hundred million requests a second at the exchange, and collapsing that to roughly one subscription per symbol — thousands, not millions — is the whole point. Storage is a footnote at eleven terabytes a year. The edge cases carry the interview: an order accepted upstream whose local write failed, resolved by a client-supplied idempotency key that lets a sweeper query and safely re-submit, and a handful of hot symbols whose single tick must reach millions of streams. Choosing consistency here means orders can sit pending until the reconciler catches up.</p>
         </div>
@@ -208,7 +208,7 @@ GET /orders?cursor=…                         # paginated, scoped to the caller
         <p id="architecture-p-1">The two requirements have opposite shapes, so they get two independent paths. The <strong>price path</strong> is read-only and push-based: a single <strong>price processor</strong> holds the one expensive subscription to the exchange feed and mirrors every tick into a cache and out onto Redis. A <strong>symbol service</strong> holds the open SSE connections and pushes ticks to the users who care — and because those connections are long-lived, the load balancer uses <a href="../patterns/distributed/routing/sticky-session.html">sticky sessions</a> to pin each client to the server that owns its stream.</p>
         <p id="architecture-p-2">The <strong>order path</strong> is a write path where correctness beats availability. The <strong>order service</strong> owns the user-facing order lifecycle — auth, validation, state transitions, and the order store, which is partitioned by <code>userId</code>. It reaches the exchange through an <strong>order dispatch <a href="../patterns/enterprise/gateway.html">gateway</a></strong> that presents a small, fixed set of egress addresses to the market and concentrates all exchange-bound traffic through one controlled point. That split is deliberate <a href="../principles/separation-of-concerns.html">separation of concerns</a>: the order service owns what is <em>true</em> for the user, while the dispatcher owns <em>delivery</em> to the exchange — pacing, retries, backoff, and client-order-id dedup. A <strong>trade processor</strong> tails the exchange's trade feed and reflects fills back into the store.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart LR
     Client["Client app"] -->|"GET /subscribe (SSE)"| LB["Load balancer · sticky"]
@@ -223,7 +223,7 @@ flowchart LR
         </pre>
         <figcaption>The price path: how does one exchange subscription reach every subscribed client without a client ever touching the exchange?</figcaption>
       </figure>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-2">
         <pre class="mermaid">
 flowchart LR
     Client["Client app"] -->|"POST /order"| Order["Order service"]
@@ -258,7 +258,7 @@ flowchart LR
         </ul>
         <p id="deepdives-p-6">Each failure has a defined resolution. A failed initial write just fails the request. A failed submission marks the order <code>failed</code>. The dangerous case is a submission that <em>succeeded</em> but whose follow-up write did not — the exchange now holds an order the store doesn't know the id of. A background clean-up job handles it: it scans stalled <code>pending</code> orders and asks the exchange about them using the client-supplied order id it sent along, an <a href="../patterns/messaging/idempotency.html">idempotency</a> key that lets it query — and safely re-submit if needed — without ever double-placing. Cancellation mirrors the shape: flip to <code>pending_cancel</code> first, then cancel upstream, then confirm, and let the same clean-up drive any stuck cancel to completion. The clean-up reconciler is what lets the system favour consistency across a boundary it can only talk to, never control.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-1">
         <pre class="mermaid">
 sequenceDiagram
     autonumber

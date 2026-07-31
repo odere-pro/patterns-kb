@@ -108,15 +108,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Store files in the cloud, reach them from any device, share them with other people, and keep a folder identical everywhere it is installed. The catch is size. One file may run to fifty gigabytes, which over an ordinary home connection takes more than an hour to move — far longer than any connection stays open — so the comfortable assumption that a file travels in a single request simply breaks.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Two decisions dominate. The bytes never pass through the application tier: the client requests signed URLs and writes straight to object storage, so the backend handles only small metadata calls, and reads come back from the edge. And the file is split on the client into five-to-ten megabyte pieces, each independently retryable, which buys parallelism, a progress bar and resume from the first unfinished piece; splitting on the server would require the whole file to arrive first. Boundaries are content-defined, not fixed, so one inserted byte does not shift every later piece.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The signal is doing the arithmetic that kills the obvious design before drawing anything: fifty gigabytes over a hundred-megabit link is roughly an hour of held-open connection, and a managed front door caps a request body far below that anyway, so splitting the file is forced rather than chosen. What not to build is a server that touches bytes — capacity then sizes on control-plane calls, not on terabytes of traffic. The interesting edges are verifying completion against storage rather than trusting the client's own progress reports, identifying content by fingerprint so deduplication and resume detection fall out for free, and compressing before encrypting because ciphertext will not compress. Staying off the data path costs the ability to scan or transform anything in flight.</p>
         </div>
@@ -201,7 +201,7 @@ PATCH /files/{fileId}/chunks     { chunks: [ { id, status, eTag } ] }</code></pr
         <p id="architecture-p-1">The organising idea is that the app server is a <strong>control plane, not a data plane</strong>. A <strong>File Service</strong> sits behind a load balancer and <a href="../patterns/distributed/routing/api-gateway.html">API gateway</a> — which does routing, TLS termination, rate limiting, and request validation — and its only jobs are to read and write metadata, enforce share permissions, and hand the client a <em>presigned URL</em>: a signed, time-limited grant to write to (or read from) one exact <a href="../patterns/distributed/routing/object-storage.html">blob-storage</a> location. That URL is a textbook <a href="../patterns/distributed/routing/valet-key.html">valet key</a> — the service generates it locally with the storage SDK using its own credentials, so signing costs nothing and never calls storage. The client then <code>PUT</code>s the bytes <strong>straight to blob storage</strong>. When the upload lands, storage fires a completion notification back to the File Service, which flips the metadata to <code>uploaded</code> — the handshake that keeps "bytes present" and "metadata says present" from drifting apart. Because it holds no per-request state, the File Service is a <a href="../patterns/distributed/routing/stateless-service.html">stateless service</a> that scales out horizontally.</p>
         <p id="architecture-p-2">Downloads are the mirror image, but through a <a href="../patterns/distributed/routing/cdn.html">CDN</a>: the File Service issues a CDN-signed URL, the edge serves the file from the cache nearest the user, and only a cache miss reaches origin storage — the fix for a single-region blob store being slow for distant users. <strong>Sharing</strong> is the separate <code>SharedFiles</code> table keyed on <code>(userId, fileId)</code>: "my files" is an index scan on <code>uploadedBy</code>, and "files shared with me" is an index scan on the shares table — neither one has to scan every file's permission list, which is exactly what an embedded share-list would force. <strong>Sync</strong> runs a hybrid: one persistent WebSocket/SSE connection per device carries change events the server <a href="../patterns/messaging/pubsub.html">publishes</a> in real time, backed by a periodic poll of <code>/files/changes?since=</code> so a dropped socket still converges — eventual consistency by construction. Local edits are caught by the OS file-watcher (<code>FSEvents</code>, <code>FileSystemWatcher</code>), queued, and pushed; conflicts resolve last-write-wins.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart TB
     Client["Client — uploader &amp; downloader"]
@@ -246,7 +246,7 @@ flowchart TB
         <h3 id="deepdives-dive-3">3 · Keeping files secure</h3>
         <p id="deepdives-p-4">Encryption is the easy half: HTTPS in transit, and storage-side encryption at rest with a per-object key held separately from the data. Access control is the shares table acting as the ACL — a download URL is only minted for an authorized user. The subtle risk is the <strong>signed URL itself</strong>: it is a bearer token, so anyone holding a valid, unexpired one can use it, and an authorized user might leak it. The defense is a short expiry (around five minutes) so a leaked link dies quickly; higher-security setups additionally bind the URL to an IP or require it alongside an auth cookie. This is <a href="../patterns/security/least-privilege.html">least privilege</a> applied to a URL — the narrowest grant, for the shortest time. The CDN or storage validates the signature against its registered public key and checks expiry and any restriction before serving a byte.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-1">
         <pre class="mermaid">
 sequenceDiagram
     autonumber

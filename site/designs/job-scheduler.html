@@ -108,15 +108,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Build a service that runs tasks at a set time — once, later, or on a repeat like every morning at ten. The catch: a task has to fire close to its appointed moment even when millions are queued, and it must never be quietly lost if the machine running it dies halfway through. People also need to see which of their tasks ran and which failed.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Two pivots. First, split polling from firing: a single loop's poll interval caps precision, so one phase sweeps the store every few minutes for work due in the next five, and a queue with per-message delayed visibility releases each item at its exact instant — a strictly ordered log like Kafka cannot do this, a Redis sorted set can but hands you retries and replication. Second, the execution table partitioned by hour is a hot partition; a random shard suffix fans the writes. The dominant axis is timing precision under durable delivery.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The signal is knowing what not to build: at ten thousand executions a second the create path is trivial — recurring work is written once and fires many times — so a buffering queue in front of creation is over-engineering, and a five-minute lookahead window of three million small messages sits well inside a managed queue's throughput, so extra queues buy functional separation, not scale. The real pressure sits on the hourly execution partition and the worker tier. Reuse the queue's own invisibility lease for crash recovery rather than inventing database leases, which would cost roughly fifty thousand renewal writes a second; the price of at-least-once is that every task must be written idempotent.</p>
         </div>
@@ -197,7 +197,7 @@ GET /jobs?user_id={id}&amp;status={status}&amp;start_time={t0}&amp;end_time={t1}
         <p id="architecture-p-1">The store is a horizontally scalable key-value database (DynamoDB, or Cassandra for open-source shops) rather than a relational one — there are few relationships and no need for strong consistency, so easy partitioning matters more than joins. The pivotal move is to <strong>split the job definition from its execution instances</strong>, exactly as a calendar keeps a recurring event separate from each occurrence. A <strong>Jobs table</strong> holds the definition (partitioned by <code>job_id</code>: <code>user_id</code>, <code>task_id</code>, <code>schedule</code>, <code>parameters</code>). An <strong>Executions table</strong> holds one row per due run, partitioned by a <code>time_bucket</code> — the execution time rounded down to the hour, <code>(t // 3600) * 3600</code> — with the exact <code>execution_time</code> plus <code>job_id</code> as the sort key. Bucketing by hour means "what's due soon?" touches only one or two partitions instead of scanning every CRON expression in the system. When a recurring job's run completes, the scheduler writes its <em>next</em> execution row; the definition never changes.</p>
         <p id="architecture-p-2">Reads come in two shapes. Workers ask "which executions are due in the next few minutes and still <code>PENDING</code>?" — served straight off the time-bucketed partition. Users ask "how are <em>my</em> jobs doing?" — served by a global secondary index on the Executions table keyed by <code>user_id</code> then <code>execution_time</code>, so per-user listing, filtering and paging never scan the base table. Execution then runs in two phases, described in the deep dives: a low-frequency database poll feeds a <a href="../patterns/messaging/message-queue.html">delay queue</a>, and a fleet of workers pulls jobs off it as they come due.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart TB
     Client["Client"]
@@ -238,7 +238,7 @@ flowchart TB
         <p id="deepdives-p-5">At-least-once means two failure modes must both be caught. A <strong>visible failure</strong> — a bug or bad parameters — surfaces as an exception: wrap the task, log it, mark the execution <code>RETRYING</code> with its attempt count, and re-enqueue with <a href="../patterns/distributed/resilience/retry-backoff.html">exponential backoff</a> (5s, 25s, 125s) by raising <code>DelaySeconds</code> per attempt. After a bounded number of tries the row goes <code>FAILED</code> and the message lands in a <a href="../patterns/messaging/dead-letter-channel.html">dead-letter queue</a> for inspection rather than looping forever. An <strong>invisible failure</strong> — the worker itself dies before reporting anything — is harder, because nothing raises. Polling health-check endpoints does not scale to thousands of workers and invents its own single point of failure. A database lease works: a worker writes its id and an expiry onto the execution and renews it while running, so an expired lease lets another worker retry — but at 10k/sec with 5-second leases that is ~50k renewal writes a second, plus clock-skew and partition edge cases. The cleanest answer reuses the queue's own <a href="../patterns/distributed/coordination/distributed-lock.html">lease</a> semantics: an SQS message goes invisible when received and reappears automatically if the worker never deletes it, and a periodic <code>ChangeMessageVisibility</code> heartbeat extends ownership for long jobs — recovery in ~30 seconds with no extra infrastructure.</p>
         <p id="deepdives-p-6">At-least-once has a corollary the caller must honour: because a job can run more than once, task code has to be <a href="../patterns/messaging/idempotency.html">idempotent</a>. Executing blindly is dangerous — a retried money transfer moves funds twice. A deduplication table keyed by <code>job_id</code> + execution time works but adds a read-before-write and needs pruning. Best is to design the task so repetition is harmless: use an idempotency key with conditional operations ("set the counter to X", not "increment"; check a "welcome email sent" flag before sending), pushing the guarantee down into the work itself.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-1">
         <pre class="mermaid">
 stateDiagram-v2
     [*] --> Pending: execution row written

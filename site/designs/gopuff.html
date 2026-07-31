@@ -130,15 +130,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Your stock is not in one big warehouse. It sits in hundreds of small depots inside the city, so what you can buy is everything any nearby depot could bring within the hour, merged into one list. The obvious build goes wrong twice. Two people are both told they got the last carton of milk, because both saw the same count a moment before either paid, and one of them gets an apology instead of milk. And far more people look than buy, so the machine that takes orders spends its day answering window shoppers. The fix is to split the jobs. Buying goes down one careful path that hands each carton to exactly one person; looking is answered from cheap copies that may be a minute out of date, and the careful path checks again before it takes your money.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Two requirements pull the design apart, and the split runs through the middle of the data. Ordering is one transaction in one relational store: claim every requested unit with an update whose row count is the stock check, insert the order, commit — at SERIALIZABLE isolation, so a concurrent claim on the same unit aborts at commit instead of overselling it, and the client replays under an idempotency key. The rival, separate best-fit stores joined by a distributed lock, buys a store per concern and pays in lease expiry, crash recovery and lock-ordering deadlocks. Reads run the other way. A location resolves to its in-range depots through an in-memory table keyed by spatial cell and pruned by a fixed radius before any drive-time call, and the query fans out over region-partitioned inventory on read replicas behind a cache keyed by cell. Orders invalidate the cells they touch after they commit.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>Work the traffic backwards before choosing anything: 10M orders a day is ~116 writes/s, while ten page views per session at 5% conversion puts availability near 20k reads/s. That 200:1 ratio, not the data volume, buys the cache and the replicas — 30M inventory rows and 3 GB force no sharding, and region partitioning is bought for locality and blast radius instead. The sharper number is that contention is per row rather than per node: a leader at 35 orders/s is idle while a promoted item draws tens of claims a second onto one row family, which is where serializable isolation begins aborting work that is already done. Three bills follow. One writable leader per region owns both ledger and orders, so a failover stops buying there — paid by keeping browsing entirely off the leader, so the outage is partial. Aborts scale with the hot row — paid with bounded jittered replays now, and with row-lock claiming of interchangeable units once the abort rate is measurable. And a replica-served count is stale — paid at checkout, where the transaction is the only authority and a 409 is the honest answer. Under surge the ranking is fixed in advance: browsing sheds, ordering does not.</p>
         </div>
@@ -268,7 +268,7 @@ Idempotency-Key: 8f2c-…                 // a retry returns the first order
       <div class="prose">
         <p id="architecture-p-1">Requests enter at two endpoints and take routes that share almost nothing. <code>GET /availability</code> resolves the caller's location to a handful of in-range DCs, then answers from a cache backed by regional read replicas. <code>POST /orders</code> resolves the same set of DCs and then goes to the region's writable leader inside one transaction. The structural decision is that reading and ordering share the set of in-range DCs and nothing else: reads never touch the leader, so browsing load cannot slow ordering, and an order's correctness never depends on how fresh the browsing answer was.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart TB
     Client["Customer app"]
@@ -342,7 +342,7 @@ INSERT INTO order_items (order_id, inventory_id)             VALUES ...;
 COMMIT;   -- a concurrent claim on the same unit aborts here (SQLSTATE 40001):
           -- replay the whole transaction, bounded attempts, jittered backoff</code></pre>
       </details>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-1">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -377,7 +377,7 @@ sequenceDiagram
         </ul>
         <p id="deepdives-p-6">Two details decide whether this holds. The prune's errors are asymmetric: too loose and you pay for wasted drive-time calls, which shows up on an invoice; too tight and a reachable DC is silently dropped, which shows up as an item the customer never saw and nobody ever counts — so size the radius against the fastest plausible hour, not the typical one. And note which clock sets the memo's TTL: DCs move on a quarterly clock while congestion moves on a five-minute one, so the memo expires on the traffic's schedule. The general version of this locality problem is the <a href="../themes/proximity-search.html">Proximity Search</a> theme.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-2">
         <pre class="mermaid">
 flowchart TB
     Req["Availability or order request"] -->|"lat/long to cell"| Memo["Cell to DC-set memo · 5-min TTL"]
@@ -405,7 +405,7 @@ flowchart TB
         <p id="deepdives-p-8" data-kb-level="advanced">Invalidation is where this design is easiest to get subtly wrong. A sold-out item must leave the list quickly, so the Orders Service deletes the affected keys — a DC serves a few dozen cells, so one sale invalidates a few dozen entries. Do it <em>after</em> the transaction commits, never inside it: an invalidation whose transaction then rolls back has evicted a correct entry, and one sent from inside an uncommitted transaction is a <a href="../hazards/dual-write-inconsistency.html">dual write</a> pretending to be atomic. Losing one to a crash is survivable because the TTL is the floor — a <a href="../hazards/stale-cache.html">stale entry</a> for under a minute, on a path where the order transaction refuses the sale anyway.</p>
         <p id="deepdives-p-9">The residual is worth stating to customers, not just to interviewers: a listing is an invitation, not a promise. A count served from a replica behind a cache can be seconds old, so an item may appear after its last unit is claimed and the customer meets a 409 at checkout. The design prefers that to the alternative of reserving stock for browsers, which makes a full city look sold out.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-3">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -440,7 +440,7 @@ sequenceDiagram
         <p id="deepdives-p-11">Then the picker walks the aisle and the unit is not there. Shrinkage, misplacement and damage are ordinary in a building people work in, so the exception path belongs in the design rather than in an incident report: the unit is marked <code>missing</code>, an adjustment row records who observed it and when, and the line is re-sourced from another in-range DC or refunded. Re-sourcing is a second reservation under the same rules, which is why the state machine needs no special case for it.</p>
         <p id="deepdives-p-12">Adjustments let the ledger converge without stopping the building. A full recount takes a DC offline; a rolling count of a few aisles a day writes its corrections into the same adjustment ledger the pickers use, so every correction has one shape and one audit trail whatever produced it. Watch the adjustment rate per DC: a depot whose corrections climb is either losing stock or mis-scanning it, and both are answered on the floor rather than in the schema.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-4">
         <pre class="mermaid">
 stateDiagram-v2
     [*] --> Available: received at the DC

@@ -103,15 +103,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Count a torrent of viewing events and answer one question fast: which thousand items were watched most in the past hour, day, month, and ever. Tens of billions of views land every day, and yet the answer has to come back in the blink of an eye — so nothing can be tallied while someone is waiting. The whole trick is deciding what to work out in advance.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Three pivots. Reads: never rank on request — a job refreshes each window's answer on a cadence so the cache is always warm, rather than letting entries expire and stampede. Writes: shard ingest by video id and, more importantly, batch through a stream aggregator, which collapses the skewed hot keys and cuts the shard count from around seventy to under ten; the global ranking then comes from scatter-gather, exactly, since a global leader must lead its own shard. Windows are maintained as running totals per named period, paying write cost to make reads an index walk.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The signal is naming the real difficulty: seven hundred thousand writes a second is seventy times a node, but cardinality — billions of distinct keys — hurts more, while the flat table of counts is only sixty-odd gigabytes, so storage is never the problem. What not to build: native sliding windows, where a one-minute slide over a month inflates state some forty thousand times; slide only the hour and leave day and month tumbling. A lagged second consumer group can expire counts using the log's own retention. Sketching cuts hundreds of gigabytes to hundreds of megabytes, but it knows frequencies and not identities, so it needs a companion ranking structure and gives up exactness.</p>
         </div>
@@ -187,7 +187,7 @@
       <div class="prose">
         <p id="architecture-p-1">Start from the simplest thing that answers the all-time query, then let each requirement bend it. A view consumer reads events from a Kafka <code>ViewEvent</code> topic (partitioned by video ID) and increments a per-video counter in a store; a <strong>Top-K service</strong> behind a load balancer answers reads. With an index on the <code>views</code> column, <code>ORDER BY views DESC LIMIT k</code> is an O(k) walk down a sorted list. Windows add a timestamp dimension: keep a <em>separate running aggregate per window</em> so every query stays the same cheap index walk. The event rate makes a single writer impossible, so a stream processor (Flink) sits between Kafka and the store, batching and aggregating views before they land, and the store is sharded by video ID. Finally, because even the fast query cannot meet the SLA under load, a precompute job keeps the answer for each window sitting in a cache, and the Top-K service only ever reads cache.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart TB
     Kafka[("Kafka ViewEvent stream — partitioned by videoId")]
@@ -228,7 +228,7 @@ flowchart TB
         <h3 id="deepdives-dive-5">5 · Trading exactness for memory with approximation</h3>
         <p id="deepdives-p-5">If the interviewer relaxes exactness, the gaps between top videos are usually thousands of views — the ranking is about direction, not a precise tally — which opens the door to a <a href="../patterns/distributed/coordination/count-min-sketch.html">Count-Min Sketch</a>. It estimates per-item frequencies in a fixed 2D counter array via several hash functions, using hundreds of MB where an exact hash table would need hundreds of GB. The catch is that the sketch stores frequencies, not identities: it can answer "how many times has X been seen?" but cannot list its own top items. So it is paired with a sorted set — on each view, increment the sketch, read back the estimate, and upsert that item into a per-window sorted set trimmed to 1,000. Redis does this natively (<code>CMS.INCRBY</code> → <code>CMS.QUERY</code> → <code>ZADD</code>), skipping the <code>ZADD</code> for items already below the top-1,000 floor; the risk is a durability gap between updating the sketch and the sorted set. Keeping both structures inside Flink's checkpointed state removes that gap and, uniquely, supports the decrement a sliding window needs — Redis exposes no <code>CMS.DECRBY</code>.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-1">
         <pre class="mermaid">
 flowchart LR
     View["view event"] -->|"CMS.INCRBY item"| Sketch[("Count-Min Sketch — frequency estimates")]

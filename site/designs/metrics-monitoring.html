@@ -113,15 +113,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>Build the thing operators stare at during an outage. Every server constantly reports numbers — how busy the processor is, how slow requests are — and this system swallows that firehose, draws the charts people read, and pages someone when a number crosses a line. The catch: the numbers pour in relentlessly, while the questions asked of them are rare, sudden and enormous.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Three pivots. Reads: scanning raw samples for a month-long chart is hopeless, so keep pre-aggregated rollups at minute, hour and day granularity and let the planner pick the coarsest that satisfies the step, with a cache in front splitting queries along the time axis so repeated panels cost nothing. Alerts: a polling loop meets a one-minute target cheaply; only the few rules needing seconds justify evaluating the condition on the stream itself. Labels are admission-controlled against a per-metric cap. The dominant axis is write volume against read cost.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The signal is arithmetic first: five million points a second at a hundred-odd bytes is near a gigabyte a second, some eighty-six terabytes a day, which is why columnar and delta compression plus retention are load-bearing rather than tuning. Then restraint — do not stream-evaluate every rule, and do not chase sub-second alerting on a daily-grained metric. The subtle killer is cardinality: five labels across a thousand hosts multiply into tens of millions of series, so ingestion strips unknown labels and enforces a cap, with a bloom filter absorbing the per-point membership check. Never run this on the infrastructure it watches; dropped points are the price of surviving the flood.</p>
         </div>
@@ -209,7 +209,7 @@ POST /alerts/rules              # written rarely, evaluated every minute
         <p id="architecture-p-2"><strong>Store and read.</strong> The store is a purpose-built <strong>time-series database</strong>, one of the rare cases where a specialised engine is clearly right: its <a href="../patterns/distributed/coordination/lsm-tree.html">LSM-tree</a> backbone turns the incoming firehose into sequential appends, exactly what a Postgres row-per-point layout can't sustain. In front of it, a separate <strong>query service</strong> translates the PromQL-style DSL into storage scans. Splitting the read path from the write path is deliberate <a href="../patterns/architecture/cqrs.html">command-query separation</a>: writes are constant and must never drop, reads are sporadic and expensive, so each scales and tunes independently — and a cache can be bolted onto the query side without touching ingestion.</p>
         <p id="architecture-p-3"><strong>Alert and notify.</strong> Alerts are built <em>on top of</em> queries, not as a separate engine — the sub-minute budget allows it. Rules live in Postgres; an <strong>alert evaluator</strong> pulls them on a fixed interval and runs each as a scheduled query against the store (the Prometheus Alertmanager model — "alerts are just scheduled queries"). On breach it emits an event to a <strong>notification service</strong>, which is what stands between a breach and a human: it tracks each alert as firing or resolved and pages only on state transitions, and it <a href="../patterns/messaging/aggregator.html">aggregates</a> breaches arriving in a short window by label so a hundred servers tripping one threshold become one page, not a hundred.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart TB
     Agents["Server agents: batch and pre-aggregate"]
@@ -250,7 +250,7 @@ flowchart TB
         <h3 id="deepdives-dive-4">4 · Taming cardinality explosion</h3>
         <p id="deepdives-p-4">Every distinct metric-plus-label combination is a new series, and combinations multiply fast: <code>http_requests{host, region, endpoint, status, method}</code> across 1,000 hosts × 5 regions × 200 endpoints × 10 statuses × 5 methods is up to 50M series in theory. Each series costs index, metadata, and memory on the write side, and aggregating across millions of them is slow on the read side. The fix is an admission step wedged into the ingestion service, between validation and the queue, backed by two stores: a <strong>policy store</strong> (Postgres) mapping each metric to its allowed label keys and a maximum series count, and a fast <strong>series tracker</strong> (Redis) counting the unique series seen per metric. Ingestion strips non-allowlisted labels, hashes the rest into a series id, and checks whether that series is known and under cap — accepting and publishing if so, dropping and bumping a <code>dropped_metrics</code> counter if not. That counter becomes a first-class monitored signal (more monitoring of the monitor), and hitting a cap fires an alert through the existing notification path. A membership check per point at 5M/s is itself a cost, so a local <a href="../patterns/distributed/coordination/bloom-filter.html">bloom filter</a> fronts Redis as a cheap first pass: only combinations the filter says might be new pay for a round trip.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-1">
         <pre class="mermaid">
 flowchart TB
     Point["Incoming point: metric + labels"]

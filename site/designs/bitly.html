@@ -110,15 +110,15 @@
     <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>A long web address is awkward to share, so you want a short name that always leads back to it. The obvious build is to make the name out of the address and keep both in a table — and it fails twice. Two different addresses can end up with the same short name, and one visitor gets sent somewhere they were never meant to go. Then the table gets so busy answering clicks that it cannot keep up. The fix is to hand out names from a running number that never repeats itself, and to keep the popular ones in memory close to the reader, so almost no click ever reaches the database.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
           <p>Mint codes from an atomic counter, permute the number with a secret key so it carries no order, and base62-encode it — distinctness is structural, so no writer reads before it writes. Claim ids in blocks of a thousand and the shared counter is touched a few hundred times a day rather than once per link. Serve redirects from an edge cache in front of a shared cache in front of one well-indexed store: mappings are immutable, so every tier is governed by a TTL instead of an invalidation protocol. Answer 302 rather than 301, which keeps expiry enforceable at the origin at the cost of never letting the browser absorb a repeat click.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
           <p>The judgment here is what not to build: 500 GB and a handful of writes a second do not force sharding, the read rate forces caching, and the replica is bought by an availability target rather than by load. Three bills come with that. Sequential ids are walkable, paid with a keyed bijection before encoding and a seventh character that drops occupancy to 0.03%. A viral code turns one expiry into a stampede, paid with long TTLs on immutable entries, stale-while-revalidate at the edge, and one in-flight fill per code. And a single write path stops link creation during a failover, paid with a warm standby and the fact that redirects never depend on it. Multi-region is latency geography for reads — the write primary can stay where it is, because nobody minds waiting 200 ms once.</p>
         </div>
@@ -242,7 +242,7 @@ GET /{short_code}
       <div class="prose">
         <p id="architecture-p-1">Requests enter at two points and take routes with nothing in common. <code>POST /urls</code> runs once in a link's life: take the next id from the block this instance already claimed, permute it, encode it, insert one row. <code>GET /{short_code}</code> runs for years: the edge answers what it holds, the shared cache answers what it holds, and only a miss reaches the store. The structural decision is that the two paths share exactly one thing — the store — which is what makes them scale on their own clocks and lets a write outage pass without a single failed redirect.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="architecture-fig-1">
         <pre class="mermaid">
 flowchart TB
     Client["Client / browser"]
@@ -295,7 +295,7 @@ flowchart TB
         <p id="deepdives-p-4" data-kb-level="expert">The one thing that must never happen is the counter going backwards. If its node fails over to a replica that missed the last increments, the next instance claims a block that has already been spent, and every insert in that block collides. Two defences do two different jobs: persisting each increment before acknowledging it prevents the storm, and the UNIQUE constraint on <code>short_code</code> — hit via a <a href="../patterns/distributed/coordination/conditional-write.html">conditional write</a> — prevents the corruption if the storm happens anyway. A collision then costs one failed insert and a retry with the next id, never a wrong redirect.</p>
         <p id="deepdives-p-5">A custom alias is the same insert with the code supplied by the creator instead of the allocator, so one mechanism arbitrates both cases. The loser of the race gets a 409 and picks another alias; an allocated code that happens to land on a taken alias retries with the next id, and nobody notices.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-1">
         <pre class="mermaid">
 flowchart TB
     subgraph Write["Write Service"]
@@ -318,7 +318,7 @@ flowchart TB
         <p id="deepdives-p-7">Behind the edge, the lookup has to avoid a disk. An un-indexed lookup is a table scan, fatal at a billion rows, and a B-tree on <code>short_code</code> fixes that in principle — but the index is ~40&nbsp;GB and a disk-backed node tops out near ~100k IOPS, so what decides the latency is what happens to be resident in memory. A <a href="../patterns/caching/cache-aside.html">cache-aside</a> tier holding the hot mappings answers a hit in ~100&nbsp;ns; a miss costs a random SSD read of a few hundred microseconds, roughly a thousand times more. Miss the index as well and you pay two of them.</p>
         <p id="deepdives-p-8">What makes this cache unusually easy is that a mapping never changes. There is no invalidation protocol here, only expiry: an entry can be held for the whole life of the link, and a TTL at or below <code>expires_at</code> retires it without anyone sending a message. That immutability is why three tiers of copy stack up without a consistency argument at every boundary — the only question at each hop is whether the entry is there, never whether it is right.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-2">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -359,7 +359,7 @@ sequenceDiagram
         </ul>
         <p id="deepdives-p-11">The residual is the cold start. A cache tier that comes back empty puts the full sustained rate — ~17k reads/s — on the store as single-row lookups, which is survivable while the index is in memory and unpleasant if it is not. Collapsing misses does the staging for free: the first request for each code fills it, the rest wait a millisecond behind it, and the store sees one read per distinct code rather than one per client.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-3">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -391,7 +391,7 @@ sequenceDiagram
         <p id="deepdives-p-17">For the store, synchronous replication is rejected: it pays write latency for a consistency guarantee the requirements traded away. What remains is a single primary with an asynchronous <a href="../patterns/distributed/coordination/replication.html">standby</a>, promoted when the primary dies. Redirects continue throughout, because the edge and the cache are already answering nearly all of them and the promoted node picks up the rest. What stops is creation — at ~6 writes/s, a two-minute promotion costs on the order of seven hundred link creations, which clients retry — and the residual is replication lag, so a link created seconds before the failure can be briefly missing after it. The requirements accept both.</p>
         <p id="deepdives-p-18">The other stateful pieces degrade more gently. Losing a cache node is a miss storm rather than an outage: the store sees the sustained rate instead of the leftovers, and the one-fill-per-code rule from dive 3 keeps the refill from arriving all at once. Losing the counter's node costs the unspent tail of a few claimed blocks, which is free — uniqueness never needed an unbroken sequence — provided the counter cannot come back holding a lower value than it already gave out (dive 1).</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-4">
         <pre class="mermaid">
 flowchart TB
     Write["Write Service"] -->|"INSERT mapping"| DB[("URL store")]
@@ -407,7 +407,7 @@ flowchart TB
         <p id="deepdives-p-20">Serving tiers are <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>, so they grow by adding instances, and each region gets its own edge and its own cache because that is where the latency budget is spent. The store needs no such treatment: at ~6 writes/s a single writable primary anywhere on earth is enough, and creating a link is the one operation here that nobody minds waiting 200&nbsp;ms for. That is what multi-region means on this page — latency geography for reads, not capacity for writes.</p>
         <p id="deepdives-p-21">The counter is the piece that would otherwise coordinate across a WAN, so it does not: give each region a disjoint range (region A from 0, region B from 10¹²) and writers never contend across an ocean, with <a href="../patterns/concurrency/batching.html">batched</a> block claims making each region's counter nearly idle. If write volume ever did demand regional primaries, the exit is to partition by code, which is cheap because every access is already an exact-key lookup. Keep that region map in the routing tier rather than encoding a region prefix in the code itself — the code is deliberately opaque (dive 4), and a routable prefix would hand back the structure the permutation exists to remove.</p>
       </div>
-      <figure class="diagram">
+      <figure class="diagram" id="deepdives-fig-5">
         <pre class="mermaid">
 flowchart TB
     subgraph RA["Region A — counter range 0–1T"]
