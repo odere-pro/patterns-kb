@@ -87,7 +87,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>service layer</strong> sits above the domain model and defines an application's operations as a set of coarse-grained methods — <code>placeOrder</code>, <code>cancelSubscription</code>, <code>issueRefund</code>. Each method is a use case: it coordinates the domain model to carry out one unit of application logic, typically inside a single transaction, and returns a plain result to the caller.</p>
         <p id="description-p-2">The force it resolves is <strong>duplicated orchestration</strong>. Without it, every entry point into the system — a web controller, a CLI command, a scheduled job, an integration test — has to independently open a transaction, pull the right aggregates out of a repository, call the domain methods in the right order, and map the result back out. That plumbing gets copy-pasted across entry points or, worse, leaks into presentation code that has no business owning it.</p>
-        <p id="description-p-3">The layer is deliberately thin. It doesn't hold business rules itself — those stay in the domain model — it holds the recipe: which repositories to call, in what order, inside what transaction, translating to and from DTOs at the boundary so callers never see the domain model's internal shape.</p>
+        <p id="description-p-3" data-kb-level="advanced">The layer is deliberately thin. It doesn't hold business rules itself — those stay in the domain model — it holds the recipe: which repositories to call, in what order, inside what transaction, translating to and from DTOs at the boundary so callers never see the domain model's internal shape.</p>
       </div>
     </section>
 
@@ -96,15 +96,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Give each thing your application can do — place an order, cancel a subscription, issue a refund — one function that does the whole job from start to finish. Every way in, whether a web page, a scheduled job or a command line, calls that same function. Like a restaurant kitchen with one recipe per dish: the waiters do not each improvise their own version, and the recipe is written down once.</p>
+          <p>Give each thing your application can do — place an order, cancel a subscription, issue a refund — one function that does the whole job from start to finish. Without that, the web page, the nightly job and the command line each write their own version of the steps, and the versions drift: one forgets to check stock, another charges twice. Like a kitchen with one written recipe per dish, every way in cooks it the same way.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A layer of coarse-grained, use-case-shaped operations above the domain model: one method per application transaction, each opening and closing the transactional boundary, pulling aggregates from repositories, calling domain methods in order, and translating to and from DTOs at the edge. It holds the orchestration, not the rules — business invariants stay in the domain model. Every entry point, controller, job or consumer, goes through the same method, which makes it the natural place to hang authorization, validation, logging and caching in one place.</p>
+          <p>Each of those functions is one application transaction: it opens the transactional boundary, pulls aggregates out of repositories, calls domain methods in order, commits, and hands back a DTO so callers never see the domain model's shape. The business rules stay in the domain model; the layer holds only the recipe. Because every caller funnels through one method, authorization, validation, logging and caching attach there once instead of once per entry point.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when more than one kind of client must invoke the same operations, or when transaction boundaries and authorization need a single defined home — the return is that the domain model underneath can be refactored freely, because callers never touch its shape. The cost is a layer that earns nothing when there is one client and a handful of operations, and two well-worn failure modes. It degrades into a pass-through facade that forwards calls and adds only indirection, or it accretes business rules that belonged in the domain until it is the god-class the domain model was supposed to prevent.</p>
+          <p>Choose it when several kinds of client invoke the same operations, or when transaction boundaries and authorization need one defined home; with a single client and a dozen operations the layer buys nothing and you should call the domain model directly. Two failure modes come with it, and each has a counter-move. It decays into a pass-through facade that only forwards calls — delete it and let the one caller talk to the domain until a second caller appears. Or it accretes rules that belonged in the domain — hold each method to load, orchestrate, commit and map, and push every invariant down into the aggregate. Then run it: keep external I/O outside the transaction and watch transaction duration and connection-pool wait, or the boundary becomes the bottleneck.</p>
         </div>
       </div>
     </section>
@@ -112,6 +112,29 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Web["Web controller"]:::ext
+    Job["Nightly job"]:::ext
+    subgraph Tx["placeOrder — one transaction"]
+        Svc["Order service"]
+        Dom["Order aggregate"]
+        Repo["Order repository"]
+    end
+    DB[("Orders database")]
+    Web --&gt;|"1 placeOrder(dto)"| Svc
+    Job --&gt;|"1 placeOrder(dto)"| Svc
+    Svc --&gt;|"2 load"| Repo
+    Repo --&gt;|"3 read rows"| DB
+    Svc --&gt;|"4 apply rules"| Dom
+    Svc --&gt;|"5 save"| Repo
+    Repo --&gt;|"6 write rows"| DB
+    Svc --&gt;|"7 return dto"| Web
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>Where does one use case begin and end? Every caller enters by the same door (1); loading, applying rules and saving (2–6) happen inside one transaction, and step 7 hands back a plain DTO — no caller ever holds the aggregate.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -140,10 +163,10 @@ sequenceDiagram
         <dd>A plain in-process facade the same process calls directly, or a coarse-grained boundary that marshals arguments and results across a network call.</dd>
         <dt id="variations-item-2">Thin vs. thick service layer</dt>
         <dd>Thin delegates every rule to a rich domain model; thick absorbs the business logic itself, blurring into a set of procedures per operation.</dd>
-        <dt id="variations-item-3">Application service vs. domain service</dt>
-        <dd>An application service coordinates a use case end to end; a domain service is stateless, purely domain-focused logic with no awareness of the caller.</dd>
-        <dt id="variations-item-4">Command / query split</dt>
-        <dd>Separate service classes for state-changing operations and read-only queries, mirroring a CQRS-style split without a full separate read model.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Application service vs. domain service</dt>
+        <dd data-kb-level="advanced">An application service coordinates a use case end to end; a domain service is stateless, purely domain-focused logic with no awareness of the caller.</dd>
+        <dt id="variations-item-4" data-kb-level="expert">Command / query split</dt>
+        <dd data-kb-level="expert">Separate service classes for state-changing operations and read-only queries, mirroring a CQRS-style split without a full separate read model.</dd>
       </dl>
     </section>
 
@@ -155,8 +178,8 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">One coarse-grained entry point per use case, callable identically from any client.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Centralizes transaction boundaries, so where a unit of work starts and ends is defined once.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Decouples callers from the domain model's internal shape — it can be refactored freely underneath.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">A natural seam for cross-cutting concerns: authorization, logging, validation, caching.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Decouples callers from the domain model's internal shape — it can be refactored freely underneath.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">A natural seam for cross-cutting concerns: authorization, logging, validation, caching.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -165,7 +188,7 @@ sequenceDiagram
             <li id="tradeoffs-con-1" data-kb-polarity="con">Easy to degrade into a pass-through facade that forwards calls and adds nothing but indirection.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="expert">Can accumulate business rules that belong in the domain model, becoming a god-class over time.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">Extra layer to navigate and test when the domain is small enough not to need one.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Without discipline, validation ends up duplicated between the service and the domain objects it calls.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Without discipline, validation ends up duplicated between the service and the domain objects it calls.</li>
           </ul>
         </div>
       </div>
@@ -179,7 +202,7 @@ sequenceDiagram
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Multiple client types — a web UI, an API, a batch job — need to invoke the same business operations.</li>
             <li id="usage-when-2" data-kb-polarity="when">You need one place to define transaction boundaries, authorization, or use-case-level workflow ordering.</li>
-            <li id="usage-when-3" data-kb-polarity="when">The domain model is rich enough that orchestration logic would otherwise crowd into it or into controllers.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The domain model is rich enough that orchestration logic would otherwise crowd into it or into controllers.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -235,25 +258,25 @@ const dto = await orderService.placeOrder({ customerId: "c1", lines });</code></
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Transaction isolation level</strong> — The isolation the use-case transaction runs at; higher isolation cuts anomalies but raises lock contention and abort rate.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Transaction timeout</strong> — Upper bound on how long the use-case transaction may hold its connection and locks before rollback.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Transaction propagation / nesting</strong> — Whether a service method joins the caller transaction or starts its own; mis-set, it silently splits or merges what should be one boundary.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Transaction timeout</strong> — Upper bound on how long the use-case transaction may hold its connection and locks before rollback.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="expert"><strong>Transaction propagation / nesting</strong> — Whether a service method joins the caller transaction or starts its own; mis-set, it silently splits or merges what should be one boundary.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Transaction duration p99</strong> — How long a use case holds its transaction; long transactions hold connections and locks.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Rollback rate</strong> — Fraction of use-case transactions that roll back, from conflicts, timeouts, or validation failures.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Connection pool wait time</strong> — Time callers wait for a free database connection; it rises when transactions are held too long.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Lock wait time</strong> — Time transactions spend blocked on row locks held by other use cases.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Rollback rate</strong> — Fraction of use-case transactions that roll back, from conflicts, timeouts, or validation failures.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Connection pool wait time</strong> — Time callers wait for a free database connection; it rises when transactions are held too long.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Lock wait time</strong> — Time transactions spend blocked on row locks held by other use cases.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>External I/O inside the transaction</strong> — A remote call or slow computation between begin and commit holds the database connection and locks for its whole duration, throttling throughput.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Connection pool exhaustion</strong> — Long-held transactions consume every pooled connection; new use cases queue and time out.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Deadlock between use cases</strong> — Two service methods lock the same rows in opposite order and block each other until one is aborted.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Connection pool exhaustion</strong> — Long-held transactions consume every pooled connection; new use cases queue and time out.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Deadlock between use cases</strong> — Two service methods lock the same rows in opposite order and block each other until one is aborted.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
@@ -261,8 +284,8 @@ const dto = await orderService.placeOrder({ customerId: "c1", lines });</code></
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Keep transaction boundaries tight — no network or external I/O between begin and commit.</li>
             <li id="production-check-2" data-kb-polarity="check">Set an isolation level and timeout per operation instead of accepting one global default blindly.</li>
-            <li id="production-check-3" data-kb-polarity="check">Make command operations idempotent so a client retry after a timeout does not double-apply.</li>
-            <li id="production-check-4" data-kb-polarity="check">Keep one transaction per use case; do not let a request span several service calls each with its own.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Make command operations idempotent so a client retry after a timeout does not double-apply.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Keep one transaction per use case; do not let a request span several service calls each with its own.</li>
           </ul>
         </div>
       </div>

@@ -93,7 +93,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>repository</strong> is an object that mediates between the domain and the data store, exposing a <em>collection-like</em> interface for accessing domain objects. Callers ask for entities by identity or by criteria — <code>findById</code>, <code>findActiveSubscribers</code> — and add or remove them as though the whole set lived in memory. Behind that interface sits the real machinery: SQL, an ORM session, an HTTP call to another service.</p>
         <p id="description-p-2">The forces it resolves are <strong>coupling and duplication</strong>. Without it, query strings and storage calls leak into business logic, the same lookup is re-implemented in five places, and the domain can only be tested against a live database. The repository draws a single seam: persistence concerns on one side, domain language on the other.</p>
-        <p id="description-p-3">Because the interface is expressed in domain terms rather than storage terms, the code that uses it reads as intent, not plumbing. And because it is an interface, the implementation is swappable — a real database in production, an in-memory fake in a unit test.</p>
+        <p id="description-p-3" data-kb-level="advanced">Because the interface is expressed in domain terms rather than storage terms, the code that uses it reads as intent, not plumbing. And because it is an interface, the implementation is swappable — a real database in production, an in-memory fake in a unit test.</p>
       </div>
     </section>
 
@@ -106,11 +106,11 @@
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>An interface expressed in domain terms — findById, findActiveSubscribers, add, remove — that presents persisted aggregates as though they were an in-memory collection. Query construction, ORM sessions and SQL sit behind it; callers never see them. Because it is an interface, the implementation is substitutable: a real store in production, an in-memory fake in unit tests. It is scoped per aggregate root rather than per table, and it usually sits above a data mapper or ORM and beneath a service layer, sharing that layer's unit of work.</p>
+          <p>That one place is an interface named in the domain's vocabulary — findById, findOverdue, add, remove — scoped to one aggregate root rather than one table, sitting above a data mapper or ORM and beneath a service layer whose unit of work owns the transaction. Two shapes divide the field: one generic repository parameterised over entity type and wired up once for everything, which buys convenience and pays it back as a lowest-common-denominator CRUD surface, and a hand-written repository per aggregate that carries only the queries that aggregate answers. Specification objects keep the second shape from sprawling into forty findByX methods. Because callers depend on the interface rather than the class, a collection-backed fake substitutes for the store in unit tests, and under CQRS thin read repositories return view-shaped rows instead of whole aggregates.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the domain is rich enough that storage vocabulary would otherwise bleed into business logic, or when you need queries defined once and domain tests that never touch a database — that substitutability is the whole return. What you buy against is indirection with no content: a pass-through over an ORM that already reads clearly is a layer for its own sake, and one uniform CRUD interface across every entity quietly dissolves the aggregate boundary it was meant to protect. The subtler cost is that hiding the store hides its price, so an innocent-looking findAll drags back a million rows and nobody sees the query that did it.</p>
+          <p>Reach for it when the domain has queries worth naming and tests worth running without a database; skip it when each method would forward a single ORM call, because indirection with nothing inside it is a layer you maintain for its own sake. Three costs come with it, each with a counter-move. A uniform CRUD surface over every entity dissolves the aggregate boundary it was meant to protect — refuse the generic base class and write one interface per aggregate root. The collection illusion hides the query behind it, so lazy relations turn a loop into an N+1 storm and an unbounded finder degrades quietly as the table grows — pay that back with a bound on every list-returning method and query count per request as a watched signal rather than an incident report. A fake that nobody re-checks becomes a lie your tests believe — run one contract suite against the fake and the real implementation. Then run the loop: tune the fetch strategy, watch rows and queries per call, expect the N+1 to break first under load, and gate on transaction control living in the caller.</p>
         </div>
       </div>
     </section>
@@ -120,12 +120,22 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    Client["Service Layer"] --&gt;|add, remove, query| Repo["Repository"]
-    Repo --&gt;|criteria| Mapper["Data Mapper"]
-    Mapper --&gt;|SQL| DB[("Datastore")]
-    Repo -.-&gt;|domain objects| Client
+    Svc["Billing Service"]
+    Repo["InvoiceRepository interface"]
+    subgraph Seam["Behind the seam"]
+        Impl["SQL implementation"]
+        DB[("invoices table")]
+    end
+    Fake["In-memory fake"]:::ext
+    Svc --&gt;|"1 findOverdue"| Repo
+    Repo --&gt;|"2 bound to one implementation"| Impl
+    Impl --&gt;|"3 SELECT overdue rows"| DB
+    DB --&gt;|"4 rows"| Impl
+    Impl --&gt;|"5 Invoice objects"| Svc
+    Repo -.-&gt;|"tests bind here instead"| Fake
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>The repository is a collection-like facade. Callers add, remove, and query in domain terms; translating those requests into storage operations happens behind the seam.</figcaption>
+        <figcaption>Where does the query actually run? The service asks by name and gets domain objects back; only the implementation inside the seam knows there is SQL, and a test binds that same name to a fake.</figcaption>
       </figure>
     </section>
 
@@ -136,12 +146,12 @@ flowchart LR
         <dd>A single <code>Repository&lt;T&gt;</code> parameterised over entity type and wired up once. Convenient, but tends to expose a lowest-common-denominator CRUD surface that ignores what each aggregate actually needs to query.</dd>
         <dt id="variations-item-2">Per-aggregate repository</dt>
         <dd>One hand-written repository per aggregate root, exposing only the queries the domain really uses. More verbose, but honest about intent and easy to reason about.</dd>
-        <dt id="variations-item-3">Specification-based queries</dt>
-        <dd>Compose query criteria as first-class specification objects instead of a sprawl of <code>findByX</code> methods, so callers build predicates the repository translates.</dd>
-        <dt id="variations-item-4">In-memory fake</dt>
-        <dd>A collection-backed implementation of the same interface, letting domain and service tests run fast without touching a real database.</dd>
-        <dt id="variations-item-5">Read-side query repository</dt>
-        <dd>Under CQRS, split the write repository that loads full aggregates from thin read repositories that return denormalised, view-shaped projections.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Specification-based queries</dt>
+        <dd data-kb-level="advanced">Compose query criteria as first-class specification objects instead of a sprawl of <code>findByX</code> methods, so callers build predicates the repository translates.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">In-memory fake</dt>
+        <dd data-kb-level="advanced">A collection-backed implementation of the same interface, letting domain and service tests run fast without touching a real database.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Read-side query repository</dt>
+        <dd data-kb-level="expert">Under CQRS, split the write repository that loads full aggregates from thin read repositories that return denormalised, view-shaped projections.</dd>
       </dl>
     </section>
 
@@ -153,8 +163,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Isolates domain logic from persistence — swap SQL for a document store without touching callers.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Centralises query logic in one place instead of scattering SQL across services.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Makes the domain testable by substituting an in-memory fake for the real store.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Reads as domain language rather than raw storage calls, keeping intent legible.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Makes the domain testable by substituting an in-memory fake for the real store.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Reads as domain language rather than raw storage calls, keeping intent legible.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -229,7 +239,7 @@ class InMemoryUserRepository implements Repository&lt;User&gt; {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="spring-data-jpa" id="wild-spring-data-jpa"><strong>Spring Data JPA</strong><span>Generates repository implementations at runtime from interface method names like findByLastNameAndActive; teams escape to @Query for anything the naming scheme cannot express, and pass Pageable parameters to keep list methods bounded.</span></div>
-        <div class="wild-item" data-kb-example="doctrine-orm" id="wild-doctrine-orm"><strong>Doctrine ORM</strong><span>Ships an EntityRepository per entity that callers extend with domain-specific finder methods, typically built on the QueryBuilder or DQL so raw SQL stays behind the repository seam.</span></div>
+        <div class="wild-item" data-kb-example="doctrine-orm" id="wild-doctrine-orm" data-kb-level="advanced"><strong>Doctrine ORM</strong><span>Ships an EntityRepository per entity that callers extend with domain-specific finder methods, typically built on the QueryBuilder or DQL so raw SQL stays behind the repository seam.</span></div>
       </div>
     </section>
 
@@ -240,34 +250,34 @@ class InMemoryUserRepository implements Repository&lt;User&gt; {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>fetch strategy</strong> — lazy or eager loading of related entities behind each finder; the wrong default turns one innocent findById into a query storm or drags half the object graph into memory</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>transaction boundary</strong> — whether each call commits itself or joins a unit of work owned by the caller; per-call commits quietly make multi-aggregate operations non-atomic</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>result-set bound</strong> — whether list-returning methods paginate or cap; an unbounded findAll works on the demo dataset and melts on the production table</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>read caching</strong> — whether repeated lookups in one request hit the store or a per-request identity map; trades staleness for load, and hides writes made outside the seam</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>transaction boundary</strong> — whether each call commits itself or joins a unit of work owned by the caller; per-call commits quietly make multi-aggregate operations non-atomic</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>result-set bound</strong> — whether list-returning methods paginate or cap; an unbounded findAll works on the demo dataset and melts on the production table</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>read caching</strong> — whether repeated lookups in one request hit the store or a per-request identity map; trades staleness for load, and hides writes made outside the seam</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>queries per request</strong> — the N+1 problem shows up here first — a list endpoint that issues one query per row looks like clean domain code</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>rows fetched per call</strong> — a method whose row count grows with the table is a missing bound waiting to be found by production</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>per-method latency at the seam</strong> — the interface is the natural place to instrument; p95 by method name tells you which query the domain actually pays for</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>rows fetched per call</strong> — a method whose row count grows with the table is a missing bound waiting to be found by production</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="expert"><strong>per-method latency at the seam</strong> — the interface is the natural place to instrument; p95 by method name tells you which query the domain actually pays for</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>N+1 query storm</strong> — a collection-like interface plus lazy relations: iterating the result fires one query per element, invisible in the calling code</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>unbounded findAll</strong> — the collection illusion hides cost — a method that returned 50 rows at launch returns 5 million two years later and takes the connection pool with it</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>full-aggregate reads</strong> — loading the whole aggregate to answer a two-field question; read-heavy paths deserve thin, view-shaped queries instead</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>unbounded findAll</strong> — the collection illusion hides cost — a method that returned 50 rows at launch returns 5 million two years later and takes the connection pool with it</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>full-aggregate reads</strong> — loading the whole aggregate to answer a two-field question; read-heavy paths deserve thin, view-shaped queries instead</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">put a bound or pagination on every method that returns a list — no exceptions for tables that are small today</li>
-            <li id="production-check-2" data-kb-polarity="check">run the same contract test suite against the real implementation and the in-memory fake, or the fake will drift into a lie</li>
-            <li id="production-check-3" data-kb-polarity="check">keep transaction control in the caller — a service or unit of work — not inside repository methods</li>
-            <li id="production-check-4" data-kb-polarity="check">watch query count per request in a staging environment and treat a sudden multiplication as a regression</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">run the same contract test suite against the real implementation and the in-memory fake, or the fake will drift into a lie</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">keep transaction control in the caller — a service or unit of work — not inside repository methods</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="expert">watch query count per request in a staging environment and treat a sudden multiplication as a regression</li>
           </ul>
         </div>
       </div>

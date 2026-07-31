@@ -80,7 +80,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>transaction script</strong> is one procedure that handles one request from the presentation layer to the database and back — <code>placeOrder</code>, <code>cancelSubscription</code>, <code>applyDiscount</code>. It reads the rows it needs, runs whatever validation and calculation the business rule requires, writes the rows back, and returns. There's no domain object standing in between deciding how to behave; the logic lives in the procedure itself.</p>
         <p id="description-p-2">The force it resolves is <strong>upfront modeling cost</strong>. Building a real domain model — objects with behavior, invariants enforced in one place, a mapping layer to persistence — pays off when business logic is rich and reused across many operations. Most transactions aren't that: they're a handful of checks and one write. A transaction script matches the shape of the problem exactly, is easy to write top-to-bottom, and is trivial to trace because nothing is indirected through a class hierarchy.</p>
-        <p id="description-p-3">Martin Fowler catalogued it in <em>Patterns of Enterprise Application Architecture</em> as the natural starting point for application logic, and the natural thing to graduate away from once transactions stop being simple. It scales in the number of procedures, not in the sophistication of any one of them — which is exactly where it starts to strain.</p>
+        <p id="description-p-3" data-kb-level="advanced">Martin Fowler catalogued it in <em>Patterns of Enterprise Application Architecture</em> as the natural starting point for application logic, and the natural thing to graduate away from once transactions stop being simple. It scales in the number of procedures, not in the sophistication of any one of them — which is exactly where it starts to strain.</p>
       </div>
     </section>
 
@@ -89,15 +89,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Handle each request with one straightforward procedure: read the rows you need, check the rules, write the rows back, return an answer. No objects in between deciding how things behave — the whole job reads top to bottom in one file. Like following a single printed checklist for one task, rather than building a whole department to handle every task you might ever get.</p>
+          <p>Placing an order means three things: check the customer has credit, save the order, send back a confirmation. You could first design a set of classes for orders and customers plus a layer that maps them to tables — a week of modelling for three rules that will never change. Or write one procedure that does exactly those three things and stops: read the rows, check them, write the rows back, return. Like following one printed checklist for one job, instead of hiring a department to handle every job you might ever get.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>One procedure per request from the presentation layer: it opens a transaction, reads rows directly, runs whatever validation and calculation the rule needs, writes back, and returns. Logic lives in the procedure, not in objects — there is no domain model and no mapping layer to build. It scales in the number of procedures rather than in the sophistication of any one. Stored procedures and one-script-per-action web handlers are the archetype; underneath sits plain SQL or a thin data-access helper, and a service layer over a real domain model is what you graduate to.</p>
+          <p>That procedure is the transaction boundary: the presentation layer calls it, it opens the transaction, works the tables through plain SQL or a thin data-access helper, and commits before it returns. Nothing sits between it and the rows deciding behaviour, so there is no model to design and no mapping layer to keep in step with the schema. Group the procedures as free functions or as methods on a class named for the subject area — that grouping is filing, not design. Push the whole thing inside the database and you have a stored procedure: same shape, the database's deployment story.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the logic per transaction genuinely is a few checks and one write, and reuse across transactions is not on the horizon — its value is that you ship without paying for a domain model whose payoff depends on that reuse existing. The bill is deferred rather than avoided. Rules shared across scripts get copy-pasted, so the same invariant is enforced inconsistently or forgotten in one branch; logic welded to data access cannot be unit-tested without a database; and individual scripts grow tangled as edge cases accumulate. Retrofitting a domain model later means rewriting every script that touched the rule.</p>
+          <p>Choose it when the logic per transaction really is a few checks and one write, and reuse across transactions is not on the horizon: you ship without paying for a domain model whose payoff depends on that reuse existing. The bill is deferred rather than avoided, and each item has a counter-move. Shared rules get copy-pasted and drift apart, so extract a shared subroutine the moment a second script needs the rule, and read the third copy as the signal to graduate to a service layer over a domain model. Logic welded to data access cannot be unit-tested without a database, so keep the data-access calls behind one injectable seam instead of scattering them through the procedure. And because every script does its own locking, hold each transaction for as few statements as possible and touch rows in the same order everywhere, or two scripts will deadlock against each other under load.</p>
         </div>
       </div>
     </section>
@@ -105,6 +105,24 @@
     <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Req["POST /orders"]
+    Script["placeOrder procedure"]
+    subgraph Tx["One database transaction"]
+        Customers[("customers")]
+        Orders[("orders")]
+        Items[("order_items")]
+    end
+    Req --&gt;|"1 call with input"| Script
+    Script --&gt;|"2 read credit limit"| Customers
+    Script --&gt;|"3 insert order"| Orders
+    Script --&gt;|"4 insert lines"| Items
+    Script --&gt;|"5 commit, return order id"| Req
+        </pre>
+        <figcaption>Where does the business rule live? Inside the one procedure — it reads the credit limit, decides, and writes every row in a single transaction that commits or rolls back whole.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -121,7 +139,7 @@ sequenceDiagram
         S-->>C: return error, nothing written
     end
         </pre>
-        <figcaption>One procedure owns the whole transaction: read, decide, write, return. No object model mediates the decision.</figcaption>
+        <figcaption>What does the caller get when a check fails? The same procedure returns the error and nothing is written — the rollback is the transaction it opened, not a compensating step elsewhere.</figcaption>
       </figure>
     </section>
 
@@ -132,10 +150,10 @@ sequenceDiagram
         <dd>Each transaction is a standalone function grouped by module or file — no class at all, just procedures and the data access calls they make.</dd>
         <dt id="variations-item-2">Scripts as class methods</dt>
         <dd>Related transactions are grouped as methods on a class named for the subject area (e.g. <code>OrderTransactions</code>), purely for organization — the class carries no state or behavior of its own.</dd>
-        <dt id="variations-item-3">Scripts as stored procedures</dt>
-        <dd>The procedure is written and executed inside the database itself, pushing the whole transaction — logic and data access both — into the DB tier.</dd>
-        <dt id="variations-item-4">Shared subroutine extraction</dt>
-        <dd>Common steps — parsing input, formatting a response, a repeated validation — are pulled into helper functions called by several scripts, trimming duplication without introducing a domain model.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Scripts as stored procedures</dt>
+        <dd data-kb-level="advanced">The procedure is written and executed inside the database itself, pushing the whole transaction — logic and data access both — into the DB tier.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Shared subroutine extraction</dt>
+        <dd data-kb-level="advanced">Common steps — parsing input, formatting a response, a repeated validation — are pulled into helper functions called by several scripts, trimming duplication without introducing a domain model.</dd>
       </dl>
     </section>
 
@@ -147,8 +165,8 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Simple and direct — the whole transaction reads top to bottom in one place.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">No upfront design cost: no domain model, no object-relational mapping to build.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Matches procedural and SQL-heavy teams' existing mental model.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Cheap to add a new transaction — write one more procedure, nothing else to touch.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Matches procedural and SQL-heavy teams' existing mental model.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Cheap to add a new transaction — write one more procedure, nothing else to touch.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -157,7 +175,7 @@ sequenceDiagram
             <li id="tradeoffs-con-1" data-kb-polarity="con">Business rules shared across transactions get copy-pasted instead of reused.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">No object enforces invariants, so the same rule can be checked inconsistently — or forgotten — in different scripts.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con">Business logic is welded to data access, making it hard to unit-test without a database.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Scripts grow long and tangled as more rules and edge cases pile onto one procedure.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Scripts grow long and tangled as more rules and edge cases pile onto one procedure.</li>
           </ul>
         </div>
       </div>
@@ -177,9 +195,9 @@ sequenceDiagram
         <div class="avoid">
           <h3>Avoid when</h3>
           <ul>
-            <li id="usage-avoid-1" data-kb-polarity="avoid" data-kb-level="expert">Business rules are numerous, interrelated, and start duplicating across scripts — a <a href="./service-layer.html">Service Layer</a> over a real domain model earns its cost.</li>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Business rules are numerous, interrelated, and start duplicating across scripts — a <a href="./service-layer.html">Service Layer</a> over a real domain model earns its cost.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid">You need to unit-test business rules independently of the database — a script's logic is welded to its data access.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">Several transactions should share and enforce the same invariants, not just similar data access.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Several transactions should share and enforce the same invariants, not just similar data access.</li>
           </ul>
         </div>
       </div>
@@ -224,29 +242,29 @@ async function placeOrder(db: Database, input: PlaceOrderInput): Promise&lt;Orde
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Transaction isolation level</strong> — The isolation each script runs its read-modify-write at; too low risks lost updates, too high risks contention.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Statement / transaction timeout</strong> — A ceiling on how long a script may hold its transaction before the database aborts it.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Statement / transaction timeout</strong> — A ceiling on how long a script may hold its transaction before the database aborts it.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Transaction duration</strong> — How long each script holds its transaction open; long scripts hold locks.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Deadlock rate</strong> — Frequency of deadlocks; scripts that lock rows in inconsistent order deadlock under concurrency.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Lock wait time</strong> — Time scripts spend blocked waiting for locks held by other scripts.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Deadlock rate</strong> — Frequency of deadlocks; scripts that lock rows in inconsistent order deadlock under concurrency.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="expert"><strong>Lock wait time</strong> — Time scripts spend blocked waiting for locks held by other scripts.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Deadlock from inconsistent lock ordering</strong> — With no single object enforcing order, different scripts lock the same rows in different sequences and deadlock under load.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Long script holds locks</strong> — A script that does heavy computation or an external call mid-transaction holds its row locks the whole time, blocking others.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Long script holds locks</strong> — A script that does heavy computation or an external call mid-transaction holds its row locks the whole time, blocking others.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Keep each script short and its transaction brief — do not do external I/O mid-transaction.</li>
-            <li id="production-check-2" data-kb-polarity="check">Lock rows in a consistent order across scripts to avoid deadlocks.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Lock rows in a consistent order across scripts to avoid deadlocks.</li>
             <li id="production-check-3" data-kb-polarity="check">Wrap the script in an explicit transaction that rolls back fully on any error.</li>
           </ul>
         </div>

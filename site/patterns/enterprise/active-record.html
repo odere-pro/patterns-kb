@@ -81,8 +81,8 @@
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
         <p id="description-p-1">An <strong>Active Record</strong> wraps a single row of a database table (or view) in an object, and that object owns both the row's fields and the code that persists them. The class exposes CRUD directly: instance methods like <code>save</code> and <code>delete</code>, and static finders like <code>find</code> or <code>all</code> that return record instances already populated from a query.</p>
-        <p id="description-p-2">Its whole appeal is that the object model tracks the database model one-for-one: one table, one class, one row, one instance. There's no translation layer to write or maintain — add a column, add a field, and the record picks it up. For CRUD-heavy applications where the domain barely exceeds "a record with a few validations and callbacks," this collapses nearly all the data-access boilerplate into a single class per table.</p>
-        <p id="description-p-3">The cost shows up as the domain grows past that shape. Because persistence logic lives inside the same class as the data, the record's structure is dictated by the table rather than by the problem it models, and behavior that doesn't fit CRUD has nowhere natural to live — it either bloats the record or gets pushed into an outside service, leaving the record a thin wrapper around getters and setters. A Data Mapper decouples the two, at the cost of an explicit mapping layer.</p>
+        <p id="description-p-2" data-kb-level="advanced">The saving is more than typing. With only one representation there is nothing for the two to drift apart from: a migration is the schema change and the class change at once, and the query that loaded the object sits in the same file as the rule that uses it. That is why CRUD-heavy software — admin tools, back offices, most of a young product — ships faster on records than on any layered alternative.</p>
+        <p id="description-p-3" data-kb-level="advanced">The ceiling is the shape of the row. Behavior spanning several rows, or an object whose fields come from three tables, has nowhere natural to sit, and the further past that line the domain goes, the more the class is shaped by the table rather than by the problem it models.</p>
       </div>
     </section>
 
@@ -91,15 +91,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Each row in your database table gets one object in your code, and that object knows how to save itself. Change a field, call save, and the row updates. Like a paper form that knows which filing cabinet drawer it came from and can file itself back — no separate clerk needed. Adding a column adds a field, and nothing else has to change.</p>
+          <p>A table of five columns and no real behavior does not need a translation layer sitting between it and your code: write one and adding a field means editing three things — the table, the class and the mapping in between. Let the row carry its own persistence instead. One class per table, one object per row, and that object knows how to fetch itself and write itself back — load it, change a field, tell it to save. Like a paper form that knows which drawer it came from and can file itself back.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>One class per table, one instance per row. The class carries the row's columns as fields and the SQL to persist them: instance methods save and delete, plus class-level finders that return hydrated instances. The instance holds its own primary key and dirty state, so save resolves to an INSERT or an UPDATE without the caller deciding. It is the default ORM style in Rails, Django and Laravel, and normally arrives bundled with migrations, validations and association helpers on the same base class.</p>
+          <p>The instance holds its own primary key and tracks which fields changed, so a single save resolves to an INSERT or an UPDATE without the caller choosing. Rails, Django and Laravel read the schema at load time, so the class declares no field list at all and a migration stays the only place a column is named. Around that core ride the extras attached to the same base class: validations that run before a write, lifecycle callbacks that fire on every save, and association helpers that issue their own query the moment you navigate one.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the domain genuinely is the schema — one row is one meaningful object with modest behavior — because then the mapping layer you would otherwise write is pure cost, and this collapses it to nothing. The bill comes due as behavior outgrows CRUD. Persistence is welded into the class, so unit tests need a database and the object's shape is dictated by the table rather than the problem. Logic spanning rows or tables has no home, and pushing it outward leaves an anemic wrapper of accessors. Schema changes propagate into domain code, so a column rename becomes a refactor rather than a migration.</p>
+          <p>Choose it when the domain genuinely is the schema — one row is one meaningful object with modest behavior — because then the mapping layer you would otherwise own is pure cost, and the framework's migrations, validations and admin tooling arrive already wired to the same base class. The bill comes due as behavior outgrows CRUD, and each line of it has a counter-move. Persistence is welded into the class, so tests need a real database: run them inside a transaction that rolls back rather than stubbing a class that is half SQL. Logic spanning several rows has no home on any one record — give it a service layer before the record grows into a God object, and watch for the opposite drift, a record of bare accessors with its rules living outside it. Validations declared on the model are skipped by bulk-write paths, so back the ones you actually rely on with a database constraint. When a column rename starts rippling into business rules, the schema and the model have parted ways and the mapping layer you refused has become the cheaper option.</p>
         </div>
       </div>
     </section>
@@ -109,12 +109,21 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    App["Application code"] -->|Order.find(id)| Rec["Order record"]
-    Rec -->|SELECT row by id| DB["orders table"]
-    App -->|edit fields, then save()| Rec
-    Rec -->|UPDATE row by id| DB
+    App["Application code"]
+    subgraph Rec["Order class — fields, behavior and SQL together"]
+        Find["Order.find, the static finder"]
+        Obj["order instance"]
+    end
+    DB[("orders table")]
+    App --&gt;|"1 Order.find(42)"| Find
+    Find --&gt;|"2 SELECT row 42"| DB
+    DB --&gt;|"3 row"| Find
+    Find --&gt;|"4 return instance"| Obj
+    App --&gt;|"5 applyDiscount(10)"| Obj
+    App --&gt;|"6 order.save()"| Obj
+    Obj --&gt;|"7 UPDATE row 42"| DB
         </pre>
-        <figcaption>The record fetches its own row through a static finder, then saves, updates, or deletes that same row through instance methods — one class does both jobs.</figcaption>
+        <figcaption>Who writes the SQL? The same class that carries the discount rule. Both arrows to the table start inside the boundary, which is why the caller never names a column — and why nothing on this page runs without a database.</figcaption>
       </figure>
     </section>
 
@@ -125,10 +134,10 @@ flowchart LR
         <dd>Columns are introspected from the schema at load time (Rails' ActiveRecord, Laravel's Eloquent, Django's ORM), so the class carries no explicit field list — a migration adds a column and every record picks it up.</dd>
         <dt id="variations-item-2">Hand-written records</dt>
         <dd>Fields and SQL are written out by hand per class, common in smaller frameworks and pre-ORM codebases — more boilerplate, but no schema-introspection magic to fight.</dd>
-        <dt id="variations-item-3">Lifecycle callbacks</dt>
-        <dd>Hooks such as <code>before_save</code> or <code>after_create</code> weave extra behavior — timestamps, validation, cache invalidation — directly into the persistence path.</dd>
-        <dt id="variations-item-4">Read-only / view-backed record</dt>
-        <dd>Wraps a query result, report, or database view instead of a writable table, and simply omits <code>save</code> and <code>delete</code>.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Lifecycle callbacks</dt>
+        <dd data-kb-level="advanced">Hooks such as <code>before_save</code> or <code>after_create</code> weave extra behavior — timestamps, validation, cache invalidation — directly into the persistence path.</dd>
+        <dt id="variations-item-4" data-kb-level="expert">Read-only / view-backed record</dt>
+        <dd data-kb-level="expert">Wraps a query result, report, or database view instead of a writable table, and simply omits <code>save</code> and <code>delete</code>.</dd>
       </dl>
     </section>
 
@@ -140,8 +149,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Minimal ceremony for CRUD-shaped domains — define fields, call save, and persistence is done.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Reads the way people think about it: load a row, change it, save it back.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">One class holds everything about a row: its shape and how it persists — nothing else to open.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Framework tooling (migrations, validations, associations) hooks straight into the base class.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">One class holds everything about a row: its shape and how it persists — nothing else to open.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Framework tooling (migrations, validations, associations) hooks straight into the base class.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -150,7 +159,7 @@ flowchart LR
             <li id="tradeoffs-con-1" data-kb-polarity="con">Couples domain logic to the schema — a column rename or table split forces a class change.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Hard to unit test in isolation; persistence is baked in, so tests need a real or in-memory database.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Business logic and persistence logic share one class, tending toward a God object, or, if kept thin, toward an anemic one with logic pushed elsewhere.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Awkward once a row's data spans more than one table or a non-trivial join — there's no natural home for it.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Awkward once a row's data spans more than one table or a non-trivial join — there's no natural home for it.</li>
           </ul>
         </div>
       </div>
@@ -222,8 +231,8 @@ await order.save(); // UPDATE orders SET total = ... WHERE id = 42</code></pre>
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="rails-activerecord" id="wild-rails-activerecord"><strong>Rails ActiveRecord</strong><span>Introspects the schema so each model class gains its columns, finders and save method automatically; teams lean on includes to eager-load associations against N+1, and know that update_all-style bulk writes bypass validations and callbacks.</span></div>
-        <div class="wild-item" data-kb-example="laravel-eloquent" id="wild-laravel-eloquent"><strong>Laravel Eloquent</strong><span>Each model wraps a table and carries its own save, delete and static query methods; with() eager-loads relationships to dodge N+1, and observers hang lifecycle behavior off the persistence path without bloating the model.</span></div>
-        <div class="wild-item" data-kb-example="django-orm" id="wild-django-orm"><strong>Django ORM</strong><span>Model classes declare fields and inherit save/delete, keeping row and persistence in one class; select_related and prefetch_related are the standard N+1 defenses, and bulk_create deliberately skips per-object save() and its signals.</span></div>
+        <div class="wild-item" data-kb-example="laravel-eloquent" id="wild-laravel-eloquent" data-kb-level="advanced"><strong>Laravel Eloquent</strong><span>Each model wraps a table and carries its own save, delete and static query methods; with() eager-loads relationships to dodge N+1, and observers hang lifecycle behavior off the persistence path without bloating the model.</span></div>
+        <div class="wild-item" data-kb-example="django-orm" id="wild-django-orm" data-kb-level="advanced"><strong>Django ORM</strong><span>Model classes declare fields and inherit save/delete, keeping row and persistence in one class; select_related and prefetch_related are the standard N+1 defenses, and bulk_create deliberately skips per-object save() and its signals.</span></div>
       </div>
     </section>
 
@@ -234,36 +243,36 @@ await order.save(); // UPDATE orders SET total = ... WHERE id = 42</code></pre>
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>association loading</strong> — lazy by default in most implementations; every association navigated inside a loop is a potential extra query, so the eager-load switch is the dial you touch most</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>callback discipline</strong> — how much behavior rides on lifecycle hooks; every hook runs on every save — including imports, backfills and test fixtures that never asked for it</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>validation placement</strong> — rules on the record are skipped by bulk writes and raw SQL; rules in the database are not — decide which layer is the actual gate</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>connection pool size</strong> — records talk to the database directly, so the app tier owns the pool; slow work done while a record holds a connection starves everyone else</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>callback discipline</strong> — how much behavior rides on lifecycle hooks; every hook runs on every save — including imports, backfills and test fixtures that never asked for it</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>validation placement</strong> — rules on the record are skipped by bulk writes and raw SQL; rules in the database are not — decide which layer is the actual gate</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>connection pool size</strong> — records talk to the database directly, so the app tier owns the pool; slow work done while a record holds a connection starves everyone else</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>queries per request</strong> — association access in a template loop is the classic N+1 source — the view fires queries and nothing in the code says so</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>save latency vs. raw statement latency</strong> — a save that takes 200ms is often 10ms of SQL and 190ms of callback chain; the gap is your hook budget</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>connection pool utilisation</strong> — external calls inside callbacks hold a connection hostage for their whole duration; pool exhaustion often traces back to one innocent after_save</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>save latency vs. raw statement latency</strong> — a save that takes 200ms is often 10ms of SQL and 190ms of callback chain; the gap is your hook budget</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="expert"><strong>connection pool utilisation</strong> — external calls inside callbacks hold a connection hostage for their whole duration; pool exhaustion often traces back to one innocent after_save</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>N+1 in the view layer</strong> — templates navigate associations freely; each navigation is a query, and the page that rendered fine with 10 rows issues 500 queries with 500</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>callback cascade</strong> — an after-save that saves another record that fires its own hooks — one write fans out into a chain nobody designed, and bulk operations replay it row by row</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>validation bypass</strong> — framework bulk-write paths skip model validations and callbacks by design; the database accepts rows the model would have refused</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>racy uniqueness check</strong> — a uniqueness rule enforced only on the model is a read-then-write; two concurrent saves both pass the check and both insert</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>callback cascade</strong> — an after-save that saves another record that fires its own hooks — one write fans out into a chain nobody designed, and bulk operations replay it row by row</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>validation bypass</strong> — framework bulk-write paths skip model validations and callbacks by design; the database accepts rows the model would have refused</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>racy uniqueness check</strong> — a uniqueness rule enforced only on the model is a read-then-write; two concurrent saves both pass the check and both insert</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">back every validation you rely on with a database constraint — model-level uniqueness alone races under concurrency</li>
-            <li id="production-check-2" data-kb-polarity="check">keep side effects (email, HTTP calls) out of lifecycle callbacks; enqueue a job instead, or every save becomes a distributed transaction</li>
-            <li id="production-check-3" data-kb-polarity="check">eager-load associations on any query whose results feed a loop</li>
-            <li id="production-check-4" data-kb-polarity="check">know which bulk operations in your framework skip callbacks and validations, and treat them as raw SQL</li>
-            <li id="production-check-5" data-kb-polarity="check">test against a real database — persistence is baked into the class, so a stub tests something else</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">keep side effects (email, HTTP calls) out of lifecycle callbacks; enqueue a job instead, or every save becomes a distributed transaction</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">eager-load associations on any query whose results feed a loop</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">know which bulk operations in your framework skip callbacks and validations, and treat them as raw SQL</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">test against a real database — persistence is baked into the class, so a stub tests something else</li>
           </ul>
         </div>
       </div>

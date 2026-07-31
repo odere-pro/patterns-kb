@@ -87,7 +87,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>DTO</strong> (Data Transfer Object) is a plain, flat object whose only job is to carry data across a boundary — a network call, a process boundary, a serialization format, a UI tier. It carries at most getters and setters, never business rules, validation, or identity. Its shape is dictated entirely by what the boundary needs to send or receive, not by how the domain models the same concept internally.</p>
         <p id="description-p-2">The force it resolves is the cost of crossing that boundary. Remote calls are expensive per round trip, so a chatty interface that fetches an object's fields one getter at a time drowns in latency. A DTO batches everything a call needs into one coarse-grained object sent in a single trip. It also resolves a coupling problem: domain objects carry lazy-loading proxies, circular references, private fields, and behavior that has no business crossing a wire or reaching a client — the DTO exposes only what the contract promises and nothing else.</p>
-        <p id="description-p-3">Fowler coined the term for exactly this in <em>Patterns of Enterprise Application Architecture</em>, aimed at genuinely remote calls between tiers. The idea outlived that narrow reading: today any API request or response body, any message payload, any shape crossing a serialization boundary is a DTO in the same sense, whether or not the call is literally remote.</p>
+        <p id="description-p-3" data-kb-level="advanced">Fowler coined the term for exactly this in <em>Patterns of Enterprise Application Architecture</em>, aimed at genuinely remote calls between tiers. The idea outlived that narrow reading: today any API request or response body, any message payload, any shape crossing a serialization boundary is a DTO in the same sense, whether or not the call is literally remote.</p>
       </div>
     </section>
 
@@ -96,15 +96,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>When data has to leave your program — over a network, into a message, out to a browser — send a plain package that holds exactly the fields the other side asked for, and nothing else. No behavior, no hidden links back into your code. Like packing a shipping box: you put in what the recipient ordered, label it, and send it in one trip instead of a dozen small ones.</p>
+          <p>When data leaves your program — over a network, into a message, out to a browser — send a plain package holding exactly the fields the other side asked for. Hand over your own internal object instead and you ship things nobody outside should see, such as a password hash, and the day you rename a field every client breaks. Like packing a shipping box: put in what was ordered, label it, and send it in one trip instead of a dozen small ones.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A flat, serializable object whose shape is dictated by a boundary's contract rather than by the domain — at most getters and setters, no invariants, no identity, no lazy proxies. It batches everything one call needs into a single coarse-grained payload, so a remote caller makes one round trip instead of a field-at-a-time conversation, and it exposes only the fields the contract promises. In practice it is every request and response body and every message payload, paired with assembler or mapping code at the edge of a service layer.</p>
+          <p>The package is flat and serializable: no behavior, no identity, and no lazy-loading proxies that would try to reach back into your database from the far side. The mapping between it and the domain lives in one assembler at the edge of the service layer, which is what lets the two shapes version on separate clocks — you can add a field to the wire contract without touching the aggregate, or refactor the aggregate without touching the contract. Requests and responses usually get separate shapes, because what a caller may write is rarely what it may read.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it wherever a boundary is real — a process, a network hop, a published API, a client tier — because its value is that the wire contract and the internal model can then version independently, and neither leaks into the other. The price is duplication: fields restated, mapping code that is mostly ceremony, and two shapes that drift until a change to one becomes a silent mismatch at the other. Applied where there is no boundary it is pure overhead, and the standard decay is a package that quietly acquires validation and business rules until it is an anemic second domain model nobody owns.</p>
+          <p>Reach for it wherever a boundary is real — a process, a network hop, a published API, a client tier — and skip it where none is, because there it is mapping ceremony that buys nothing. The bill is duplication: fields restated, mapping that is mostly typing, and two shapes that drift until a rename becomes a silent mismatch at runtime. Pay it by generating one side from a schema (Protocol Buffers, OpenAPI) or by contract tests that fail the build when the shapes diverge, never by hand-syncing. The other standard decay is a transfer shape that quietly acquires validation and rules until it is a second, anemic domain model — keep invariants on the aggregate and let the edge check shape and nothing else.</p>
         </div>
       </div>
     </section>
@@ -114,12 +114,22 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    Domain["Domain objects"] -->|mapped by assembler| DTO1["DTO"]
-    DTO1 -->|serialized| Wire["Network / IPC boundary"]
-    Wire -->|deserialized| DTO2["DTO"]
-    DTO2 -->|mapped by assembler| Client["Client-side model"]
+    subgraph Svc["Service process — the domain stays here"]
+        DB[("Users table")]
+        Dom["User aggregate:<br/>id, email, roles, passwordHash"]
+        Asm["Assembler"]
+        Dto["UserDto: id, email, roles"]
+    end
+    Client["Browser client"]:::ext
+    Model["Client-side model"]:::ext
+    DB --&gt;|"1 load rows"| Dom
+    Dom --&gt;|"2 copy promised fields"| Asm
+    Asm --&gt;|"3 build"| Dto
+    Dto --&gt;|"4 serialize, one round trip"| Client
+    Client --&gt;|"5 deserialize"| Model
+    classDef ext stroke-dasharray:4 4
         </pre>
-        <figcaption>Domain state is flattened into a DTO by an assembler, crosses the boundary, and is unpacked on the other side. The DTO itself never travels back once its data has landed.</figcaption>
+        <figcaption>Which fields cross the boundary, and in how many trips? The assembler copies only what the contract promises (2–3), so <code>passwordHash</code> never leaves the process, and the whole payload crosses in one trip (4) instead of a getter at a time.</figcaption>
       </figure>
     </section>
 
@@ -130,12 +140,12 @@ flowchart LR
         <dd>Separate shapes for what a call accepts and what it returns, instead of one shared type — keeps write-only fields out of the read shape and vice versa.</dd>
         <dt id="variations-item-2">Assembler (or Mapper)</dt>
         <dd>A dedicated function or class that converts between domain object and DTO in one place, so mapping logic doesn't spread across controllers or leak into either shape.</dd>
-        <dt id="variations-item-3">Aggregate / coarse-grained DTO</dt>
-        <dd>Bundles several related entities — an order plus its line items and customer — into one shape, answering a whole screen or call in a single round trip.</dd>
-        <dt id="variations-item-4">Versioned DTO</dt>
-        <dd>The wire shape is versioned independently of the domain model (<code>UserDtoV2</code>), so an API keeps old clients working while the internal model moves on.</dd>
-        <dt id="variations-item-5">Immutable / record DTO</dt>
-        <dd>Fields are readonly and set once at construction — a plain record with no setters, matching how most serialization formats treat the data anyway.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Aggregate / coarse-grained DTO</dt>
+        <dd data-kb-level="advanced">Bundles several related entities — an order plus its line items and customer — into one shape, answering a whole screen or call in a single round trip.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Versioned DTO</dt>
+        <dd data-kb-level="advanced">The wire shape is versioned independently of the domain model (<code>UserDtoV2</code>), so an API keeps old clients working while the internal model moves on.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Immutable / record DTO</dt>
+        <dd data-kb-level="expert">Fields are readonly and set once at construction — a plain record with no setters, matching how most serialization formats treat the data anyway.</dd>
       </dl>
     </section>
 
@@ -147,8 +157,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Decouples the wire or API shape from the internal domain model — either can change without breaking the other.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Batches data into one coarse-grained call, cutting chatty round trips over the network.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Plain data with no behavior serializes trivially and is easy to version, cache, and log.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Gives a boundary an explicit, reviewable contract instead of leaking internal objects across it.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Plain data with no behavior serializes trivially and is easy to version, cache, and log.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Gives a boundary an explicit, reviewable contract instead of leaking internal objects across it.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -156,8 +166,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Duplicates fields already on the domain model, and the mapping code is often repetitive boilerplate.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Two shapes to keep in sync — every model change risks becoming a silent DTO mismatch.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Business logic or validation that creeps into a DTO turns it into an anemic clone of the domain model.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">Used across a call with no real boundary, it's pure mapping ceremony with nothing to justify it.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Business logic or validation that creeps into a DTO turns it into an anemic clone of the domain model.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Used across a call with no real boundary, it's pure mapping ceremony with nothing to justify it.</li>
           </ul>
         </div>
       </div>
@@ -171,7 +181,7 @@ flowchart LR
           <ul>
             <li id="usage-when-1" data-kb-polarity="when">Data crosses a real boundary — process, network, service, or UI tier — and the two sides shouldn't share one internal type.</li>
             <li id="usage-when-2" data-kb-polarity="when">You're crossing a boundary drawn by a <a href="./service-layer.html">Service Layer</a> and need an explicit shape for what goes in and out.</li>
-            <li id="usage-when-3" data-kb-polarity="when">A single call should return exactly what the caller needs, not a partial or over-fetched domain graph.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">A single call should return exactly what the caller needs, not a partial or over-fetched domain graph.</li>
           </ul>
         </div>
         <div class="avoid">
@@ -179,7 +189,7 @@ flowchart LR
           <ul>
             <li id="usage-avoid-1" data-kb-polarity="avoid">Everything runs in one process with no boundary to protect — pass the domain object directly.</li>
             <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">You need a small domain concept with real equality and behavior, not just a shipping container — that's a <a href="../ddd/value-object.html">Value Object</a>.</li>
-            <li id="usage-avoid-3" data-kb-polarity="avoid">The "DTO" would carry business rules or validation — that behavior belongs on the domain side, not the transfer shape.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The "DTO" would carry business rules or validation — that behavior belongs on the domain side, not the transfer shape.</li>
           </ul>
         </div>
       </div>

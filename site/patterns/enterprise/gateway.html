@@ -87,7 +87,7 @@
       <div class="prose">
         <p id="description-p-1">A <strong>gateway</strong> is a single object that encapsulates all access to an external system or resource — a payment processor, a message queue, a legacy mainframe, a third-party REST API — and exposes it through an interface shaped around what your application actually needs, not around the vendor's protocol, wire format, or field names.</p>
         <p id="description-p-2">The force it resolves is <strong>API leakage</strong>. Left unchecked, a vendor's auth headers, quirky field naming, unit conventions, and error codes creep into call sites throughout the codebase. Every caller becomes coupled to that vendor's shape, so a version bump, a provider switch, or even a unit test means touching dozens of places. The gateway confines that coupling to one seam: callers speak your domain's vocabulary, and only the gateway itself knows it's actually talking SOAP, paginating a REST endpoint, or parsing fixed-width mainframe records.</p>
-        <p id="description-p-3">Unlike an adapter, a gateway doesn't have to conform to an interface a client already expects — it's free to design its own, purpose-built for the calling code. That's also what makes it easy to substitute in tests: swap the real gateway for an in-memory fake that implements the same interface, and business logic runs without ever touching the network.</p>
+        <p id="description-p-3" data-kb-level="advanced">Unlike an adapter, a gateway doesn't have to conform to an interface a client already expects — it's free to design its own, purpose-built for the calling code. That's also what makes it easy to substitute in tests: swap the real gateway for an in-memory fake that implements the same interface, and business logic runs without ever touching the network.</p>
       </div>
     </section>
 
@@ -96,15 +96,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Everything your program needs from an outside system goes through one piece of code you wrote, and nothing else in your codebase talks to that system directly. That one piece speaks the outside system's language on one side and yours on the other. Like having a single person who deals with a supplier: everyone asks them, and if you change suppliers, only that person has to learn the new paperwork.</p>
+          <p>Your app sends text messages through a vendor. Its key, its odd field names and its units get copied into thirty files, so the day you switch vendors you edit all thirty — and every test has to reach the real vendor to run. Instead, write one small class that all of it goes through: it speaks the vendor's language on one side and yours on the other. Like having one person in the office who deals with a supplier — everyone asks them, and when the supplier changes, only that person learns the new paperwork.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>One object encapsulates all access to an external system — a payment processor, a queue, a mainframe, a third-party REST API — behind an interface designed around what the calling code needs, not around the vendor's protocol. Auth headers, pagination, wire format, unit conventions and error-code translation live inside it and nowhere else; callers pass and receive domain types. Because it owns its own interface rather than conforming to one a client already expects, substituting an in-memory fake in tests is a constructor argument, not a mocking framework.</p>
+          <p>That class owns the whole conversation: authentication, wire format, pagination, unit conversion and error-code translation live inside it, and callers pass and receive your own domain types. It designs its own interface rather than conforming to one a client already expects, which is what separates it from an adapter and what makes a second implementation cheap. The thing wrapped can be a network API, a file system, a device or a single SQL table, so swapping the real implementation for an in-memory fake in tests is a constructor argument, not a mocking framework.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when a dependency you do not control would otherwise imprint its vocabulary on call sites across the codebase — its value is that a version bump, a provider swap or a change to outage handling becomes an edit in one file rather than a search across dozens. The costs are modest but real: another interface to maintain even when the wrap is thin, and two decay modes to watch. Scoped too widely it becomes a dumping ground for unrelated external calls; written as a 1:1 forwarder it buys no insulation at all, because the vendor's shape simply reappears in your method signatures.</p>
+          <p>Choose it wherever a dependency you do not control would otherwise imprint its vocabulary on call sites you own: the payoff is that a version bump or a provider swap becomes an edit in one file. The bill is an interface to maintain even when the wrap is thin, plus two decay modes, each with a counter-move. Scoped too widely it accretes unrelated calls — keep one gateway per external system and promote genuine model translation to an anti-corruption layer. Written as a 1:1 forwarder it insulates nothing, because the vendor's shape reappears in your method signatures — shape each method from a caller's use case and let the mapping live inside. It is also the only outbound seam you own, which is where the timeout, the bounded retry and the circuit breaker belong.</p>
         </div>
       </div>
     </section>
@@ -114,12 +114,32 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
+    Checkout["Checkout service"]
+    Returns["Returns service"]
+    subgraph Seam["The only code that knows the carrier"]
+        GW["Shipping gateway"]
+        Keys[("Carrier credentials")]
+    end
+    Carrier["Carrier REST API"]:::ext
+    Checkout --&gt;|"1 rates for 2.5 kg"| GW
+    GW --&gt;|"2 read API key"| Keys
+    GW --&gt;|"3 POST weight_lbs"| Carrier
+    Carrier --&gt;|"4 quotes in price_usd"| GW
+    GW --&gt;|"5 rates in your own types"| Checkout
+    Returns -.-&gt;|"same interface"| GW
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>Which code knows the carrier's key, units and field names? Only what sits inside the box — steps 2 to 4 never leave it, and every caller sends and receives your own types.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+flowchart LR
     App["Application code"] -->|domain call| GWI["Gateway interface"]
     GWI -.->|implemented by| Real["Real Gateway"]
     GWI -.->|implemented by| Fake["Fake Gateway, for tests"]
     Real -->|vendor protocol| Ext["External system"]
         </pre>
-        <figcaption>Callers depend only on the gateway's own interface. A real implementation speaks the vendor's protocol; a fake substitutes it in tests.</figcaption>
+        <figcaption>Where does the test double plug in? Callers depend only on the gateway's own interface, so a fake implementing that interface substitutes for the real one and no caller changes.</figcaption>
       </figure>
     </section>
 
@@ -130,10 +150,10 @@ flowchart LR
         <dd>Wraps a non-object resource such as a file system, a hardware device, or an environment/config store, giving it an object-shaped interface.</dd>
         <dt id="variations-item-2">Service Gateway</dt>
         <dd>Wraps a network-facing API — REST, SOAP, gRPC — hiding wire format, authentication, and retries behind plain domain method calls. A client that wraps an AI tool server, such as one speaking Anthropic's Model Context Protocol (MCP), is the same shape: the gateway turns discoverable remote tools into ordinary method calls the rest of the code can use without knowing the protocol.</dd>
-        <dt id="variations-item-3">Table Data Gateway / Row Data Gateway</dt>
-        <dd>Fowler's data-layer gateways: one object per table, or one per row, standing between domain code and raw SQL.</dd>
-        <dt id="variations-item-4">Fake Gateway</dt>
-        <dd>A stand-in implementation swapped in for tests, so business logic runs against a fast, deterministic double instead of the real external system.</dd>
+        <dt id="variations-item-3" data-kb-level="expert">Table Data Gateway / Row Data Gateway</dt>
+        <dd data-kb-level="expert">Fowler's data-layer gateways: one object per table, or one per row, standing between domain code and raw SQL.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Fake Gateway</dt>
+        <dd data-kb-level="advanced">A stand-in implementation swapped in for tests, so business logic runs against a fast, deterministic double instead of the real external system.</dd>
       </dl>
     </section>
 
@@ -145,8 +165,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Confines a vendor's API quirks — auth, protocol, naming, units — to one place.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Domain code reads in its own vocabulary instead of the external system's.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Swappable: replace, upgrade, or fake the real system without touching callers.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Cushions the codebase from the external system's changes and outages.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Swappable: replace, upgrade, or fake the real system without touching callers.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Cushions the codebase from the external system's changes and outages.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -154,7 +174,7 @@ flowchart LR
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">One more object and interface to maintain, even when the wrap is thin.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="expert">A poorly scoped gateway accretes into a dumping ground for unrelated calls.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Doesn't fix a genuine interface mismatch by itself — real translation work remains.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Doesn't fix a genuine interface mismatch by itself — real translation work remains.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">A gateway that just forwards arguments 1:1 is ceremony without real insulation.</li>
           </ul>
         </div>
@@ -229,37 +249,37 @@ const rates = await gateway.getRates("94107", "10001", 2.5);</code></pre>
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Request timeout (connect and read)</strong> — Upper bound on how long a call to the external system may block before the gateway gives up; set too high, a slow vendor ties up callers.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Retry policy (count and backoff)</strong> — How many times a failed call is retried and with what backoff; unbounded or un-jittered retries amplify load during a vendor outage.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Client connection pool size</strong> — Maximum concurrent connections the gateway holds open to the vendor; it caps in-flight calls and bounds resource use.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Outbound rate / concurrency limit</strong> — A ceiling on calls per interval so the gateway stays under the vendor rate limit.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Retry policy (count and backoff)</strong> — How many times a failed call is retried and with what backoff; unbounded or un-jittered retries amplify load during a vendor outage.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Client connection pool size</strong> — Maximum concurrent connections the gateway holds open to the vendor; it caps in-flight calls and bounds resource use.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Outbound rate / concurrency limit</strong> — A ceiling on calls per interval so the gateway stays under the vendor rate limit.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>External error rate</strong> — Fraction of calls the vendor rejects or fails; the primary health signal for the dependency.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Call latency p99</strong> — Tail latency of gateway calls; the external system usually dominates the caller latency budget.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Timeout and retry rate</strong> — How often calls time out or get retried; a rising rate is early warning of vendor degradation.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Throttling (429) rate</strong> — Rate of rate-limit rejections, indicating outbound volume exceeds the vendor quota.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Call latency p99</strong> — Tail latency of gateway calls; the external system usually dominates the caller latency budget.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Timeout and retry rate</strong> — How often calls time out or get retried; a rising rate is early warning of vendor degradation.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Throttling (429) rate</strong> — Rate of rate-limit rejections, indicating outbound volume exceeds the vendor quota.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Slow vendor exhausts the client pool</strong> — When the external system slows, in-flight calls pile up and consume every connection or thread, blocking callers waiting on the gateway.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Retry storm</strong> — Retries stacked on top of a struggling vendor multiply load and delay its recovery.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Rate-limited under burst</strong> — A spike of outbound calls trips the vendor quota, and the vendor starts rejecting until volume drops.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Cascading outage</strong> — Without a timeout or fallback, a vendor outage propagates straight through the gateway into every caller.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Retry storm</strong> — Retries stacked on top of a struggling vendor multiply load and delay its recovery.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Rate-limited under burst</strong> — A spike of outbound calls trips the vendor quota, and the vendor starts rejecting until volume drops.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Cascading outage</strong> — Without a timeout or fallback, a vendor outage propagates straight through the gateway into every caller.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Set an explicit connect and read timeout on every outbound call.</li>
-            <li id="production-check-2" data-kb-polarity="check">Bound retries with capped, jittered backoff and only retry idempotent calls.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Bound retries with capped, jittered backoff and only retry idempotent calls.</li>
             <li id="production-check-3" data-kb-polarity="check">Provide a fake gateway implementing the same interface for tests.</li>
-            <li id="production-check-4" data-kb-polarity="check">Wrap the gateway with a circuit breaker or fallback so a vendor outage degrades gracefully.</li>
-            <li id="production-check-5" data-kb-polarity="check">Confine vendor credentials and auth to the gateway, not its callers.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Wrap the gateway with a circuit breaker or fallback so a vendor outage degrades gracefully.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Confine vendor credentials and auth to the gateway, not its callers.</li>
           </ul>
         </div>
       </div>

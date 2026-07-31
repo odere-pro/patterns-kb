@@ -78,8 +78,8 @@
       <div class="prose">
         <p id="description-p-1">A <strong>Unit of Work</strong> maintains a list of the objects affected by a business transaction and coordinates writing out their changes. As you load and mutate domain objects it quietly records which ones are <em>new</em>, which have gone <em>dirty</em>, and which are <em>removed</em>. Nothing touches the database until you tell it to commit.</p>
         <p id="description-p-2">The forces it resolves are chattiness and atomicity. Without it, persistence leaks into the business logic — every object saves itself the moment it changes. That means a swarm of small round trips, no say over the <em>order</em> writes happen in, and no single transactional boundary, so a failure halfway through leaves the store half-updated.</p>
-        <p id="description-p-3">The Unit of Work acts as a buffer and a controller. It collects intended changes as they accrue, and on commit it opens one transaction, orders the writes to respect foreign-key and dependency constraints, sends them together, and commits or rolls back the lot. One business transaction becomes one database transaction.</p>
-        <p id="description-p-4">It usually rides alongside an identity map, so each row maps to exactly one in-memory object, and it is the natural place to attach optimistic-locking version checks the moment the changes flush.</p>
+        <p id="description-p-3" data-kb-level="advanced">The Unit of Work acts as a buffer and a controller. It collects intended changes as they accrue, and on commit it opens one transaction, orders the writes to respect foreign-key and dependency constraints, sends them together, and commits or rolls back the lot. One business transaction becomes one database transaction.</p>
+        <p id="description-p-4" data-kb-level="advanced">It usually rides alongside an identity map, so each row maps to exactly one in-memory object, and it is the natural place to attach optimistic-locking version checks the moment the changes flush.</p>
       </div>
     </section>
 
@@ -92,11 +92,11 @@
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A stateful coordinator scoped to one business transaction. As objects are loaded and mutated it records which are new, dirty or removed — by snapshot comparison or proxies — and nothing reaches the store until commit. On commit it opens one database transaction, orders inserts, updates and deletes by dependency to respect foreign-key constraints, flushes them together, and commits or rolls back the lot. It normally rides alongside an identity map so each row maps to one object, and it is where optimistic-locking version checks fire.</p>
+          <p>The interesting choice is how that list gets built: the caller announces each change with an explicit registerDirty, the object notifies from inside its own setters so callers cannot forget, or the coordinator diffs every loaded object against a snapshot taken at load time — the route Hibernate and EF Core take, invisible to the caller and subtle to implement. At commit it topologically orders the inserts, updates and deletes so foreign-key constraints hold, then batches the statements into as few round trips as the driver allows. It rides alongside an identity map, so each row maps to exactly one tracked object and two halves of the same use case cannot mutate different copies of one row. Optimistic-locking version checks fire in that same flush, inside that same transaction.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when one business transaction touches several objects and must land atomically, or when per-object saves have turned into a swarm of round trips — the return is one transactional boundary plus the batching and write ordering you would otherwise hand-code. What you take on is state with a lifetime. Scope it wrongly and a long-lived instance accumulates memory and hands out stale objects; forget to dispose it and you leak a connection. Dirty tracking is fiddly enough to miss or over-report changes, and deferring writes surprises anyone expecting a save to have happened, turning debugging into reasoning about flush order.</p>
+          <p>Reach for it when one business transaction touches several objects that must land together, or when per-object saves have become a swarm of round trips; skip it when the operation writes a single row, because a direct save says plainly what it does. What you take on is state with a lifetime, and each cost has a counter-move. Scope it too widely and it accumulates tracked objects until every dirty-check is linear in a set nobody meant to load — bind the scope to one request or use case, dispose it reliably, and keep bulk jobs out of it entirely. A missed registration loses a write in silence, which is the argument for snapshot diffing or setter notification over trusting callers to remember. Deferred writes surprise anyone expecting a save to have already happened, so make flush timing explicit wherever the ordering is load-bearing. And two units of work will eventually mutate the same row, so the version check that fails at commit needs a retry around the whole use case rather than a raw error. Then run the loop: tune batch size and scope, watch tracked-entity count and commit duration, expect the long-lived context to bloat first, and gate the release on disposal.</p>
         </div>
       </div>
     </section>
@@ -105,16 +105,21 @@
       <h2 class="doc-h" id="h-struct">How it works</h2>
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
-flowchart TB
-    Client["Client mutates objects"] -->|"register change"| UoW["Unit of Work"]
-    UoW -->|"registerNew"| New["New — insert"]
-    UoW -->|"registerDirty"| Dirty["Dirty — update"]
-    UoW -->|"registerRemoved"| Removed["Removed — delete"]
-    New -->|"INSERT"| Commit["commit as one transaction"]
-    Dirty -->|"UPDATE"| Commit
-    Removed -->|"DELETE"| Commit
+flowchart LR
+    Svc["Place-order use case"]
+    UoW["Unit of Work"]
+    Sets["new · dirty · removed"]
+    subgraph Tx["One database transaction"]
+        Mapper["Data mapper"]
+        DB[("orders + order_lines")]
+    end
+    Svc --&gt;|"1 mutate domain objects"| UoW
+    UoW --&gt;|"2 record each change"| Sets
+    Svc --&gt;|"3 commit"| UoW
+    UoW --&gt;|"4 ordered inserts, updates, deletes"| Mapper
+    Mapper --&gt;|"5 one batched flush"| DB
         </pre>
-        <figcaption>Changes accumulate in three buckets — new, dirty, removed — then flush together in a single ordered commit.</figcaption>
+        <figcaption>When does anything actually reach the database? Not while the use case is mutating objects — steps 1 and 2 only record what changed, and step 3 sends the whole set inside one transaction that commits or rolls back together.</figcaption>
       </figure>
     </section>
 
@@ -125,10 +130,10 @@ flowchart TB
         <dd>The caller explicitly tells the unit of work when something changed — <code>registerDirty(order)</code>. Simple and explicit, but easy to forget a call and lose a write.</dd>
         <dt id="variations-item-2">Object registration</dt>
         <dd>Each object notifies its own unit of work from inside its setters, so callers can't forget. Couples the domain object to the unit of work.</dd>
-        <dt id="variations-item-3">Snapshot / dirty checking</dt>
-        <dd>The unit of work keeps a snapshot taken at load time and, on commit, diffs each object to infer what changed. This is how Hibernate and EF Core work — invisible to the caller, subtle to implement.</dd>
-        <dt id="variations-item-4">Session-per-request scope</dt>
-        <dd>One unit of work is opened per web request or message and disposed at the end, versus a unit explicitly scoped around a single use case.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Snapshot / dirty checking</dt>
+        <dd data-kb-level="advanced">The unit of work keeps a snapshot taken at load time and, on commit, diffs each object to infer what changed. This is how Hibernate and EF Core work — invisible to the caller, subtle to implement.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Session-per-request scope</dt>
+        <dd data-kb-level="advanced">One unit of work is opened per web request or message and disposed at the end, versus a unit explicitly scoped around a single use case.</dd>
       </dl>
     </section>
 
@@ -140,8 +145,8 @@ flowchart TB
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">One transactional boundary — the whole business transaction commits or rolls back atomically.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">Fewer round trips — writes are collected and sent together at commit, and can be batched.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">Controls write order so inserts and deletes respect foreign-key constraints.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Decouples domain logic from persistence timing — business code just mutates objects.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Controls write order so inserts and deletes respect foreign-key constraints.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Decouples domain logic from persistence timing — business code just mutates objects.</li>
             <li id="tradeoffs-pro-5" data-kb-polarity="pro" data-kb-level="advanced">A single place to apply optimistic-locking and concurrency checks.</li>
           </ul>
         </div>
@@ -150,7 +155,7 @@ flowchart TB
           <ul>
             <li id="tradeoffs-con-1" data-kb-polarity="con">Adds a stateful coordinator you must scope correctly and dispose reliably.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="expert">A long-lived unit of work accumulates memory and can serve stale objects.</li>
-            <li id="tradeoffs-con-3" data-kb-polarity="con">Dirty tracking via snapshots or proxies is fiddly — it can miss or over-report changes.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Dirty tracking via snapshots or proxies is fiddly — it can miss or over-report changes.</li>
             <li id="tradeoffs-con-4" data-kb-polarity="con">Hides <em>when</em> writes actually happen, which surprises anyone expecting an immediate save.</li>
           </ul>
         </div>
@@ -216,8 +221,8 @@ class UnitOfWork {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="hibernate-session" id="wild-hibernate-session"><strong>Hibernate Session</strong><span>Its first-level cache tracks loaded entities and dirty-checks them on flush, orders inserts, updates, and deletes by dependency, and can batch statements via hibernate.jdbc.batch_size; flush timing is governed by the FlushMode.</span></div>
-        <div class="wild-item" data-kb-example="ef-core-dbcontext" id="wild-ef-core-dbcontext"><strong>EF Core DbContext</strong><span>Its change tracker records each entity as Added, Modified, or Deleted; SaveChanges wraps them in one transaction and batches multiple statements per round trip up to MaxBatchSize.</span></div>
-        <div class="wild-item" data-kb-example="sqlalchemy-session" id="wild-sqlalchemy-session"><strong>SQLAlchemy Session</strong><span>Accumulates pending object changes and, on flush or commit, emits INSERT, UPDATE, and DELETE in dependency order; the Session also serves as the identity map so one row maps to one object within it.</span></div>
+        <div class="wild-item" data-kb-example="ef-core-dbcontext" id="wild-ef-core-dbcontext" data-kb-level="advanced"><strong>EF Core DbContext</strong><span>Its change tracker records each entity as Added, Modified, or Deleted; SaveChanges wraps them in one transaction and batches multiple statements per round trip up to MaxBatchSize.</span></div>
+        <div class="wild-item" data-kb-example="sqlalchemy-session" id="wild-sqlalchemy-session" data-kb-level="expert"><strong>SQLAlchemy Session</strong><span>Accumulates pending object changes and, on flush or commit, emits INSERT, UPDATE, and DELETE in dependency order; the Session also serves as the identity map so one row maps to one object within it.</span></div>
       </div>
     </section>
 
@@ -228,37 +233,37 @@ class UnitOfWork {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Flush timing / mode</strong> — Whether pending changes flush automatically (before queries, at commit) or only on an explicit call; auto-flush is convenient but hides when writes happen.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Write batch size</strong> — How many INSERT/UPDATE/DELETE statements are sent per round trip on commit (for example hibernate.jdbc.batch_size); larger batches cut round trips.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Unit-of-work scope</strong> — The lifespan of one unit of work — per request, per message, or per use case; wider scope tracks more objects and holds them longer.</li>
-            <li id="production-knob-4" data-kb-polarity="knob"><strong>Commit isolation level</strong> — The isolation the single commit transaction runs at, trading anomaly protection against contention.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Write batch size</strong> — How many INSERT/UPDATE/DELETE statements are sent per round trip on commit (for example hibernate.jdbc.batch_size); larger batches cut round trips.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Unit-of-work scope</strong> — The lifespan of one unit of work — per request, per message, or per use case; wider scope tracks more objects and holds them longer.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Commit isolation level</strong> — The isolation the single commit transaction runs at, trading anomaly protection against contention.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Tracked entity count</strong> — Number of objects the unit of work is tracking; dirty-checking cost and memory grow with it.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Statements per commit</strong> — How many statements the flush emits and whether they batch; a flush of thousands of un-batched statements is a round-trip storm.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Commit transaction duration</strong> — How long the single commit transaction runs; long commits hold locks and connections.</li>
-            <li id="production-signal-4" data-kb-polarity="signal"><strong>Optimistic-lock conflict rate</strong> — How often a version check fails at flush, forcing the use case to retry.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Statements per commit</strong> — How many statements the flush emits and whether they batch; a flush of thousands of un-batched statements is a round-trip storm.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Commit transaction duration</strong> — How long the single commit transaction runs; long commits hold locks and connections.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Optimistic-lock conflict rate</strong> — How often a version check fails at flush, forcing the use case to retry.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>Long-lived unit of work bloats</strong> — A unit of work kept open too long accumulates tracked entities, growing memory and slowing every dirty-check.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Dirty-check cost scales with tracked set</strong> — Snapshot diffing is linear in tracked objects; loading tens of thousands into one context makes each flush crawl.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Optimistic-lock conflict under concurrency</strong> — Two units of work mutate the same row; the second fails its version check at commit and must be retried.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Lost write from a missed registration</strong> — In the caller-registration variant, forgetting a registerDirty leaves a mutation out of the commit, and it silently never persists.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Dirty-check cost scales with tracked set</strong> — Snapshot diffing is linear in tracked objects; loading tens of thousands into one context makes each flush crawl.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="expert"><strong>Optimistic-lock conflict under concurrency</strong> — Two units of work mutate the same row; the second fails its version check at commit and must be retried.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Lost write from a missed registration</strong> — In the caller-registration variant, forgetting a registerDirty leaves a mutation out of the commit, and it silently never persists.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Scope the unit of work to one request or use case and dispose it reliably at the end.</li>
-            <li id="production-check-2" data-kb-polarity="check">Keep the tracked set bounded — do not load tens of thousands of entities into one unit of work for a bulk job.</li>
-            <li id="production-check-3" data-kb-polarity="check">Enable statement batching for bulk writes.</li>
-            <li id="production-check-4" data-kb-polarity="check">Handle optimistic-lock conflicts with a retry rather than surfacing them as a raw error.</li>
-            <li id="production-check-5" data-kb-polarity="check">Pair it with an identity map so one row maps to exactly one tracked object.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Keep the tracked set bounded — do not load tens of thousands of entities into one unit of work for a bulk job.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Enable statement batching for bulk writes.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="expert">Handle optimistic-lock conflicts with a retry rather than surfacing them as a raw error.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Pair it with an identity map so one row maps to exactly one tracked object.</li>
           </ul>
         </div>
       </div>

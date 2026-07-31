@@ -86,8 +86,8 @@
       <h2 class="doc-h" id="h-desc">What it is</h2>
       <div class="prose">
         <p id="description-p-1">A <strong>data mapper</strong> is a dedicated layer of code whose only responsibility is moving data between in-memory domain objects and the tables of a relational database. It knows how to build an object from a row, and how to take an object apart back into the columns a table expects. Neither side holds a reference to the other: the domain object carries no SQL, no table name, no foreign-key column — it is a plain object with behavior; the schema stays an ordinary relational design, untouched by object concerns.</p>
-        <p id="description-p-2">The force it resolves is a mismatch between two shapes that rarely agree. A domain model wants inheritance, aggregates, value objects, and rich behavior; a relational schema wants normalized tables, foreign keys, and junction tables for many-to-many links. Wire persistence directly into the domain — as <a href="./active-record.html">Active Record</a> does — and one shape compromises toward the other. A data mapper puts the reconciliation in a third piece, so the object model and the schema can each take the shape that suits them best.</p>
-        <p id="description-p-3">The cost is a layer that has to exist even for a trivial entity: someone has to write the mapping code, by hand or generated from metadata, and a field added to either side means updating both the model and its mapper. In return the domain model can be built and tested with no database in the loop at all, and a schema change that doesn't alter behavior — a renamed column, a new join table — never has to touch the model.</p>
+        <p id="description-p-2" data-kb-level="advanced">The force it resolves is a mismatch between two shapes that rarely agree. A domain model wants inheritance, aggregates, value objects, and rich behavior; a relational schema wants normalized tables, foreign keys, and junction tables for many-to-many links. Wire persistence directly into the domain — as <a href="./active-record.html">Active Record</a> does — and one shape compromises toward the other. A data mapper puts the reconciliation in a third piece, so the object model and the schema can each take the shape that suits them best.</p>
+        <p id="description-p-3" data-kb-level="advanced">What the layer buys is scheduling freedom. A schema change that doesn't alter behavior — a renamed column, a new junction table — stops at the mapper, and a model change that needs no new storage never reaches the team that owns the database. Each side pays only for the changes that concern it.</p>
       </div>
     </section>
 
@@ -96,15 +96,15 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Keep your business objects and your database tables as two separate designs, and put a piece of code in the middle that translates between them. The objects never mention tables; the tables never bend to suit the objects. Like a translator between two people who each keep speaking their own language — neither has to learn the other's, but someone has to write the phrasebook and keep it current.</p>
+          <p>Put the save-and-load code inside your business objects and the two get welded together: you cannot build an order in a test without a live database, and the day someone renames a column your business rules stop compiling. Keep the two designs apart instead. The objects hold the behavior, the tables hold the data, and one piece of code in the middle knows how to turn each into the other — a translator, so neither side has to learn the other's language.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>A dedicated layer translates between domain objects and rows in both directions: hydrate an object from a result set, and take it apart into the columns an INSERT or UPDATE expects. Neither side holds a reference to the other — the domain object carries no table name, no foreign key, no SQL, and the schema stays an ordinary relational design. Mapping is hand-written or generated from metadata. It is the model behind Hibernate, SQLAlchemy and Doctrine, and it normally travels with an identity map and a unit of work.</p>
+          <p>Both directions live in that middle piece, so that is where the interesting choices concentrate. Write each field out by hand, or generate the mapping from annotations or a mapping file the way Hibernate, SQLAlchemy and Doctrine do. An inheritance hierarchy gets a declared strategy — one wide table for the whole tree, or a joined table per subclass — and each association declares how it is fetched, which is what decides the SQL a single load issues. The mapper rarely works alone: an identity map in front of it keeps one row mapped to one object, and a unit of work tells it which objects to write when the transaction commits.</p>
         </div>
         <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>Choose it when the object model and the schema have genuinely different shapes — inheritance, value objects, aggregates spanning tables, or a schema another team owns — because it lets each side take the form that suits it, and lets business rules be tested with no database in the loop. You pay with a layer that must exist even for a trivial entity, two representations to keep in sync, and mapping code someone has to own. The failure modes are quiet: a naive mapper turns loading a graph into N+1 queries, and without an identity map beside it one row hydrates into two divergent objects in a single request.</p>
+          <p>Choose it when the object model and the schema have genuinely different shapes — inheritance, value objects, an aggregate spanning tables, or a schema another team owns — because each side then changes on its own schedule, and business rules can be tested with nothing running. The bill is a layer that exists even for a one-table entity plus two representations to keep in sync; pay it by generating the mapping from metadata and by treating the mapping edit as part of the migration that forced it. Each quiet failure has its counter-move: chatty loading is paid off with a per-association fetch decision, a join or a batched IN-query; divergent duplicates of one row with an identity map scoped to the unit of work. When one row honestly is one object with modest behavior, skip the layer and let the row persist itself.</p>
         </div>
       </div>
     </section>
@@ -114,12 +114,21 @@
       <figure class="diagram" id="structure-fig-1">
         <pre class="mermaid">
 flowchart LR
-    App["Application code"] -->|find / save| Mapper["Data Mapper"]
-    Mapper -->|hydrates| Obj["Domain object, plain"]
-    App -->|calls behavior on| Obj
-    Mapper -->|SQL| DB[("Database")]
+    subgraph Domain["Domain side — no SQL, no table names"]
+        App["Application code"]
+        Obj["Order object"]
+    end
+    Mapper["Order Mapper"]
+    DB[("orders table")]
+    App --&gt;|"1 find(42)"| Mapper
+    Mapper --&gt;|"2 SELECT row"| DB
+    DB --&gt;|"3 row"| Mapper
+    Mapper --&gt;|"4 hydrate"| Obj
+    App --&gt;|"5 change fields"| Obj
+    App --&gt;|"6 save(order)"| Mapper
+    Mapper --&gt;|"7 UPDATE columns"| DB
         </pre>
-        <figcaption>The application calls the mapper to load or save, and calls the domain object directly for behavior. Only the mapper ever touches SQL.</figcaption>
+        <figcaption>Where does SQL stop? Steps 2, 3 and 7 are the only places a table or column name appears, and all three happen inside the mapper — everything in the boundary is a plain object you can build in a test.</figcaption>
       </figure>
     </section>
 
@@ -130,12 +139,12 @@ flowchart LR
         <dd>An ORM (Hibernate, TypeORM, Doctrine) generates the mapper from annotations or a mapping file instead of hand-written code — far less boilerplate on typical entities, at the cost of some transparency.</dd>
         <dt id="variations-item-2">Hand-written mapper</dt>
         <dd>Every field mapped explicitly in code. More typing, but no reflection magic and a straightforward stack trace the moment a mapping breaks.</dd>
-        <dt id="variations-item-3"><a href="./repository.html">Repository</a></dt>
-        <dd>Wraps one or more mappers behind a collection-like interface — add, remove, find — so callers query for objects without ever seeing SQL or the mapper itself.</dd>
-        <dt id="variations-item-4">Identity Map integration</dt>
-        <dd>The mapper checks an identity map before building a new instance, so loading the same row twice in one unit of work returns the same object instead of a duplicate.</dd>
-        <dt id="variations-item-5">Table Data Gateway</dt>
-        <dd>A lighter cousin: the gateway wraps a table and hands back raw rows or a cursor; a data mapper goes one step further and turns those rows into full domain objects.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced"><a href="./repository.html">Repository</a></dt>
+        <dd data-kb-level="advanced">Wraps one or more mappers behind a collection-like interface — add, remove, find — so callers query for objects without ever seeing SQL or the mapper itself.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Identity Map integration</dt>
+        <dd data-kb-level="advanced">The mapper checks an identity map before building a new instance, so loading the same row twice in one unit of work returns the same object instead of a duplicate.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Table Data Gateway</dt>
+        <dd data-kb-level="expert">A lighter cousin: the gateway wraps a table and hands back raw rows or a cursor; a data mapper goes one step further and turns those rows into full domain objects.</dd>
       </dl>
     </section>
 
@@ -147,8 +156,8 @@ flowchart LR
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Domain objects stay plain — no base class, no persistence API, trivial to unit test without a database.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">The object model and the schema evolve independently; a normalized junction table or a renamed column doesn't touch business logic.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">All mapping logic lives in one place, so a query or translation bug is fixed once instead of chased across the domain.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Handles domain shapes that don't map 1:1 to tables — inheritance hierarchies, value objects, aggregates spanning several tables.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">All mapping logic lives in one place, so a query or translation bug is fixed once instead of chased across the domain.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Handles domain shapes that don't map 1:1 to tables — inheritance hierarchies, value objects, aggregates spanning several tables.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -235,8 +244,8 @@ if (user) {
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
         <div class="wild-item" data-kb-example="sqlalchemy" id="wild-sqlalchemy"><strong>SQLAlchemy</strong><span>Maps plain Python classes onto tables, and imperative mapping (registry.map_imperatively) can map an existing class without altering it; the Session doubles as identity map and unit of work, with lazy or eager relationship loading set per attribute.</span></div>
-        <div class="wild-item" data-kb-example="hibernate" id="wild-hibernate"><strong>Hibernate</strong><span>Builds mappers from annotations or XML mapping so POJOs carry no SQL; fetch mode is lazy or eager per association, collection loads batch via default_batch_fetch_size, and the Session first-level cache acts as an identity map.</span></div>
-        <div class="wild-item" data-kb-example="doctrine" id="wild-doctrine"><strong>Doctrine ORM</strong><span>The PHP ORM that names itself a Data Mapper in contrast to Active Record; entities are plain objects with mapping declared in attributes, XML, or YAML, while the EntityManager holds the unit of work and identity map.</span></div>
+        <div class="wild-item" data-kb-example="hibernate" id="wild-hibernate" data-kb-level="advanced"><strong>Hibernate</strong><span>Builds mappers from annotations or XML mapping so POJOs carry no SQL; fetch mode is lazy or eager per association, collection loads batch via default_batch_fetch_size, and the Session first-level cache acts as an identity map.</span></div>
+        <div class="wild-item" data-kb-example="doctrine" id="wild-doctrine" data-kb-level="advanced"><strong>Doctrine ORM</strong><span>The PHP ORM that names itself a Data Mapper in contrast to Active Record; entities are plain objects with mapping declared in attributes, XML, or YAML, while the EntityManager holds the unit of work and identity map.</span></div>
       </div>
     </section>
 
@@ -247,34 +256,34 @@ if (user) {
           <h3>Tuning knobs</h3>
           <ul>
             <li id="production-knob-1" data-kb-polarity="knob"><strong>Fetch strategy (lazy vs eager)</strong> — Whether an association loads lazily on first access or eagerly by join; eager avoids extra round trips but over-fetches, lazy risks N+1 and access-after-close errors.</li>
-            <li id="production-knob-2" data-kb-polarity="knob"><strong>Batch fetch size</strong> — How many parent rows a collection fetch folds into one IN-query; larger batches cut round trips at the cost of wider queries.</li>
-            <li id="production-knob-3" data-kb-polarity="knob"><strong>Identity-map / session cache scope</strong> — The window over which one row maps to one in-memory object; too wide serves stale objects, too narrow re-hydrates duplicates.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Batch fetch size</strong> — How many parent rows a collection fetch folds into one IN-query; larger batches cut round trips at the cost of wider queries.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="expert"><strong>Identity-map / session cache scope</strong> — The window over which one row maps to one in-memory object; too wide serves stale objects, too narrow re-hydrates duplicates.</li>
           </ul>
         </div>
         <div class="prod-group prod-signals">
           <h3>Signals to watch</h3>
           <ul>
             <li id="production-signal-1" data-kb-polarity="signal"><strong>Queries per request</strong> — Query count for one logical load; a climb that tracks result-set size is the N+1 signature.</li>
-            <li id="production-signal-2" data-kb-polarity="signal"><strong>Rows fetched vs rows used</strong> — Rows hydrated against rows actually read; a large gap points to an over-eager fetch or a cartesian join.</li>
-            <li id="production-signal-3" data-kb-polarity="signal"><strong>Hydration time</strong> — Time spent building objects from rows, separate from query time; it grows with graph size.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Rows fetched vs rows used</strong> — Rows hydrated against rows actually read; a large gap points to an over-eager fetch or a cartesian join.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="expert"><strong>Hydration time</strong> — Time spent building objects from rows, separate from query time; it grows with graph size.</li>
           </ul>
         </div>
         <div class="prod-group prod-failures">
           <h3>Failure modes under load</h3>
           <ul>
             <li id="production-failure-1" data-kb-polarity="failure"><strong>N+1 query explosion</strong> — A naive mapper issues one query per associated row; a list that was fast at ten rows overwhelms the database at ten thousand.</li>
-            <li id="production-failure-2" data-kb-polarity="failure"><strong>Lazy load after the session closed</strong> — Touching a lazily-mapped association once its loading unit of work has closed throws instead of fetching.</li>
-            <li id="production-failure-3" data-kb-polarity="failure"><strong>Duplicate objects without an identity map</strong> — The same row hydrated twice in one request becomes two objects that can diverge, so an update on one is silently lost.</li>
-            <li id="production-failure-4" data-kb-polarity="failure"><strong>Cartesian blow-up from eager joins</strong> — Eagerly join-fetching several collections at once multiplies rows combinatorially and returns far more data than the graph holds.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Lazy load after the session closed</strong> — Touching a lazily-mapped association once its loading unit of work has closed throws instead of fetching.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>Duplicate objects without an identity map</strong> — The same row hydrated twice in one request becomes two objects that can diverge, so an update on one is silently lost.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>Cartesian blow-up from eager joins</strong> — Eagerly join-fetching several collections at once multiplies rows combinatorially and returns far more data than the graph holds.</li>
           </ul>
         </div>
         <div class="prod-group prod-checklist">
           <h3>Readiness checklist</h3>
           <ul>
             <li id="production-check-1" data-kb-polarity="check">Count the SQL a hot path issues and confirm it does not grow with result-set size.</li>
-            <li id="production-check-2" data-kb-polarity="check">Choose lazy or eager fetch deliberately per association instead of accepting the default everywhere.</li>
-            <li id="production-check-3" data-kb-polarity="check">Put an identity map in front of the mapper so one row maps to one object within a unit of work.</li>
-            <li id="production-check-4" data-kb-polarity="check">Keep the mapping in sync whenever the schema or the model gains a field.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Choose lazy or eager fetch deliberately per association instead of accepting the default everywhere.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Put an identity map in front of the mapper so one row maps to one object within a unit of work.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Keep the mapping in sync whenever the schema or the model gains a field.</li>
           </ul>
         </div>
       </div>
