@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Priority Queue · Patterns</title>
+  <meta name="description" content="Priority Queue — Serves queued work by importance, not by arrival order">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <script src="../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#priority-queue",
+  "identifier": "priority-queue",
+  "name": "Priority Queue",
+  "description": "Serves queued work by importance, not by arrival order",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "messaging",
+  "kb:group": "messaging",
+  "kb:combines-with": [
+    {
+      "@id": "../distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "Leveling buffers the burst, priority decides who gets served out of it first"
+    },
+    {
+      "@id": "./competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:note": "Each priority class is drained by its own pool of interchangeable workers"
+    },
+    {
+      "@id": "../distributed/resilience/rate-limiter.html#rate-limiter",
+      "name": "Rate Limiter",
+      "kb:note": "Limit the low classes first, so shedding load costs the cheapest work"
+    },
+    {
+      "@id": "./sequential-convoy.html#sequential-convoy",
+      "name": "Sequential Convoy",
+      "kb:note": "Keep per-entity order inside a class when the class alone is not enough"
+    }
+  ],
+  "kb:variant-of": [
+    {
+      "@id": "./message-queue.html#message-queue",
+      "name": "Message Queue",
+      "kb:note": "A queue whose service order is business importance rather than arrival"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc lens">
+  <main class="doc-wrap" data-kb-id="priority-queue" data-kb-kind="pattern" data-kb-band="messaging" data-kb-group="messaging" data-kb-essence="Serves queued work by importance, not by arrival order" data-kb-order="87" data-kb-aliases="[&quot;priority messaging&quot;]" data-kb-tags="[&quot;messaging&quot;,&quot;latency&quot;,&quot;resource-management&quot;,&quot;throughput&quot;]" data-kb-solves="[&quot;our biggest customer's jobs sit behind a backlog of free-tier work&quot;,&quot;urgent requests wait in the same line as overnight batch jobs and miss their deadline&quot;,&quot;we promised premium users faster processing but everything goes through one queue&quot;,&quot;a flood of low-value work is starving the work that actually matters&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-msg-h">Messaging</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Priority Queue</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Messaging</p>
+      <h1 class="doc-title">Priority Queue</h1>
+      <p class="doc-essence">Classifies each unit of queued work by how much it matters, and serves the important classes first — so a promise made to one caller survives a flood of work from another.</p>
+      <div class="doc-metarow">
+        <span class="badge">Messaging</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="priority-queue">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1">A plain <a href="./message-queue.html">Message Queue</a> serves work in the order it arrived, which is a statement that every item is worth the same. That is rarely true. A password-reset email and a monthly analytics export share one channel, and when ten thousand exports land at nine in the morning the reset waits behind all of them.</p>
+        <p id="description-p-2" data-kb-level="advanced">A priority queue breaks the tie differently. The producer classifies each message — this is urgent, this can wait — and consumers take the urgent class first. Nothing about the work changes; only the order it is offered in.</p>
+        <p id="description-p-3" data-kb-level="advanced">Two mechanisms give you that ordering, and they fail differently. <strong>One queue with a priority field</strong> asks the broker to sort, which is simple and only works if your broker actually supports it. <strong>One queue per class</strong> puts the ordering in the routing instead, which every broker supports and which lets you also give each class its own consumers.</p>
+        <p id="description-p-4" data-kb-level="advanced">The consumer topology is the real decision. Give each queue its own dedicated pool and the classes are isolated: a jam in the low queue cannot slow the high one, and you can size each pool against its own target. Share one pool across the queues and you get simplicity plus a hard guarantee that high always beats low — bought with the pattern's signature failure, <strong>starvation</strong>, where low-priority work under sustained load is delayed indefinitely and in principle never runs.</p>
+        <p id="description-p-5" data-kb-level="expert">What the pattern does not do is absorb load. Priority reorders an overload; it does not shrink it. If the arrival rate can exceed what the consumers can drain, you still need <a href="../distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a> underneath — priority decides who suffers first, buffering decides whether anyone has to.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>Everything waiting for the same workers sits in one line, so a password reset queues behind ten thousand overnight reports and arrives an hour late. Give the work labels — this one is urgent, this one can wait — and let the workers take the urgent ones first. The reset goes out in seconds and the reports still finish, just afterwards.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>Two mechanisms deliver that ordering. A single queue with a priority attribute asks the broker to sort, which is the least infrastructure and only works where the broker supports it. One queue per class puts the ordering in the routing instead, which every broker supports and which lets each class own its consumers: dedicated pools give you isolation and independently sized capacity, a shared pool draining highest-first gives you simplicity and a hard preemption guarantee. Scale each pool on the depth of the queue it serves, not on a fixed count.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose the topology from what must be independently guaranteed. Dedicated pools when each class has its own target or a jam in one must not touch another; a shared pool when the tasks are alike and operational simplicity is worth the risk. That risk is starvation, and its counter-move is aging — promote a message as it waits, or reserve a slice of capacity for the low class so its worst case is bounded rather than unbounded. Two further bills: every queue is charged for posting, retrieving and polling, so class count is a cost decision as well as a design one; and priority reorders an overload without shrinking it, so pair it with load leveling or the whole system simply falls behind in priority order.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    P["Producer"]
+    subgraph Q["One queue per class"]
+        QH[("High")]
+        QL[("Low")]
+    end
+    CH["Consumers, high"]
+    CL["Consumers, low"]
+    D["Downstream service"]:::ext
+    P --&gt;|"1 classify, then route"| QH
+    P --&gt;|"1 classify, then route"| QL
+    QH --&gt;|"2 dedicated capacity"| CH
+    QL --&gt;|"3 whatever is left"| CL
+    CH --&gt;|"4 process"| D
+    CL --&gt;|"4 process"| D
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does an urgent request overtake a backlog of batch work? The producer decides the class at step 1 — everything after that is routing and capacity, which is why the classification rule is the part worth arguing about.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant P as Producer
+    participant QH as High queue
+    participant QL as Low queue
+    participant W as Shared consumer pool
+    P-&gt;&gt;QL: enqueue 5,000 batch jobs
+    P-&gt;&gt;QH: enqueue 1 urgent job
+    W-&gt;&gt;QH: poll high first
+    QH--&gt;&gt;W: urgent job
+    W-&gt;&gt;QH: poll high again
+    alt high queue empty
+        W-&gt;&gt;QL: poll low
+        QL--&gt;&gt;W: batch job
+    else high queue still filling
+        Note over W,QL: low queue is never polled — starvation
+    end
+        </pre>
+        <figcaption>The shared-pool variant, and its cost. Strict preemption is what makes the high-priority promise unconditional, and it is the same property that can leave the low queue unserved for as long as high-priority work keeps arriving.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Single queue, priority field</dt>
+        <dd>Every message goes to one channel carrying a priority value, and the broker orders by it. The least infrastructure to run and the least routing to reason about — but it depends entirely on the broker supporting priority ordering, and it gives you no way to size capacity per class, because there is only one queue to consume.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Queue per class, dedicated pools</dt>
+        <dd data-kb-level="advanced">One queue per priority level, each with its own consumers, sized or tiered independently. Pick this when the classes have separate performance targets that must be met independently, or when fault isolation matters and a problem draining one class must not touch another.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Queue per class, shared pool</dt>
+        <dd data-kb-level="advanced">One pool serves every queue, draining the highest class first and dropping to the next only when the higher ones are empty. Simplest to configure and monitor, and the right shape when the tasks are similar in kind — at the price of starvation, which is not a bug in the implementation but the behaviour you asked for.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Aging</dt>
+        <dd data-kb-level="advanced">Raise a message's priority as it waits, so low-priority work eventually reaches the front instead of being deferred forever. This is the standard counter to starvation, and it needs a broker that lets you change a queued message's priority — where it does not, the same effect comes from a sweeper that re-enqueues aged messages into a higher class.</dd>
+        <dt id="variations-item-5" data-kb-level="expert"><a href="./competing-consumers.html">Competing Consumers</a> per class</dt>
+        <dd data-kb-level="expert">Each pool is itself a set of interchangeable workers on one queue, so a class scales horizontally within its own lane. Priority decides which lane is served; competing consumers decides how wide each lane is.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Differentiated service levels become enforceable. A promise of faster handling for one client class stops being a hope about capacity and becomes a property of the routing.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">Critical work stops sharing a fate with bulk work. A batch flood delays the batch queue, and the urgent queue does not notice.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Reliability and performance effort can be concentrated. You can afford to over-provision, monitor tightly and alert aggressively on one class rather than on everything.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">With dedicated pools, each class is a separate blast radius — a poison message or a stuck consumer in one lane leaves the others draining.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Starvation is built in. Under sustained high-priority load a strictly preemptive shared pool can defer low-priority work indefinitely, so you need aging or a reserved slice of capacity to bound the wait.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">It does not absorb bursts. Reordering an overload still leaves an overload; pair it with load leveling or the whole system falls behind in priority order.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Each queue costs money and attention. Brokers charge to post, retrieve and poll, and the bill and the dashboard both grow with the number of classes.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">The classification rule becomes a permanent argument. Every caller believes their work is urgent, and a priority field that everyone sets to high is a plain queue with extra steps.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Static pool sizing decays. Consumers should scale on the depth of the queue they serve; a pool sized for last quarter's mix silently misses this quarter's target.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">Ordering within a class is not guaranteed once several consumers share it. Where it must be, you need <a href="./sequential-convoy.html">Sequential Convoy</a> inside the priority level.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You owe different clients different service-level guarantees, and the paying tier must see better latency than the free one.</li>
+            <li id="usage-when-2" data-kb-polarity="when" data-kb-level="advanced">The workload mixes genuinely urgent tasks with genuinely deferrable ones, and today they share a channel.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">A named target exists for the urgent class — "processed within ten seconds" — so you can tell whether the pattern is working.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">Background work can be scheduled into quiet periods rather than competing for consumers at peak.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">All the work is equally important. A single queue with enough consumers is cheaper to run and easier to reason about.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">The real problem is capacity, not ordering. If every class is missing its target, priority just chooses who finds out last.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Nobody will own the classification. Without a rule someone enforces, priority drifts to uniform and you have paid for queues you do not use.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid" data-kb-level="advanced">Low-priority work has a hard deadline too. Strict preemption cannot promise both, and you need reserved capacity per class instead.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — a shared pool that drains high before low, with aging to bound the wait</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type Job = { id: string; enqueuedAt: number }
+
+const AGING_THRESHOLD_MS = 60_000
+
+interface Queue {
+  receive(): Promise&lt;Job | null&gt;
+  send(job: Job): Promise&lt;void&gt;
+}
+
+// One pass of the shared-pool loop: always offer the high queue first, and
+// only fall through to low when high has nothing left to give.
+async function drainOnce(high: Queue, low: Queue): Promise&lt;Job | null&gt; {
+  const urgent = await high.receive()
+  if (urgent) return urgent
+  return low.receive()
+}
+
+// The counter-move to starvation: anything that has waited past the threshold
+// is promoted, so the low queue's worst case is bounded rather than unbounded.
+async function promoteAged(low: Queue, high: Queue, now: number): Promise&lt;number&gt; {
+  let promoted = 0
+  for (;;) {
+    const job = await low.receive()
+    if (!job) return promoted
+    if (now - job.enqueuedAt &lt; AGING_THRESHOLD_MS) {
+      await low.send(job)
+      return promoted
+    }
+    await high.send(job)
+    promoted += 1
+  }
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="rabbitmq-priority" data-kb-level="advanced" id="wild-rabbitmq-priority"><strong>RabbitMQ priority queues</strong><span>A queue declared with <code>x-max-priority</code> orders messages by the priority set on each publish — the single-queue variant, and its documentation is explicit that priority is best-effort and higher priority levels cost more CPU and memory.</span></div>
+        <div class="wild-item" data-kb-example="celery-routing" id="wild-celery-routing"><strong>Celery</strong><span>Routes tasks to named queues and starts workers bound to specific queues, which is how the multiple-queue, multiple-pool topology is normally built in Python — dedicated workers for a high queue, separate ones for bulk work.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Number of priority classes</strong> — Each class is another queue to pay for, monitor and staff. Two is usually enough; five is usually an argument nobody won.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Consumers per class</strong> — Size each pool against its own class target, and scale it on that queue depth rather than a fixed count.</li>
+            <li data-kb-level="advanced" id="production-knob-3" data-kb-polarity="knob"><strong>Aging threshold</strong> — How long low-priority work may wait before it is promoted — this is what bounds the starvation window.</li>
+            <li data-kb-level="advanced" id="production-knob-4" data-kb-polarity="knob"><strong>Poll ratio for a shared pool</strong> — Strict preemption is the simple setting; serving low every Nth poll trades the hard guarantee for a floor under low-priority throughput.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Age of the oldest message per class</strong> — The number that says whether the high-priority promise is being kept, and the first place starvation shows.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Queue depth per class</strong> — Depth diverging between classes means the pool sizing no longer matches the mix.</li>
+            <li data-kb-level="advanced" id="production-signal-3" data-kb-polarity="signal"><strong>End-to-end latency percentiles per class</strong> — Track them separately, because a blended percentile hides exactly the difference the pattern exists to create.</li>
+            <li data-kb-level="advanced" id="production-signal-4" data-kb-polarity="signal"><strong>Share of traffic marked high priority</strong> — Climbing toward everything means the classification has stopped meaning anything.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Low-priority starvation</strong> — Sustained high-priority load with a strictly preemptive pool leaves the low queue unserved indefinitely.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>Priority inflation</strong> — Every caller marks their work urgent, and the system degrades to a single queue with extra infrastructure.</li>
+            <li data-kb-level="advanced" id="production-failure-3" data-kb-polarity="failure"><strong>Overload arrives in priority order</strong> — When arrival exceeds capacity, priority only decides who falls behind last — every class still falls behind.</li>
+            <li data-kb-level="advanced" id="production-failure-4" data-kb-polarity="failure"><strong>Idle dedicated capacity</strong> — Dedicated pools cannot lend each other workers, so the high pool sits idle while the low queue backs up.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Each class has a named, measurable target rather than a relative label.</li>
+            <li id="production-check-2" data-kb-polarity="check">Someone owns the classification rule and can refuse a request to mark work urgent.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Starvation is bounded by aging or reserved capacity, not left to load.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Pools scale on the depth of the queue they serve.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Load leveling is in place if arrival rate can exceed drain rate.</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="advanced">Per-class latency and oldest-message age are on a dashboard, not derived on request.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="load-leveling"><a href="../distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">Leveling buffers the burst, priority decides who gets served out of it first</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="competing-consumers"><a href="./competing-consumers.html">Competing Consumers</a><span class="rel-note">Each priority class is drained by its own pool of interchangeable workers</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="rate-limiter"><a href="../distributed/resilience/rate-limiter.html">Rate Limiter</a><span class="rel-note">Limit the low classes first, so shedding load costs the cheapest work</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="sequential-convoy"><a href="./sequential-convoy.html">Sequential Convoy</a><span class="rel-note">Keep per-entity order inside a class when the class alone is not enough</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Variant of</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="variant-of" data-kb-to="message-queue"><a href="./message-queue.html">Message Queue</a><span class="rel-note">A queue whose service order is business importance rather than arrival</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#lens-msg-h">← Messaging</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="../../index.html#lens-msg-h">Messaging →</a>
+    </nav>
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

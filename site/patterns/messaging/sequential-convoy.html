@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sequential Convoy · Patterns</title>
+  <meta name="description" content="Sequential Convoy — Keeps order inside each group while groups run in parallel">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <script src="../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#sequential-convoy",
+  "identifier": "sequential-convoy",
+  "name": "Sequential Convoy",
+  "description": "Keeps order inside each group while groups run in parallel",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "messaging",
+  "kb:group": "messaging",
+  "kb:combines-with": [
+    {
+      "@id": "./competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:note": "Restores the per-entity ordering that parallel consumers give away"
+    },
+    {
+      "@id": "../distributed/coordination/distributed-lock.html#distributed-lock",
+      "name": "Distributed Lock",
+      "kb:note": "Where the broker has no sessions, lock on the category key yourself"
+    },
+    {
+      "@id": "./priority-queue.html#priority-queue",
+      "name": "Priority Queue",
+      "kb:note": "Sessions inside a priority level, so ordering holds within each class"
+    }
+  ],
+  "kb:prerequisite": [
+    {
+      "@id": "./dead-letter-channel.html#dead-letter-channel",
+      "name": "Dead Letter Channel",
+      "kb:note": "A poison message blocks its whole ordered group, so it needs somewhere to go"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/race-condition.html#race-condition",
+      "name": "Race Condition",
+      "kb:note": "One consumer per group at a time removes the concurrent-update race entirely"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc lens">
+  <main class="doc-wrap" data-kb-id="sequential-convoy" data-kb-kind="pattern" data-kb-band="messaging" data-kb-group="messaging" data-kb-essence="Keeps order inside each group while groups run in parallel" data-kb-order="95" data-kb-aliases="[&quot;message sessions&quot;,&quot;session-based ordering&quot;]" data-kb-tags="[&quot;messaging&quot;,&quot;coordination&quot;,&quot;concurrency&quot;,&quot;throughput&quot;]" data-kb-solves="[&quot;two workers processed the same order's updates out of sequence and corrupted it&quot;,&quot;i need one customer's messages in order but cannot afford a single consumer&quot;,&quot;adding consumers to the queue broke the ordering our state machine depends on&quot;,&quot;one stuck message is blocking every other customer's work&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-msg-h">Messaging</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Sequential Convoy</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Messaging</p>
+      <h1 class="doc-title">Sequential Convoy</h1>
+      <p class="doc-essence">Partitions a stream by a category key and hands each category to exactly one consumer at a time, so ordering is enforced per group instead of across the whole queue — and the number of groups becomes the unit of parallelism.</p>
+      <div class="doc-metarow">
+        <span class="badge">Messaging</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="sequential-convoy">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1">Order matters more often than it looks. An order is created, a transaction is added to it, that transaction is amended, the order is cancelled — apply those four events in the wrong sequence and the record is wrong in a way no retry will fix.</p>
+        <p id="description-p-2" data-kb-level="advanced">The two obvious designs each fail at one end. One consumer preserves order perfectly and cannot scale past what a single worker can do. <a href="./competing-consumers.html">Competing Consumers</a> scales beautifully and destroys order, because two workers can pull consecutive events for the same order and apply them at the same moment.</p>
+        <p id="description-p-3" data-kb-level="advanced">Sequential convoy resolves that by noticing the requirement was never global. You do not need every message in order — you need each order's messages in order, and one order's events have nothing to do with another's. So stamp every message with a <strong>category key</strong> naming the group it belongs to, and let the broker partition on it. A consumer takes an exclusive lock on a group, receives that group's messages strictly in enqueue order, and holds the group while it works; other consumers hold other groups at the same time.</p>
+        <p id="description-p-4" data-kb-level="advanced">The decision that matters is the key, because it is the unit of parallelism as well as the unit of ordering. A key too coarse — one covering every order for a customer — collapses the system into a single lane. A key too fine orders things that never needed ordering and buys nothing. Choose the smallest entity whose events genuinely depend on each other.</p>
+        <p id="description-p-5" data-kb-level="expert">You pay for this with a strict serial lane per group, and every consequence follows from that one fact. Throughput per group is capped by the time to handle one message. A message that will not process blocks everything behind it in its group, which makes a <a href="./dead-letter-channel.html">Dead Letter Channel</a> load-bearing rather than nice to have.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>One worker handles messages in the order they arrive and cannot keep up. Add more workers and they keep up, but two of them now grab consecutive updates for the same order and apply them in the wrong sequence, which corrupts it. The fix is to notice that only one order's updates depend on each other: tag each message with which order it belongs to, and let one worker own that order at a time while other workers own other orders.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>The tag is a category key, and the broker partitions on it. A consumer accepts a group and holds an exclusive lock on it, receiving that group's messages strictly in enqueue order; other consumers accept other groups concurrently, so throughput scales with the number of active groups rather than with workers on one queue. The key is the unit of parallelism as well as the unit of ordering — pick the smallest entity whose events genuinely depend on each other, because too coarse collapses the system to one lane and too fine orders what never needed it. Where the broker has no session support, the same shape can be built on a distributed lock keyed by category, at the cost of owning lease expiry and duplicate suppression yourself.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>The serial lane is what you bought and every cost follows from it. Per-group throughput is bounded by single-message latency, so cutting handler time is the only lever that raises the ceiling — batch downstream writes and use asynchronous I/O inside the handler rather than adding consumers. A poison message blocks its entire group, which makes attempt counting and a dead-letter path load-bearing rather than defensive. Tune the lock duration against expected processing time and renew it mid-handler: expire too early and the group is redelivered while a slow worker is still on it, expire too late and a dead worker freezes the group for the whole lease. Two failure modes have no automatic guard — a producer that stamps the wrong key silently corrupts a group, and latency before the broker can reorder messages ahead of the session ordering, so validate keys at the producer and carry per-category sequence numbers where correctness depends on it. Watch active session count and per-session depth, not aggregate queue depth, because the aggregate looks healthy while one category starves.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    P["Producer"]
+    subgraph B["Broker — one queue, partitioned by category key"]
+        GA[("Group A, FIFO")]
+        GB[("Group B, FIFO")]
+        GC[("Group C, FIFO")]
+    end
+    CA["Consumer holding A"]
+    CB["Consumer holding B"]
+    CC["Consumer holding C"]
+    P --&gt;|"1 stamp the category key"| B
+    GA --&gt;|"2 exclusive lock, in order"| CA
+    GB --&gt;|"2 exclusive lock, in order"| CB
+    GC --&gt;|"2 exclusive lock, in order"| CC
+        </pre>
+        <figcaption>How does one entity's ordering survive parallel consumers? Messages from every group are interleaved in the same queue; the lock at step 2 is what turns that interleaving back into three independent ordered lanes.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant P as Producer
+    participant B as Broker
+    participant C1 as Consumer 1
+    participant C2 as Consumer 2
+    P-&gt;&gt;B: create(order-7), addTx(order-7), amendTx(order-7)
+    C1-&gt;&gt;B: accept group order-7
+    B--&gt;&gt;C1: exclusive lock granted
+    C2-&gt;&gt;B: accept group order-7
+    B--&gt;&gt;C2: refused, already locked
+    C2-&gt;&gt;B: accept group order-9
+    B--&gt;&gt;C2: lock granted, runs in parallel
+    alt consumer 1 stalls past the lock duration
+        B--&gt;&gt;B: lock expires, messages redelivered
+        Note over B,C2: another consumer may reprocess — handlers must be idempotent
+    end
+        </pre>
+        <figcaption>The lock is the whole mechanism, and its duration is the tuning knob. Too short and a slow handler loses its group mid-flight, so the messages come back; too long and a dead consumer holds its group hostage until the lease runs out.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Broker-native sessions</dt>
+        <dd>The broker owns the grouping and the locking: the producer sets a session identifier, and accepting a session grants an exclusive lease plus in-order delivery. The least code and the strongest guarantee, and it constrains your broker choice — not every queue offers session-level locking, and on some it sits behind a higher service tier.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Partitioned log</dt>
+        <dd data-kb-level="advanced">A log broker hashes the key to a partition and assigns each partition to one consumer, so per-key ordering falls out of the same rebalancing machinery that gives you scale. Ordering then holds per partition rather than per key, which means two keys landing in one partition also share a lane.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Consumer-side coordination</dt>
+        <dd data-kb-level="advanced">Where the broker has no notion of groups, the consumer takes a <a href="../distributed/coordination/distributed-lock.html">Distributed Lock</a> on the key before handling a message and releases it after. It works, and it moves every hard part — lease expiry, fencing, duplicate suppression — into your code, where the failure modes are duplicates, skipped messages and out-of-order execution.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Serial-to-parallel transition</dt>
+        <dd data-kb-level="advanced">A first queue is drained strictly in order by one processor that de-batches each item, stamps the category key, and forwards to a second, key-partitioned queue where consumers fan out. It is how you get from an inherently ordered source to parallel processing, and that first stage becomes the ceiling on the whole pipeline, because everything downstream waits behind it.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Sequence numbers over arrival order</dt>
+        <dd data-kb-level="expert">Rather than trusting arrival order, the producer numbers each message within its category and the consumer verifies the run. Worth adding when variable latency between producer and broker can reorder messages before the broker's ordering ever applies — an end-of-sequence flag on the last message also lets the consumer know the run is complete.</dd>
+        <dt id="variations-item-6" data-kb-level="expert">Bracketed batches</dt>
+        <dd data-kb-level="expert">Where strict ordering costs more throughput than it is worth, mark a run with an explicit start and end message, or sort by timestamp inside a window and process the window in parallel. You give up per-message ordering and keep the property that actually mattered, which was that the run is applied as a unit.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Ordering stops being a scaling ceiling. Throughput grows with the number of active groups, which for per-entity keys is effectively unbounded.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">Whole classes of defect never get written. No two workers touch one entity at once, so the race conditions, out-of-order state mutations and reordering buffers that ordering bugs usually attract simply do not arise.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Producers stay ignorant of consumers. They stamp a key and enqueue; consumer count, placement and identity change underneath without them.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">The blast radius of a stuck message is one group rather than the whole queue.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Per-group throughput is capped by single-message latency, because the lane is serial by construction. Cutting handler time is the only lever that raises that ceiling.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">A poison message blocks its group until something removes it, so delivery-attempt counting and a dead-letter path are mandatory rather than optional.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Lock duration is a two-sided mistake. Too short redelivers work a slow handler was still doing; too long freezes a group behind a consumer that has already died.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">A wrong key silently corrupts a group. Nothing rejects a misrouted message, so producer-side key assignment needs validating and, where the consequence is severe, checking again at the consumer.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Operations gain a second dimension. You now watch how many groups are active and how deep each one is, not just total queue depth — and dead-lettered groups need their own investigate-and-replay workflow.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">Cost tracks active groups. Each locked group is a concurrent consumer, so a spike in distinct keys is a spike in compute even when total volume has not moved.</li>
+            <li id="tradeoffs-con-7" data-kb-polarity="con" data-kb-level="expert">Every group depends on one broker, whose availability is the ceiling on the guarantee the pattern advertises.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Messages arrive in a meaningful order, and applying them out of that order produces a wrong result rather than a slow one.</li>
+            <li id="usage-when-2" data-kb-polarity="when" data-kb-level="advanced">The stream splits into independent categories — per order, per account, per device — with no cross-category dependency.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">There are far more categories than consumers, so per-group serialization still leaves plenty of parallelism on the table.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">You already run competing consumers and have found the ordering hole the hard way.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Ordering does not matter. Competing consumers gives the same throughput with none of the locking, monitoring or poison-message coupling.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">Volume is extreme — millions of messages a minute — and the serial-per-group constraint caps you below the target.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The natural key yields very few groups, because parallelism is then bounded by that count no matter how many consumers you run.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid" data-kb-level="advanced">The handlers can be made commutative or idempotent instead. Making order irrelevant is a stronger result than enforcing it.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — accept a group, hold it, renew the lease while handling</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type Message = { categoryKey: string; sequence: number; body: unknown }
+
+interface SessionBroker {
+  // Blocks until some unlocked group is available, then leases it exclusively.
+  acceptAnyGroup(): Promise&lt;GroupLease | null&gt;
+}
+
+interface GroupLease {
+  key: string
+  next(): Promise&lt;Message | null&gt;   // strictly in enqueue order
+  complete(m: Message): Promise&lt;void&gt;
+  deadLetter(m: Message, reason: string): Promise&lt;void&gt;
+  renew(): Promise&lt;void&gt;            // push the lease out while still working
+  close(): Promise&lt;void&gt;
+}
+
+const MAX_ATTEMPTS = 5
+
+async function runOneGroup(broker: SessionBroker, handle: (m: Message) =&gt; Promise&lt;void&gt;) {
+  const lease = await broker.acceptAnyGroup()
+  if (!lease) return
+
+  try {
+    for (;;) {
+      const message = await lease.next()
+      if (!message) return
+
+      // Renew before the slow part, not after: an expired lease hands this
+      // group to another consumer and the message is delivered twice.
+      await lease.renew()
+
+      let attempt = 0
+      for (;;) {
+        try {
+          await handle(message)
+          await lease.complete(message)
+          break
+        } catch (err) {
+          attempt += 1
+          // Nothing behind this message in the group can move until it leaves,
+          // so bound the retries and get it out of the lane.
+          if (attempt &gt;= MAX_ATTEMPTS) {
+            await lease.deadLetter(message, String(err))
+            break
+          }
+        }
+      }
+    }
+  } finally {
+    await lease.close()
+  }
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="service-bus-sessions" data-kb-level="advanced" id="wild-service-bus-sessions"><strong>Azure Service Bus message sessions</strong><span>The producer sets a <code>SessionId</code> on the message and the broker groups every message sharing it into one logical session; a consumer that accepts the session holds an exclusive lock on it and receives its messages in FIFO order, while other consumers accept other sessions concurrently.</span></div>
+        <div class="wild-item" data-kb-example="kafka-partitions" id="wild-kafka-partitions"><strong>Apache Kafka partitions</strong><span>The same guarantee from a log: records carrying the same key hash to the same partition, ordering is guaranteed within a partition, and each partition is assigned to exactly one consumer in a group — so ordering holds per partition rather than per key, and two keys sharing a partition share a lane.</span></div>
+        <div class="wild-item" data-kb-example="sqs-fifo" data-kb-level="advanced" id="wild-sqs-fifo"><strong>Amazon SQS FIFO queues</strong><span>A message group id plays the category-key role: SQS delivers messages within one group in order and to one consumer at a time, and delivers different groups in parallel.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Category key</strong> — The unit of both ordering and parallelism. Too coarse caps concurrency at the number of keys; too fine orders what never needed it.</li>
+            <li data-kb-level="advanced" id="production-knob-2" data-kb-polarity="knob"><strong>Session lock duration</strong> — Set it above the worst expected handler time, and renew mid-handler for long operations.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Max concurrent sessions per consumer</strong> — Caps how many groups one instance holds at once, which is what bounds its memory and its connection use.</li>
+            <li data-kb-level="advanced" id="production-knob-4" data-kb-polarity="knob"><strong>Max delivery attempts</strong> — How long a failing message may block its group before it is dead-lettered.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Active session count</strong> — The real parallelism, and the number consumer scaling should track.</li>
+            <li data-kb-level="advanced" id="production-signal-2" data-kb-polarity="signal"><strong>Per-session backlog depth</strong> — Aggregate queue depth looks healthy while one category starves — only the per-session number shows it.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Session lock renewals and expiries</strong> — Rising expiries mean the lock duration is below actual handler time, and every expiry is a redelivery.</li>
+            <li data-kb-level="advanced" id="production-signal-4" data-kb-polarity="signal"><strong>Dead-lettered messages by category</strong> — A cluster in one category usually means bad data for one entity rather than a broken handler.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>One group stalls, the rest look fine</strong> — A poison message holds its lane while aggregate metrics stay green — this is why per-session depth is the signal that matters.</li>
+            <li data-kb-level="advanced" id="production-failure-2" data-kb-polarity="failure"><strong>Lock expiry storms under load</strong> — Handlers slow down, locks start expiring, redelivered messages add load, and handlers slow further.</li>
+            <li data-kb-level="advanced" id="production-failure-3" data-kb-polarity="failure"><strong>Session count spike becomes a cost spike</strong> — Each active group is a concurrent consumer, so a burst of distinct keys multiplies compute even at flat message volume.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="advanced"><strong>Duplicate application after a redelivery</strong> — An expired lock hands the group on mid-message, so a non-idempotent handler applies the same change twice.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">The category key is the smallest entity whose events genuinely depend on each other.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">Handlers are idempotent, because lock expiry redelivers.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">A dead-letter path exists and someone is paged when a group stops moving.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Lock duration is measured against p99 handler time, not guessed.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">Producers are validated to set the key, and the consumer rejects an implausible one.</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="advanced">Dashboards show active sessions and per-session depth, not just total queue depth.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="competing-consumers"><a href="./competing-consumers.html">Competing Consumers</a><span class="rel-note">Restores the per-entity ordering that parallel consumers give away</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="distributed-lock"><a href="../distributed/coordination/distributed-lock.html">Distributed Lock</a><span class="rel-note">Where the broker has no sessions, lock on the category key yourself</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="priority-queue"><a href="./priority-queue.html">Priority Queue</a><span class="rel-note">Sessions inside a priority level, so ordering holds within each class</span></div>
+        </div>
+      </div>
+
+            <div class="rel-group">
+        <p class="rel-type">Requires</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prerequisite" data-kb-to="dead-letter-channel"><a href="./dead-letter-channel.html">Dead Letter Channel</a><span class="rel-note">A poison message blocks its whole ordered group, so it needs somewhere to go</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="race-condition"><a href="../../hazards/race-condition.html">Race Condition</a><span class="rel-note">One consumer per group at a time removes the concurrent-update race entirely</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#lens-msg-h">← Messaging</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="../../index.html#lens-msg-h">Messaging →</a>
+    </nav>
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

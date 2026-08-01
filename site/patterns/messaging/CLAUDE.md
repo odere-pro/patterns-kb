@@ -1,9 +1,9 @@
 # patterns/messaging
 
-**Messaging (lens)** — 17 patterns.
+**Messaging (lens)** — 20 patterns.
 A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
 
-Pages here: aggregator, claim-check, competing-consumers, content-based-router, correlation-identifier, dead-letter-channel, fan-in, fan-out, idempotency, message-encoding, message-queue, message-router, message-translator, pubsub, scatter-gather, splitter, wire-tap
+Pages here: aggregator, claim-check, competing-consumers, content-based-router, correlation-identifier, dead-letter-channel, fan-in, fan-out, idempotency, message-encoding, message-queue, message-router, message-translator, messaging-bridge, priority-queue, pubsub, scatter-gather, sequential-convoy, splitter, wire-tap
 
 Every page in this folder declares `data-kb-band="messaging"` and
 `data-kb-group="messaging"`. The path is checked against them — `make check` fails if a
