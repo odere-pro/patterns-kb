@@ -9,57 +9,6 @@ value-to-effort.
 - <https://github.com/mehdihadeli/awesome-software-architecture/blob/main/README.md>
 - go through each and build KB for every pattern
 
-## Add Architecture styles
-
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/big-compute>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/big-data>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/event-driven>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/microservices>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/microservices-assessment>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/ci-cd>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/model/domain-analysis>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/model/tactical-domain-driven-design>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/model/microservice-boundaries>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/design/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/design/compute-options>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/design/interservice-communication>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/design/api-design>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/design/gateway>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/design/data-considerations>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/design/orchestration>
-- add <https://learn.microsoft.com/en-us/azure/architecture/microservices/design/patterns>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/n-tier>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/web-queue-worker>
-
-## Add Design principles for cloud applications
-
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/self-healing>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/redundancy>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/minimize-coordination>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/scale-out>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/partition>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/design-for-operations>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/managed-services>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/identity>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/design-for-evolution>
-- add <https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/build-for-business>
-
-## Add page to map resources and existent cloud patterns
-
-- see example <https://learn.microsoft.com/en-us/azure/architecture/aws-professional/>
-- see example <https://learn.microsoft.com/en-us/azure/architecture/gcp-professional/services>
-- see example <https://learn.microsoft.com/en-us/azure/architecture/aws-professional/compute>
-- see example <https://learn.microsoft.com/en-us/azure/architecture/aws-professional/data-ai>
-- see example <https://learn.microsoft.com/en-us/azure/architecture/aws-professional/databases>
-- see example <https://learn.microsoft.com/en-us/azure/architecture/aws-professional/messaging>
-- see example <https://learn.microsoft.com/en-us/azure/architecture/aws-professional/networking>
-- see example <https://learn.microsoft.com/en-us/azure/architecture/aws-professional/regions-zones>
-- see example <https://learn.microsoft.com/en-us/azure/architecture/aws-professional/resources>
-- see example <https://learn.microsoft.com/en-us/azure/architecture/aws-professional/security-identity>
-- see example <https://learn.microsoft.com/en-us/azure/architecture/aws-professional/storage>
-
 ## Add / update more cloud patterns
 
 - explore <https://learn.microsoft.com/en-us/azure/architecture/patterns/>
@@ -106,47 +55,6 @@ value-to-effort.
 - explore <https://learn.microsoft.com/en-us/azure/architecture/patterns/strangler-fig>
 - explore <https://learn.microsoft.com/en-us/azure/architecture/patterns/throttling>
 - explore <https://learn.microsoft.com/en-us/azure/architecture/patterns/valet-key>
-
-## Add design areas
-
-- add <https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks-mission-critical/mission-critical-app-platform>
-- add <https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks-mission-critical/mission-critical-app-design>
-- add <https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks-mission-critical/mission-critical-networking>
-- add <https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks-mission-critical/mission-critical-data-platform>
-- add <https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks-mission-critical/mission-critical-health-modeling>
-- add <https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks-mission-critical/mission-critical-deploy-test>
-- add <https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks-mission-critical/mission-critical-security>
-- add <https://learn.microsoft.com/en-us/azure/architecture/reference-architectures/containers/aks-mission-critical/mission-critical-operations>
-
-## Add performance antipatterns
-
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/busy-database/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/busy-front-end/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/chatty-io/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/extraneous-fetching/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/improper-instantiation/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/monolithic-persistence/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/no-caching/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/noisy-neighbor/noisy-neighbor>
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/retry-storm/>
-- add <https://learn.microsoft.com/en-us/azure/architecture/antipatterns/synchronous-io/>
-
-## Add new lenses
-
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/index-best-practices>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-implementation>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/auto-scaling>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/background-jobs>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/caching>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/cdn>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/data-partitioning>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/data-partitioning-strategies>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/host-name-preservation>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/message-encode>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/monitoring>
-- add <https://learn.microsoft.com/en-us/azure/architecture/best-practices/transient-faults>
 
 ## Add KB pages
 
@@ -203,6 +111,7 @@ value-to-effort.
 - What is better for inbox and outbox pessimistic or optimistic lock? (Does not span connections, services, or time — it lives and dies with one transaction, so it is not a distributed lock.)
 - Should I use wire tap pattern for observability?
 - where to use autoscaling (min-max up-down) and redundency? <https://odere-pro.github.io/patterns-kb/themes/spike-handling.html>, how to tell producer to slowdown (backpreasure)
+- availability for email photo send, and consistency (strong or evantual) for the result
 
 ## Questions
 

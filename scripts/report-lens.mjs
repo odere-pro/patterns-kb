@@ -56,6 +56,10 @@ const BANDS_W = {
   hazard: () => [400, 650],
   principle: () => [350, 550],
   design: () => [900, 1500],
+  /* A capability page carries a taxonomy, a table and the portability traps — bigger than
+   * a principle, smaller than a worked design. The mapping table's cells are counted as
+   * prose, so the upper bound has to allow for a wide one. */
+  capability: () => [700, 1200],
   theme: () => null,
 };
 

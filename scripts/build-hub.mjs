@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { BANDS, THEME_ORDER, ML_CASE_STUDIES, DESIGN_ORDER, HAZARD_ORDER, PRINCIPLE_ORDER, esc } from "./lib/model.mjs";
+import { BANDS, THEME_ORDER, ML_CASE_STUDIES, DESIGN_ORDER, HAZARD_ORDER, PRINCIPLE_ORDER, PRINCIPLE_GROUPS, CAPABILITY_ORDER, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "site", "index.html");
@@ -105,6 +105,17 @@ function principleCard(id) {
   return `        <a class="theme-card"${favAttrOf(p)} href="${p.path}"><span class="theme-name">${esc(p.name)}</span><span class="theme-note">${esc(p.essence)}</span>${favStarOf(p)}</a>`;
 }
 const PRINCIPLES = PRINCIPLE_ORDER.filter((id) => N[id]);
+/* Two subgroups, because the craft maxims and the systems maxims answer different questions
+ * and a reader after one is never after the other. Empty groups drop out entirely. */
+const principleSubgroups = PRINCIPLE_GROUPS
+  .map((g) => ({ ...g, ids: g.ids.filter((id) => N[id]) }))
+  .filter((g) => g.ids.length)
+  .map((g) => `        <h3 class="themes-sub" id="principles-${g.id}-h">${esc(g.label)}</h3>
+        <p class="themes-sub-note">${esc(g.note)}</p>
+        <div class="theme-grid">
+${g.ids.map(principleCard).join("\n")}
+        </div>`)
+  .join("\n");
 
 /* ---- design case studies ---- */
 /* Reuses the theme-card styling. Filtered to pages that exist so the hub still builds
@@ -123,6 +134,23 @@ ${DESIGNS.map(themeCard).join("\n")}
     </section>
 ` : "";
 const designJump = DESIGNS.length ? `\n      <a href="#design-cases-h">Case Studies</a>` : "";
+
+/* ---- cloud capabilities ---- */
+/* Reuses the theme-card styling, and the same populate-one-at-a-time filter: the section
+ * and its jumpnav link stay out of the page until the first capability page lands. */
+const CAPABILITIES = CAPABILITY_ORDER.filter((id) => N[id]);
+const capabilitiesSection = CAPABILITIES.length ? `
+    <section class="themes cloud-capabilities" aria-labelledby="capabilities-h">
+      <div class="themes-head">
+        <h2 id="capabilities-h">Cloud Capabilities — what you can buy</h2>
+        <p>One page per category of managed service. Each names the capabilities in provider-neutral terms, maps them across AWS, Azure and Google Cloud, and links the patterns the category packages for you — and the ones you are still on the hook to build. Services are matched, never feature-for-feature equivalent.</p>
+      </div>
+      <div class="theme-grid">
+${CAPABILITIES.map(themeCard).join("\n")}
+      </div>
+    </section>
+` : "";
+const capabilityJump = CAPABILITIES.length ? `\n      <a href="#capabilities-h">Cloud Capabilities</a>` : "";
 
 /* ---- hazards ---- */
 /* A hazard is not practised, so its chip carries no checkbox — but a hazard page does
@@ -169,7 +197,7 @@ const html = `<!doctype html>
       <a href="#band-arch-h">III · Architecture</a>
       <a href="#band-dist-h">IV · Network</a>
       <a href="#themes-h">Themes</a>
-      <a href="#ml-cases-h">ML Case Studies</a>${designJump}
+      <a href="#ml-cases-h">ML Case Studies</a>${designJump}${capabilityJump}
       <a href="#lens-ml-h">Machine Learning</a>
       <a href="#principles-h">Principles</a>
       <a href="#lens-msg-h">Messaging</a>
@@ -208,15 +236,13 @@ ${THEME_ORDER.map(themeCard).join("\n")}
 ${ML_CASE_STUDIES.map(themeCard).join("\n")}
       </div>
     </section>
-${designCasesSection}
+${designCasesSection}${capabilitiesSection}
     <section class="themes principles" aria-labelledby="principles-h">
       <div class="themes-head">
-        <h2 id="principles-h">Principles — how to write it well</h2>
-        <p>Not a rung and not a lens: each principle is a rule of thumb that holds at every elevation — the maxims that keep code simple, decoupled, and cheap to change. Each page cross-links to the patterns that embody it and the hazards it guards against.</p>
+        <h2 id="principles-h">Principles — how to do it well</h2>
+        <p>Not a rung and not a lens: a principle is a rule of thumb you check a decision against. They come at two altitudes — the maxims that keep a codebase simple, decoupled and cheap to change, and the maxims that keep a running system available, scalable and operable. Each page cross-links to the patterns that embody it and the hazards it guards against.</p>
       </div>
-      <div class="theme-grid">
-${PRINCIPLES.map(principleCard).join("\n")}
-      </div>
+${principleSubgroups}
     </section>
 
     <section class="lenses">

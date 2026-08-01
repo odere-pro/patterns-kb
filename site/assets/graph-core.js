@@ -14,7 +14,11 @@
   "use strict";
 
   var PALETTE_SIZE = 8;        // grp-1..grp-8 color classes in graph.css
-  var SETTINGS_VERSION = 1;    // bump when a stored shape stops being mergeable
+  /* Bump when a stored shape stops being mergeable. The merge below is shallow, so
+   * `filters.kinds` is REPLACED wholesale by whatever a returning visitor has stored —
+   * adding a kind to the default therefore does nothing for them, and every node of the
+   * new kind would be hidden with no visible cause. v2 = the `capability` kind. */
+  var SETTINGS_VERSION = 2;
   var EMPTY_META = { tags: [], aliases: [] };
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -143,7 +147,7 @@
     families[demoFamily] = false;   // half the edges — the main hairball source
     return {
       v: SETTINGS_VERSION,
-      filters: { kinds: { pattern: 1, hazard: 1, theme: 1, principle: 1, design: 1 }, bands: {}, favs: false, practiced: false, orphans: false },
+      filters: { kinds: { pattern: 1, hazard: 1, theme: 1, principle: 1, design: 1, capability: 1 }, bands: {}, favs: false, practiced: false, orphans: false },
       families: families,            // family -> false when hidden; absent means visible
       groups: [],                    // [{q, color}] — first match wins, color 1..8
       display: { arrows: false, labelZoom: 1.4, nodeScale: 1, edgeScale: 1 },

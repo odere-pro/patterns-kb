@@ -1,9 +1,13 @@
 # site/principles
 
-**Principles** — 14 design maxims. Not a rung, not a lens, not a pattern: each is a
-rule of thumb for writing good code at any elevation (SOLID, DRY, KISS, YAGNI, and friends).
+**Principles** — 25 design maxims. Not a rung, not a lens, not a pattern: each is a
+rule of thumb you check a decision against. They sit at two altitudes, and the hub groups them
+that way: **writing the code** (SOLID, DRY, KISS, YAGNI and friends) and **building the system**
+(self-healing, redundancy, minimize coordination, scale out and friends). Membership and order
+come from `PRINCIPLE_GROUPS` in `scripts/lib/model.mjs` — a page missing from it validates
+fine and silently never appears on the hub.
 
-Pages here: composition-over-inheritance, dependency-inversion, dry, fail-fast, interface-segregation, kiss, law-of-demeter, least-astonishment, liskov-substitution, open-closed, postels-law, separation-of-concerns, single-responsibility, yagni
+Pages here: build-for-business, composition-over-inheritance, dependency-inversion, design-for-evolution, design-for-operations, dry, fail-fast, failure-mode-analysis, identity-as-perimeter, interface-segregation, kiss, law-of-demeter, least-astonishment, liskov-substitution, managed-services, minimize-coordination, open-closed, partition-around-limits, postels-law, redundancy, scale-out, self-healing, separation-of-concerns, single-responsibility, yagni
 
 Blocks, in order: `description` → `explain` → `rationale` → `applying` → `overreach` → `relationships`.
 

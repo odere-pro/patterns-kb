@@ -244,7 +244,7 @@ test("compileQuery: the scorer widens the phrase, it never narrows it", () => {
 
 /* ---- visibility ---- */
 
-const ALL_KINDS = { pattern: 1, hazard: 1, theme: 1, principle: 1, design: 1 };
+const ALL_KINDS = { pattern: 1, hazard: 1, theme: 1, principle: 1, design: 1, capability: 1 };
 const filters = (over) => Object.assign({ kinds: Object.assign({}, ALL_KINDS), bands: {}, favs: false, practiced: false, orphans: false }, over);
 function visible(core, opts) {
   const { nodes, edges } = core.buildGraph(fixture());
@@ -364,7 +364,7 @@ test("loadSettings: corrupt, empty or foreign-version blobs fall back whole", ()
 
 test("loadSettings: a stored section is merged over the defaults, never half-applied", () => {
   const core = loadCore();
-  const s = core.loadSettings(JSON.stringify({ v: 1, forces: { repel: 300 }, display: { arrows: true } }), DEMO);
+  const s = core.loadSettings(JSON.stringify({ v: core.SETTINGS_VERSION, forces: { repel: 300 }, display: { arrows: true } }), DEMO);
   assert.equal(s.forces.repel, 300);
   assert.equal(s.forces.dist, 80, "an absent key keeps its default");
   assert.equal(s.display.arrows, true);
@@ -375,7 +375,7 @@ test("loadSettings: a stored section is merged over the defaults, never half-app
 test("loadSettings: a blob stored before a filter existed still gains its default", () => {
   const core = loadCore();
   // What a visitor who last opened the map before the practiced filter shipped has.
-  const s = core.loadSettings(JSON.stringify({ v: 1, filters: { kinds: { pattern: 1 }, bands: {}, favs: true, orphans: false } }), DEMO);
+  const s = core.loadSettings(JSON.stringify({ v: core.SETTINGS_VERSION, filters: { kinds: { pattern: 1 }, bands: {}, favs: true, orphans: false } }), DEMO);
   assert.equal(s.filters.favs, true, "what they set survives");
   assert.equal(s.filters.practiced, false, "what did not exist yet defaults, not undefined");
 });
@@ -384,15 +384,15 @@ test("loadSettings: a family switched back ON survives the reload", () => {
   const core = loadCore();
   // A visible family is an ABSENT key, so the stored map replaces the default rather
   // than merging over it — merging would resurrect the hidden demonstrates family.
-  const s = core.loadSettings(JSON.stringify({ v: 1, families: {} }), DEMO);
+  const s = core.loadSettings(JSON.stringify({ v: core.SETTINGS_VERSION, families: {} }), DEMO);
   assert.deepEqual(s.families, {}, "demonstrates stays visible after a reload");
-  const hidden = core.loadSettings(JSON.stringify({ v: 1, families: { "combines-with": false } }), DEMO);
+  const hidden = core.loadSettings(JSON.stringify({ v: core.SETTINGS_VERSION, families: { "combines-with": false } }), DEMO);
   assert.deepEqual(hidden.families, { "combines-with": false });
 });
 
 test("loadSettings: groups keep their shape — string query, colour inside the palette", () => {
   const core = loadCore();
-  const s = core.loadSettings(JSON.stringify({ v: 1, groups: [
+  const s = core.loadSettings(JSON.stringify({ v: core.SETTINGS_VERSION, groups: [
     { q: "tag:caching", color: 3 },
     { q: "kind:hazard", color: 99 },     // clamped
     { q: "band:gof", color: 0 },         // clamped
@@ -406,7 +406,7 @@ test("loadSettings: groups keep their shape — string query, colour inside the 
     { q: "band:gof", color: 1 },
     { q: "no colour", color: 1 },
   ]);
-  assert.deepEqual(core.loadSettings(JSON.stringify({ v: 1, groups: "nope" }), DEMO).groups, []);
+  assert.deepEqual(core.loadSettings(JSON.stringify({ v: core.SETTINGS_VERSION, groups: "nope" }), DEMO).groups, []);
 });
 
 test("loadSettings: each call returns its own object — no shared default state", () => {

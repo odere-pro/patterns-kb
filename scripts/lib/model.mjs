@@ -25,7 +25,7 @@ export const KB_NAME = "Patterns KB";
  * `relationships`; only the middle is kind-specific. The opener id is `description` on
  * every kind — the visible heading may still be kind-flavoured ("The question",
  * "Understanding the problem") but the anchor and the semantic key are shared, so
- * `kb.mjs get <any-id> --block description` works on all five kinds. */
+ * `kb.mjs get <any-id> --block description` works on every kind. */
 const BASE_OPEN  = ["description", "explain"];
 const BASE_CLOSE = ["relationships"];
 const KIND_BLOCKS = {
@@ -38,6 +38,13 @@ const KIND_BLOCKS = {
    * sub-problems argued out, and the patterns it puts to work (via the typed
    * `relationships` block, so `kb.mjs link … demonstrates …` wires both sides). */
   design:    ["requirements", "sizing", "entities", "interface", "architecture", "deepdives", "tradeoffs", "levels"],
+  /* A capability is a category of thing the cloud sells — managed queues, object stores,
+   * elastic compute. It takes the CAPABILITY as its subject and the vendors' products as
+   * evidence: `capabilities` is the provider-neutral taxonomy, `mapping` the cross-cloud
+   * table, `choosing` the decision, `portability` what breaks when you move. It joins the
+   * pattern graph through `implements`, so a pattern page gains an "Implemented by" list
+   * of the cloud capabilities that package it. */
+  capability: ["capabilities", "mapping", "choosing", "portability"],
 };
 export const BLOCKS = Object.fromEntries(
   Object.entries(KIND_BLOCKS).map(([kind, mid]) => [kind, [...BASE_OPEN, ...mid, ...BASE_CLOSE]]),
@@ -56,6 +63,7 @@ export const OPTIONAL_BLOCKS = {
   theme:     new Set(["architecture", "relationships"]),
   principle: new Set([]),
   design:    new Set(["sizing", "interface", "levels"]),
+  capability: new Set([]),
 };
 
 /* ---- reading levels ----
@@ -87,6 +95,7 @@ export const BLOCK_LEVELS = {
   theme:     {},
   principle: {},
   design:    {},
+  capability: {},
 };
 
 /* Tags are a CLOSED vocabulary, like the relation verbs. They exist to group and
@@ -101,12 +110,12 @@ export const TAGS = new Set([
   "data-modeling", "decoupling", "domain-modeling", "durability", "edge", "encapsulation",
   "error-handling", "event-driven", "extensibility", "immutability", "instantiation-control",
   "integration", "isolation", "latency", "legacy", "lifecycle", "load-balancing",
-  "maintainability", "messaging", "modularity", "observability", "partitioning", "performance",
+  "maintainability", "messaging", "modularity", "observability", "operations", "partitioning", "performance",
   "persistence", "polymorphism", "read-optimization", "readability", "replication",
   "resilience", "resource-management", "routing", "scalability", "security",
   "separation-of-concerns", "state-management", "test-doubles", "testability", "testing",
   "throughput", "transactions", "transformation", "ui-architecture", "validation",
-  "machine-learning", "system-design", "low-level-design"
+  "machine-learning", "system-design", "low-level-design", "cloud"
 ]);
 
 /* Quick-filter facets for the hub search. A CLOSED, authored mapping — like TAGS and the
@@ -152,6 +161,7 @@ export const FACETS = [
     { id: "theme",     label: "Themes",       kinds: ["theme"] },
     { id: "principle", label: "Principles",   kinds: ["principle"] },
     { id: "design",    label: "Case studies", kinds: ["design"] },
+    { id: "capability", label: "Cloud capabilities", kinds: ["capability"] },
   ] },
   { rail: "Extras", chips: [
     { id: "has-example", label: "Has real-world example", hasExample: true },
@@ -188,6 +198,12 @@ export const RELATION_TYPES = {
    * inverse gives every pattern a "Demonstrated by" list of the real systems that use it. */
   "demonstrates":        { label: "Demonstrates",    inverse: "demonstrated-by" },
   "demonstrated-by":     { label: "Demonstrated by", inverse: "demonstrates" },
+  /* A cloud capability sells a pattern ready-made; the pattern is available off the shelf
+   * from that capability. Written by `kb.mjs link <capability> implements <pattern>`. Kept
+   * distinct from `demonstrates` because the two answer different questions: a case study
+   * shows a pattern AT WORK in one system, a capability says you can BUY it. */
+  "implements":          { label: "Implements",     inverse: "implemented-by" },
+  "implemented-by":      { label: "Implemented by", inverse: "implements" },
 };
 
 /* Canonical display order of relation groups on a page. */
@@ -195,7 +211,7 @@ export const REL_ORDER = [
   "Combines with", "Alternative to", "Has variant", "Variant of", "Generalizes",
   "Specializes", "Enables", "Requires", "Composed of", "Part of",
   "Often confused with", "Prevents", "Mitigated by",
-  "Demonstrates", "Demonstrated by",
+  "Demonstrates", "Demonstrated by", "Implements", "Implemented by",
 ];
 
 // A small curated synonym bridge for search: a symptom phrased as "stale" should still
@@ -231,7 +247,7 @@ export const SYNONYMS = {
 export const PROSE_LINK_EXCLUDE =
   "[data-kb-rel], [data-kb-member], .fluency-item, .crumb, .docnav, .mentions";
 
-export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes", principle: "principles", design: "designs" };
+export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes", principle: "principles", design: "designs", capability: "capabilities" };
 
 /* ---- taxonomy ----
  * `kind: "elevation"` bands are the I-IV ladder; `kind: "lens"` bands cut across it.
@@ -289,9 +305,16 @@ export const THEME_ORDER = [
   "cap-theorem", "streaming", "realtime-updates", "spike-handling", "long-running-tasks",
   "multi-step-processes", "performance", "auth-and-access", "api-design",
   "frontend-architecture",
+  "architecture-styles", "service-boundaries", "microservices-design", "continuous-delivery",
   "scalability", "scaling-reads", "scaling-writes", "consistency-and-replication",
   "observability", "resilience", "genai-scale", "caching",
   "dealing-with-contention", "proximity-search",
+  /* The design areas of an always-on workload, in the order you meet them: what the
+   * pieces are, how they are bundled, how traffic reaches them, where state lives,
+   * how you know it is well, how you change it safely, and how you run it. */
+  "workload-composition", "scale-units-and-stamps", "global-traffic-and-ingress",
+  "data-platform", "health-modeling", "continuous-validation",
+  "securing-availability", "operating-a-live-system",
 ];
 /* ML System Design case studies. Kept OUT of THEME_ORDER so they render as their own
  * dedicated hub + graph section ("ML System Design — Case Studies") rather than in the
@@ -322,24 +345,59 @@ export const DESIGN_ORDER = [
   "parking-lot", "elevator", "amazon-locker", "connect-four", "file-system",
   "logging-service", "inventory-management", "bookmyshow", "design-rate-limiter",
 ];
+/* Cloud capability categories — the `capability` kind. Each takes one category of managed
+ * service as its subject, names the provider-neutral capabilities inside it, maps them
+ * across AWS / Azure / Google Cloud, and links the patterns the category packages. Order
+ * runs foundation-first: the things you provision, then the things that carry traffic
+ * between them, then the things that govern the whole account. The hub filters this list
+ * to pages that exist, so it can be populated one at a time. */
+export const CAPABILITY_ORDER = [
+  "compute", "storage", "databases", "messaging", "networking", "identity",
+  "regions", "resources", "data-analytics",
+];
 export const HAZARD_ORDER = [
-  "god-object", "spaghetti-code", "big-ball-of-mud", "anemic-domain-model",
+  "god-object", "spaghetti-code", "big-ball-of-mud", "distributed-monolith", "anemic-domain-model",
   "golden-hammer", "boat-anchor",
-  "cache-stampede", "hot-key", "stale-cache", "hot-partition",
+  "cache-stampede", "hot-key", "stale-cache", "no-caching", "hot-partition",
   "split-brain", "dual-write-inconsistency",
-  "race-condition", "deadlock", "unbounded-queue", "resource-leak", "n-plus-1-query",
-  "connection-pool-exhaustion",
+  "race-condition", "deadlock", "unbounded-queue", "resource-leak", "improper-instantiation",
+  "n-plus-1-query", "chatty-io", "extraneous-fetching",
+  "busy-database", "monolithic-persistence",
+  "synchronous-io", "busy-front-end", "connection-pool-exhaustion",
   "retry-storm", "thundering-herd", "cascading-failure", "noisy-neighbour",
 ];
-/* Editorial order for the principle section: universal heuristics first, then SOLID,
- * then the OO-structural maxims. Drives the hub's Principles grid. */
-export const PRINCIPLE_ORDER = [
-  "dry", "kiss", "yagni", "least-astonishment", "fail-fast",
-  "single-responsibility", "open-closed", "liskov-substitution",
-  "interface-segregation", "dependency-inversion",
-  "composition-over-inheritance", "law-of-demeter", "separation-of-concerns",
-  "postels-law",
+/* Editorial order for the principle section, in two groups because the maxims work at two
+ * different altitudes and a reader looking for one is never looking for the other. Within
+ * `craft`: universal heuristics first, then SOLID, then the OO-structural maxims. Within
+ * `systems`: reliability, then scale, then operations, then the strategic pair. Drives the
+ * hub's Principles grid — a page missing from here still builds and validates, and simply
+ * never appears on the hub, so add new ids to the right group. */
+export const PRINCIPLE_GROUPS = [
+  {
+    id: "craft",
+    label: "Writing the code",
+    note: "Maxims that hold inside a single codebase — what keeps it simple, decoupled and cheap to change.",
+    ids: [
+      "dry", "kiss", "yagni", "least-astonishment", "fail-fast",
+      "single-responsibility", "open-closed", "liskov-substitution",
+      "interface-segregation", "dependency-inversion",
+      "composition-over-inheritance", "law-of-demeter", "separation-of-concerns",
+      "postels-law",
+    ],
+  },
+  {
+    id: "systems",
+    label: "Building the system",
+    note: "Maxims that hold across processes, machines and regions — what keeps a running system available, scalable and operable.",
+    ids: [
+      "self-healing", "redundancy", "failure-mode-analysis",
+      "minimize-coordination", "scale-out", "partition-around-limits",
+      "design-for-operations", "managed-services", "identity-as-perimeter",
+      "design-for-evolution", "build-for-business",
+    ],
+  },
 ];
+export const PRINCIPLE_ORDER = PRINCIPLE_GROUPS.flatMap((g) => g.ids);
 
 /* ---- derived lookups ---- */
 const BY_ID = new Map(BANDS.map((b) => [b.id, b]));

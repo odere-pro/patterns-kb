@@ -20,7 +20,7 @@ const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json")
 const N = graph.nodes;
 
 const count = (kind) => Object.values(N).filter((n) => n.kind === kind).length;
-const counts = Object.fromEntries(["pattern", "hazard", "theme", "principle", "design"].map((k) => [k, count(k)]));
+const counts = Object.fromEntries(["pattern", "hazard", "theme", "principle", "design", "capability"].map((k) => [k, count(k)]));
 
 /* ---- verb legend: one toggle per family ----
  * A family is a symmetric verb or a directional pair; its canonical id is the
@@ -47,8 +47,8 @@ const legend = families.map((f) =>
 /* ---- panel controls ---- */
 /* Kind chips are tag-like FILTER toggles — the glyph mirrors the node's shape on the
  * canvas (kinds are shape-coded, bands are color-coded). */
-const KIND_GLYPHS = { pattern: "●", hazard: "▲", theme: "■", principle: "◎", design: "◆" };
-const KIND_LABELS = { pattern: "Patterns", hazard: "Hazards", theme: "Themes", principle: "Principles", design: "Case studies" };
+const KIND_GLYPHS = { pattern: "●", hazard: "▲", theme: "■", principle: "◎", design: "◆", capability: "✚" };
+const KIND_LABELS = { pattern: "Patterns", hazard: "Hazards", theme: "Themes", principle: "Principles", design: "Case studies", capability: "Cloud capabilities" };
 const kindBtns = Object.entries(KIND_LABELS).map(([kind, label]) =>
   `          <button type="button" class="gbtn kind-btn" data-kind="${kind}" aria-pressed="true"><span class="kshape" aria-hidden="true">${KIND_GLYPHS[kind]}</span>${esc(label)}</button>`,
 ).join("\n");
@@ -80,7 +80,7 @@ const html = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Interactive Graph · Map</title>
-  <meta name="description" content="Every pattern, hazard, theme, principle and case study on one live force-directed canvas — filter by kind, band, tag, favourites or what you have practiced, color your own groups, tune the physics, and follow the ${graph.meta.relationships} typed relationships.">
+  <meta name="description" content="Every pattern, hazard, theme, principle, case study and cloud capability on one live force-directed canvas — filter by kind, band, tag, favourites or what you have practiced, color your own groups, tune the physics, and follow the ${graph.meta.relationships} typed relationships.">
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
   <link rel="stylesheet" href="../assets/graph.css">
@@ -99,7 +99,7 @@ const html = `<!doctype html>
     <header class="doc-head">
       <p class="doc-kicker">Map · The whole web</p>
       <h1 class="doc-title">Interactive Graph</h1>
-      <p class="doc-essence">${counts.pattern} patterns, ${counts.design} case studies, ${counts.theme} themes, ${counts.hazard} hazards and ${counts.principle} principles, wired by ${graph.meta.relationships} typed relationships — one live canvas. Drag, zoom, filter by kind, band, tag (<code>tag:caching</code>), favourites or what you have practiced, color your own groups, and tune the forces. Click a node to trace its neighbourhood; double-click to open its page. Your ★ and ✓ are the same ones the hub and the pages carry — toggle them from the selected node's card.</p>
+      <p class="doc-essence">${counts.pattern} patterns, ${counts.design} case studies, ${counts.theme} themes, ${counts.hazard} hazards, ${counts.principle} principles and ${counts.capability} cloud capabilities, wired by ${graph.meta.relationships} typed relationships — one live canvas. Drag, zoom, filter by kind, band, tag (<code>tag:caching</code>), favourites or what you have practiced, color your own groups, and tune the forces. Click a node to trace its neighbourhood; double-click to open its page. Your ★ and ✓ are the same ones the hub and the pages carry — toggle them from the selected node's card.</p>
       <div class="doc-metarow">
         <span class="badge">Interactive</span>
         <span class="badge muted">${graph.meta.relationships} relationships</span>

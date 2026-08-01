@@ -132,7 +132,11 @@ function forPrinciples(list) {
   return `# site/principles
 
 **Principles** — ${list.length} design maxims. Not a rung, not a lens, not a pattern: each is a
-rule of thumb for writing good code at any elevation (SOLID, DRY, KISS, YAGNI, and friends).
+rule of thumb you check a decision against. They sit at two altitudes, and the hub groups them
+that way: **writing the code** (SOLID, DRY, KISS, YAGNI and friends) and **building the system**
+(self-healing, redundancy, minimize coordination, scale out and friends). Membership and order
+come from \`PRINCIPLE_GROUPS\` in \`scripts/lib/model.mjs\` — a page missing from it validates
+fine and silently never appears on the hub.
 
 Pages here: ${list.map((n) => n.id).sort().join(", ")}
 
@@ -148,6 +152,42 @@ Read with \`node ../../scripts/kb.mjs get <id>\`. See the root CLAUDE.md for the
 `;
 }
 
+function forCapabilities(list) {
+  return `# site/capabilities
+
+**Cloud capabilities** — ${list.length} pages (the \`capability\` kind). Each takes one category
+of managed cloud service as its subject and answers the question a reader arrives with when they
+are holding a console: what can I buy here, what is it called on each cloud, and which patterns
+am I still on the hook to build myself. Order comes from \`CAPABILITY_ORDER\` in
+\`scripts/lib/model.mjs\` — a page missing from it validates fine and silently never appears on
+the hub.
+
+Pages here: ${list.map((n) => n.id).sort().join(", ")}
+
+Blocks, in order: ${BLOCKS.capability.map((b) => `\`${b}\``).join(" → ")}.
+
+**The capability is the subject; the products are evidence.** \`capabilities\` names each
+capability with no product in it at all, as a \`dl.variations\` card. \`mapping\` is the
+cross-cloud table — \`.table-scroll\` wrapping \`table.decision\`, columns Capability / AWS /
+Azure / Google Cloud. \`choosing\` argues the decision; \`portability\` lists what breaks when
+you move, each item a bold label then the difference and what it costs.
+
+Two rules bite harder here than anywhere else in the KB. **Anti-fabrication:** every cell is a
+service name you are sure of or it is omitted — "no direct equivalent" is a true, useful answer
+and belongs in the table; an invented product feature is a lie that ships to a public site.
+**Naming decay:** prefer the stable capability-level answer to the newest brand, because these
+are the pages that go out of date first.
+
+A capability links to the patterns it packages with
+\`node ../../scripts/kb.mjs link <id> implements <pattern>\`, which writes both sides and gives
+the pattern an "Implemented by" backlink — distinct from "Demonstrated by", which is a case
+study showing the pattern at work. Where the platform requires a discipline of you rather than
+providing it, the verb is \`prerequisite\`, not \`implements\`.
+
+Read with \`node ../../scripts/kb.mjs get <id>\`. See the root CLAUDE.md for the contract.
+`;
+}
+
 let written = 0;
 const stale = [];
 for (const [dir, list] of Object.entries(byDir)) {
@@ -156,6 +196,7 @@ for (const [dir, list] of Object.entries(byDir)) {
     : dir === "themes" ? forThemes(list)
     : dir === "principles" ? forPrinciples(list)
     : dir === "designs" ? forDesigns(list)
+    : dir === "capabilities" ? forCapabilities(list)
     : forPatternFolder(dir, list);
   const file = join(SITE, dir, "CLAUDE.md");
   const cur = existsSync(file) ? readFileSync(file, "utf8") : "";
@@ -195,8 +236,8 @@ fails if the two disagree. See the root CLAUDE.md for the data contract.
 const kindCount = (k) => nodes.filter((n) => n.kind === k).length;
 const countsText =
   `${kindCount("pattern")} software design patterns, ${kindCount("design")} design case studies, ` +
-  `${kindCount("theme")} themes, ${kindCount("hazard")} hazards and ${kindCount("principle")} principles ` +
-  `— ${nodes.length} pages in all`;
+  `${kindCount("theme")} themes, ${kindCount("hazard")} hazards, ${kindCount("principle")} principles ` +
+  `and ${kindCount("capability")} cloud capabilities — ${nodes.length} pages in all`;
 const REGIONS = [
   { tag: "kb:counts", text: countsText },
   { tag: "kb:page-count", text: String(nodes.length) },

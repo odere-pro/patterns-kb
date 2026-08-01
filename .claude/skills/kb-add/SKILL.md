@@ -37,8 +37,9 @@ it works at (an object? one app? a whole system? a network?) or which lens it is
 node scripts/kb.mjs new <id> --kind pattern --band <band> [--group <group>] --name "Name" --order <n>
 ```
 
-`--kind` is one of `pattern|hazard|theme|principle`. Only `pattern` needs a `--band`; hazards,
-themes and principles are flat (their band/group is just the kind). This writes a structurally
+`--kind` is one of `pattern|hazard|theme|principle|design|capability`. Only `pattern` needs a
+`--band`; every other kind is flat (its band/group is just the kind), and lands in
+`site/<kind>s/`. This writes a structurally
 valid skeleton — every mandatory block in order, sketch pre-wired for highlighting on patterns
 — that already passes `kb.mjs validate --file`. Then study an exemplar for what good content
 looks like:

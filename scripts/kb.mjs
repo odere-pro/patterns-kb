@@ -36,7 +36,7 @@
  *                                 (elements only — sections always show, at every lens)
  *   kb.mjs link <from> <verb> <to> [--note "…"] [--note-back "…"]   both sides at once
  *   kb.mjs unlink <a> <b>         drop the edge from both pages, whatever verb each used
- *   kb.mjs new <id> --kind pattern|hazard|theme|principle|design --band <b> [--group <g>] --name "…" --order <n>
+ *   kb.mjs new <id> --kind pattern|hazard|theme|principle|design|capability --band <b> [--group <g>] --name "…" --order <n>
  *
  *   --json      structured output instead of text
  *   --diagrams  keep the mermaid source (omitted by default as noise)
@@ -45,7 +45,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, esc, folderFor, band as bandOf, PROSE_LINK_EXCLUDE } from "./lib/model.mjs";
+import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, esc, folderFor, band as bandOf, PROSE_LINK_EXCLUDE, KIND_DIR } from "./lib/model.mjs";
 import { pruneForLens } from "./lib/lens.mjs";
 import { mergedSynonyms, STOP } from "./lib/expansions.mjs";
 import { validatePage } from "./lib/validate.mjs";
@@ -716,7 +716,7 @@ ${items}
       const p = join(dir, name);
       return statSync(p).isDirectory() ? walk(p) : p.endsWith(".html") ? [relative(SITE, p)] : [];
     });
-    for (const d of ["patterns", "hazards", "themes", "principles", "designs"]) targets.push(...walk(join(SITE, d)));
+    for (const d of Object.values(KIND_DIR)) targets.push(...walk(join(SITE, d)));
   }
 
   const problems = [];
@@ -949,9 +949,12 @@ ${items}
   const kind = opt("kind"), bandId = opt("band"), name = opt("name"), order = opt("order");
   const group = opt("group") ?? bandId;
   if (!id || !kind || !name || order == null || (kind === "pattern" && !bandId)) {
-    console.error('usage: kb.mjs new <id> --kind pattern|hazard|theme|principle|design --band <b> [--group <g>] --name "…" --order <n>\n  (--band is required only for --kind pattern)');
+    console.error('usage: kb.mjs new <id> --kind pattern|hazard|theme|principle|design|capability --band <b> [--group <g>] --name "…" --order <n>\n  (--band is required only for --kind pattern)');
     process.exit(1);
   }
+  /* Guard the kind before folderFor sees it: an unknown kind makes folderFor return
+   * undefined and the failure surfaces as a raw TypeError out of join(). */
+  if (!BLOCKS[kind]) { console.error(`unknown kind: ${kind} (one of ${Object.keys(BLOCKS).join(", ")})`); process.exit(1); }
   const band = kind === "pattern" ? bandId : kind;
   if (kind === "pattern" && !bandOf(bandId)) { console.error(`unknown band: ${bandId}`); process.exit(1); }
 

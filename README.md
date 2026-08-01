@@ -1,6 +1,6 @@
 # patterns-kb — an HTML5 knowledge base
 
-A cross-linked reference of **<!-- kb:counts -->173 software design patterns, 40 design case studies, 25 themes, 22 hazards and 14 principles — 274 pages in all<!-- /kb:counts -->**, written to be
+A cross-linked reference of **<!-- kb:counts -->190 software design patterns, 40 design case studies, 37 themes, 32 hazards, 25 principles and 9 cloud capabilities — 333 pages in all<!-- /kb:counts -->**, written to be
 learned from: every page answers the same questions in the same order, and every page says
 how it relates to its neighbours.
 
@@ -15,6 +15,7 @@ Live at **https://odere-pro.github.io/patterns-kb/**.
 | **Themes** | narratives that cut across patterns (CAP, streaming, traffic spikes, auth) |
 | **Hazards** | anti-patterns, and what they cost |
 | **Principles** | design maxims (SOLID, DRY, KISS, YAGNI) — including how each fails when overapplied |
+| **Capabilities** | categories of managed cloud service, mapped across AWS/Azure/Google Cloud and back to the patterns they package |
 
 Every page of a kind carries the same blocks in the same order. A pattern is always
 `description → structure → variations → tradeoffs → usage → sketch → relationships`; a
@@ -33,7 +34,7 @@ server needed.
 
 **Follow the relationships.** Every page ends with typed neighbours — `combines-with`,
 `variant-of`, `alternative-to`, `prevents-hazard`, `demonstrated-by` — each with a note
-saying *why* they relate. The 15 verbs are a closed vocabulary, published at
+saying *why* they relate. The 17 verbs are a closed vocabulary, published at
 [`site/vocab.html`](site/vocab.html), and each edge is declared on both pages it joins. The
 whole web renders at [`site/map/graph.html`](site/map/graph.html) — a live force-directed
 canvas in the Obsidian-graph mould: drag and zoom, filter by kind, band, tag or
@@ -54,7 +55,7 @@ node scripts/kb.mjs related circuit-breaker                        # typed neigh
 node scripts/kb.mjs ls --band caching
 ```
 
-`find` searches the full prose of all <!-- kb:page-count -->274<!-- /kb:page-count --> pages and prints the line that matched. It weights
+`find` searches the full prose of all <!-- kb:page-count -->333<!-- /kb:page-count --> pages and prints the line that matched. It weights
 differently depending on whether you are naming a pattern ("circuit breaker") or describing a
 symptom, because in the second case a name match is usually incidental. Add `--json` for
 structured output.

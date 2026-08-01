@@ -1,6 +1,6 @@
 # patterns-kb
 
-A knowledge base of <!-- kb:counts -->173 software design patterns, 40 design case studies, 25 themes, 22 hazards and 14 principles — 274 pages in all<!-- /kb:counts -->.
+A knowledge base of <!-- kb:counts -->190 software design patterns, 40 design case studies, 37 themes, 32 hazards, 25 principles and 9 cloud capabilities — 333 pages in all<!-- /kb:counts -->.
 **It is data that happens to render**, not a site that happens to hold data.
 
 ## The one thing to understand
@@ -29,7 +29,7 @@ node scripts/kb.mjs ls --band caching
 ```
 
 Add `--json` for structured output. A grounded answer costs ~600 tokens this way, against
-~3,600 for one raw page. `find` searches the full prose of all <!-- kb:page-count -->274<!-- /kb:page-count --> pages — that costs disk,
+~3,600 for one raw page. `find` searches the full prose of all <!-- kb:page-count -->333<!-- /kb:page-count --> pages — that costs disk,
 not context — and prints the line that matched.
 
 Cite precisely: every claim has a stable id (`…/circuit-breaker.html#tradeoffs-con-2`).
@@ -86,7 +86,7 @@ Each folder under `site/` has its own CLAUDE.md with local rules.
   `fluency` item must both exist — the tour is the source of truth, but the pattern's
   "Where it shows up" block is hand-written and can drift from it. Wording may differ;
   presence may not.
-- The relation vocabulary (15 verbs), the **tag vocabulary** and the **level vocabulary**
+- The relation vocabulary (17 verbs), the **tag vocabulary** and the **level vocabulary**
   (`basic`/`advanced`/`expert`) are **closed**. Adding a tag means adding it to `TAGS` in
   `scripts/lib/model.mjs` first, and only if it will honestly apply to 3+ pages.
 - An `explain` block, when present, holds exactly one item per level, in order.
@@ -99,6 +99,7 @@ Each folder under `site/` has its own CLAUDE.md with local rules.
 site/patterns/<band>/[<group>/]<id>.html   the source of truth
 site/hazards/<id>.html · site/themes/<id>.html · site/principles/<id>.html
 site/designs/<id>.html                     worked case studies (system-design & LLD katas)
+site/capabilities/<id>.html                cloud service categories, mapped across providers
 site/assets/graph.json · catalog.json · graphdata.js   DERIVED
 site/index.html · vocab.html · map/graph.html   DERIVED (graph.html = interactive graph explorer shell;
                                                 its runtime is hand-authored assets/graph-view.js + graph.css,

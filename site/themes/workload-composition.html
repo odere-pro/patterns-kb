@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workload Composition · Patterns</title>
+  <meta name="description" content="Workload Composition — Splitting a workload into parts that scale alone, with a write path that never makes the caller wait">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <script src="../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#workload-composition",
+  "identifier": "workload-composition",
+  "name": "Workload Composition",
+  "description": "Splitting a workload into parts that scale alone, with a write path that never makes the caller wait",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "theme",
+  "kb:band": "theme",
+  "kb:group": "theme",
+  "kb:tours": [
+    {
+      "@id": "../patterns/distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:role": "Make any instance able to serve any request"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:role": "Take the write off the request path"
+    },
+    {
+      "@id": "../patterns/messaging/competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:role": "Drain the backlog by adding workers"
+    },
+    {
+      "@id": "../patterns/messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:role": "Survive the redelivery the buffer guarantees"
+    },
+    {
+      "@id": "../patterns/distributed/routing/autoscaling.html#autoscaling",
+      "name": "Autoscaling",
+      "kb:role": "Let each component follow its own signal"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/health-endpoint.html#health-endpoint",
+      "name": "Health Endpoint Monitoring",
+      "kb:role": "Report readiness so the router can act"
+    },
+    {
+      "@id": "../patterns/messaging/correlation-identifier.html#correlation-identifier",
+      "name": "Correlation Identifier",
+      "kb:role": "Stitch the split request back together"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc theme">
+  <main class="doc-wrap" data-kb-id="workload-composition" data-kb-kind="theme" data-kb-band="theme" data-kb-group="theme" data-kb-essence="Splitting a workload into parts that scale alone, with a write path that never makes the caller wait" data-kb-order="30" data-kb-tags="[&quot;decoupling&quot;,&quot;scalability&quot;,&quot;asynchrony&quot;,&quot;separation-of-concerns&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#themes-h">Themes</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Workload Composition</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Theme</p>
+      <h1 class="doc-title">Workload Composition</h1>
+      <p class="doc-essence">How to cut one application into components that scale on their own signals and fail on their own, so a slow database or a busy worker never becomes a slow front end.</p>
+      <div class="doc-metarow">
+        <span class="badge">Theme</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="workload-composition">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">The question</h2>
+      <div class="prose">
+        <p id="description-p-1">An application that does everything in the request thread has one load pattern and one failure mode, and both belong to the slowest thing it touches. A user posts a comment, the request holds a thread while the database write commits, and every other user waiting behind that thread is now paying for the database's afternoon. Add capacity and you add it to everything at once, because there is only one thing to add capacity to.</p>
+        <p id="description-p-2">Composition is the decision to stop that. Cut the workload along the lines where load actually differs — the part users wait on, the part that grinds through work nobody is watching, the part that answers a probe — and let each scale, fail and be replaced without the others noticing. The cut is not free: the moment a write leaves the request it becomes a message someone has to deliver, and delivered messages arrive twice.</p>
+        <p data-kb-level="advanced" id="description-p-3">Three properties make the pieces genuinely independent, and dropping any one puts the coupling back. Components hold no per-user state, so any instance serves any request and instances can be added or killed without a migration. Slow writes go through a buffer rather than down the wire, so the front end returns in milliseconds regardless of what the store is doing. And every component reports its own health, so the thing in front of it can route around it rather than discovering the problem through user-facing errors.</p>
+        <p data-kb-level="advanced" id="description-p-4">The write path is where the design earns its keep and where it gets hard. Accepting a write means acknowledging something you have not done yet, which is a promise rather than a fact. The client gets an identifier and a place to look; the work happens behind the buffer at whatever rate the workers can sustain; and because the buffer will redeliver, every handler has to produce the same result the second time it runs.</p>
+        <p data-kb-level="expert" id="description-p-5">What you lose is the single transaction and the single stack trace. The write is no longer atomic with the response, so the client has to be told how to find out what happened rather than being told the answer. The failure is no longer one exception, so a request that crossed three components leaves three unrelated log streams unless something threads them together. Both are recoverable, and both cost work a single process never had to do — which is the honest reason not to compose a workload that has no scaling problem.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>When one program does every part of the job, the slowest part sets the pace for all of it. Somebody posts a comment, the request sits there while the database finishes writing, and everyone waiting behind that request is now paying for the database having a bad afternoon. Split the work up instead. Let the part people are waiting on hand the slow job to a list and answer straight away, and let a separate set of workers chew through the list at whatever speed they can manage. Now the fast part stays fast when the slow part is slow, and you can add more of whichever one is struggling. The catch is that a job on the list sometimes gets picked up twice, so doing it twice has to be harmless.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>The cut lands on three properties. No component holds per-user state, so any instance serves any request and instances can be added or destroyed without a migration. Writes go through a durable buffer, so the front end returns as soon as the message is safe and the workers drain it at their own rate — which makes a traffic burst show up as queue depth rather than as timeouts. And each component reports its own health, so the thing in front routes around a sick instance rather than learning about it from user-facing errors. Because the components now have different load shapes, they get different scaling signals: request rate for the front end, which must react while users wait, and queue depth for the workers, which can react slowly because nobody is watching.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Compose when the load patterns of the pieces genuinely differ, and leave a single process alone when they do not — the coupling you remove is real and so is the machinery you add. The bill and its counter-moves. The response is no longer the answer, only an acknowledgement, so the API has to hand back an identifier and a place to poll rather than a result, and the client has to be built to collect it. Delivery is at-least-once, so every handler needs a repeat-safe write keyed on something the producer committed — retrofitting that means auditing every write path, which is why it is designed in at the start. The failure is no longer one stack trace, so an identifier minted at the edge must survive the hop through the broker, where it rides in the message envelope rather than in a connection. And the buffer is now a component that can itself fill or fail, so it needs a depth alarm and a dead-letter destination rather than unbounded growth. Then run the loop: tune the scaling signal and thresholds per component, watch queue depth and consumer lag against front-end latency, expect the worker pool to be what saturates first under a burst, and gate the release on handlers that have been tested against a replayed message.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tradespace" aria-labelledby="h-tradespace" data-kb-block="tradespace">
+      <h2 class="doc-h" id="h-tradespace">The tradespace</h2>
+      <div class="prose">
+        <p id="tradespace-p-1">The tension is between answering now and answering truthfully. A request that waits for the write to commit can tell the user exactly what happened, and it holds a thread for as long as that takes. A request that hands the write to a buffer returns in milliseconds and can only say the work has been accepted — a smaller promise, and one the system can keep under load that would have collapsed the first design.</p>
+        <p data-kb-level="advanced" id="tradespace-p-2">Every cut moves cost from the request path to somewhere else rather than removing it. Statelessness moves session data into a shared store, which is a network hop the process no longer avoids. Buffering moves the write into a broker, which is another thing to run, size and watch. Independent scaling means several policies to tune instead of one. The trade is worth making where the load patterns genuinely differ, and is pure overhead where they do not.</p>
+        <p data-kb-level="expert" id="tradespace-p-3">Underneath sits a requirement that is easy to skip and expensive to retrofit: once work is buffered, it will be delivered more than once. Repeat-safety has to be designed into each handler at the point where it writes, and bolting it on later means auditing every write path in the system rather than writing one guard clause.</p>
+        <p id="tradespace-p-4"><strong>Answer immediately and promise less, or answer completely and hold the caller.</strong></p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="tour" aria-labelledby="h-tour" data-kb-block="tour">
+      <h2 class="doc-h" id="h-tour">The tour</h2>
+      <div class="tour">
+        <div class="tour-step" data-kb-member="stateless-service" data-kb-role="Make any instance able to serve any request" id="tour-stateless-service">
+          <h3><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a></h3>
+          <p id="tour-p-1">The precondition for everything else here. If no instance holds something the others lack, instances can be added, killed and replaced with no migration and no session to preserve — which is what makes independent scaling a configuration change rather than a project.</p>
+        </div>
+        <div class="tour-step" data-kb-member="load-leveling" data-kb-role="Take the write off the request path" id="tour-load-leveling">
+          <h3><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a></h3>
+          <p id="tour-p-2">A queue between the front end and the write lets the request return the moment the message is durable, instead of holding a thread until the store commits. The front end then serves at its own pace and the store works at its own, and a burst becomes queue depth rather than a timeout.</p>
+        </div>
+        <div class="tour-step" data-kb-member="competing-consumers" data-kb-role="Drain the backlog by adding workers" id="tour-competing-consumers">
+          <h3><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a></h3>
+          <p id="tour-p-3">The other half of the buffer: several workers pull from the same channel, each claiming its own message, so backlog turns into throughput by adding instances. It is why the worker's scaling signal is queue depth while the front end's is request rate.</p>
+        </div>
+        <div class="tour-step" data-kb-member="idempotency" data-kb-role="Survive the redelivery the buffer guarantees" data-kb-level="advanced" id="tour-idempotency">
+          <h3><a href="../patterns/messaging/idempotency.html">Idempotency</a></h3>
+          <p data-kb-level="advanced" id="tour-p-4">A worker that dies after writing but before acknowledging will see its message again, so every handler must produce the same result the second time. This is not optional once a buffer is in the path — it is the price of the acknowledgement, and skipping it turns a crash into duplicated data.</p>
+        </div>
+        <div class="tour-step" data-kb-member="autoscaling" data-kb-role="Let each component follow its own signal" data-kb-level="advanced" id="tour-autoscaling">
+          <h3><a href="../patterns/distributed/routing/autoscaling.html">Autoscaling</a></h3>
+          <p data-kb-level="advanced" id="tour-p-5">Separated components have different load shapes, so they get different policies: the front end tracks request rate and must react quickly because users are waiting, while the worker tracks queue depth and can react slowly because nobody is. One policy for both wastes capacity on one and starves the other.</p>
+        </div>
+        <div class="tour-step" data-kb-member="health-endpoint" data-kb-role="Report readiness so the router can act" data-kb-level="advanced" id="tour-health-endpoint">
+          <h3><a href="../patterns/distributed/resilience/health-endpoint.html">Health Endpoint Monitoring</a></h3>
+          <p data-kb-level="advanced" id="tour-p-6">Each component answers for itself, so an instance that has lost its store leaves rotation before users meet it. Independence is only real if the thing in front can tell which piece is unwell.</p>
+        </div>
+        <div class="tour-step" data-kb-member="correlation-identifier" data-kb-role="Stitch the split request back together" data-kb-level="advanced" id="tour-correlation-identifier">
+          <h3><a href="../patterns/messaging/correlation-identifier.html">Correlation Identifier</a></h3>
+          <p data-kb-level="advanced" id="tour-p-7">Splitting the workload splits the evidence. An id minted at the edge and carried through the buffer into the worker turns three unrelated log streams back into one story, and returning it to the caller is what lets support answer a question about one specific request.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="decide" aria-labelledby="h-decide" data-kb-block="decide">
+      <h2 class="doc-h" id="h-decide">When to reach for what</h2>
+      <div class="table-scroll">
+        <table class="decision">
+          <thead>
+            <tr><th>If you need…</th><th>Move</th><th>Reach for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>To add and remove instances without migrating anything</td><td>Push state out</td><td><a href="../patterns/distributed/routing/stateless-service.html">Stateless Service</a></td></tr>
+            <tr><td>A write that does not hold the caller while the store commits</td><td>Buffer it</td><td><a href="../patterns/distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a></td></tr>
+            <tr><td>Backlog to drain faster by adding capacity</td><td>Parallel consumption</td><td><a href="../patterns/messaging/competing-consumers.html">Competing Consumers</a></td></tr>
+            <tr><td>A redelivered message not to double-write</td><td>Same result twice</td><td><a href="../patterns/messaging/idempotency.html">Idempotency</a></td></tr>
+            <tr><td>Each component to scale on the signal that actually drives it</td><td>Separate policies</td><td><a href="../patterns/distributed/routing/autoscaling.html">Autoscaling</a></td></tr>
+            <tr><td>A failing component pulled out before users notice</td><td>Report readiness</td><td><a href="../patterns/distributed/resilience/health-endpoint.html">Health Endpoint Monitoring</a></td></tr>
+            <tr><td>One request followed across the pieces it was split into</td><td>Thread the evidence</td><td><a href="../patterns/messaging/correlation-identifier.html">Correlation Identifier</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="doc-section" id="siblings" aria-labelledby="h-sib" data-kb-block="siblings">
+      <h2 class="doc-h" id="h-sib">Related areas</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" id="siblings-item-1"><a href="./scale-units-and-stamps.html">Scale Units &amp; Stamps</a><span>Composition decides what the pieces are; the scale unit decides how they are bundled and deployed together.</span></div>
+        <div class="fluency-item" id="siblings-item-2"><a href="./long-running-tasks.html">Long-Running Tasks</a><span>The same buffer-and-worker shape, followed through to progress reporting and results the client collects later.</span></div>
+        <div class="fluency-item" data-kb-level="advanced" id="siblings-item-3"><a href="./scalability.html">Scalability</a><span>Independent components are what make horizontal scale a choice per component rather than one decision for the whole application.</span></div>
+        <div class="fluency-item" data-kb-level="advanced" id="siblings-item-4"><a href="./health-modeling.html">Health Modeling</a><span>Once a workload has several components, deciding whether the whole thing is healthy stops being obvious.</span></div>
+      </div>
+    </section>
+
+    <nav class="docnav" aria-label="Theme navigation">
+      <a class="prev" href="../index.html#themes-h">← Themes</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="./scale-units-and-stamps.html">Scale Units &amp; Stamps →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+</body>
+</html>

@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fault Injection · Patterns</title>
+  <meta name="description" content="Fault Injection — Break it on purpose, on a schedule, to prove it survives">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#fault-injection",
+  "identifier": "fault-injection",
+  "name": "Fault Injection",
+  "description": "Break it on purpose, on a schedule, to prove it survives",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-resilience",
+  "kb:combines-with": [
+    {
+      "@id": "./circuit-breaker.html#circuit-breaker",
+      "name": "Circuit Breaker",
+      "kb:note": "Injecting a failing dependency is how you find out the breaker actually trips"
+    },
+    {
+      "@id": "./bulkhead.html#bulkhead",
+      "name": "Bulkhead",
+      "kb:note": "Saturating one compartment proves the others were really isolated"
+    },
+    {
+      "@id": "./retry-backoff.html#retry-backoff",
+      "name": "Retry with Backoff",
+      "kb:note": "Returning errors on purpose exposes a retry with no ceiling or no jitter"
+    },
+    {
+      "@id": "./timeout-deadline.html#timeout-deadline",
+      "name": "Timeout / Deadline",
+      "kb:note": "Added latency is the fastest way to find a missing or over-generous timeout"
+    },
+    {
+      "@id": "./health-endpoint.html#health-endpoint",
+      "name": "Health Endpoint Monitoring",
+      "kb:note": "The experiment checks whether the probe noticed, not just whether the code coped"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../../hazards/cascading-failure.html#cascading-failure",
+      "name": "Cascading Failure",
+      "kb:note": "Rehearse the first failure and find the spread before it happens for real"
+    },
+    {
+      "@id": "../../../hazards/retry-storm.html#retry-storm",
+      "name": "Retry Storm",
+      "kb:note": "A deliberate outage under load makes the amplification visible in a controlled window"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/continuous-validation.html#continuous-validation",
+      "name": "Continuous Validation",
+      "kb:role": "Check the safeguards still work"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="fault-injection" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-resilience" data-kb-essence="Break it on purpose, on a schedule, to prove it survives" data-kb-order="143" data-kb-aliases="[&quot;chaos engineering&quot;,&quot;failure injection&quot;,&quot;chaos testing&quot;]" data-kb-tags="[&quot;resilience&quot;,&quot;testing&quot;,&quot;observability&quot;,&quot;availability&quot;]" data-kb-solves="[&quot;we think the system survives a dependency going down but nobody has ever checked&quot;,&quot;the failure path has never run outside a design document&quot;,&quot;our timeouts and retry settings were copied from another service and nobody knows if they fit&quot;,&quot;the mechanism worked during the incident and nobody was alerted&quot;,&quot;we promise an availability number and have no evidence for it&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Resilience</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Fault Injection</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Resilience</p>
+      <h1 class="doc-title">Fault Injection</h1>
+      <p class="doc-essence">States what the system should do when a specific thing fails, then causes that failure deliberately under real load and checks the prediction — turning resilience from a property the design claims into one the system has been observed to have.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Resilience</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="fault-injection">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1">You added a timeout, a retry and a circuit breaker, and the design document says the system degrades gracefully when the payment provider slows down. Nobody has ever seen it do that. The first time it will be tested is the first time the provider actually slows down, at which point you discover the retry has no jitter, the breaker threshold was copied from another service, and the fallback path throws because it was never executed.</p>
+        <p id="description-p-2"><strong>Fault injection</strong> settles the question before the incident does. You write down what should happen — orders keep completing, latency rises by under a second, the breaker opens within thirty seconds — then you cause the failure on purpose while real load is running, and you compare what happened against what you predicted. A prediction that holds is evidence. A prediction that fails is a defect found on a Tuesday afternoon with everyone awake, rather than at 3am.</p>
+        <p data-kb-level="advanced" id="description-p-3">The prediction is what separates this from breaking things at random. An experiment has a steady-state measure that says the system is behaving normally, a hypothesis that the measure stays within bounds while the fault is applied, a blast radius that caps how much can be affected, and an abort condition that stops the experiment automatically when the measure leaves those bounds. Skip the hypothesis and you have an outage you scheduled; skip the abort and you have one you cannot stop.</p>
+        <p data-kb-level="advanced" id="description-p-4">Load has to be running for any of it to mean anything. A dependency taken away from an idle system produces no queueing, no pool exhaustion and no <a href="../../../hazards/retry-storm.html">retry storm</a> — the three things you were trying to observe. Either run the experiment against production traffic, or drive synthetic load alongside it and accept that the traffic mix is an approximation.</p>
+        <p data-kb-level="expert" id="description-p-5">The most valuable result is rarely the one about the mechanism. Systems usually survive the fault and fail the response to it: the breaker opened correctly and no alert fired, or the alert fired and pointed at the wrong service, or the runbook named a dashboard that no longer exists. Injecting the fault exercises the detection path and the human path along with the code, and those are the parts no unit test covers and no design review catches.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>You built the parts that are meant to cope when something else breaks, and none of them has ever run for real. The first time they will be tried is the first time a dependency actually falls over, and that is a bad moment to discover that the fallback throws an error because nobody ever executed it. So break something on purpose instead, while people are around and watching. Write down beforehand what you expect to happen, make that exact thing fail, and see whether the system did what you said it would. If it did, you have proof. If it did not, you found the problem on a Tuesday afternoon rather than at three in the morning.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>An experiment is four things: a measure that says the system is currently normal, a prediction that the measure stays inside stated bounds while the fault is applied, a cap on how much can be affected, and an automatic stop that fires when the measure leaves those bounds. Load has to be running or the result means nothing — an idle system tolerates a lost dependency because no queue builds and no pool drains. Which fault you inject decides which question you answer: added latency finds missing or over-generous timeouts, returned errors find the retry without a ceiling, name-resolution failure stands in for the whole class of connectivity loss, and terminating an instance tests whether the fleet notices. The fault can be applied at the platform, in the network path through a proxy or mesh, or inside the application, and each reaches a different amount of the traffic.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it once resilience mechanisms exist and are unproven, and not before — an experiment against a system with no timeout and no fallback confirms what you already know. The bill and its counter-moves: you are degrading a live system, so scope the fault to one instance or a small percentage and make the abort mechanical rather than a person watching a dashboard. A fault can outlive the experiment as a leftover name-resolution override or firewall rule, so removal runs on every path and is verified rather than assumed. Findings are often that nothing happened, which is hard to keep funded, so run experiments in the release pipeline where the cost is amortised and a regression is attributable to the change that caused it. And the practice only covers failures somebody imagined, so drive the backlog from a written failure analysis and treat every real incident as a new experiment rather than only a postmortem. Then run the loop: tune blast radius and fault magnitude, watch the steady-state measure, time to detect and time to recover, expect the finding to be a missing alert rather than broken code, and gate the experiment on the system being healthy before it starts.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Hyp["Hypothesis"]
+    Runner["Experiment runner"]
+    Load["Load"]
+    Sys["System under test"]
+    Dep[("Dependency")]
+    Obs[("Telemetry")]
+    Hyp --&gt;|"1 predict the outcome"| Runner
+    Load --&gt;|"2 drive steady state"| Sys
+    Runner --&gt;|"3 inject the fault"| Dep
+    Sys --&gt;|"4 absorb or degrade"| Obs
+    Runner --&gt;|"5 compare against the prediction"| Obs
+    Runner --&gt;|"6 stop and restore"| Dep
+        </pre>
+        <figcaption>What makes this an experiment rather than an outage? Steps 1 and 5. Without the prediction there is nothing to compare against, and step 2 is what makes the comparison meaningful — a fault applied to an idle system produces none of the queueing you were trying to observe.</figcaption>
+      </figure>
+      <figure class="diagram" data-kb-level="advanced" id="structure-fig-2">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant R as Runner
+    participant S as Service
+    participant D as Dependency
+    participant M as Monitors
+    R-&gt;&gt;M: record steady state
+    R-&gt;&gt;D: add 2s latency, one instance only
+    S-&gt;&gt;D: call
+    D--&gt;&gt;S: slow
+    Note over S: timeout fires, breaker counts the failure
+    S-&gt;&gt;M: error rate within predicted bounds
+    M--&gt;&gt;R: still inside the abort threshold
+    R-&gt;&gt;D: remove the fault
+    S-&gt;&gt;M: steady state restored
+    Note over R,M: the alert never fired — that is the finding
+        </pre>
+        <figcaption>Where does the real defect usually turn up? Not in the mechanism, which behaved. In the response to it: the system degraded exactly as designed and nobody was told.</figcaption>
+      </figure>
+      <div class="prose">
+        <p data-kb-level="advanced" id="structure-p-1">The faults worth injecting map to the failures that actually happen. Added latency finds missing or over-generous timeouts. Returned errors find the retry that has no ceiling. Name-resolution failure simulates the whole class of connectivity loss without touching the dependency. Terminating instances tests whether the fleet notices and replaces them. Filling a disk, pinning a processor or exhausting a connection pool finds the resource limit nobody set. Each answers a different question, so an experiment names one fault rather than combining several.</p>
+        <p data-kb-level="expert" id="structure-p-2">Blast radius has to be a property of the experiment, not of the operator's care. The controls that make production experiments defensible are a fault scoped to one instance or one small percentage of traffic, an automatic abort wired to the steady-state measure rather than to a human watching, and a rollback that is a single call and has been tested on its own. A fault that leaves residue is the specific hazard here — a name-resolution override or a firewall rule that outlives the experiment is an outage the runner will not report, because as far as it is concerned the experiment ended.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Game day</dt>
+        <dd>A scheduled session where a team runs experiments by hand and watches together. Slow and expensive per experiment, and the best way to test the human parts — who gets paged, which dashboard they open, whether the runbook is still true.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Automated experiment in the pipeline</dt>
+        <dd data-kb-level="advanced">The same experiments run unattended as a stage of the release pipeline, usually alongside a load test so the system is under pressure when the fault lands. It catches a resilience regression on the release that introduced it rather than months later.</dd>
+        <dt data-kb-level="advanced" id="variations-item-3">Pre-production versus production</dt>
+        <dd data-kb-level="advanced">Running in a copy of the environment risks nothing and proves less, because the copy has different data, different scale and different traffic. Running in production is the only place the answer is definitive, and it is only defensible once the blast radius and the abort are mechanical.</dd>
+        <dt data-kb-level="advanced" id="variations-item-4">Randomised termination</dt>
+        <dd data-kb-level="advanced">Instances are killed continuously and at random rather than as a designed experiment. It is the oldest form of the practice and it enforces one specific property — nothing may depend on a particular instance surviving — which is why it works without a hypothesis where the general form does not.</dd>
+        <dt data-kb-level="expert" id="variations-item-5">Where the fault is applied</dt>
+        <dd data-kb-level="expert">In the platform (terminate an instance, sever a zone), in the network path (a proxy or <a href="../routing/service-mesh.html">service mesh</a> adds latency or returns errors), or in the application itself behind a switch. Platform faults are realistic and coarse; mesh faults are precise and only reach traffic that goes through the mesh; in-application faults reach anything but require the failure path to be built into the code you are testing.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Converts a claim about resilience into an observation, so the first test of the failure path is not the incident.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">Exercises detection and response, not just the mechanism — most findings are a missing alert or a stale runbook rather than broken code.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Finds the settings that were copied rather than chosen: thresholds, timeouts and pool sizes that only reveal themselves under a real fault.</li>
+            <li data-kb-level="advanced" id="tradeoffs-pro-4" data-kb-polarity="pro">Run in the pipeline, it catches a resilience regression on the release that caused it, when the change is still small and attributable.</li>
+            <li data-kb-level="advanced" id="tradeoffs-pro-5" data-kb-polarity="pro">Builds a documented history of what the system does under specific failures, which is worth more during an incident than any design document.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">You are deliberately degrading a system real people are using, and sometimes the degradation is larger than predicted.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Meaningless without load and without a stated prediction — an unloaded system tolerates faults it would fail under traffic.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Needs observability good enough to see the answer. Without per-dependency latency and error metrics, the experiment produces an anecdote.</li>
+            <li data-kb-level="advanced" id="tradeoffs-con-4" data-kb-polarity="con">Costs engineering time to design, run and interpret, and the finding is often that nothing happened, which is hard to keep funded.</li>
+            <li data-kb-level="expert" id="tradeoffs-con-5" data-kb-polarity="con">A fault can leave residue — a name-resolution override, a firewall rule, a paused process — that outlives the experiment and becomes a real outage the runner never reports.</li>
+            <li data-kb-level="expert" id="tradeoffs-con-6" data-kb-polarity="con">Experiments only cover failures somebody thought of, so the practice reinforces the existing model of how the system fails and is weakest exactly where that model is wrong.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">The system has resilience mechanisms nobody has ever seen operate under load.</li>
+            <li id="usage-when-2" data-kb-polarity="when">An availability target is being promised and there is no evidence behind the promise.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">A failure analysis lists modes the design claims to handle, and you want the list checked rather than believed.</li>
+            <li data-kb-level="advanced" id="usage-when-4" data-kb-polarity="when">Incidents keep revealing that the mechanism worked and the alert did not.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">There are no resilience mechanisms yet. Injecting a fault will confirm the system breaks, which you already knew — build the timeout and the fallback first.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">You cannot cap the blast radius or stop the experiment automatically, in which case this is an unplanned outage with a plan attached.</li>
+            <li data-kb-level="advanced" id="usage-avoid-3" data-kb-polarity="avoid">Observability is too thin to see what happened, so the result cannot be read either way.</li>
+            <li data-kb-level="advanced" id="usage-avoid-4" data-kb-polarity="avoid">The system is already unstable and the queue of known problems is longer than anything an experiment would surface.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — the experiment, with its abort wired in</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">const experiment = {
+  hypothesis: "Orders keep completing when payments adds 2s of latency",
+  steadyState: () =&gt; metrics.successRate("checkout", { window: "1m" }),
+  tolerance: 0.99,            // below this, the prediction has failed
+  blastRadius: { instances: 1 },
+  fault: latency("payments", { ms: 2000 }),
+  duration: "5m",
+};
+
+async function run(e: Experiment) {
+  const before = await e.steadyState();
+  if (before &lt; e.tolerance) return skip("system is not healthy to begin with");
+
+  await e.fault.inject(e.blastRadius);
+  try {
+    // The abort is mechanical. A human watching a dashboard is not an abort.
+    await watchUntil(e.duration, async () =&gt; {
+      if (await e.steadyState() &lt; e.tolerance) throw new HypothesisFailed();
+    });
+    return { held: true, before };
+  } finally {
+    await e.fault.remove();   // always, on every path — residue is the real hazard
+    await verifyRemoved(e.fault);
+  }
+}
+</code></pre>
+      </details>
+      <details class="sketch" data-kb-level="advanced" id="sketch-variant-2">
+        <summary>TypeScript — the finding is usually about the response, not the mechanism</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// A pass on the hypothesis is only half the result. Check that the system said
+// something while it degraded, because the common defect is silent correctness.
+async function report(e: Experiment, result: Result) {
+  return {
+    hypothesisHeld: result.held,
+
+    // Did the mechanism engage at all? A "pass" where nothing tripped means the
+    // fault never reached the path you were testing.
+    breakerOpened: await metrics.sawStateChange("payments.breaker", "open"),
+
+    // Did anyone find out? This is where most experiments actually fail.
+    alertFired: await alerts.firedDuring(result.window, "payments-degraded"),
+    timeToDetect: await alerts.firstFiredAt(result.window),
+
+    // And did it come back on its own, or did the fault removal fix it?
+    recoveredBeforeFaultRemoved: result.recoveryAt &lt; result.faultRemovedAt,
+  };
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="chaos-monkey" id="wild-chaos-monkey"><strong>Netflix Chaos Monkey</strong><span>The tool that named the practice: it terminates instances at random during working hours, which enforces one property continuously — nothing may depend on a particular instance staying alive.</span></div>
+        <div class="wild-item" data-kb-example="aws-fis" id="wild-aws-fis" data-kb-level="advanced"><strong>AWS Fault Injection Service</strong><span>Runs experiment templates that inject faults such as instance termination, added API latency and resource exhaustion, with stop conditions bound to CloudWatch alarms so the experiment aborts itself when a metric leaves its bounds.</span></div>
+        <div class="wild-item" data-kb-example="azure-chaos-studio" id="wild-azure-chaos-studio" data-kb-level="advanced"><strong>Azure Chaos Studio</strong><span>Runs fault experiments against Azure resources as a pipeline step, which is how the mission-critical reference architecture validates resiliency: chaos experiments execute alongside a load test so the injected fault lands on a system that is actually under pressure.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Blast radius</strong> — How much of the system the fault may reach — one instance, one percentage of traffic, one zone. It is the difference between an experiment and an outage, and it belongs in the experiment definition rather than in the operator judgement.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Steady-state measure and tolerance</strong> — The metric that says the system is normal and the bound it may not cross. Choose a user-facing measure such as checkout success rate; an infrastructure metric will stay green through a failure users can feel.</li>
+            <li id="production-knob-3" data-kb-polarity="knob" data-kb-level="advanced"><strong>Fault magnitude</strong> — How much latency, what error rate, how many instances. Too small and nothing engages, too large and every mechanism trips at once and you cannot tell which one mattered.</li>
+            <li id="production-knob-4" data-kb-polarity="knob" data-kb-level="expert"><strong>Duration</strong> — How long the fault stays applied. It has to outlast the mechanism being tested — a breaker that opens after thirty seconds is untested by a twenty-second experiment.</li>
+            <li id="production-knob-5" data-kb-polarity="knob" data-kb-level="expert"><strong>Schedule</strong> — Whether experiments run on a cadence, as a release-pipeline stage, or only during a game day. Pipeline runs attribute a regression to the change that caused it; game days test the people.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>The steady-state measure during the experiment</strong> — The verdict on the hypothesis, and the input to the automatic abort. Everything else is diagnosis.</li>
+            <li id="production-signal-2" data-kb-polarity="signal" data-kb-level="advanced"><strong>Whether the mechanism engaged</strong> — Breaker state changes, timeouts fired, retries attempted. A pass with nothing engaged means the fault never reached the path under test, which is a false result rather than a good one.</li>
+            <li id="production-signal-3" data-kb-polarity="signal" data-kb-level="advanced"><strong>Time to detect</strong> — How long until an alert fired, measured from fault injection. A system that degraded correctly and told nobody has failed the experiment even though the hypothesis held.</li>
+            <li id="production-signal-4" data-kb-polarity="signal" data-kb-level="expert"><strong>Time to recover after the fault is removed</strong> — Separates a system that absorbed the fault from one that was pushed into a state it cannot leave on its own, such as a full queue or a saturated pool.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>The abort does not fire</strong> — The steady-state measure degrades past tolerance and the experiment keeps running because the stop condition was misconfigured or the metric was delayed. This is the failure that turns the practice into an incident.</li>
+            <li id="production-failure-2" data-kb-polarity="failure" data-kb-level="advanced"><strong>The fault leaves residue</strong> — A name-resolution override, a firewall rule or a paused process outlives the experiment. The runner reports a clean finish while the system is still broken, so nobody connects the outage to the experiment.</li>
+            <li id="production-failure-3" data-kb-polarity="failure" data-kb-level="advanced"><strong>No load, so no result</strong> — The fault is applied to an idle or lightly loaded system, nothing queues, nothing saturates, and the experiment passes without testing anything.</li>
+            <li id="production-failure-4" data-kb-polarity="failure" data-kb-level="expert"><strong>The measure is too coarse to see the damage</strong> — An aggregate success rate hides a failure confined to one endpoint or one customer segment. The hypothesis holds and the users who were affected are invisible in the number.</li>
+            <li id="production-failure-5" data-kb-polarity="failure" data-kb-level="expert"><strong>Cascading beyond the blast radius</strong> — The fault is scoped to one instance, but retries from its callers push load onto the healthy ones. The blast radius was drawn around the injection point and the failure travelled through the traffic.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Every experiment states its hypothesis and its tolerance before it runs, and is skipped if the system is not healthy to begin with</li>
+            <li id="production-check-2" data-kb-polarity="check">The abort is automatic and bound to the steady-state measure, not to someone watching</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Fault removal runs on every exit path and is verified afterwards rather than assumed</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Load is running, whether production traffic or a load test alongside the experiment</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">The blast radius is enforced by the tool, and the experiment records what it actually reached</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="advanced">The experiment backlog comes from a written failure analysis and from real incidents, not from what is easy to inject</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="continuous-validation" id="fluency-continuous-validation"><a href="../../../themes/continuous-validation.html">Continuous Validation</a><span>Check the safeguards actually work</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="circuit-breaker"><a href="./circuit-breaker.html">Circuit Breaker</a><span class="rel-note">Injecting a failing dependency is how you find out the breaker actually trips</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="bulkhead"><a href="./bulkhead.html">Bulkhead</a><span class="rel-note">Saturating one compartment proves the others were really isolated</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="retry-backoff"><a href="./retry-backoff.html">Retry with Backoff</a><span class="rel-note">Returning errors on purpose exposes a retry with no ceiling or no jitter</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="timeout-deadline"><a href="./timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">Added latency is the fastest way to find a missing or over-generous timeout</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="health-endpoint"><a href="./health-endpoint.html">Health Endpoint Monitoring</a><span class="rel-note">The experiment checks whether the probe noticed, not just whether the code coped</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="cascading-failure"><a href="../../../hazards/cascading-failure.html">Cascading Failure</a><span class="rel-note">Rehearse the first failure and find the spread before it happens for real</span></div>
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="retry-storm"><a href="../../../hazards/retry-storm.html">Retry Storm</a><span class="rel-note">A deliberate outage under load makes the amplification visible in a controlled window</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

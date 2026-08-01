@@ -153,7 +153,7 @@ Fixed vocabulary, fixed order, per kind — see `BLOCKS` in `scripts/lib/model.m
 
 Every kind extends ONE base skeleton: it opens `description` → `explain` and closes
 `relationships`; only the middle is kind-specific (`BASE_OPEN`/`BASE_CLOSE` in model.mjs).
-The opener's *anchor* is `description` on all five kinds — the visible heading stays
+The opener's *anchor* is `description` on every kind — the visible heading stays
 kind-flavoured ("The question", "Understanding the problem") — so
 `kb.mjs get <any-id> --block description` works everywhere.
 
@@ -164,6 +164,7 @@ kind-flavoured ("The question", "Understanding the problem") — so
 | theme | `description` `explain` `architecture`* `tradespace` `tour` `decide` `siblings` `relationships`* |
 | principle | `description` `explain` `rationale` `applying` `overreach` `relationships` |
 | design | `description` `explain` `requirements` `sizing`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
+| capability | `description` `explain` `capabilities` `mapping` `choosing` `portability` `relationships` |
 
 `*` optional (per kind — see `OPTIONAL_BLOCKS` in model.mjs; a theme's `relationships` is
 optional because themes join the graph through tour membership). A **design** is a worked
@@ -183,6 +184,35 @@ that embodies them, or `prevents-hazard` an anti-pattern they guard against). Ha
 a real `relationships` block like every other kind, so `kb.mjs link` writes both sides of a
 `prevents-hazard`/`mitigated-by` edge — the `mitigation` block keeps its prose narrative
 and any figure, but no typed edges.
+
+A **capability** is one category of managed cloud service — storage, messaging, identity —
+taking the **capability** as its subject and the vendors' products as evidence. Its
+`capabilities` block is the provider-neutral taxonomy (a `dl.variations`, same card shape as
+a pattern's `variations`, and no product names inside it at all); `mapping` is the
+cross-cloud table, a `table.decision` inside a `.table-scroll` with columns Capability / AWS
+/ Azure / Google Cloud; `choosing` argues the decision; `portability` lists what breaks when
+you move, each item a bold label then the difference and what it costs. Capabilities carry
+`data-kb-solves` like a pattern, always carry the `cloud` tag, and live flat in
+`site/capabilities/`. Order on the hub comes from `CAPABILITY_ORDER` in model.mjs.
+
+The `mapping` table must keep **at least one untagged `<tr>`**, for the same reason every
+list must: a block may not render empty at any lens. A table header is furniture and does not
+count as content — `make check` strips `<thead>` before asking whether anything survived, so
+tagging every row up a lens fails the build rather than quietly leaving a basic reader with
+a headed, empty table.
+
+Two rules bite harder here than anywhere else in the KB. The **anti-fabrication** rule below
+governs every cell of the mapping table: a service name you are sure of, or
+"no first-party equivalent", or no row — an invented product feature is a lie that ships to a
+public site. And **naming decay** is the standing cost of these pages, so prefer the stable
+capability-level answer to the newest brand; the capability column is the durable part of
+the table and the product columns are replaceable evidence.
+
+They join the graph through `implements` (see Relationships), which gives each pattern an
+"Implemented by" list — distinct from "Demonstrated by", which is a case study showing the
+pattern at work rather than a product you can buy. Where the platform **requires** a
+discipline of you instead of providing it — elastic compute needs your service to be
+stateless — the verb is `prerequisite`, not `implements`.
 
 **`variations`** — a `<dl class="variations">` of `<dt>` name / `<dd>` explanation pairs.
 CSS renders each pair as one card, so the `<dt>` is the card's heading: keep it short, and
@@ -314,11 +344,17 @@ both may exist on a design page.
 ## Relationships
 
 Declared on **both** pages, each side with its own `data-kb-rel` / `data-kb-to`. `make check`
-fails on one-way, dangling or contradictory edges. The 15 verbs are closed and paired
+fails on one-way, dangling or contradictory edges. The 17 verbs are closed and paired
 (`variant-of` ↔ `has-variant`, `prevents-hazard` ↔ `mitigated-by`, `demonstrates` ↔
 `demonstrated-by`); see [site/vocab.html](../../site/vocab.html). `demonstrates` runs from a **design**
 page to a pattern or principle it puts to work — write it with `kb.mjs link <design> demonstrates
 <pattern>`, which adds the "Demonstrated by" backlink on the pattern.
+
+`implements` runs from a **capability** page to a pattern the cloud sells ready-made —
+`kb.mjs link <capability> implements <pattern>` adds the "Implemented by" backlink. The two
+verbs are deliberately separate: "Demonstrated by" is a worked system showing the pattern at
+work, "Implemented by" is a product category you can buy it from. When the platform requires
+the pattern of you rather than providing it, use `prerequisite` instead.
 
 Retiring an edge goes through `kb.mjs unlink <a> <b>`. It removes both sides whatever verb
 each declared, and takes the `rel-group` with its last item. Re-typing an edge is `unlink`
@@ -359,11 +395,13 @@ derivation (`PROSE_LINK_EXCLUDE` in model.mjs), so the list can never feed itsel
 ## Adding a page
 
 1. Copy the shape of an exemplar: **`circuit-breaker`** (pattern), **`cap-theorem`** (theme),
-   or **`dry`** (principle). Read it with `node scripts/kb.mjs get circuit-breaker`. Or scaffold
-   directly: `node scripts/kb.mjs new <id> --kind principle --name "…" --order <n>` (a
-   non-pattern kind needs no `--band`).
+   **`dry`** (principle) or **`storage`** (capability). Read it with
+   `node scripts/kb.mjs get circuit-breaker`. Or scaffold directly:
+   `node scripts/kb.mjs new <id> --kind principle --name "…" --order <n>` (a non-pattern kind
+   needs no `--band`).
 2. File it at `site/patterns/<band>/[<group>/]<id>.html` (patterns) or `site/<kind>s/<id>.html`
-   (hazards, themes, principles) — the path must match the band and group it declares.
+   (hazards, themes, principles, designs, capabilities) — the path must match the band and
+   group it declares.
 3. Give it a `data-kb-order`. Pattern order is editorial, not alphabetical: it drives the hub
    and prev/next. Insert it where it belongs pedagogically and renumber its neighbours.
 4. Add every block for its kind, in order.

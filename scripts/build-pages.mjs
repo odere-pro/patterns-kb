@@ -51,6 +51,11 @@ const ITEMS = [
   { block: "usage", sel: ".when li", polarity: "when" },
   { block: "usage", sel: ".avoid li", polarity: "avoid" },
   { block: "variations", sel: "dl.variations dt", polarity: null },
+  /* A capability page's taxonomy reuses the variations card shape, so it mints the same
+   * way. The mapping table's rows are addressed so a long-tail row can be moved up a lens
+   * — a <tr> is the only thing in that block a lens could sensibly hide. */
+  { block: "capabilities", sel: "dl.variations dt", polarity: null },
+  { block: "mapping", sel: "tbody tr", idOf: (_el, i) => `mapping-row-${i + 1}` },
   { block: "production", sel: ".prod-knobs li", polarity: "knob" },
   { block: "production", sel: ".prod-signals li", polarity: "signal" },
   { block: "production", sel: ".prod-failures li", polarity: "failure" },
@@ -184,8 +189,10 @@ for (const node of Object.values(graph.nodes)) {
    * A variation is a dt/dd pair but only the dt carries the minted id, so a lens
    * attribute authored on the dt would hide the label and orphan the body. Mirror
    * the dt's attribute onto its dd (generated, self-cleaning) so the pair moves
-   * together at every lens. */
-  for (const dt of root.querySelectorAll('[data-kb-block="variations"] dl.variations dt')) {
+   * together at every lens. A capability page's `capabilities` block reuses the same card
+   * shape and needs the same mirroring, so the selector matches on the markup rather than
+   * on one block name. */
+  for (const dt of root.querySelectorAll("dl.variations dt")) {
     let dd = dt.nextElementSibling;
     if (!dd || dd.tagName?.toLowerCase() !== "dd") continue;
     for (const attr of ["data-kb-level", "data-kb-register"]) {

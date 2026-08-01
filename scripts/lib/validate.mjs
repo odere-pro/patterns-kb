@@ -81,6 +81,12 @@ export function lensProblems(root) {
     const clone = parse(el.toString(), { comment: true });
     pruneForLens(clone, lens);
     for (const h of clone.querySelectorAll("h2, h3")) h.remove();
+    /* A table header is furniture, exactly like a heading: its column labels survive any
+     * pruning, so a block whose every <tr> is tagged up a lens would otherwise pass this
+     * test while a reader at basic meets a headed, empty table. Dropping the thead is what
+     * makes the mapping block (and a theme's decide table) answerable by the same rule as
+     * every list — at least one untagged row, or the block is empty. */
+    for (const th of clone.querySelectorAll("thead")) th.remove();
     return !clone.text.trim();
   };
 

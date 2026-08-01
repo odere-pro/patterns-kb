@@ -218,6 +218,47 @@ const PRINCIPLE_BLOCKS = () => [
   REL_SECTION("How it relates"),
 ].join("\n\n");
 
+/* A capability page takes one category of managed cloud service as its subject. The
+ * `capabilities` block is the provider-neutral taxonomy and reuses the pattern
+ * `dl.variations` card shape; `mapping` is the cross-cloud table, in the same
+ * `.table-scroll` + `table.decision` wrapper the theme pages use so a wide table scrolls
+ * inside itself rather than scrolling the page. Both blocks are hand-authored HTML —
+ * unlike `explain`, they can carry links, which is the point of the mapping table. */
+const CAPABILITY_BLOCKS = () => [
+  PROSE_SECTION("description", "h-desc", "What the cloud gives you here", "description"),
+  EXPLAIN_SECTION(),
+  `    <section class="doc-section" id="capabilities" aria-labelledby="h-caps" data-kb-block="capabilities">
+      <h2 class="doc-h" id="h-caps">The capabilities</h2>
+      <dl class="variations">
+        <dt>TODO — the capability, named without any product</dt>
+        <dd>TODO — what it is and what it is for.</dd>
+      </dl>
+    </section>`,
+  `    <section class="doc-section" id="mapping" aria-labelledby="h-mapping" data-kb-block="mapping">
+      <h2 class="doc-h" id="h-mapping">What each cloud calls it</h2>
+      <div class="table-scroll">
+        <table class="decision">
+          <thead>
+            <tr><th>Capability</th><th>AWS</th><th>Azure</th><th>Google Cloud</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>TODO</td><td>TODO</td><td>TODO</td><td>TODO</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>`,
+  PROSE_SECTION("choosing", "h-choosing", "Choosing between them", "choosing"),
+  `    <section class="doc-section" id="portability" aria-labelledby="h-port" data-kb-block="portability">
+      <h2 class="doc-h" id="h-port">What does not port</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>TODO</strong>: the difference, then what it costs you.</li>
+        </ul>
+      </div>
+    </section>`,
+  REL_SECTION("Patterns it implements"),
+].join("\n\n");
+
 export function pageSkeleton({ id, name, kind, band, group, order }) {
   const dir = folderFor({ kind, band, group });
   const p = "../".repeat(dir.split("/").length);
@@ -225,13 +266,13 @@ export function pageSkeleton({ id, name, kind, band, group, order }) {
   const lens = b?.kind === "lens";
 
   const bodyClass = kind === "pattern" ? (lens ? "doc lens" : "doc") : `doc ${kind}`;
-  const kicker = kind === "pattern" ? (lens ? `Lens · ${b.label}` : b.label) : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : kind === "design" ? "Case study" : "Theme";
-  const badge = kind === "pattern" ? b.short : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : kind === "design" ? "Design" : "Theme";
-  const crumbAnchor = kind === "pattern" ? `#${b.anchor}` : kind === "hazard" ? "#hazards-h" : kind === "principle" ? "#principles-h" : kind === "design" ? "#design-cases-h" : "#themes-h";
-  const crumbLabel = kind === "pattern" ? b.label : kind === "hazard" ? "Hazards" : kind === "principle" ? "Principles" : kind === "design" ? "Case studies" : "Themes";
+  const kicker = kind === "pattern" ? (lens ? `Lens · ${b.label}` : b.label) : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : kind === "design" ? "Case study" : kind === "capability" ? "Cloud capability" : "Theme";
+  const badge = kind === "pattern" ? b.short : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : kind === "design" ? "Design" : kind === "capability" ? "Capability" : "Theme";
+  const crumbAnchor = kind === "pattern" ? `#${b.anchor}` : kind === "hazard" ? "#hazards-h" : kind === "principle" ? "#principles-h" : kind === "design" ? "#design-cases-h" : kind === "capability" ? "#capabilities-h" : "#themes-h";
+  const crumbLabel = kind === "pattern" ? b.label : kind === "hazard" ? "Hazards" : kind === "principle" ? "Principles" : kind === "design" ? "Case studies" : kind === "capability" ? "Cloud capabilities" : "Themes";
 
   const blocks =
-    kind === "pattern" ? PATTERN_BLOCKS() : kind === "hazard" ? HAZARD_BLOCKS() : kind === "principle" ? PRINCIPLE_BLOCKS() : kind === "design" ? DESIGN_BLOCKS() : THEME_BLOCKS();
+    kind === "pattern" ? PATTERN_BLOCKS() : kind === "hazard" ? HAZARD_BLOCKS() : kind === "principle" ? PRINCIPLE_BLOCKS() : kind === "design" ? DESIGN_BLOCKS() : kind === "capability" ? CAPABILITY_BLOCKS() : THEME_BLOCKS();
 
   /* Designs may carry a small code sketch (an API shape, a low-level-design class), so
    * they load the highlighter too. */
