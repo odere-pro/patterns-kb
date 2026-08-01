@@ -719,7 +719,7 @@ export const THEME_GROUPS = [
     note: "Where the boundaries go, what crosses them, and who is allowed through.",
     ids: [
       "architecture-styles", "service-boundaries", "microservices-design",
-      "api-design", "frontend-architecture", "auth-and-access",
+      "api-design", "frontend-architecture", "auth-and-access", "harness-engineering",
     ],
   },
   {
@@ -743,8 +743,9 @@ export const THEME_GROUPS = [
   {
     id: "operating",
     label: "Running it in production",
-    note: "The design areas of an always-on workload, in the order you meet them: what the pieces are, how they are bundled, how traffic reaches them, where state lives, how you know it is well, how you change it safely, and how you run it.",
+    note: "The design areas of an always-on workload, in the order you meet them: what contract the platform and the application hold each other to, what the pieces are, how they are bundled, how traffic reaches them, where state lives, how you know it is well, how you change it safely, and how you run it.",
     ids: [
+      "cloud-native", "twelve-factor",
       "resilience", "observability", "continuous-delivery",
       "workload-composition", "scale-units-and-stamps", "global-traffic-and-ingress",
       "data-platform", "health-modeling", "continuous-validation",

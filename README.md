@@ -1,6 +1,6 @@
 # patterns-kb — the Software Design Atlas
 
-A cross-linked reference of **<!-- kb:counts -->209 software design patterns, 41 design case studies, 39 themes, 36 hazards, 27 principles, 10 cloud capabilities and 10 product comparisons — 372 pages in all<!-- /kb:counts -->**, written to be
+A cross-linked reference of **<!-- kb:counts -->216 software design patterns, 41 design case studies, 42 themes, 36 hazards, 27 principles, 10 cloud capabilities and 10 product comparisons — 382 pages in all<!-- /kb:counts -->**, written to be
 learned from: every page answers the same questions in the same order, and every page says
 how it relates to its neighbours.
 
@@ -35,7 +35,7 @@ than a pile of articles.
 
 ## From a terminal
 
-`scripts/kb.mjs` searches the full prose of all <!-- kb:page-count -->372<!-- /kb:page-count --> pages and returns clean text, so you
+`scripts/kb.mjs` searches the full prose of all <!-- kb:page-count -->382<!-- /kb:page-count --> pages and returns clean text, so you
 never have to open the HTML:
 
 ```
