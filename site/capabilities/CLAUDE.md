@@ -14,12 +14,16 @@ Blocks, in order: `description` → `explain` → `capabilities` → `mapping` �
 **The capability is the subject; the products are evidence.** `capabilities` names each
 capability with no product in it at all, as a `dl.variations` card. `mapping` is the
 cross-cloud table — `.table-scroll` wrapping `table.decision`, columns Capability / AWS /
-Azure / Google Cloud. `choosing` argues the decision; `portability` lists what breaks when
-you move, each item a bold label then the difference and what it costs.
+Azure / Google Cloud / Open source. The Open source cell carries the headline self-hosted
+answer only (one name, two at most) and links the `site/comparisons/` page that argues the
+choice where one exists; the depth lives there, not in the cell. `choosing` argues the
+decision; `portability` lists what breaks when you move, each item a bold label then the
+difference and what it costs.
 
 Two rules bite harder here than anywhere else in the KB. **Anti-fabrication:** every cell is a
-service name you are sure of or it is omitted — "no direct equivalent" is a true, useful answer
-and belongs in the table; an invented product feature is a lie that ships to a public site.
+service name you are sure of or it is omitted — "no direct equivalent" and "no direct
+open-source equivalent" are true, useful answers and belong in the table; an invented product
+feature is a lie that ships to a public site.
 **Naming decay:** prefer the stable capability-level answer to the newest brand, because these
 are the pages that go out of date first.
 

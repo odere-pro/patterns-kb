@@ -56,6 +56,10 @@ const ITEMS = [
    * — a <tr> is the only thing in that block a lens could sensibly hide. */
   { block: "capabilities", sel: "dl.variations dt", polarity: null },
   { block: "mapping", sel: "tbody tr", idOf: (_el, i) => `mapping-row-${i + 1}` },
+  /* A comparison page mints the same two shapes: contender cards like a taxonomy,
+   * matrix rows like a mapping table. */
+  { block: "contenders", sel: "dl.variations dt", polarity: null },
+  { block: "matrix", sel: "tbody tr", idOf: (_el, i) => `matrix-row-${i + 1}` },
   { block: "production", sel: ".prod-knobs li", polarity: "knob" },
   { block: "production", sel: ".prod-signals li", polarity: "signal" },
   { block: "production", sel: ".prod-failures li", polarity: "failure" },

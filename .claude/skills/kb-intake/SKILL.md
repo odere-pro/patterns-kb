@@ -7,6 +7,9 @@ description: Merge a pattern discovered on the web into patterns-kb — triage a
 
 The repeatable intake loop: candidates in (URLs, pattern names, or both — one or many per
 run), and for each one exactly one verdict out: **IMPROVED**, **SKIPPED**, or **CREATED**.
+Candidates may also arrive from `kb-harvest`, in which case a `NEW` candidate carries a
+ready raw capture under `tmp/kb-harvest/captures/…` that substitutes for §2's fetch — all
+the §5–§6 bars still apply.
 Unlike `kb-fact-check`, which only writes findings, this skill **applies** its changes — it
 is the edit step. The full data contract is
 **[.claude/rules/html5-authoring.md](../../rules/html5-authoring.md)**; everything below is

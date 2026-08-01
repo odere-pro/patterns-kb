@@ -239,10 +239,10 @@ const CAPABILITY_BLOCKS = () => [
       <div class="table-scroll">
         <table class="decision">
           <thead>
-            <tr><th>Capability</th><th>AWS</th><th>Azure</th><th>Google Cloud</th></tr>
+            <tr><th>Capability</th><th>AWS</th><th>Azure</th><th>Google Cloud</th><th>Open source</th></tr>
           </thead>
           <tbody>
-            <tr><td>TODO</td><td>TODO</td><td>TODO</td><td>TODO</td></tr>
+            <tr><td>TODO</td><td>TODO</td><td>TODO</td><td>TODO</td><td>TODO</td></tr>
           </tbody>
         </table>
       </div>
@@ -259,6 +259,39 @@ const CAPABILITY_BLOCKS = () => [
   REL_SECTION("Patterns it implements"),
 ].join("\n\n");
 
+/* A comparison page takes one product decision as its subject: the managed services and
+ * the open-source contenders for a single capability area, side by side. `contenders`
+ * reuses the `dl.variations` card shape (product name, then character + license + managed
+ * offerings); `matrix` is the condition-by-contender table in the same `.table-scroll` +
+ * `table.decision` wrapper as a capability's mapping. Both are hand-authored HTML and can
+ * carry links. Every product, license and feature cell is verified or omitted. */
+const COMPARISON_BLOCKS = () => [
+  PROSE_SECTION("description", "h-desc", "What this compares", "description"),
+  EXPLAIN_SECTION(),
+  `    <section class="doc-section" id="contenders" aria-labelledby="h-contenders" data-kb-block="contenders">
+      <h2 class="doc-h" id="h-contenders">The contenders</h2>
+      <dl class="variations">
+        <dt>TODO — the product</dt>
+        <dd>TODO — its character in one line, its license, and who runs it for you.</dd>
+      </dl>
+    </section>`,
+  `    <section class="doc-section" id="matrix" aria-labelledby="h-matrix" data-kb-block="matrix">
+      <h2 class="doc-h" id="h-matrix">How they compare</h2>
+      <div class="table-scroll">
+        <table class="decision">
+          <thead>
+            <tr><th>Criterion</th><th>TODO contender</th><th>TODO contender</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>TODO condition</td><td>TODO</td><td>TODO</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>`,
+  PROSE_SECTION("choosing", "h-choosing", "Choosing between them", "choosing"),
+  REL_SECTION("How it relates"),
+].join("\n\n");
+
 export function pageSkeleton({ id, name, kind, band, group, order }) {
   const dir = folderFor({ kind, band, group });
   const p = "../".repeat(dir.split("/").length);
@@ -266,13 +299,13 @@ export function pageSkeleton({ id, name, kind, band, group, order }) {
   const lens = b?.kind === "lens";
 
   const bodyClass = kind === "pattern" ? (lens ? "doc lens" : "doc") : `doc ${kind}`;
-  const kicker = kind === "pattern" ? (lens ? `Lens · ${b.label}` : b.label) : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : kind === "design" ? "Case study" : kind === "capability" ? "Cloud capability" : "Theme";
-  const badge = kind === "pattern" ? b.short : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : kind === "design" ? "Design" : kind === "capability" ? "Capability" : "Theme";
-  const crumbAnchor = kind === "pattern" ? `#${b.anchor}` : kind === "hazard" ? "#hazards-h" : kind === "principle" ? "#principles-h" : kind === "design" ? "#design-cases-h" : kind === "capability" ? "#capabilities-h" : "#themes-h";
-  const crumbLabel = kind === "pattern" ? b.label : kind === "hazard" ? "Hazards" : kind === "principle" ? "Principles" : kind === "design" ? "Case studies" : kind === "capability" ? "Cloud capabilities" : "Themes";
+  const kicker = kind === "pattern" ? (lens ? `Lens · ${b.label}` : b.label) : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : kind === "design" ? "Case study" : kind === "capability" ? "Cloud capability" : kind === "comparison" ? "Comparison" : "Theme";
+  const badge = kind === "pattern" ? b.short : kind === "hazard" ? "Hazard" : kind === "principle" ? "Principle" : kind === "design" ? "Design" : kind === "capability" ? "Capability" : kind === "comparison" ? "Comparison" : "Theme";
+  const crumbAnchor = kind === "pattern" ? `#${b.anchor}` : kind === "hazard" ? "#hazards-h" : kind === "principle" ? "#principles-h" : kind === "design" ? "#design-cases-h" : kind === "capability" ? "#capabilities-h" : kind === "comparison" ? "#comparisons-h" : "#themes-h";
+  const crumbLabel = kind === "pattern" ? b.label : kind === "hazard" ? "Hazards" : kind === "principle" ? "Principles" : kind === "design" ? "Case studies" : kind === "capability" ? "Cloud capabilities" : kind === "comparison" ? "Comparisons" : "Themes";
 
   const blocks =
-    kind === "pattern" ? PATTERN_BLOCKS() : kind === "hazard" ? HAZARD_BLOCKS() : kind === "principle" ? PRINCIPLE_BLOCKS() : kind === "design" ? DESIGN_BLOCKS() : kind === "capability" ? CAPABILITY_BLOCKS() : THEME_BLOCKS();
+    kind === "pattern" ? PATTERN_BLOCKS() : kind === "hazard" ? HAZARD_BLOCKS() : kind === "principle" ? PRINCIPLE_BLOCKS() : kind === "design" ? DESIGN_BLOCKS() : kind === "capability" ? CAPABILITY_BLOCKS() : kind === "comparison" ? COMPARISON_BLOCKS() : THEME_BLOCKS();
 
   /* Designs may carry a small code sketch (an API shape, a low-level-design class), so
    * they load the highlighter too. */

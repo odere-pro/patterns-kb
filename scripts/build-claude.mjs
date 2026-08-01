@@ -169,12 +169,16 @@ Blocks, in order: ${BLOCKS.capability.map((b) => `\`${b}\``).join(" → ")}.
 **The capability is the subject; the products are evidence.** \`capabilities\` names each
 capability with no product in it at all, as a \`dl.variations\` card. \`mapping\` is the
 cross-cloud table — \`.table-scroll\` wrapping \`table.decision\`, columns Capability / AWS /
-Azure / Google Cloud. \`choosing\` argues the decision; \`portability\` lists what breaks when
-you move, each item a bold label then the difference and what it costs.
+Azure / Google Cloud / Open source. The Open source cell carries the headline self-hosted
+answer only (one name, two at most) and links the \`site/comparisons/\` page that argues the
+choice where one exists; the depth lives there, not in the cell. \`choosing\` argues the
+decision; \`portability\` lists what breaks when you move, each item a bold label then the
+difference and what it costs.
 
 Two rules bite harder here than anywhere else in the KB. **Anti-fabrication:** every cell is a
-service name you are sure of or it is omitted — "no direct equivalent" is a true, useful answer
-and belongs in the table; an invented product feature is a lie that ships to a public site.
+service name you are sure of or it is omitted — "no direct equivalent" and "no direct
+open-source equivalent" are true, useful answers and belong in the table; an invented product
+feature is a lie that ships to a public site.
 **Naming decay:** prefer the stable capability-level answer to the newest brand, because these
 are the pages that go out of date first.
 
@@ -183,6 +187,44 @@ A capability links to the patterns it packages with
 the pattern an "Implemented by" backlink — distinct from "Demonstrated by", which is a case
 study showing the pattern at work. Where the platform requires a discipline of you rather than
 providing it, the verb is \`prerequisite\`, not \`implements\`.
+
+Read with \`node ../../scripts/kb.mjs get <id>\`. See the root CLAUDE.md for the contract.
+`;
+}
+
+function forComparisons(list) {
+  return `# site/comparisons
+
+**Product comparisons** — ${list.length} pages (the \`comparison\` kind). Each takes one product
+decision as its subject: the managed services and the open-source contenders for a single
+capability area, side by side, compared on the conditions that decide the choice. Order comes
+from \`COMPARISON_ORDER\` in \`scripts/lib/model.mjs\` — a page missing from it validates fine
+and silently never appears on the hub.
+
+Pages here: ${list.map((n) => n.id).sort().join(", ")}
+
+Blocks, in order: ${BLOCKS.comparison.map((b) => `\`${b}\``).join(" → ")}.
+
+**The decision is the subject; the products are the contenders.** \`contenders\` is a
+\`dl.variations\` — each \`dt\` a product name, each \`dd\` its character in one line, its
+license, and who runs it for you. \`matrix\` is the condition-by-contender table —
+\`.table-scroll\` wrapping \`table.decision\`, first column Criterion, one column per contender,
+rows lens-tagged with at least one untagged. \`choosing\` argues the per-condition verdicts.
+
+Two rules bite harder here than anywhere else in the KB. **Anti-fabrication:** every cell is a
+fact you verified or it is omitted — a license, a feature, a managed offering; "no managed
+offering" and "no direct open-source equivalent" are true, useful answers. **Naming decay:**
+licenses and product lines change (Redis, Elasticsearch and CockroachDB all relicensed); prefer
+the durable behavioural difference to the claim that dates fastest.
+
+A comparison joins the graph twice: \`node ../../scripts/kb.mjs link <id> implements <pattern>\`
+(these products are the pattern, runnable or buyable — the pattern gains an "Implemented by"
+backlink) and \`node ../../scripts/kb.mjs link <id> specializes <capability>\` (the capability
+page is the wider, provider-neutral subject; it gains a "Generalizes" backlink).
+
+\`data-kb-aliases\` must carry the contender product names ("kafka", "rabbitmq") so
+\`kb.mjs find kafka\` resolves here. \`data-kb-solves\` carries the decision's symptoms
+("should we use Kafka or SQS", "we can't use it because of the license").
 
 Read with \`node ../../scripts/kb.mjs get <id>\`. See the root CLAUDE.md for the contract.
 `;
@@ -197,6 +239,7 @@ for (const [dir, list] of Object.entries(byDir)) {
     : dir === "principles" ? forPrinciples(list)
     : dir === "designs" ? forDesigns(list)
     : dir === "capabilities" ? forCapabilities(list)
+    : dir === "comparisons" ? forComparisons(list)
     : forPatternFolder(dir, list);
   const file = join(SITE, dir, "CLAUDE.md");
   const cur = existsSync(file) ? readFileSync(file, "utf8") : "";
@@ -236,8 +279,9 @@ fails if the two disagree. See the root CLAUDE.md for the data contract.
 const kindCount = (k) => nodes.filter((n) => n.kind === k).length;
 const countsText =
   `${kindCount("pattern")} software design patterns, ${kindCount("design")} design case studies, ` +
-  `${kindCount("theme")} themes, ${kindCount("hazard")} hazards, ${kindCount("principle")} principles ` +
-  `and ${kindCount("capability")} cloud capabilities — ${nodes.length} pages in all`;
+  `${kindCount("theme")} themes, ${kindCount("hazard")} hazards, ${kindCount("principle")} principles, ` +
+  `${kindCount("capability")} cloud capabilities` +
+  `${kindCount("comparison") ? ` and ${kindCount("comparison")} product comparisons` : ""} — ${nodes.length} pages in all`;
 const REGIONS = [
   { tag: "kb:counts", text: countsText },
   { tag: "kb:page-count", text: String(nodes.length) },

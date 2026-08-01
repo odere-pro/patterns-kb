@@ -60,6 +60,9 @@ const BANDS_W = {
    * a principle, smaller than a worked design. The mapping table's cells are counted as
    * prose, so the upper bound has to allow for a wide one. */
   capability: () => [700, 1200],
+  /* A comparison carries contender cards plus a condition-by-contender matrix — the same
+   * taxonomy-plus-wide-table shape as a capability, so the same budget. */
+  comparison: () => [700, 1200],
   theme: () => null,
 };
 

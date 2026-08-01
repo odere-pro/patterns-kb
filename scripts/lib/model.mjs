@@ -45,6 +45,13 @@ const KIND_BLOCKS = {
    * pattern graph through `implements`, so a pattern page gains an "Implemented by" list
    * of the cloud capabilities that package it. */
   capability: ["capabilities", "mapping", "choosing", "portability"],
+  /* A comparison takes ONE product decision as its subject — the managed services and
+   * the open-source contenders for a single capability area, side by side. `contenders`
+   * names the products (license and managed offerings included), `matrix` compares them
+   * on the conditions that decide the choice, `choosing` argues the per-condition
+   * verdicts. It joins the graph through `implements` (these products ARE the pattern,
+   * runnable or buyable) and `specializes` (its capability page is the wider subject). */
+  comparison: ["contenders", "matrix", "choosing"],
 };
 export const BLOCKS = Object.fromEntries(
   Object.entries(KIND_BLOCKS).map(([kind, mid]) => [kind, [...BASE_OPEN, ...mid, ...BASE_CLOSE]]),
@@ -64,6 +71,7 @@ export const OPTIONAL_BLOCKS = {
   principle: new Set([]),
   design:    new Set(["sizing", "interface", "levels"]),
   capability: new Set([]),
+  comparison: new Set([]),
 };
 
 /* ---- reading levels ----
@@ -96,6 +104,7 @@ export const BLOCK_LEVELS = {
   principle: {},
   design:    {},
   capability: {},
+  comparison: {},
 };
 
 /* Tags are a CLOSED vocabulary, like the relation verbs. They exist to group and
@@ -162,6 +171,7 @@ export const FACETS = [
     { id: "principle", label: "Principles",   kinds: ["principle"] },
     { id: "design",    label: "Case studies", kinds: ["design"] },
     { id: "capability", label: "Cloud capabilities", kinds: ["capability"] },
+    { id: "comparison", label: "Comparisons", kinds: ["comparison"] },
   ] },
   { rail: "Extras", chips: [
     { id: "has-example", label: "Has real-world example", hasExample: true },
@@ -247,7 +257,7 @@ export const SYNONYMS = {
 export const PROSE_LINK_EXCLUDE =
   "[data-kb-rel], [data-kb-member], .fluency-item, .crumb, .docnav, .mentions";
 
-export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes", principle: "principles", design: "designs", capability: "capabilities" };
+export const KIND_DIR = { pattern: "patterns", hazard: "hazards", theme: "themes", principle: "principles", design: "designs", capability: "capabilities", comparison: "comparisons" };
 
 /* ---- taxonomy ----
  * `kind: "elevation"` bands are the I-IV ladder; `kind: "lens"` bands cut across it.
@@ -354,6 +364,14 @@ export const DESIGN_ORDER = [
 export const CAPABILITY_ORDER = [
   "compute", "storage", "databases", "messaging", "networking", "identity",
   "regions", "resources", "data-analytics",
+];
+/* Product comparisons — the `comparison` kind. One page per product decision, ordered to
+ * shadow CAPABILITY_ORDER: the comparisons for a capability area sit where that area sits.
+ * The hub filters this list to pages that exist, so it can be populated one at a time. */
+export const COMPARISON_ORDER = [
+  "object-stores", "relational-databases", "key-value-stores", "search-engines",
+  "message-brokers", "workflow-orchestrators", "load-balancers-and-gateways",
+  "identity-providers",
 ];
 export const HAZARD_ORDER = [
   "god-object", "spaghetti-code", "big-ball-of-mud", "distributed-monolith", "anemic-domain-model",

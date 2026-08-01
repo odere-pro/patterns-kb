@@ -73,6 +73,9 @@ function walk(rel) {
 
 const raw = [];
 for (const [kind, top] of Object.entries(KIND_DIR)) {
+  /* A kind's folder may not exist yet — a new kind is registered before its first page
+   * lands, and the test fixtures carry only the folders they exercise. */
+  if (!existsSync(join(SITE, top))) continue;
   for (const { dir, file } of walk(top)) {
     const root = parse(readFileSync(join(SITE, dir, file), "utf8"), PARSE_OPTS);
     const doc = root.querySelector("[data-kb-id]");
@@ -86,7 +89,7 @@ for (const [kind, top] of Object.entries(KIND_DIR)) {
 
 /* ---------------- nodes ---------------- */
 const nodes = {};
-const KIND_SEQ = ["pattern", "hazard", "theme", "principle", "design", "capability"];
+const KIND_SEQ = ["pattern", "hazard", "theme", "principle", "design", "capability", "comparison"];
 raw.sort((a, b) =>
   KIND_SEQ.indexOf(a.kind) - KIND_SEQ.indexOf(b.kind) ||
   Number(a.doc.getAttribute("data-kb-order")) - Number(b.doc.getAttribute("data-kb-order")),
@@ -101,6 +104,7 @@ for (const { kind, dir, root, doc, id } of raw) {
     kind === "hazard" ? "hazard" : kind === "theme" ? "theme" : kind === "principle" ? "principle"
     : kind === "design" ? "design"
     : kind === "capability" ? "capability"
+    : kind === "comparison" ? "comparison"
     : ELEVATION_BANDS.has(band) ? "" : "lens";
   const group = doc.getAttribute("data-kb-group");
   // The filesystem is part of the data model: a page's location must agree with the
@@ -137,7 +141,7 @@ for (const { root } of raw) {
 const seenPair = new Map(); // "a|b" -> {from, to, type} of the first directional edge
 let rendered = 0;
 
-for (const { root, id } of raw) {
+for (const { root, id, kind } of raw) {
   const node = nodes[id];
   for (const item of root.querySelectorAll("[data-kb-rel]")) {
     const type = item.getAttribute("data-kb-rel");
@@ -145,12 +149,26 @@ for (const { root, id } of raw) {
     const def = RELATION_TYPES[type];
     if (!def) fail(`${id}: unknown relation type "${type}"`);
     if (!nodes[to] && !stubs.has(to)) fail(`${id}: dangling relation target "${to}"`);
+    /* `data-kb-maps` pins an implements edge to ONE row of this page's own mapping
+     * (capability) or matrix (comparison) table, so the derived stack page can show the
+     * services that package the pattern instead of a whole-table link. Optional — an
+     * unannotated edge degrades to a link — but when present it must point at a real row,
+     * or the stack page would silently render the em-dash fallback forever. */
+    const maps = item.getAttribute("data-kb-maps");
+    if (maps) {
+      if (type !== "implements") fail(`${id}: data-kb-maps on a "${type}" edge (implements only)`);
+      const tableBlock = kind === "capability" ? "mapping" : kind === "comparison" ? "matrix" : null;
+      if (!tableBlock) fail(`${id}: data-kb-maps on a ${kind} page (capability/comparison only)`);
+      if (!root.querySelector(`[data-kb-block="${tableBlock}"] #${maps}`))
+        fail(`${id}: data-kb-maps="${maps}" names no row in its ${tableBlock} table`);
+    }
     node.relations.push({
       to, type,
       note: item.querySelector(".rel-note")?.text.trim() ?? "",
       name: nodes[to]?.name ?? titleize(to),
       href: nodes[to]?.path ?? null,
       label: def.label,
+      ...(maps ? { maps } : {}),
     });
     rendered++;
 
@@ -311,6 +329,7 @@ const out = {
     principles: counts("principle"),
     designs: counts("design"),
     capabilities: counts("capability"),
+    comparisons: counts("comparison"),
     relationships: uniq.size,
     renderedRelations: rendered,
   },

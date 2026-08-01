@@ -949,7 +949,7 @@ ${items}
   const kind = opt("kind"), bandId = opt("band"), name = opt("name"), order = opt("order");
   const group = opt("group") ?? bandId;
   if (!id || !kind || !name || order == null || (kind === "pattern" && !bandId)) {
-    console.error('usage: kb.mjs new <id> --kind pattern|hazard|theme|principle|design|capability --band <b> [--group <g>] --name "…" --order <n>\n  (--band is required only for --kind pattern)');
+    console.error('usage: kb.mjs new <id> --kind pattern|hazard|theme|principle|design|capability|comparison --band <b> [--group <g>] --name "…" --order <n>\n  (--band is required only for --kind pattern)');
     process.exit(1);
   }
   /* Guard the kind before folderFor sees it: an unknown kind makes folderFor return

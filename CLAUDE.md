@@ -1,6 +1,6 @@
 # patterns-kb
 
-A knowledge base of <!-- kb:counts -->190 software design patterns, 40 design case studies, 37 themes, 32 hazards, 25 principles and 9 cloud capabilities — 333 pages in all<!-- /kb:counts -->.
+A knowledge base of <!-- kb:counts -->190 software design patterns, 40 design case studies, 37 themes, 32 hazards, 25 principles, 9 cloud capabilities — 333 pages in all<!-- /kb:counts -->.
 **It is data that happens to render**, not a site that happens to hold data.
 
 ## The one thing to understand
@@ -74,7 +74,8 @@ edit under `site/` — it takes ~0.8s.
 attributes and will be overwritten.
 
 Merging a pattern found on the web — improve the existing page, skip, or create a new
-one — is the **kb-intake** skill.
+one — is the **kb-intake** skill; discovering those candidates from vendor architecture
+portals and GitHub repos (including awesome-list link hubs) is the **kb-harvest** skill.
 Full contract, including how to add a page: **[.claude/rules/html5-authoring.md](.claude/rules/html5-authoring.md)**.
 How the prose must read: **[.claude/rules/tone.md](.claude/rules/tone.md)** — the house
 register, distilled from AWS Prescriptive Guidance, Azure Architecture Center and the

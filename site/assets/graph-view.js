@@ -268,6 +268,7 @@
   var SYMBOLS = {
     pattern: d3.symbolCircle, hazard: d3.symbolTriangle, theme: d3.symbolSquare,
     principle: d3.symbolCircle, design: d3.symbolDiamond, capability: d3.symbolCross,
+    comparison: d3.symbolStar,
   };
   var nodeSel = nodeLayer.selectAll("g").data(nodes).enter().append("g")
     .attr("transform", function (d) { return "translate(" + d.x + "," + d.y + ")"; })

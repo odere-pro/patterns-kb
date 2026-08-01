@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { BANDS, THEME_ORDER, ML_CASE_STUDIES, DESIGN_ORDER, HAZARD_ORDER, PRINCIPLE_ORDER, PRINCIPLE_GROUPS, CAPABILITY_ORDER, esc } from "./lib/model.mjs";
+import { BANDS, THEME_ORDER, ML_CASE_STUDIES, DESIGN_ORDER, HAZARD_ORDER, PRINCIPLE_ORDER, PRINCIPLE_GROUPS, CAPABILITY_ORDER, COMPARISON_ORDER, esc } from "./lib/model.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "site", "index.html");
@@ -152,6 +152,22 @@ ${CAPABILITIES.map(themeCard).join("\n")}
 ` : "";
 const capabilityJump = CAPABILITIES.length ? `\n      <a href="#capabilities-h">Cloud Capabilities</a>` : "";
 
+/* ---- product comparisons ---- */
+/* Same card styling and populate-one-at-a-time filter as the capabilities section. */
+const COMPARISONS = COMPARISON_ORDER.filter((id) => N[id]);
+const comparisonsSection = COMPARISONS.length ? `
+    <section class="themes comparisons" aria-labelledby="comparisons-h">
+      <div class="themes-head">
+        <h2 id="comparisons-h">Comparisons — picking the product</h2>
+        <p>One page per product decision: the managed services and the open-source contenders for one capability, compared on the conditions that decide the choice — license, ops burden, scaling shape, and what each one locks you into.</p>
+      </div>
+      <div class="theme-grid">
+${COMPARISONS.map(themeCard).join("\n")}
+      </div>
+    </section>
+` : "";
+const comparisonJump = COMPARISONS.length ? `\n      <a href="#comparisons-h">Comparisons</a>` : "";
+
 /* ---- hazards ---- */
 /* A hazard is not practised, so its chip carries no checkbox — but a hazard page does
  * carry a favourite toggle, so its chip carries the star. Without it, favouriting a
@@ -197,7 +213,7 @@ const html = `<!doctype html>
       <a href="#band-arch-h">III · Architecture</a>
       <a href="#band-dist-h">IV · Network</a>
       <a href="#themes-h">Themes</a>
-      <a href="#ml-cases-h">ML Case Studies</a>${designJump}${capabilityJump}
+      <a href="#ml-cases-h">ML Case Studies</a>${designJump}${capabilityJump}${comparisonJump}
       <a href="#lens-ml-h">Machine Learning</a>
       <a href="#principles-h">Principles</a>
       <a href="#lens-msg-h">Messaging</a>
@@ -209,6 +225,7 @@ const html = `<!doctype html>
       <a href="#lens-sec-h">Security</a>
       <a href="#hazards-h">Hazards</a>
       <a href="map/graph.html">Graph ↗</a>
+      <a href="map/stack.html">Stack ↗</a>
       <a href="vocab.html">Vocabulary ↗</a>
     </nav>
   </header>
@@ -236,7 +253,7 @@ ${THEME_ORDER.map(themeCard).join("\n")}
 ${ML_CASE_STUDIES.map(themeCard).join("\n")}
       </div>
     </section>
-${designCasesSection}${capabilitiesSection}
+${designCasesSection}${capabilitiesSection}${comparisonsSection}
     <section class="themes principles" aria-labelledby="principles-h">
       <div class="themes-head">
         <h2 id="principles-h">Principles — how to do it well</h2>

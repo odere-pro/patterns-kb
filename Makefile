@@ -9,6 +9,7 @@ all: ## Regenerate every derived artifact from the pages
 	@node scripts/build-vocab.mjs
 	@node scripts/build-hub.mjs
 	@node scripts/build-graph-page.mjs
+	@node scripts/build-stack-page.mjs
 	@node scripts/build-claude.mjs
 
 help: ## Show this help
@@ -26,6 +27,7 @@ check: ## Verify generated artifacts are in sync, no dangling links, diagrams pa
 	@node scripts/build-vocab.mjs --check
 	@node scripts/build-hub.mjs --check
 	@node scripts/build-graph-page.mjs --check
+	@node scripts/build-stack-page.mjs --check
 	@node scripts/build-claude.mjs --check
 	@node scripts/check-links.mjs
 	@node scripts/check-mermaid.mjs

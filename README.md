@@ -1,6 +1,6 @@
 # patterns-kb — an HTML5 knowledge base
 
-A cross-linked reference of **<!-- kb:counts -->190 software design patterns, 40 design case studies, 37 themes, 32 hazards, 25 principles and 9 cloud capabilities — 333 pages in all<!-- /kb:counts -->**, written to be
+A cross-linked reference of **<!-- kb:counts -->190 software design patterns, 40 design case studies, 37 themes, 32 hazards, 25 principles, 9 cloud capabilities — 333 pages in all<!-- /kb:counts -->**, written to be
 learned from: every page answers the same questions in the same order, and every page says
 how it relates to its neighbours.
 
