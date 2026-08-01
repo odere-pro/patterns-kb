@@ -1,9 +1,16 @@
 # patterns — a static, build-less knowledge base. These targets are dev conveniences.
 .DEFAULT_GOAL := help
 
-.PHONY: help serve check test all graph pages vocab hub graph-page claude relations kb
+.PHONY: help serve check test all all-impl graph pages vocab hub graph-page claude relations kb
 
+# Serialised against other sessions: six of the builders below read back what build.mjs
+# writes, so two concurrent `make all` runs interleave into a hub built from one graph and
+# a graph built from another — with every file complete and every builder exiting 0.
+# See scripts/with-lock.mjs. Single-builder targets (graph, hub, …) stay unlocked.
 all: ## Regenerate every derived artifact from the pages
+	@node scripts/with-lock.mjs $(MAKE) --no-print-directory all-impl
+
+all-impl:
 	@node scripts/build.mjs
 	@node scripts/build-pages.mjs
 	@node scripts/build-vocab.mjs

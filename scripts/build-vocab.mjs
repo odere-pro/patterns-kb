@@ -11,7 +11,8 @@
  *
  * Run:  node scripts/build-vocab.mjs   (add --check to fail if vocab.html is stale)
  */
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -199,6 +200,6 @@ if (process.argv.includes("--check")) {
   if (cur !== html) { console.error("vocab.html is STALE — run: node scripts/build-vocab.mjs"); process.exit(1); }
   console.log("vocab.html is up to date.");
 } else {
-  writeFileSync(OUT, html);
+  writeAtomic(OUT, html);
   console.log(`vocab.html written: ${Object.keys(RELATION_TYPES).length} relation verbs + ${JSONLD_PROPS.length} properties + ${ATTRIBUTES.length} attributes + ${TAGS.size} tags.`);
 }

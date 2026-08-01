@@ -127,6 +127,31 @@ scripts/report-vocab.mjs  the vocabulary worklist (drift, unbridged pages, tag a
 
 `make` on its own lists every target.
 
+## Working alongside another session
+
+More than one agent edits this repo at a time, and the derived artifacts are shared
+mutable state. Three mechanisms carry it, so the protocol is short:
+
+- **`make all` takes a lock** (`scripts/with-lock.mjs`). Six builders read back what
+  `build.mjs` writes, so two concurrent runs interleave into a hub built from one graph and
+  a graph built from another — with every file complete and every builder exiting 0. A
+  second run waits; a lock whose process is gone is taken.
+- **Every generated file is written atomically** (`scripts/lib/atomic.mjs`), so a reader
+  never sees a truncated `graph.json`. Without it, `make check` in one session dies with
+  `SyntaxError: Unexpected end of JSON input` while another is mid-`make all`.
+- **`.githooks/pre-commit` runs `make check` on the STAGED tree.** `--check` compares
+  artifacts against the *working* tree, so a green worktree proves nothing about what you
+  are committing — that is how a `graph.json` once shipped without the `model.mjs` that
+  produced it, turning `main` red. Enable it once per clone:
+
+  ```
+  git config core.hooksPath .githooks
+  ```
+
+**Stage by exact path, never `git add -A` or a directory** — another session's half-finished
+work is usually sitting in the same tree. If a file you need carries someone else's changes
+too, commit only your hunks rather than sweeping theirs in.
+
 ## Conventions
 
 - **Relative links only** — the site must work from `file://` as well as GitHub Pages.

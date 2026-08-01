@@ -11,7 +11,8 @@
  *
  * Run:  node scripts/build.mjs   (add --check to fail if graph.json is stale)
  */
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
@@ -423,10 +424,10 @@ if (process.argv.includes("--check")) {
   console.log("graph.json is up to date.");
   console.log("catalog.json is up to date.");
 } else {
-  writeFileSync(OUT, json);
-  writeFileSync(CATALOG, catJson);
-  writeFileSync(CATALOG_JS, catJs);
-  writeFileSync(GRAPHDATA_JS, graphJs);
+  writeAtomic(OUT, json);
+  writeAtomic(CATALOG, catJson);
+  writeAtomic(CATALOG_JS, catJs);
+  writeAtomic(GRAPHDATA_JS, graphJs);
   console.log(
     `graph.json written from pages: ${out.meta.patterns} patterns + ${out.meta.hazards} hazards + ` +
     `${out.meta.themes} themes, ${uniq.size} relationships → ${rendered} rendered.`,

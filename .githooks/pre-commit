@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# pre-commit — run `make check` against the STAGED tree, not the working tree.
+#
+# Why this exists, precisely: `--check` in every builder regenerates its artifact from the
+# sources it can see and byte-compares. It sees the WORKING TREE. So a session holding an
+# uncommitted `scripts/lib/model.mjs` alongside a regenerated `site/assets/graph.json`
+# passes `make check` locally, commits only the graph, and pushes a tree where the artifact
+# has no source. That is commit b5286c8: `make check` was green in the worktree, red on a
+# clean checkout, and both CI workflows failed on main.
+#
+# Extracting the index to a temp dir and running `make check` THERE is the only way to ask
+# the question that matters — "does what I am about to commit stand up on its own?" Note it
+# runs from inside the extracted tree, so the staged *scripts* validate the staged *site*;
+# pointing KB_ROOT at the copy while running the repo's scripts would miss a half-committed
+# builder.
+#
+# Skips when nothing that can break the build is staged. Bypass with `git commit --no-verify`.
+
+set -euo pipefail
+
+# Only the files that can make `make check` fail. A docs-only or skills-only commit is free.
+if ! git diff --cached --name-only --diff-filter=ACMR \
+     | grep -qE '^(site/|scripts/|Makefile$)'; then
+  exit 0
+fi
+
+if ! command -v make >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: make or node not on PATH — skipping the staged-tree check." >&2
+  exit 0
+fi
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/kb-staged.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
+
+# The index, exactly as it will be committed. --all so unstaged edits cannot leak in.
+git checkout-index --all --prefix="$TMP/"
+
+if ( cd "$TMP" && make check ) >"$TMP/.out" 2>&1; then
+  exit 0
+fi
+
+echo >&2
+echo "pre-commit: the STAGED tree fails 'make check'." >&2
+echo "  Your working tree may well be green — that is the point. Something staged is" >&2
+echo "  missing the source or the regenerated artifact that goes with it." >&2
+echo >&2
+sed 's/^/    /' "$TMP/.out" >&2
+echo >&2
+echo "  Fix:    make all && git add <the regenerated paths>" >&2
+echo "  Bypass: git commit --no-verify   (CI still runs the same check)" >&2
+exit 1

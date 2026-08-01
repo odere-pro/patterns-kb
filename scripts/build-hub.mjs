@@ -5,12 +5,19 @@
  * truth. The bespoke masthead/legend/footer are hard-coded here; chips are generated.
  * Run:  node scripts/build-hub.mjs   (add --check to fail if index.html is stale)
  */
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { BANDS, THEME_ORDER, ML_CASE_STUDIES, DESIGN_ORDER, HAZARD_ORDER, PRINCIPLE_ORDER, PRINCIPLE_GROUPS, CAPABILITY_ORDER, COMPARISON_ORDER, esc } from "./lib/model.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* KB_ROOT lets the smoke tests — and the pre-commit staged-tree check — point this
+ * builder at another corpus. Without it a `KB_ROOT=... make check` silently validated
+ * the working tree instead, which is the hole a staged-tree check exists to close.
+ * Same contract as build.mjs. */
+const ROOT = process.env.KB_ROOT
+  ? resolve(process.env.KB_ROOT)
+  : join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "site", "index.html");
 const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json"), "utf8"));
 const N = graph.nodes;
@@ -301,6 +308,6 @@ if (process.argv.includes("--check")) {
   if (cur !== html) { console.error("index.html is STALE — run: node scripts/build-hub.mjs"); process.exit(1); }
   console.log("index.html is up to date.");
 } else {
-  writeFileSync(OUT, html);
+  writeAtomic(OUT, html);
   console.log(`index.html written: ${totalPatterns} pattern chips + ${THEME_ORDER.length} themes + ${PRINCIPLES.length} principles + ${HAZARD_ORDER.length} hazards.`);
 }

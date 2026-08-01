@@ -10,12 +10,19 @@
  * (window.KB_GRAPH), emitted by build.mjs — a script, not a fetch, so file:// keeps
  * working. Control ids and slider ranges here are the contract graph-view.js binds to;
  * slider default values are baked to match its DEFAULTS so nothing jumps at load. */
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { BANDS, RELATION_TYPES, REL_ORDER, esc } from "./lib/model.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* KB_ROOT lets the smoke tests — and the pre-commit staged-tree check — point this
+ * builder at another corpus. Without it a `KB_ROOT=... make check` silently validated
+ * the working tree instead, which is the hole a staged-tree check exists to close.
+ * Same contract as build.mjs. */
+const ROOT = process.env.KB_ROOT
+  ? resolve(process.env.KB_ROOT)
+  : join(dirname(fileURLToPath(import.meta.url)), "..");
 const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json"), "utf8"));
 const N = graph.nodes;
 
@@ -205,6 +212,6 @@ if (process.argv.includes("--check")) {
   if (cur !== html) { console.error("map/graph.html is STALE — run: node scripts/build-graph-page.mjs"); process.exit(1); }
   console.log("map/graph.html is up to date.");
 } else {
-  writeFileSync(OUT, html);
+  writeAtomic(OUT, html);
   console.log(`site/map/graph.html written: ${Object.keys(N).length} nodes, ${families.length} relation families.`);
 }

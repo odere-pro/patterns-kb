@@ -96,6 +96,15 @@ site/patterns/concurrency/thread-pool.html
 
 ## Contributing
 
+Enable the commit hook once per clone. It runs `make check` against the **staged** tree,
+which is the only way to catch a generated artifact committed without the source that
+produced it — the builders' own `--check` compares against the working tree, so a green
+worktree does not prove the commit stands up:
+
+```
+git config core.hooksPath .githooks
+```
+
 Metadata is written through a validated CLI, never by hand-editing an attribute string:
 
 ```

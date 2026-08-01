@@ -16,7 +16,8 @@
  * nothing. The measure that produces work is per PAGE: can a searcher reach it without
  * already knowing its name?
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { SYNONYMS, TAGS } from "./lib/model.mjs";
@@ -143,7 +144,7 @@ if (RESTAMP) {
     },
     expansions: sorted,
   };
-  writeFileSync(DATA, JSON.stringify(next, null, 1) + "\n");
+  writeAtomic(DATA, JSON.stringify(next, null, 1) + "\n");
   console.log(`re-stamped: ${next.meta.entries} entries, vocabSize ${vocab.size}, corpusHash ${hash}`);
   console.log("now run: make all   (the merged map is projected into catalog.json/catalog.js)");
   process.exit(0);

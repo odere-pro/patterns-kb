@@ -13,12 +13,19 @@
  *
  * Run:  node scripts/build-claude.mjs   (add --check to fail if any is stale)
  */
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { BANDS, BLOCKS, band as bandOf, groupLabel } from "./lib/model.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* KB_ROOT lets the smoke tests — and the pre-commit staged-tree check — point this
+ * builder at another corpus. Without it a `KB_ROOT=... make check` silently validated
+ * the working tree instead, which is the hole a staged-tree check exists to close.
+ * Same contract as build.mjs. */
+const ROOT = process.env.KB_ROOT
+  ? resolve(process.env.KB_ROOT)
+  : join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = join(ROOT, "site");
 const CHECK = process.argv.includes("--check");
 const graph = JSON.parse(readFileSync(join(SITE, "assets", "graph.json"), "utf8"));
@@ -245,7 +252,7 @@ for (const [dir, list] of Object.entries(byDir)) {
   const cur = existsSync(file) ? readFileSync(file, "utf8") : "";
   if (cur === body) continue;
   if (CHECK) stale.push(`site/${dir}/CLAUDE.md`);
-  else { writeFileSync(file, body); written++; }
+  else { writeAtomic(file, body); written++; }
 }
 
 /* An intermediate folder (patterns/gof) holds no pages of its own but is still a place
@@ -268,7 +275,7 @@ fails if the two disagree. See the root CLAUDE.md for the data contract.
   const cur = existsSync(file) ? readFileSync(file, "utf8") : "";
   if (cur === body) continue;
   if (CHECK) stale.push(`site/${dir}/CLAUDE.md`);
-  else { writeFileSync(file, body); written++; }
+  else { writeAtomic(file, body); written++; }
 }
 
 /* ---------------- root count regions ----------------
@@ -304,7 +311,7 @@ for (const name of ["CLAUDE.md", "README.md"]) {
   }
   if (next === cur) continue;
   if (CHECK) stale.push(name);
-  else { writeFileSync(file, next); written++; }
+  else { writeAtomic(file, next); written++; }
 }
 
 if (CHECK) {

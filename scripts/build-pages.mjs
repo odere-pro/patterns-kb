@@ -14,7 +14,8 @@
  *
  * Everything else on the page is authored. Run: node scripts/build-pages.mjs [--check]
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
@@ -295,7 +296,7 @@ for (const node of Object.values(graph.nodes)) {
 
   if (out !== src) {
     if (CHECK) stale.push(node.path);
-    else { writeFileSync(file, out); changed++; }
+    else { writeAtomic(file, out); changed++; }
   }
 }
 

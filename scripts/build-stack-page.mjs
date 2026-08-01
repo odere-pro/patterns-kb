@@ -11,7 +11,8 @@
  * data-kb-level attributes are stripped from copied cells: this page is a flat index,
  * every row shows at every lens.
  */
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
@@ -160,6 +161,6 @@ if (process.argv.includes("--check")) {
   if (cur !== html) { console.error("map/stack.html is STALE — run: node scripts/build-stack-page.mjs"); process.exit(1); }
   console.log("map/stack.html is up to date.");
 } else {
-  writeFileSync(OUT, html);
+  writeAtomic(OUT, html);
   console.log(`site/map/stack.html written: ${totalRows} pattern rows across ${sections.length} capabilities.`);
 }
