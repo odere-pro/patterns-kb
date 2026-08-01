@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 import { BANDS, COMPARISON_ORDER, esc } from "./lib/model.mjs";
+import { linkifyProducts, PROVIDER_COLUMNS } from "./lib/products.mjs";
 
 const ROOT = process.env.KB_ROOT
   ? resolve(process.env.KB_ROOT)
@@ -69,10 +70,23 @@ for (const list of sources.values()) {
 }
 
 /* A comparison page argues the product choice rather than naming one service per cloud, so
- * it never earns a row of its own — it rides along as a chip on the pattern's first row. */
+ * it never earns a row of its own — it rides along as a chip on the pattern's first row.
+ *
+ * Its matrix is keyed by CRITERION down the side and PRODUCT across the top — Kafka,
+ * RabbitMQ, NATS — so a pinned matrix row can never fill the four cloud columns the way a
+ * capability's mapping row does. Copying its cells here would file "Deleted on
+ * acknowledgement" under AWS. What a pin CAN do is land the reader on the one criterion that
+ * decides this pattern, so `data-kb-maps` on a comparison edge deep-links the chip and names
+ * the criterion in its tooltip. Unannotated chips still open the whole argument. */
 function compareChips(list) {
   return list.filter((e) => e.src.kind === "comparison")
-    .map((e) => `<a class="row-cmp" href="../${e.src.path}">Compare ${esc(e.src.name)}</a>`)
+    .map((e) => {
+      const cells = e.maps ? rowCells(e.src, e.maps) : null;
+      const criterion = cells && cells.length ? cells[0].replace(/<[^>]*>/g, "").trim() : "";
+      const frag = criterion ? `#${e.maps}` : "";
+      const why = criterion ? ` title="${esc(criterion)}"` : "";
+      return `<a class="row-cmp" href="../${e.src.path}${frag}"${why}>Compare ${esc(e.src.name)}</a>`;
+    })
     .join("");
 }
 
@@ -91,7 +105,14 @@ function serviceRow(p, entry, chips) {
     const c = rowCells(src, maps);
     if (c && c.length) {
       facet = `<a href="../${src.path}#${maps}">${c[0]}</a>`;
-      cells = c.slice(1, 1 + SERVICE_COLS);
+      /* Each service cell is linkified against ITS OWN column's product registry, so the
+       * reader can go straight to the vendor's documentation. The column index is what
+       * decides whose docs a name resolves to: "Application Load Balancer" is an AWS product
+       * and also Google's layer-7 balancer. A cell that already carries an internal link to a
+       * comparison page keeps it — linkifyProducts skips inside an existing anchor, so the
+       * internal link wins for that name and "patterns link in, products link out" holds. */
+      cells = c.slice(1, 1 + SERVICE_COLS)
+        .map((cell, i) => linkifyProducts(cell, PROVIDER_COLUMNS[i]));
       while (cells.length < SERVICE_COLS) cells.push(DASH);
       cls = "";
     }
@@ -201,6 +222,12 @@ ${sections.join("\n\n")}
       <a class="next" href="../vocab.html">Vocabulary →</a>
     </nav>
   </main>
+  <!-- The ⌘K palette: catalog.js is the data, search.js exposes the scorer, palette.js is
+       the UI. This order is the contract; see assets/palette.js. Typing a product name works
+       here because comparison pages carry theirs as aliases. -->
+  <script defer src="../assets/catalog.js"></script>
+  <script defer src="../assets/search.js"></script>
+  <script defer src="../assets/palette.js"></script>
 </body>
 </html>
 `;

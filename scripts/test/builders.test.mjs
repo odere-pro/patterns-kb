@@ -721,6 +721,45 @@ test("audit-vocab.mjs warns when a tag maps 1:1 onto a kind", () => {
   }
 });
 
+/* ---------------- map/stack.html, against the live corpus ----------------
+ *
+ * These read site/ rather than the fixture, deliberately: the fixture has no capability pages,
+ * so it can express nothing about a pattern-to-product index. search-parity.test.mjs sets the
+ * same precedent for the live catalog.
+ *
+ * The complaint that produced this page was coverage. It enumerated `implements` edges rather
+ * than patterns, so 43 edges became 28 rows and 174 of 202 patterns were simply absent — the
+ * reader could not tell "no cloud sells this" from "nobody wrote it down". Every pattern must
+ * have a row whether or not anything sells it. */
+test("map/stack.html gives every pattern a row", () => {
+  const catalog = JSON.parse(readFileSync(join(REPO, "site", "assets", "catalog.json"), "utf8"));
+  const html = readFileSync(join(REPO, "site", "map", "stack.html"), "utf8");
+  const patterns = catalog.nodes.filter((n) => n.kind === "pattern");
+  assert.ok(patterns.length > 150, `expected a full corpus, saw ${patterns.length} patterns`);
+  // The leading slash keeps "cache.html" from matching inside "distributed-cache.html".
+  const missing = patterns.filter((p) => !html.includes(`/${p.id}.html">`)).map((p) => p.id);
+  assert.deepEqual(missing, [], `${missing.length} pattern(s) have no row in the stack index`);
+});
+
+test("map/stack.html carries the five product columns and no 'As' column", () => {
+  const html = readFileSync(join(REPO, "site", "map", "stack.html"), "utf8");
+  const headers = [...html.matchAll(/<thead>\s*<tr>(.*?)<\/tr>/gs)]
+    .map((m) => [...m[1].matchAll(/<th>(.*?)<\/th>/g)].map((h) => h[1]));
+  assert.ok(headers.length > 0, "the index should have at least one table");
+  for (const row of headers) {
+    assert.deepEqual(row, ["Pattern", "AWS", "Azure", "Google Cloud", "Open source"]);
+  }
+});
+
+/* A dash must never read as "no such product exists" — for Circuit Breaker or Distributed Lock
+ * that would be false. The legend is what makes the gap honest, so it is part of the contract. */
+test("map/stack.html says a dash is a gap in the index, not a verdict", () => {
+  const html = readFileSync(join(REPO, "site", "map", "stack.html"), "utf8");
+  assert.match(html, /id="stack-legend"/);
+  assert.match(html, /A dash means this index records no product/);
+  assert.match(html, /not a claim about the market/);
+});
+
 test("validate.mjs holds a page to 2-5 tags", () => {
   for (const [tags, why] of [
     [`["concurrency"]`, "one tag groups nothing"],

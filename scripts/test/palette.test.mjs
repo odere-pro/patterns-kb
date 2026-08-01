@@ -1,0 +1,188 @@
+/* palette.test.mjs — the ⌘K palette's two pieces of arithmetic, run with `node --test`.
+ *
+ * The palette deliberately scores nothing of its own: window.KB_MATCHES (search.js) ranks, and
+ * the palette orders and caps. So there are exactly two things here that can be wrong on their
+ * own, and both are pure:
+ *
+ *   rank()             — is the list really the hub's ranking, descending, capped at the limit?
+ *   prefixFromHrefs()  — does a page four levels deep compute its own way back to site root?
+ *
+ * The second is the one that fails silently in production: get it wrong and every result links
+ * to a 404, on 354 pages, with no build error — check-links.mjs cannot see an href a script
+ * computes at runtime. Hence a case per depth the site actually has.
+ *
+ * Loaded the way search-parity.test.mjs loads the hub: the shipped files in a vm with a stub
+ * DOM, so the test exercises what the browser gets rather than a copy of it.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createContext, runInContext } from "node:vm";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ASSETS = join(HERE, "..", "..", "site", "assets");
+
+/* catalog.js → search.js → palette.js, the order the pages load them in. The stub returns no
+ * .controls and no #graph-search, so search.js's mount() early-returns and the palette's
+ * ownership guard lets it install — which is the content-page case. */
+function loadPalette() {
+  const window = {};
+  const document = {
+    readyState: "complete",
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: () => {},
+    createElement: () => ({ setAttribute() {}, appendChild() {}, querySelector: () => null }),
+    body: { appendChild() {} },
+  };
+  const ctx = createContext({ window, document, setTimeout, clearTimeout });
+  for (const f of ["catalog.js", "search.js", "palette.js"]) {
+    runInContext(readFileSync(join(ASSETS, f), "utf8"), ctx);
+  }
+  assert.equal(typeof window.KB_MATCHES, "function", "search.js should expose window.KB_MATCHES");
+  assert.ok(window.KB_PALETTE, "palette.js should expose window.KB_PALETTE");
+  return window;
+}
+
+const win = loadPalette();
+const { prefixFromHrefs, rank, limit } = win.KB_PALETTE;
+
+/* ---------------- the palette does not invent a ranking ---------------- */
+
+const QUERIES = [
+  "circuit breaker",
+  "one slow dependency blocks my threads",
+  "my cache keeps serving stale data",
+  "kafka",
+  "adding a payment provider means editing a huge switch",
+];
+
+test("rank() returns the hub's own hits, nothing added or dropped", () => {
+  for (const q of QUERIES) {
+    const hits = win.KB_MATCHES(q);
+    const ids = rank(q).map((n) => n.id);
+    assert.ok(ids.length > 0, `"${q}" should match something`);
+    // Every id the palette shows is one the scorer actually returned.
+    for (const id of ids) assert.ok(hits[id] !== undefined, `"${q}": ${id} is not a KB_MATCHES hit`);
+    // And it shows all of them, unless the cap bit.
+    const total = Object.keys(hits).length;
+    assert.equal(ids.length, Math.min(total, limit), `"${q}": ${total} hits should yield ${Math.min(total, limit)} rows`);
+  }
+});
+
+test("rank() is ordered by descending score", () => {
+  for (const q of QUERIES) {
+    const hits = win.KB_MATCHES(q);
+    const scores = rank(q).map((n) => hits[n.id]);
+    for (let i = 1; i < scores.length; i++) {
+      assert.ok(scores[i] <= scores[i - 1], `"${q}": score rose from ${scores[i - 1]} to ${scores[i]} at ${i}`);
+    }
+  }
+});
+
+test("rank() keeps the strongest hit, not merely 20 of them", () => {
+  for (const q of QUERIES) {
+    const hits = win.KB_MATCHES(q);
+    const best = Object.keys(hits).reduce((a, b) => (hits[b] > hits[a] ? b : a));
+    assert.equal(rank(q)[0].id, best, `"${q}": top row should be the best-scoring page`);
+  }
+});
+
+test("rank() is empty for an empty or whitespace query", () => {
+  // Length rather than deepEqual: the array is built inside the vm, so it is an Array from
+  // another realm and a strict prototype comparison would fail on an empty one.
+  for (const q of ["", "   ", null, undefined]) {
+    assert.equal(rank(q).length, 0, `${JSON.stringify(q)} should rank nothing`);
+  }
+});
+
+test("every ranked node carries what the row renders", () => {
+  for (const n of rank("circuit breaker")) {
+    assert.equal(typeof n.name, "string");
+    assert.equal(typeof n.kind, "string");
+    assert.equal(typeof n.path, "string");
+    assert.ok(n.path.endsWith(".html"), `${n.id}: path should be a page`);
+    assert.ok(!n.path.startsWith("/"), `${n.id}: catalog paths are site-root-relative, not absolute`);
+  }
+});
+
+/* ---------------- depth: the failure that check-links cannot see ---------------- */
+
+test("prefixFromHrefs() derives the way back to site root at every depth the site has", () => {
+  const cases = [
+    // [what the page's <head> says, the prefix it implies, which page looks like this]
+    ["assets/tokens.css", "", "site/vocab.html — site root"],
+    ["../assets/tokens.css", "../", "site/map/stack.html"],
+    ["../assets/tokens.css", "../", "site/designs/uber.html"],
+    ["../../assets/tokens.css", "../../", "site/patterns/<band>/<id>.html"],
+    ["../../../assets/tokens.css", "../../../", "site/patterns/<band>/<group>/<id>.html"],
+  ];
+  for (const [href, want, where] of cases) {
+    assert.equal(prefixFromHrefs([href]), want, where);
+  }
+});
+
+test("prefixFromHrefs() finds tokens.css among the other stylesheets", () => {
+  // Real heads list tokens.css, then pattern.css, then palette.css.
+  assert.equal(
+    prefixFromHrefs(["../../../assets/tokens.css", "../../../assets/pattern.css", "../../../assets/palette.css"]),
+    "../../../",
+  );
+  // And it must not be fooled by a different stylesheet that merely sits alongside it.
+  assert.equal(prefixFromHrefs(["../assets/pattern.css", "../assets/tokens.css"]), "../");
+});
+
+test("prefixFromHrefs() falls back to site root rather than throwing", () => {
+  for (const hrefs of [[], [null], [undefined], ["assets/pattern.css"], ["https://example.com/x.css"]]) {
+    assert.equal(prefixFromHrefs(hrefs), "", `${JSON.stringify(hrefs)} should fall back to ""`);
+  }
+});
+
+/* A ranked path joined to a derived prefix has to be the relative href a page can follow. */
+test("prefix + catalog path is a usable relative href", () => {
+  const node = rank("circuit breaker")[0];
+  assert.equal(prefixFromHrefs(["assets/tokens.css"]) + node.path, node.path);
+  assert.equal(
+    prefixFromHrefs(["../../../assets/tokens.css"]) + node.path,
+    `../../../${node.path}`,
+  );
+});
+
+/* ---------------- the ownership guard ---------------- */
+
+test("palette.js does not install where a ⌘K owner already exists", () => {
+  for (const owner of ["controls", "graph-search"]) {
+    const window = {};
+    const document = {
+      readyState: "complete",
+      // The hub renders .controls; the graph renders #graph-search. Either means "taken".
+      querySelector: (sel) => (sel.includes(owner) ? {} : null),
+      querySelectorAll: () => [],
+      addEventListener: () => {},
+    };
+    const ctx = createContext({ window, document, setTimeout, clearTimeout });
+    /* catalog.js and palette.js only. search.js would try to mount its own box against this
+     * stub host and fall over, and it is irrelevant here: the guard is the first statement in
+     * palette.js, so it returns before anything else is consulted. That is the claim. */
+    for (const f of ["catalog.js", "palette.js"]) {
+      runInContext(readFileSync(join(ASSETS, f), "utf8"), ctx);
+    }
+    assert.equal(window.KB_PALETTE, undefined, `.${owner} present: palette should stand down`);
+  }
+});
+
+test("palette.js stands down when search.js never ran, rather than throwing", () => {
+  // A page that wires palette.js but forgets catalog.js/search.js must degrade quietly.
+  const window = {};
+  const document = {
+    readyState: "complete",
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: () => {},
+  };
+  const ctx = createContext({ window, document, setTimeout, clearTimeout });
+  runInContext(readFileSync(join(ASSETS, "palette.js"), "utf8"), ctx);
+  assert.equal(window.KB_PALETTE, undefined, "no catalog and no scorer: install nothing");
+});

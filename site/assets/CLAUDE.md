@@ -18,6 +18,43 @@ vendored libraries. Edits here cannot break KB validity, so the post-edit hook o
 `.js` files (`node --check`). Vendored libraries (`vendor/`) are third-party — update by
 replacing the file and its LICENSE, never by editing.
 
+## The ⌘K palette (`palette.js`)
+
+One keystroke to anywhere, on the 356 pages that are not the hub or the graph. It **scores
+nothing of its own**: `catalog.js` is the data, `search.js` exposes `window.KB_MATCHES`, and
+`palette.js` orders and caps. That is a third consumer of the hub scorer, so the ranking is the
+hub's by construction.
+
+All three are `PAGE_SCRIPTS` entries (`SCRIPTS_BASE` in `lib/model.mjs`), so the 354 KB pages
+get them from the generated body-end region and the order is stated once. `vocab.html` and
+`map/stack.html` are not built by `build-pages.mjs`, so their own builders carry the tags.
+**Its CSS lives in `pattern.css`, not a stylesheet of its own** — `<head>` links stay authored,
+so a separate file would need adding to 354 heads by hand, which is the sweep `PAGE_SCRIPTS`
+exists to avoid.
+
+Three contracts, each with a test in `scripts/test/palette.test.mjs`:
+
+- **It stands down where a ⌘K owner exists.** `if (document.querySelector(".controls, #graph-search")) return;`
+  — the hub filters tiles in place and the graph jumps to its canvas search, both better than a
+  modal. The check is on their markup, not on a page-name list, because whoever renders those
+  owns the chord. Neither page loads `palette.js` at all.
+- **Depth is derived, not injected.** Catalog paths are site-root-relative and the script runs
+  at four depths with no build-time global, so `prefixFromHrefs()` reads the page's own
+  `assets/tokens.css` href and strips the tail. Get this wrong and every result 404s on 354
+  pages with no build error — `check-links.mjs` cannot see an href computed at runtime, which
+  is why there is a test case per depth.
+- **`window.KB_PALETTE` is the test seam** (`prefixFromHrefs`, `rank`, `limit`), exposed the
+  same way `search.js` exposes `KB_MATCHES`. Logic that moves out of it stops being tested.
+
+The overlay is the site's first `<dialog>`; its rules at the end of `pattern.css` theme it
+purely off `tokens.css` variables and sit at `z-index: 100`, above the fixed control cluster's 50.
+
+**`.prod` in `pattern.css` is the site's only outbound link class.** It styles the vendor
+documentation links on `map/stack.html` and marks them with a trailing ↗, because everything
+else here is relative and stays put. The URLs are not authored in any page — they come from
+`scripts/lib/products.mjs`, the single registry `make check` gates. See the root CLAUDE.md for
+the carve-out to "relative links only".
+
 `graph-core.js` is the exception to "verified by hand": it is covered by
 `scripts/test/graph-core.test.mjs` (`make test`), which loads the shipped file the way
 the page does. Logic that moves out of it stops being tested.

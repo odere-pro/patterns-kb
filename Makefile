@@ -40,12 +40,16 @@ check: ## Verify generated artifacts are in sync, no dangling links, diagrams pa
 	@node scripts/check-mermaid.mjs
 	@node scripts/audit-relations.mjs
 	@node scripts/audit-vocab.mjs
+	@node scripts/audit-products.mjs
 
 test: ## Smoke-test the builders/checkers against the fixture corpus (scripts/test/)
 	@node --test scripts/test/*.test.mjs
 
 relations: ## Cross-check every page's rendered relationships against graph.json
 	@node scripts/audit-relations.mjs
+
+products: ## Re-fetch every vendor documentation URL in the product registry (needs network)
+	@node scripts/audit-products.mjs --online
 
 diagrams: ## Parse every mermaid diagram with the vendored engine that renders it
 	@node scripts/check-mermaid.mjs

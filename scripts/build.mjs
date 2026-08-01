@@ -101,6 +101,18 @@ for (const { kind, dir, root, doc, id } of raw) {
   const band = doc.getAttribute("data-kb-band");
   const name = root.querySelector(".doc-title")?.text.trim();
   if (!name) fail(`${id}: no .doc-title`);
+  /* A page's name and essence are stored DECODED here and re-escaped by esc() at render, so
+   * a source that arrives already escaped is a fixed point no --check can catch: write
+   * "Messaging &amp;amp; Eventing", .text decodes it to "Messaging &amp; Eventing", esc() renders
+   * it back to the "&amp;amp;" it started as, every artifact agrees with itself — and the hub
+   * ships "MESSAGING &AMP; EVENTING" to the reader. Nine capability pages did exactly that.
+   * An entity surviving one decode is always that extra layer: nothing in this corpus
+   * legitimately displays the text "&amp;amp;", so fail at the source instead. */
+  const preEscaped = /&(?:amp|lt|gt|quot|apos|nbsp|#\d+|#x[0-9a-fA-F]+);/;
+  for (const [field, value] of [[".doc-title", name], ["data-kb-essence", doc.getAttribute("data-kb-essence")]]) {
+    const hit = value && preEscaped.exec(value);
+    if (hit) fail(`${id}: ${field} is double-escaped — "${hit[0]}" survives decoding. Write the literal character.`);
+  }
   const docClass =
     kind === "hazard" ? "hazard" : kind === "theme" ? "theme" : kind === "principle" ? "principle"
     : kind === "design" ? "design"
