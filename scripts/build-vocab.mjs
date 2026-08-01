@@ -338,6 +338,20 @@ ${list(tagRows)}
 ${list(langRows)}
     </section>
 
+    <!-- The eleventh vocabulary, and the only OPEN one. It gets prose and no rows on
+         purpose: the table is ~490 keys, it is authored against the corpus, and its stamp
+         moves whenever a bridge lands — rendering any of it would make this page churn and
+         would smuggle a usage count onto a page that is a pure function of the model.
+         A prose-only .vocab-section is an established shape here; #how is the other one. -->
+    <section class="doc-section vocab-section" id="expansion" aria-labelledby="h-expansion">
+      <h2 class="doc-h" id="h-expansion">Search expansion</h2>
+      <div class="prose">
+        <p>Every vocabulary above is <strong>closed</strong>: a value outside the set fails the build. One more is not, and it is the reason a search for a word this knowledge base never uses can still find the right page. A <strong>bridge</strong> maps a word a reader types to one or more words the corpus actually says — <code>resiliency</code> to <code>resilience</code>, <code>qps</code> to <code>throughput</code>. Both scorers substring-match, so a word the corpus already contains retrieves itself; a bridge pays only where the reader's word and the corpus's word differ.</p>
+        <p>Two layers, and the curated one wins outright. <code>SYNONYMS</code> in <code>scripts/lib/model.mjs</code> is hand-written and small; <code>scripts/data/expansion-synonyms.json</code> is the authored bulk. A key in both takes the curated value whole, so any target only the table names is dead. Expansion hits score at <strong>half weight</strong>, which keeps the author's own vocabulary winning ties.</p>
+        <p>Structure is enforced even though the vocabulary is open: a key is a lowercase word of three or more letters and not a stopword, it carries one to four targets, every target is a word the corpus really uses, and no target may contain its own key. <code>make check</code> fails on any of those. The two rules a machine cannot check are the author's — do not bridge to a word so common it reaches a tenth of the corpus, and do not add a bridge nobody would type. Growing or retiring the table is the <code>kb-vocab</code> skill.</p>
+      </div>
+    </section>
+
     <section class="doc-section vocab-section" id="cli" aria-labelledby="h-cli">
       <h2 class="doc-h" id="h-cli">The reader and writer</h2>
       <div class="prose">

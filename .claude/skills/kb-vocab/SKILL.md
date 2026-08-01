@@ -11,6 +11,13 @@ structurally validated. All of them live in `scripts/lib/model.mjs` except the C
 and the generated half of the table, and **none may be edited alone**: each has a fragment
 on `vocab.html`, a projection or a check that must move with it.
 
+The synonym table is the one exception to "a fragment per term". It has a
+**`#expansion` section** on `vocab.html` describing the mechanism — what a bridge is, that
+curated beats generated, that hits score at half weight — and deliberately renders **no
+rows**: the table is ~490 authored keys whose stamp moves whenever a bridge lands, and
+rendering any of it would both make the page churn and smuggle a corpus-derived count onto
+a page that is a pure function of the model.
+
 | Vocabulary | Source | Enforced by | Breaks if wrong |
 |---|---|---|---|
 | Page kinds (7) | `KINDS` | `audit-vocab.mjs` (K1) | the kind tables disagree |
@@ -21,7 +28,7 @@ on `vocab.html`, a projection or a check that must move with it.
 | Relation verbs (17) | `RELATION_TYPES` | `build.mjs`, `audit-relations.mjs` | a one-way or dangling edge |
 | JSON-LD properties (7) | `JSONLD_PROPS` | `audit-vocab.mjs` (V3) | an emitted term resolves nowhere |
 | Bands (13) & groups (9 named) | `BANDS` | `validate.mjs` (path must agree) | a page filed off its own band |
-| Tags (65) | `TAGS` | `build.mjs`, `validate.mjs`, `audit-vocab.mjs` | a page filters into nothing |
+| Tags (60) | `TAGS` | `build.mjs`, `validate.mjs`, `audit-vocab.mjs` | a page filters into nothing |
 | Sketch languages (9) | `SKETCH_LANGS` | `validate.mjs`, `audit-vocab.mjs` (V4, T4) | a sketch ships un-highlighted |
 | CLI commands (17) | `scripts/lib/cli-spec.mjs` | — (kb.mjs renders its usage from it) | the docs drift from the tool |
 | Synonyms | `SYNONYMS` + `scripts/data/expansion-synonyms.json` | `expansions.mjs`, `audit-vocab.mjs` | a bridge that never fires |
@@ -80,9 +87,12 @@ a page's five slots. Before adding to `TAGS`:
 - **It is a concept, not a kind marker.** A tag that lands on every page of one kind and
   nowhere else says what `data-kb-kind` already says; the Kind facet groups those pages for
   free. `audit-vocab.mjs` warns (T3) when it detects one.
-- **It is not a near-duplicate.** Check the existing set for a neighbour first —
-  `testing`/`testability`/`test-doubles` and `buffering`/`backpressure`/`batching` are the
-  live examples of a distinction that was drawn too finely.
+- **It is not a near-duplicate.** Check the existing set for a neighbour first. The 2026-08
+  sweep retired four tags for exactly this — `test-doubles` folded into `testing`, `legacy`
+  into `integration`/`maintainability`, `instantiation-control` into `lifecycle`, and
+  `buffering` into `backpressure` — so the surviving neighbours are the ones to reach for
+  before minting a fifth. `testability` beside `testing`, and `batching` beside
+  `backpressure`, are the distinctions still worth drawing.
 - **It goes in alphabetical position.** The set is sorted; a tag appended to the end is a
   merge conflict waiting to happen.
 
@@ -96,12 +106,17 @@ retagging every page that carries it** — removing the tag from `TAGS` without 
 build on every one of those pages. That makes retirement a separate, explicitly-approved
 act, not something to slip into another change.
 
+The 2026-08 sweep retired four and retagged the 25 pages carrying them: `test-doubles` → the
+`testing`/`testability` pair it duplicated, `legacy` → `integration` or `maintainability`
+depending on the page, `instantiation-control` → `lifecycle` (&ldquo;creation, reuse and
+disposal&rdquo; is the wider home), `buffering` → `backpressure`. That is the worked example
+of what retirement costs.
+
 Standing candidates, with counts from the last audit (re-run the report; they move):
-`test-doubles` (5, testing band only), `immutability` (5), `legacy` (6), `authentication`
-(6), `instantiation-control` (7, essentially gof-only), `buffering` (7, overlaps
-`backpressure`), `transformation` (8), `code-smell` (8, essentially the hazard kind).
-`principle` pages average 3.48 tags and never reach five — the one kind worth enriching
-rather than trimming.
+`immutability` (7), `authentication` (7), `transformation` (8), `low-level-design` (9).
+None is an obvious retirement — each names something no neighbour covers — so the next tag
+move is more likely enrichment than trimming. `principle` pages average 3.41 tags and never
+reach five, which is the weakest facet on the hub and the one kind worth enriching.
 
 ## The synonym table
 
@@ -125,10 +140,18 @@ Adding a bridge, in order:
    tags or solves *contains* the key as a substring, the bridge is dead weight.
 4. Pick targets **from the corpus vocabulary**. An invented target is the most common
    mistake — `saturated`, `fragile` and `coupling` all read like corpus words and are not.
-5. Add to `expansion-synonyms.json`, alphabetically, 1-4 targets.
+5. **Then check what the target actually retrieves.** A target can be in the corpus, pass
+   every structural rule, and still be wrong, because it means something else here:
+   `governance → hierarchy` shipped a bridge whose top hits were `visitor` and
+   `composition-over-inheritance`, since `hierarchy` in this corpus is a *class* hierarchy
+   five times out of six. Polysemy is invisible to `make check` and to the df count. Run
+   `kb.mjs find <key>` on every new key before you keep it.
+6. Add to `expansion-synonyms.json`, alphabetically, 1-4 targets.
 
 Structural rules `make check` enforces, so you cannot ship a broken one: key is a
-lowercase word of 3+ characters and not a stopword; 1-4 targets; no self-reference; every
+lowercase word of 3+ characters **and letters only** — a product name carrying a digit is
+rejected, so `ec2` is not available as a key and the bridge has to be built from a
+letters-only word a searcher would also type; not a stopword; 1-4 targets; no self-reference; every
 target is in the corpus vocabulary; **no target that contains its key** (the shorter key
 already matched it — note this is directional, `alerting → alert` is the whole point);
 no duplicate targets; keys sorted; `meta` well-formed.

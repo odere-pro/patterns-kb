@@ -99,7 +99,7 @@ export const BLOCK_DESC = {
   description: "Frames the subject. Its heading is kind-flavoured — &ldquo;The question&rdquo;, &ldquo;Understanding the problem&rdquo; — but the anchor is <code>description</code> on every kind, so one call fetches the opener of any page.",
   explain: "The three-rung ladder: one paragraph per reading level, stacked. Mandatory on every kind, because it is the per-level explanation the lens shows.",
 
-  structure: "How the happy path crosses the components, as a numbered topology walk. The sequence diagram carrying timing and the failure branches follows it one lens up.",
+  structure: "How the happy path crosses the components, as a numbered topology walk. On an implementation pattern a sequence diagram carrying timing and the failure branches follows it one lens up; a conceptual band keeps its class-style diagram and stops there.",
   variations: "The named forms the pattern takes, each a card: what changes, and what that buys.",
   tradeoffs: "What the choice costs and what it buys, argued from both sides. On a design it reads as strengths against risks, biggest flaw named first.",
   usage: "When to reach for it and when not to — the reader's situation, not the pattern's features.",
@@ -251,8 +251,10 @@ export const PAGE_SCRIPTS = {
  *                      lenses see MORE items — extra tradeoffs, operational nuance.
  *   data-kb-register = "rendered at EXACTLY this lens" (VARIANT). Adjacent siblings
  *                      carrying registers form one variant group — the same idea,
- *                      re-explained in the register of each level. The explain
- *                      ladder is the canonical variant group.
+ *                      re-explained in the register of each level. Rare by design, and
+ *                      currently unexercised: no page in the corpus authors one. The
+ *                      explain ladder is NOT a variant group — its three rungs stack
+ *                      with data-kb-level, so a reader at expert sees all three.
  *
  * An element with neither attribute is universal. An element carries at most ONE of
  * the two (make check enforces the XOR), and no section may render empty at any lens.
@@ -293,16 +295,16 @@ export const BLOCK_LEVELS = {
  * means retagging every page that carries it. */
 export const TAGS = new Set([
   "abstraction", "access-control", "api-design", "asynchrony", "authentication",
-  "availability", "backpressure", "batching", "boundaries", "buffering", "caching",
+  "availability", "backpressure", "batching", "boundaries", "caching",
   "cloud", "code-smell", "composition", "concurrency", "consistency", "coordination",
   "data-access", "data-modeling", "decoupling", "domain-modeling", "durability", "edge",
   "encapsulation", "error-handling", "event-driven", "extensibility", "immutability",
-  "instantiation-control", "integration", "isolation", "latency", "legacy", "lifecycle",
+  "integration", "isolation", "latency", "lifecycle",
   "load-balancing", "low-level-design", "machine-learning", "maintainability", "messaging",
   "modularity", "observability", "operations", "partitioning", "performance",
   "persistence", "polymorphism", "read-optimization", "readability", "replication",
   "resilience", "resource-management", "routing", "scalability", "security",
-  "separation-of-concerns", "state-management", "test-doubles",
+  "separation-of-concerns", "state-management",
   "testability", "testing", "throughput", "transactions", "transformation",
   "ui-architecture", "validation",
 ]);
@@ -322,7 +324,6 @@ export const TAG_DESC = {
   backpressure: "Letting a slow consumer push back on a fast producer instead of drowning.",
   batching: "Trading latency for throughput by handling many items as one.",
   boundaries: "Where one part of a system stops and the next begins.",
-  buffering: "Holding work in the middle to absorb a mismatch in rate.",
   caching: "Keeping a copy closer or cheaper to read, and paying the staleness bill.",
   cloud: "Managed platform services, and what depending on them costs.",
   "code-smell": "A structure that works but signals a design going wrong.",
@@ -341,11 +342,9 @@ export const TAG_DESC = {
   "event-driven": "Reacting to things that happened rather than being told what to do.",
   extensibility: "Adding a case without editing what already works.",
   immutability: "Values that never change, so nothing changes underneath a reader.",
-  "instantiation-control": "Deciding what gets created, when, and by whom.",
   integration: "Joining systems that were not designed together.",
   isolation: "Containing a failure or a workload so it cannot spread.",
   latency: "How long one operation takes, as felt by the caller.",
-  legacy: "Working with a system you cannot rewrite.",
   lifecycle: "Creation, reuse and disposal, and who is responsible for each.",
   "load-balancing": "Spreading work across interchangeable workers.",
   "low-level-design": "Class-and-object design: an interview kata at the scale of one component.",
@@ -369,7 +368,6 @@ export const TAG_DESC = {
   security: "Keeping a hostile caller from getting what they want.",
   "separation-of-concerns": "One reason to change per part.",
   "state-management": "Where mutable state lives and who may touch it.",
-  "test-doubles": "Standing in for a real collaborator during a test.",
   testability: "Designing so the thing can be checked in pieces.",
   testing: "How the system is proved to work.",
   throughput: "How much work completes per unit of time.",
@@ -514,8 +512,8 @@ export const REL_ORDER = [
  * Descriptions are interpolated raw, so they may carry <code> markup. */
 export const JSONLD_PROPS = [
   ["kind", "Which of the seven page kinds this is — <code>pattern</code>, <code>hazard</code>, <code>theme</code>, <code>principle</code>, <code>design</code> (a worked case study), <code>capability</code> (a category of managed cloud service), or <code>comparison</code> (a product decision: managed services and open-source contenders side by side)."],
-  ["band", "The elevation band or lens the pattern belongs to. Also its folder."],
-  ["group", "The subdivision within a band, where one exists. Also its folder."],
+  ["band", "The band the page declares. On a pattern that is one of the thirteen elevation bands or lenses, and also its folder; on every other kind it repeats <code>kb:kind</code>, because those pages are filed by kind."],
+  ["group", "The subdivision within a band, on the two bands that have one; elsewhere it repeats <code>kb:band</code>. It names the folder except where a group carries an alias and shares another's."],
   ["note", "Why two things relate, from this side. Each side may phrase it its own way; only the edge and its verb must agree."],
   ["role", "What a pattern does in the service of one particular theme."],
   ["in-theme", "A theme whose tour visits this pattern. The inverse of <code>kb:tours</code>."],
@@ -534,19 +532,20 @@ export const JSONLD_PROPS = [
  *   shape     text | json-array | closed (a fixed vocabulary) | boolean | id-ref
  *   required  true when every page (or every element of that kind) must carry it
  *
- * Two entries are available but unexercised: `register` (the rare replacement variant, no
- * authored use in the corpus) and `maps` (validated and consumed by build-stack-page.mjs,
- * awaiting the first comparison page). They are documented because the toolchain enforces
- * them, not because the corpus uses them. */
+ * One entry is available but unexercised: `register`, the rare replacement variant, which
+ * has no authored use in the corpus. It is documented because the toolchain enforces it,
+ * not because anything writes it. `maps` was in the same position until the comparison
+ * pages landed; it is now authored across the capability and comparison sets and consumed
+ * by build-stack-page.mjs. */
 export const ATTRIBUTES = [
   { name: "id", scope: "root", required: true, shape: "text",
     desc: "The page's stable identifier, and the target every relationship and citation names. It must match the file name and the page's place on disk." },
   { name: "kind", scope: "root", required: true, shape: "closed",
     desc: "One of the seven page kinds. It fixes which blocks the page must carry and which folder it lives in." },
   { name: "band", scope: "root", required: true, shape: "closed",
-    desc: "The elevation band or lens. The page's path must agree with it, and <code>make check</code> fails if they diverge." },
+    desc: "On a pattern, the elevation band or lens it belongs to, which is also its folder — <code>make check</code> fails if the two disagree. Every other kind repeats its own <a href=\"#data-kb-kind\"><code>kind</code></a> here, because those pages are filed by kind rather than by band; <code>hazard</code> is a placeholder, not a fourteenth band." },
   { name: "group", scope: "root", required: true, shape: "closed",
-    desc: "The subdivision within a band, where one exists. Also part of the path." },
+    desc: "The subdivision within a band, on the two bands that have one. Everywhere else it repeats the band, which is the encoding of &ldquo;not subdivided&rdquo;. Usually part of the path, but not always: a group carrying a folder alias shares another group's directory." },
   { name: "order", scope: "root", required: true, shape: "text",
     desc: "Editorial sort key within the band or kind. It drives hub order and the prev/next links, so it is pedagogical rather than alphabetical." },
   { name: "essence", scope: "root", required: true, shape: "text",
@@ -606,7 +605,7 @@ export const SYNONYMS = {
   hotspot: ["bottleneck"], chokepoint: ["bottleneck"],
   rollback: ["undo"], revert: ["undo"], mismatch: ["inconsistent"],
   starvation: ["exhausted"], starved: ["exhausted"],
-  frozen: ["freeze", "stuck", "hangs"], unresponsive: ["stuck", "freeze"],
+  unresponsive: ["stuck", "freeze"],
   redelivery: ["replay", "redelivered"],
 };
 
