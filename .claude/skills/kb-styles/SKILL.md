@@ -90,6 +90,22 @@ tokens.css   620px      (shared chrome: the fixed control cluster)
 
 Also honour `@media (prefers-reduced-motion: reduce)`, already handled in `tokens.css`.
 
+**Prefer an intrinsic rule to a fifth breakpoint.** Two layouts here adapt with no media
+query at all, because the space they respond to is not the viewport:
+
+- `.doc-wrap`'s `padding-right` reserves the fixed control column by subtracting the
+  page's own gutter — `max(<normal padding>, calc(4.3rem - max(0px, (100vw -
+  var(--content-width)) / 2)))`. The inner `max` floors the gutter at zero, without
+  which a viewport narrower than `--content-width` would *add* padding on exactly the
+  phones that can least afford it.
+- `.rel-item` / `.fluency-item` / `.wild-item` put the name and its note side by side
+  while the note has room and stack them when it does not, via `flex-wrap` plus
+  `flex: 1 1 24ch` on the note. The name is `white-space: nowrap` and never yields, so
+  without a basis the note shrank to one word wide and forty lines tall.
+
+Both sit inside a reserved column or a grouped block, so a viewport breakpoint would be
+measuring the wrong thing.
+
 ## Adding a component class
 
 1. **Check it is not already there.** `.chip` carries the flex column, padding,
