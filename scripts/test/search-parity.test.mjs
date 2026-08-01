@@ -23,8 +23,8 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createContext, runInContext } from "node:vm";
 import { SYNONYMS } from "../lib/model.mjs";
-import { mergedSynonyms, STOP } from "../lib/expansions.mjs";
-import { indexNodes, proseIndexer, scoreQuery } from "../lib/search.mjs";
+import { corpusVocabulary, mergedSynonyms, STOP } from "../lib/expansions.mjs";
+import { indexNodes, proseIndexer, scoreQuery, stemVariant } from "../lib/search.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
@@ -161,6 +161,27 @@ test("kb.mjs find is wired to the shared scorer", () => {
   const shipped = JSON.parse(r.stdout).map((x) => x.id);
   const inProcess = scoreQuery({ index, q, syn, bodyOf: proseIndexer(SITE, null), limit: 8 }).map((x) => x.n.id);
   assert.deepEqual(shipped, inProcess);
+});
+
+/* The STOP list is pinned by reading search.js's source; the stemmer is six rules with
+ * length guards and ordering, which no regex over the source could compare. Run the real
+ * thing instead: every word the corpus can be searched for, through both implementations.
+ * Milliseconds, and drift stops being possible. */
+test("hub and CLI stem every corpus word identically", () => {
+  const { KB_STEM } = loadHub();
+  assert.equal(typeof KB_STEM, "function", "search.js should export window.KB_STEM");
+  const vocab = [...corpusVocabulary(catalog.nodes)].sort();
+  assert.ok(vocab.length > 2000, `expected a real vocabulary, got ${vocab.length} words`);
+  const hub = {}, cli = {};
+  for (const w of vocab) { hub[w] = KB_STEM(w); cli[w] = stemVariant(w); }
+  assert.deepEqual(plain(hub), cli);
+  // …and the rules do something: these are the pairs the change exists for.
+  for (const [word, stem] of [["threads", "thread"], ["blocked", "block"], ["queries", "query"],
+    ["batches", "batch"], ["blocking", "block"], ["retried", "retry"]])
+    assert.equal(stemVariant(word), stem, `expected ${word} -> ${stem}`);
+  // Short words and the ones a guard protects keep their shape.
+  for (const w of ["class", "cache", "ties", "less", "used", "ring"])
+    assert.equal(stemVariant(w), null, `"${w}" should not be stemmed`);
 });
 
 test("hub stopword list matches the shared STOP set", () => {

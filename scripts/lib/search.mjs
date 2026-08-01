@@ -38,10 +38,46 @@ export function weightsFor(terms) {
     : { id: 2, name: 2, solves: 6, tags: 3, essence: 3, curated: 1, body: 2 };
 }
 
+/* Six suffix rules, first match wins, each with its own minimum length. Not a general
+ * stemmer and not trying to be: it exists so a searcher who types "threads" or "blocked"
+ * reaches a page whose author wrote "thread" and "blocks".
+ *
+ * Over-stemming is safe here, and that is why the rules can be this crude. Matching is by
+ * substring, so an over-stem is always a PREFIX of the word it came from and can only hit
+ * inside the same word family — and the unstemmed term still scores at full weight as
+ * variant 0, so a bad stem costs nothing and a good one is worth half a term.
+ *
+ *   ies -> y   (>=6)   queries -> query      ing  -> ""  (>=7)  blocking -> block
+ *   [sxz|ss|sh|ch]es   (>=6)   batches -> batch      ied -> y   (>=6)  retried  -> retry
+ *   [^s]s      (>=5)   threads -> thread     ed   -> ""  (>=6)  blocked  -> block
+ *
+ * Mirrored in site/assets/search.js as window.KB_STEM; search-parity.test.mjs runs the
+ * whole corpus vocabulary through both implementations. */
+const STEM_RULES = [
+  [/ies$/, 6, (w) => w.slice(0, -3) + "y"],
+  [/(?:ss|sh|ch|x|z)es$/, 6, (w) => w.slice(0, -2)],
+  [/[^s]s$/, 5, (w) => w.slice(0, -1)],
+  [/ing$/, 7, (w) => w.slice(0, -3)],
+  [/ied$/, 6, (w) => w.slice(0, -3) + "y"],
+  [/ed$/, 6, (w) => w.slice(0, -2)],
+];
+
+export function stemVariant(term) {
+  for (const [re, min, cut] of STEM_RULES) {
+    if (term.length < min || !re.test(term)) continue;
+    const stem = cut(term);
+    return stem.length >= 4 && stem !== term ? stem : null;
+  }
+  return null;
+}
+
 /* Every variant of a term, in scoring order: the term itself at full weight, then its
- * synonyms and its stem at half. */
+ * synonyms and its stem at half. Order matters — a tie between variants keeps the first,
+ * so both scorers must build this list the same way. */
 export function termVariants(term, syn) {
   const out = [term, ...own(syn ?? {}, term)];
+  const stem = stemVariant(term);
+  if (stem && !out.includes(stem)) out.push(stem);
   return out;
 }
 

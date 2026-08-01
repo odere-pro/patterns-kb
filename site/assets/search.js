@@ -41,6 +41,43 @@
   // only. Mirrors `own()` in scripts/lib/expansions.mjs.
   function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
 
+  // Six suffix rules, first match wins, each with its own minimum length. Not a general
+  // stemmer: it exists so a searcher who types "threads" or "blocked" reaches a page whose
+  // author wrote "thread" and "blocks". Over-stemming is safe — matching is by substring,
+  // so an over-stem is a PREFIX of the word it came from and can only hit inside the same
+  // word family, and the unstemmed term still scores at full weight as variant 0.
+  // ES5 twin of stemVariant() in scripts/lib/search.mjs; search-parity.test.mjs runs the
+  // whole corpus vocabulary through both.
+  var STEM_RULES = [
+    [/ies$/, 6, 3, "y"],
+    [/(?:ss|sh|ch|x|z)es$/, 6, 2, ""],
+    [/[^s]s$/, 5, 1, ""],
+    [/ing$/, 7, 3, ""],
+    [/ied$/, 6, 3, "y"],
+    [/ed$/, 6, 2, ""]
+  ];
+  function stemVariant(term) {
+    for (var i = 0; i < STEM_RULES.length; i++) {
+      var rule = STEM_RULES[i];
+      if (term.length < rule[1] || !rule[0].test(term)) continue;
+      var stem = term.slice(0, term.length - rule[2]) + rule[3];
+      return stem.length >= 4 && stem !== term ? stem : null;
+    }
+    return null;
+  }
+  // Exposed for the parity test, the same way KB_MATCHES is.
+  window.KB_STEM = stemVariant;
+
+  // The term itself at full weight, then its synonyms and its stem at half. Order matters:
+  // a tie between variants keeps the first, so this must build the list exactly as
+  // termVariants() does in scripts/lib/search.mjs.
+  function termVariants(term) {
+    var out = [term].concat(has(SYN, term) ? SYN[term] : []);
+    var stem = stemVariant(term);
+    if (stem && out.indexOf(stem) < 0) out.push(stem);
+    return out;
+  }
+
   // Raw score for one term (or synonym variant) against a node's fields — no multiplier.
   function termScore(n, t, naming, hay, solves, tags) {
     var s = 0;
@@ -63,9 +100,9 @@
 
     var hay = [n.id, n.name, n.essence].concat(aliases, tags, solves).join(" ").toLowerCase();
     for (var i = 0; i < terms.length; i++) {
-      // Score the term at full weight, then each synonym at half; the term counts as
-      // matched once, on its best variant. Mirrors scripts/kb.mjs.
-      var variants = [terms[i]].concat(has(SYN, terms[i]) ? SYN[terms[i]] : []);
+      // Score the term at full weight, then each variant at half; the term counts as
+      // matched once, on its best variant. Mirrors scripts/lib/search.mjs.
+      var variants = termVariants(terms[i]);
       var best = 0;
       for (var v = 0; v < variants.length; v++) {
         var got = termScore(n, variants[v], naming, hay, solves, tags) * (v === 0 ? 1 : 0.5);

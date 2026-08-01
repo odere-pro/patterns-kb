@@ -37,17 +37,20 @@ const REPORT = MODE === "report";
 /* ---------------- gates ----------------
  * One table, rates only. Ceilings are marked `max`; everything else is a floor. */
 const GATES = {
-  //                     gate    measured when this fixture landed
+  //                     gate    measured
   cliTop1: {
     verbatim:            0.983,  // 98.4%
     keyword:             0.961,  // 96.2%
-    inflected:           0.674,  // 67.5%
+    inflected:           0.980,  // 98.1%   was 67.5% before query stemming
   },
-  cliTop3:               0.945,  // 94.6%   pooled over the gated phrasings
-  cliMrr:                0.911,  // 0.912
-  hubTop1:               0.899,  // 90.0%
-  maxDesignStealsTop1:   0.039,  //  3.8%   over non-design queries
-  maxDesignInTop5:       0.654,  // 65.3%   over non-design queries
+  cliTop3:               0.995,  // 99.6%   pooled over the gated phrasings
+  cliMrr:                0.985,  // 0.986
+  hubTop1:               0.981,  // 98.2%   was 90.0%
+  maxDesignStealsTop1:   0.003,  //  0.2%   over non-design queries, was 3.8%
+  /* The one number stemming made worse: reaching more pages reaches more designs too,
+   * and a design's ~20k chars of prose clear the flat body ceiling that a pattern's
+   * ~11.7k also clears. Body-length normalisation is the fix, not a smaller stemmer. */
+  maxDesignInTop5:       0.675,  // 67.4%   over non-design queries, was 65.3%
 };
 
 /* ---------------- phrasings ----------------
