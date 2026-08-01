@@ -142,15 +142,21 @@ export function scoreQuery({ index, q, syn, bodyOf, limit }) {
         const t = variants[vi];
         const mult = vi === 0 ? 1 : 0.5;
         let s = 0, line = null;
-        if (e.id.includes(t)) s += W.id;
-        if (e.name.includes(t)) s += W.name;
-        if (e.solves.some((x) => x.includes(t))) s += W.solves;
-        if (e.tags.some((x) => x.includes(t))) s += W.tags;
-        /* A page with no solves (themes) carries what symptom vocabulary it has in the
-         * essence — score it at the solves weight there, so a one-field page is not
-         * silently outranked by pages with five. */
-        if (e.essence.includes(t)) s += (e.solves.length ? W.essence : W.solves);
-        else if (e.curated.includes(t)) s += W.curated;
+        /* `curated` concatenates every field below, so a miss here is a miss in all of
+         * them — one substring search instead of five on the ~95% of nodes a given term
+         * never touches. The relevance fixture runs ~2,000 queries over 354 nodes, and
+         * this gate is most of what keeps it under a second. */
+        if (e.curated.includes(t)) {
+          if (e.id.includes(t)) s += W.id;
+          if (e.name.includes(t)) s += W.name;
+          if (e.solves.some((x) => x.includes(t))) s += W.solves;
+          if (e.tags.some((x) => x.includes(t))) s += W.tags;
+          /* A page with no solves (themes) carries what symptom vocabulary it has in the
+           * essence — score it at the solves weight there, so a one-field page is not
+           * silently outranked by pages with five. */
+          if (e.essence.includes(t)) s += (e.solves.length ? W.essence : W.solves);
+          else s += W.curated;
+        }
         if (body) {
           const hits = body.hits.get(t);
           if (hits) { s += Math.min(hits.n, 3) * W.body; line = hits.line; }
