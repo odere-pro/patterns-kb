@@ -31,6 +31,9 @@ compression. High-level means architecture altitude, not vagueness.
 - **Write operational caveats as bold label, directive, reason — one line each.**
   "**Ordering**: publish in commit order, because out-of-order events break
   point-in-time replay." A caveat that names no action is trivia.
+- **Emphasis is bold, never italic.** On a KB page that means `<strong>` for the label,
+  `<code>` for an identifier, and no `<em>`/`<i>` anywhere — the corpus carries none and
+  no stylesheet renders italic. Contrast you would have italicised is a sentence to split.
 
 ## Structure
 

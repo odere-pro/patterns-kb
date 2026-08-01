@@ -64,6 +64,9 @@ advisory prose; do not carry third person out of the `<li>`s.
 - **Verb-first, third person, one line.** "Separates operation state from business state
   unprompted" — not "should be able to separate…". The reader is matching against a
   behaviour, so lead with the behaviour.
+- **No italics.** `<strong>` for a level label, `<code>` for an identifier, nothing else —
+  the corpus carries no `<em>`/`<i>` and renders no italic. A behaviour worth stressing is
+  one to state more plainly, not to slant.
 - **One demonstrable thing per bullet.** If a bullet contains a semicolon, it is two bullets.
   This is the single edit that turns the legacy shape into this one.
 - **3-5 bullets per level.** Past five you are transcribing the page; below three you have

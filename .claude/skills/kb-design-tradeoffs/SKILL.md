@@ -84,6 +84,10 @@ stalls, or costs — and stops. If a risk was taken deliberately, one clause may
   the deep dives and Right-sizing.
 - **State it, don't defend it.** One sentence per item. A risk followed by three
   mitigations is an essay, and the block stops being scannable.
+- **The bold claim is the only emphasis.** `<strong>` opens the item, `<code>` names an
+  identifier, and that is the whole inline vocabulary — no `<em>`, no `<i>`. The corpus
+  carries none and no stylesheet renders italic, so an italic run reads as a second
+  emphasis level that does not exist.
 - **Mitigations are pointers, not paragraphs.** At most a parenthetical — `(see dive 4)`,
   "named in Right-sizing" — the argument lives where the pointer aims. Verify every
   pointer against the actual dive numbering before writing it.

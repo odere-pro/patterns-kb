@@ -72,6 +72,12 @@ sees the basic rung too, so a restated premise reads as padding.
 **Rewrites are all-or-nothing.** `kb.mjs explain` replaces the whole block and requires all
 three flags — read the current ladder first (`get <id> --block explain`), then rewrite.
 
+**Rungs are plain text, and the corpus has no italics anyway.** `kb.mjs explain` escapes
+what you pass it, so an `<em>` you type arrives on the page as visible `&lt;em&gt;`. The
+same rule binds the elements you tag with `level`/`register` elsewhere on the page: no
+`<em>`, no `<i>`, `<strong>` for a run-in label and `<code>` for an identifier. Nothing in
+any stylesheet renders italic.
+
 ## Sizing bands — the hard targets
 
 QA-scripted, not vibes: `node scripts/report-lens.mjs` prints each page's basic and expert

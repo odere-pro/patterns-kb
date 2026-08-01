@@ -27,6 +27,9 @@ pizza shop" unless the analogy genuinely shortens the path.
   no analogy.
 - **Numbers stay, precision goes.** "About 100× slower" reads; "2.3ms vs 210µs p50" is
   for the technical version.
+- **Emphasis is bold, never italic.** When this lands on a KB page, no `<em>` and no
+  `<i>` — the corpus carries none and renders none. Plain words do the work; a word you
+  want to lean on belongs where the sentence already leans.
 
 ## Length discipline
 

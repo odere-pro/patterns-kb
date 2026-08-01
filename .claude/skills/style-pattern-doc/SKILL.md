@@ -11,7 +11,7 @@ demonstrating.
 
 ## The register
 
-Eight rules, distilled from AWS Prescriptive Guidance, Azure Architecture Center and the
+Nine rules, distilled from AWS Prescriptive Guidance, Azure Architecture Center and the
 Google Cloud Architecture Framework.
 
 1. **Second person, active voice, imperative for advice.** Address the reader as "you";
@@ -31,6 +31,10 @@ Google Cloud Architecture Framework.
 8. **No hedging stacks, no marketing adjectives.** "Robust", "scalable", "significant"
    are unpriced — give the figure or the mechanism. "Where feasible" is the one
    acceptable softener.
+9. **Emphasis is bold, never italic.** No `<em>`, no `<i>` — the KB carries none and
+   renders none. `<strong>` for a run-in label, `<code>` for an identifier, nothing at
+   all when the sentence already stresses the word. A word italicised for contrast is a
+   sentence you have not rewritten yet: move the word, or split the sentence.
 
 **Cut on sight:** *in order to* → to; *utilise / leverage* → use; *it is worth noting
 that* → delete; *demonstrates the ability to* → can; *a number of* → the number;

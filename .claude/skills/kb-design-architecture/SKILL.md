@@ -169,7 +169,7 @@ in its `references/site-embedding.md`. Read it before drawing; do not restate it
 
 ## Wording rules
 
-The lead, the components walk and every dive thesis are prose, and the same four rules
+The lead, the components walk and every dive thesis are prose, and the same five rules
 bind all of them:
 
 - **Second person, active voice.** Address the reader as "you" and open directives with
@@ -181,6 +181,10 @@ bind all of them:
   a box nobody can argue with.
 - **No unpriced adjectives.** "Robust", "scalable", "highly available" assert nothing —
   replace each with the figure, the mechanism, or the NFR that forces it.
+- **Emphasis is bold, never italic.** `<strong>` for a run-in label, `<code>` for a
+  component or column name, and no `<em>`/`<i>` anywhere — the corpus carries none and no
+  stylesheet renders italic. This holds for the pattern labels too, which are plain text
+  next to the component name, exactly as the pattern-labels section says.
 
 ## Worked example
 

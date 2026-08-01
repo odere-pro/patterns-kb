@@ -97,6 +97,13 @@ Real SQL, cut to what argues:
   row and say where the bytes are.
 - ~6–12 lines per entity. Past that, you are documenting, not arguing — trim.
 
+## Inline markup
+
+The one-line descriptions are prose: `<code>` for a column, table or type name,
+`<strong>` for a run-in label, `<a>` for a page the KB has. **No `<em>` and no `<i>`** —
+the corpus carries none and no stylesheet renders italic. A column worth stressing is
+already in `<code>`, which is emphasis enough.
+
 ## Consistency with the rest of the page
 
 The entity set is **derived from the FR/NFR/sizing blocks, never invented**. Every

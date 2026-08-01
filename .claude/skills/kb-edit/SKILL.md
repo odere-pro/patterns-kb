@@ -32,6 +32,13 @@ wrong", that is `#tradeoffs-con-2`, and you can quote it before changing it.
 | a relationship's note | edit the `.rel-note` on **both** pages by hand — each side phrases it its own way |
 | anything in `<!-- kb:generated -->` | **do not.** `make all` overwrites it |
 
+When you rewrite prose, the inline vocabulary is four elements — `<a>`, `<strong>`,
+`<code>`, `<abbr>`. **Never reintroduce `<em>` or `<i>`:** the corpus carries zero of them
+and no stylesheet renders italic, so an italic run is both off-register and invisible.
+`<strong>` for a run-in label, `<code>` for an identifier, and for contrast, rewrite the
+sentence so the stress falls where you wanted the italic. `grep -rn '<em>\|<i>' site
+--include='*.html'` should always come back empty.
+
 `kb.mjs set` validates the JSON before it lands and never guesses placement. Hand-editing a
 `data-kb-solves='[…]'` string is how you get an unparseable attribute. After any edit,
 `node scripts/kb.mjs validate <id>` (~50ms) names what broke, if anything — the hook runs it

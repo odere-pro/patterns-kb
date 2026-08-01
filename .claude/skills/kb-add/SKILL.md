@@ -59,6 +59,15 @@ node scripts/kb.mjs get thread-pool --block production   # the production block
 - `data-kb-order` — pattern order is **editorial, not alphabetical**. It drives the hub and
   prev/next. Insert where it belongs pedagogically, and renumber the pages after it in the
   same band.
+- **Inline markup is four elements: `<a>`, `<strong>`, `<code>`, `<abbr>`.** No `<em>` and
+  no `<i>` — the corpus carries zero and no stylesheet renders italic. `<strong>` for a
+  run-in label, `<code>` for an identifier, nothing at all when the sentence already puts
+  the stress where you want it. Italic contrast is a sentence to rewrite, not to mark up.
+- In a `variations` block, when a variant names a page the KB already has, link it from the
+  `<dt>` — wrapping only the page-name portion:
+  `<dt id="variations-item-1"><a href="./sidecar.html">Sidecar</a> data plane</dt>`.
+  Link the page, not the word: a name collision ("Streaming Gateway" is not the `streaming`
+  theme) is not a reference, and a wrong link costs more than a missing one.
 - Leave the JSON-LD out. It is generated.
 - `node scripts/kb.mjs validate <id>` at any point tells you what is still structurally wrong.
 

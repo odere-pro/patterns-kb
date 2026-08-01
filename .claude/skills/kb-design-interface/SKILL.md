@@ -102,6 +102,13 @@ Real HTTP, cut to what argues:
 - ~8–15 lines per contract. Past that, the argument belongs in a deep dive — link by
   mention ("deep dive 2") and trim.
 
+## Inline markup
+
+The one-line descriptions are prose: `<code>` for a field, header or status code,
+`<strong>` for a run-in label, `<a>` for a page the KB has. **No `<em>` and no `<i>`** —
+the corpus carries none and no stylesheet renders italic. A field worth stressing is
+already in `<code>`.
+
 ## Consistency with the rest of the page
 
 Every endpoint traces to an FR; an endpoint no requirement forces is invented scope.

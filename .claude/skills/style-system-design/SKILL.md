@@ -68,6 +68,15 @@ A recommendation describes when *they* are in this position, not what the option
 Give the inverse too — the conditions under which the recommendation flips. A
 recommendation with no stated inverse is a preference.
 
+### 7. Emphasis is bold, never italic
+
+On a KB page that means `<strong>` for a run-in label, `<code>` for an identifier, and no
+`<em>` or `<i>` anywhere — the corpus carries none and no stylesheet renders italic.
+
+A verdict-first sentence rarely needs emphasis at all: the claim is already in first
+position, which is where the stress lands. If you reach for italic contrast, the sentence
+is carrying two claims and wants splitting.
+
 ## Shape
 
 | Element | Limit |
