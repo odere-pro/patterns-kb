@@ -365,6 +365,51 @@ test('build-pages.mjs renders "Mentioned by" and never feeds it back into the gr
   }
 });
 
+test("build-pages.mjs owns the body-end script list, per kind and at the right depth", () => {
+  /* The list is taxonomy (PAGE_SCRIPTS), so the KIND decides it: a pattern loads the
+   * highlighter for its code sketches, a theme has no sketch to highlight and must not.
+   * The depth comes from the page's own path, which is the half most likely to be wrong
+   * — the site has to work from file:// with no server to resolve an absolute path.
+   * The fixture pages carry NO body-end scripts, so this covers the insert path; the
+   * absorb path (hand-written tags, no marker) is asserted below. */
+  const root = built();
+  const mark = /<!-- kb:generated — page scripts/;
+  try {
+    assert.equal(run("build-pages.mjs", root).status, 0);
+    const alpha = readFileSync(join(root, ALPHA), "utf8");
+    const gamma = readFileSync(join(root, "site", "themes", "gamma.html"), "utf8");
+
+    assert.match(alpha, mark, "the region is marked, so the never-edit rule covers it");
+    assert.match(alpha, /<script src="\.\.\/\.\.\/assets\/vendor\/mermaid\.min\.js"><\/script>/,
+      "two folders deep, so two hops up");
+    assert.match(alpha, /<script src="\.\.\/\.\.\/assets\/favourites\.js"><\/script>/,
+      "every kind gets the favourite control — the drift this replaced had lost it on 53 pages");
+    assert.match(alpha, /<script src="\.\.\/\.\.\/assets\/section-nav\.js"><\/script>/);
+    assert.match(alpha, /<script src="\.\.\/\.\.\/assets\/sketch\.js"><\/script>\n<\/body>/,
+      "the list is the last thing before </body>");
+    assert.match(gamma, /<script src="\.\.\/assets\/section-nav\.js"><\/script>/,
+      "one folder deep, so one hop up");
+    assert.doesNotMatch(gamma, /sketch\.js|highlight/,
+      "a theme carries no details.sketch, so it loads no highlighter");
+
+    assert.equal(run("build-pages.mjs", root, "--check").status, 0, "a second pass is a no-op");
+
+    /* The absorb path: a page whose tags were hand-written carries no marker, and the
+     * builder has to replace that run rather than emit a second one beside it. That is
+     * what let 354 pages converge with no migration script. Drop the marker line to get
+     * back the shape the corpus had before this region existed. */
+    const file = join(root, ALPHA);
+    writeFileSync(file, readFileSync(file, "utf8").replace(/[ \t]*<!-- kb:generated — page scripts[^\n]*-->\n/, ""));
+    assert.equal(run("build-pages.mjs", root).status, 0);
+    const absorbed = readFileSync(file, "utf8");
+    assert.equal(absorbed.match(/<script src="[^"]*section-nav\.js"/g).length, 1,
+      "one script list, not two");
+    assert.equal(run("build-pages.mjs", root, "--check").status, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("kb.mjs refs reports each carrier separately", () => {
   const root = built();
   try {

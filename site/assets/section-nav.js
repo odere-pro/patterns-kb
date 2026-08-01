@@ -13,6 +13,14 @@
  * Sections are lens-independent: every block renders at every lens, so the target
  * list never changes when the lens does. Sections hidden by CSS are still skipped
  * defensively via offsetParent, in case that ever stops being true.
+ *
+ * It loads on every kind of page and decides for itself whether to appear, because
+ * page length does not follow page kind: measured at 1440x900, a seven-block
+ * capability page runs to 8.6 viewports while an eight-block pattern runs to 4.3. A
+ * per-kind list would have put the control on the short page and withheld it from the
+ * long one. The floor is deliberately low — below two viewports the whole page is one
+ * flick of the wheel and a floating button is pure clutter, and above it the reader
+ * can lose their place.
  */
 (function () {
   'use strict';
@@ -58,6 +66,13 @@
 
   var target = null;
 
+  /* Two viewports of document. Re-measured rather than decided once at load: the basic
+     lens can halve a page's height, and mermaid renders after this script runs. */
+  var MIN_SCREENS = 2;
+  function longEnough() {
+    return document.documentElement.scrollHeight > window.innerHeight * MIN_SCREENS;
+  }
+
   function paint() {
     target = nextSection();
     if (target) {
@@ -89,6 +104,20 @@
     paint();
   });
 
+  /* Attach and detach rather than hide: the other injected controls exist only where
+     they apply (progress.js injects its toggle only where a practice box exists), and
+     the site has exactly four hide mechanisms already — this adds no fifth. */
+  var attached = false;
+  function sync() {
+    if (longEnough()) {
+      if (!attached) { document.body.appendChild(btn); attached = true; }
+      paint();
+    } else if (attached) {
+      document.body.removeChild(btn);
+      attached = false;
+    }
+  }
+
   /* rAF-throttled: scroll fires far more often than the label can meaningfully
      change, and this runs on every content page. */
   var queued = false;
@@ -97,7 +126,7 @@
     queued = true;
     window.requestAnimationFrame(function () {
       queued = false;
-      paint();
+      sync();
     });
   }
 
@@ -105,7 +134,12 @@
   window.addEventListener('resize', onScroll, { passive: true });
   /* The lens changes which content is visible, which changes section offsets. */
   document.addEventListener('kb-lens-change', onScroll);
+  /* Height changes with no event of their own: mermaid replaces each diagram with a
+     rendered SVG well after this script runs, and web fonts reflow the prose. Without
+     this the control would be missing on a page that only becomes tall enough once its
+     diagrams land. The button is position:fixed, so attaching it cannot itself resize
+     the body and re-enter this. */
+  if (window.ResizeObserver) new window.ResizeObserver(onScroll).observe(document.body);
 
-  document.body.appendChild(btn);
-  paint();
+  sync();
 })();

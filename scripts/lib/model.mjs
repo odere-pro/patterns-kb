@@ -183,6 +183,55 @@ export const SKETCH_LANGS = [
   { id: "text", label: "Plain text", desc: "No highlighting — for output, logs and anything that is not a language." },
 ];
 
+/* ---- the body-end script list, per kind ----
+ * Which client scripts a page loads, in load order. It is taxonomy like BLOCKS above:
+ * what a kind of page *is* decides what it needs to run.
+ *
+ * It lives here because the authored tags drifted. Fifty-three pages had lost
+ * favourites.js — every capability and every comparison page among them — so the
+ * favourite control silently did not exist on them, and adding one more control meant
+ * hand-editing a set that already carried nine different shapes. build-pages.mjs emits
+ * this list into a `kb:generated` region at the body end, which puts the whole set under
+ * the same "edit the page, not this" rule as the JSON-LD, and makes the next control a
+ * one-line change here.
+ *
+ * Head scripts stay AUTHORED. theme.js and lens.js must run before first paint or the
+ * reader sees a flash of the wrong theme, so they belong in <head> and are none of this
+ * builder's business.
+ *
+ * Two pairs are ordered by dependency — mermaid before diagram.js, highlight before
+ * sketch.js. Everything else is independent, so new entries append. */
+const SCRIPTS_BASE = [
+  /* Every kind may carry a diagram: hazards and themes already do, and nothing stops a
+   * principle or a capability page gaining one. Loading the engine where no diagram
+   * happens to exist today costs a cached file; NOT loading it where one appears
+   * tomorrow renders the mermaid source as text. */
+  "vendor/mermaid.min.js",
+  "diagram.js",
+  "progress.js",
+  "favourites.js",
+  /* Injects the left-edge next-section control, and suppresses itself on a page short
+   * enough to scroll — which is why this is uniform rather than per kind. Measured at
+   * 1440×900, a 7-block capability page runs to 8.6 viewports and an 8-block pattern to
+   * 4.3, so page length does not follow kind and a per-kind list would guess wrong in
+   * both directions. */
+  "section-nav.js",
+];
+/* Syntax highlighting, only where a collapsed code sketch can appear: a pattern's
+ * `sketch` block, and a design's HTTP contracts and deep-dive samples. No page of any
+ * other kind carries `details.sketch`, and the loader is inert without one. */
+const SCRIPTS_CODE = ["vendor/highlight.min.js", "sketch.js"];
+
+export const PAGE_SCRIPTS = {
+  pattern:    [...SCRIPTS_BASE, ...SCRIPTS_CODE],
+  hazard:     [...SCRIPTS_BASE],
+  theme:      [...SCRIPTS_BASE],
+  principle:  [...SCRIPTS_BASE],
+  design:     [...SCRIPTS_BASE, ...SCRIPTS_CODE],
+  capability: [...SCRIPTS_BASE],
+  comparison: [...SCRIPTS_BASE],
+};
+
 /* ---- reading levels ----
  * Every page reads at three depths — the SAME block skeleton at every lens, with the
  * content adapted inside the blocks. Two authored attributes, two semantics:

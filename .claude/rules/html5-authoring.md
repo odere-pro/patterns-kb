@@ -389,9 +389,17 @@ presence must agree.
 ## Generated regions — do not edit
 
 Marked `<!-- kb:generated -->`. Currently the JSON-LD block, the element-level ids
-(`tradeoffs-con-1`, `data-kb-polarity`) and the **"Mentioned by"** list. They are projected
-from the page's own attributes and `make all` will overwrite anything you write there.
-`make check` fails if they are stale.
+(`tradeoffs-con-1`, `data-kb-polarity`), the **"Mentioned by"** list and the **body-end
+script list**. They are projected from the page's own attributes and `make all` will
+overwrite anything you write there. `make check` fails if they are stale.
+
+**The body-end script list** comes from `PAGE_SCRIPTS` in
+[`scripts/lib/model.mjs`](../../scripts/lib/model.mjs), keyed by kind, at the `../` depth
+the page's own path implies. Adding a client script means adding it there, not to 354
+pages: the authored tags had drifted into nine different shapes and 53 pages had silently
+lost `favourites.js`, so the favourite control did not exist on them. The `<head>` scripts
+stay **authored** — `theme.js` and `lens.js` must run before first paint or the reader sees
+a flash of the wrong theme.
 
 **"Mentioned by"** is the one region projected from OTHER pages: the `<aside class="mentions">`
 before the footer nav lists every page that links here in prose without declaring a typed
