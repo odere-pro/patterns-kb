@@ -216,6 +216,17 @@ const SCRIPTS_BASE = [
    * 4.3, so page length does not follow kind and a per-kind list would guess wrong in
    * both directions. */
   "section-nav.js",
+  /* The ⌘K palette, and the two files it reads rather than duplicates: catalog.js is the
+   * data and search.js exposes window.KB_MATCHES, so the palette's ranking IS the hub's.
+   * This trio is order-dependent — the third needs the first two on window — and uniform
+   * rather than per kind, because "jump to any page from any page" does not vary by kind.
+   *
+   * search.js mounts its own hub UI only where it finds `.controls`, so it is inert here;
+   * palette.js stands down entirely where a ⌘K owner already exists, which is why the hub
+   * and the graph are unaffected — neither is built by build-pages.mjs. */
+  "catalog.js",
+  "search.js",
+  "palette.js",
 ];
 /* Syntax highlighting, only where a collapsed code sketch can appear: a pattern's
  * `sketch` block, and a design's HTTP contracts and deep-dive samples. No page of any

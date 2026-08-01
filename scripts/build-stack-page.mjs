@@ -222,6 +222,12 @@ ${sections.join("\n\n")}
       <a class="next" href="../vocab.html">Vocabulary →</a>
     </nav>
   </main>
+  <!-- The ⌘K palette: catalog.js is the data, search.js exposes the scorer, palette.js is
+       the UI. This order is the contract; see assets/palette.js. Typing a product name works
+       here because comparison pages carry theirs as aliases. -->
+  <script defer src="../assets/catalog.js"></script>
+  <script defer src="../assets/search.js"></script>
+  <script defer src="../assets/palette.js"></script>
 </body>
 </html>
 `;
