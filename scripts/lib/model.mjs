@@ -18,6 +18,21 @@ export const SITE_URL = "https://odere-pro.github.io/patterns-kb/";
 export const VOCAB_NS = SITE_URL + "vocab.html#";
 export const KB_NAME = "Patterns KB";
 
+/* ---- the seven page kinds ----
+ * The closed vocabulary `data-kb-kind` takes, and the key BLOCKS, OPTIONAL_BLOCKS and
+ * KIND_DIR are all indexed by — audit-vocab.mjs asserts the four agree, which is the only
+ * thing stopping this list drifting from the tables it keys. Ordered as the hub meets
+ * them, not alphabetically. Descriptions interpolate raw, so they may carry <code>. */
+export const KINDS = [
+  ["pattern", "A reusable solution to a recurring problem, filed at one rung of the elevation ladder or under one lens. The largest kind, and the one the other six point at."],
+  ["hazard", "A failure mode with a name — what goes wrong, what it costs, and which patterns keep it from happening. A hazard names the problem rather than fixing it; the fix is a <code>mitigated-by</code> hop away."],
+  ["theme", "A guided tour through the patterns that answer one recurring question. A theme owns its membership: its tour steps are the source of truth, and each pattern names the theme back."],
+  ["principle", "A design maxim — SOLID, DRY, KISS, YAGNI. Not a mechanism you build but a rule you honour, which is why it carries a mandatory block on how it fails when taken too far."],
+  ["design", "A worked case study — a system-design or low-level-design kata argued end to end, from requirements through the hard sub-problems. It joins the graph through <code>demonstrates</code>."],
+  ["capability", "One category of managed cloud service, taking the capability as its subject and the vendors' products as evidence. It joins the graph through <code>implements</code>."],
+  ["comparison", "One product decision: the managed services and open-source contenders for a single capability area, side by side, compared on the conditions that decide the choice."],
+];
+
 /* Blocks each kind of page is expected to carry, in order. The section id doubles as
  * the anchor and the semantic key, so this is both a vocabulary and a lint rule.
  *
@@ -73,6 +88,91 @@ export const OPTIONAL_BLOCKS = {
   capability: new Set([]),
   comparison: new Set([]),
 };
+
+/* ---- what each block is for ----
+ * BLOCKS says which blocks a kind carries and in what order; this says what each one
+ * ANSWERS. Ordered the way the skeleton is built: the two openers, then the kind-specific
+ * middles in KIND_BLOCKS order, then the shared closer. A block appearing on more than one
+ * kind (`architecture`, `tradeoffs`, `choosing`) is described once, in terms both kinds
+ * recognise. Descriptions interpolate raw, so they may carry <code>. */
+export const BLOCK_DESC = {
+  description: "Frames the subject. Its heading is kind-flavoured — &ldquo;The question&rdquo;, &ldquo;Understanding the problem&rdquo; — but the anchor is <code>description</code> on every kind, so one call fetches the opener of any page.",
+  explain: "The three-rung ladder: one paragraph per reading level, stacked. Mandatory on every kind, because it is the per-level explanation the lens shows.",
+
+  structure: "How the happy path crosses the components, as a numbered topology walk. The sequence diagram carrying timing and the failure branches follows it one lens up.",
+  variations: "The named forms the pattern takes, each a card: what changes, and what that buys.",
+  tradeoffs: "What the choice costs and what it buys, argued from both sides. On a design it reads as strengths against risks, biggest flaw named first.",
+  usage: "When to reach for it and when not to — the reader's situation, not the pattern's features.",
+  sketch: "The smallest code that shows the mechanism working. Collapsed by default; the language selects the highlighter.",
+  wild: "Real, well-known implementations that genuinely exemplify the pattern. Optional, and empty is a better answer than a guess.",
+  production: "What it takes to run: the tuning knobs, the signals to watch, what breaks first under load, and the gates before shipping.",
+  fluency: "Where the pattern shows up — the themes whose tours visit it. Hand-authored, and it must agree with the tour that owns it.",
+
+  causes: "What produces the hazard — the decisions and pressures that end in this failure mode.",
+  cost: "What the hazard costs once it lands, in the terms the person paying it feels.",
+  mitigation: "How to keep it from happening, as narrative. The typed edges to the patterns that prevent it live in <code>relationships</code>.",
+
+  architecture: "The primary diagram and the walk through it. On a theme it maps a concrete system; on a design it is the board plus the trace from every functional requirement to the component that satisfies it.",
+  tradespace: "The axes the theme's decision moves along, and what trading one for another actually costs.",
+  tour: "The ordered walk through the theme's patterns, each step naming the role that pattern plays here. This is the source of truth for theme membership.",
+  decide: "The decision table — the conditions that pick one member of the theme over another.",
+  siblings: "The neighbouring themes, and the line where this one stops and that one starts.",
+
+  rationale: "Why the principle helps — the mechanism behind the maxim, not a restatement of it.",
+  applying: "How to honour it in practice, at the grain of a decision someone actually makes.",
+  overreach: "How it fails when taken too far. Mandatory on every principle, because a maxim with no stated limit is advice nobody can argue with.",
+
+  requirements: "What the system must do (functional) and how well (non-functional). Everything downstream argues from here.",
+  sizing: "Right-sizing: the interaction shape, the numbers run, and each candidate technology adopted, rejected or deferred with a reason.",
+  entities: "The core entities and their data design — each with its role, a one-line description and a trimmed schema.",
+  interface: "The API surface, grouped by caller, each endpoint with its method, path and contract.",
+  deepdives: "One argued deep dive per non-functional requirement, each carrying its own zoom or an iterated board.",
+  levels: "What a Mid, Senior and Staff candidate demonstrably does with this problem. A rubric, distinct from the <code>explain</code> ladder.",
+
+  capabilities: "The provider-neutral taxonomy of what this category of service does. No product names — those are evidence, and they live in the mapping.",
+  mapping: "The cross-cloud table: each capability against what AWS, Azure and Google Cloud call it, or an honest &ldquo;no first-party equivalent&rdquo;.",
+  choosing: "The decision argued out — which option wins under which conditions, and why.",
+  portability: "What breaks when you move between providers, and what each break costs.",
+
+  contenders: "The products in the running, with their licenses and whether a managed offering exists.",
+  matrix: "The contenders compared on the conditions that decide the choice, one row per condition.",
+
+  relationships: "The typed edges to other pages. Generated by <code>kb.mjs link</code>, declared on both pages, and the reason the graph exists.",
+};
+
+/* ---- the closed polarity vocabulary ----
+ * Which side of a multi-sided block an item argues. Three families, one per block that has
+ * sides, in BLOCKS.pattern order. CLOSED as of this change: the shape was declared "closed"
+ * in ATTRIBUTES from the start, but nothing enforced membership, so a typo would have
+ * shipped as a silently unstyled item. validate.mjs rejects a value outside this set,
+ * audit-vocab.mjs mirrors that at corpus scale, and build-vocab.mjs renders it. */
+export const POLARITIES = [
+  { name: "pro", block: "tradeoffs", desc: "An argument for adopting the page's subject — what it buys you." },
+  { name: "con", block: "tradeoffs", desc: "An argument against — what it costs, stated as a fact rather than hedged." },
+  { name: "when", block: "usage", desc: "A situation that calls for the pattern, written as the reader's circumstance." },
+  { name: "avoid", block: "usage", desc: "A situation where reaching for it makes things worse." },
+  { name: "knob", block: "production", desc: "A configuration surface you actually turn — a named parameter, or a dial described without attributing it to a product." },
+  { name: "signal", block: "production", desc: "An observable quantity worth watching: queue depth, replication lag, p99 latency." },
+  { name: "failure", block: "production", desc: "What breaks first under load, and how it looks when it does." },
+  { name: "check", block: "production", desc: "A gate to clear before shipping." },
+];
+
+/* ---- the closed sketch-language vocabulary ----
+ * `data-kb-lang` on a code sketch selects the highlighter (site/assets/sketch.js). Closed
+ * against the corpus rather than aspirational: these nine are the nine in use, and
+ * audit-vocab.mjs fails on a member nothing uses. The tail is one page each, so that check
+ * is deliberately one page-deletion away from red — which is the point. Ordered by use. */
+export const SKETCH_LANGS = [
+  { id: "typescript", label: "TypeScript", desc: "The corpus default. Most sketches are TypeScript because it types the shapes without demanding a runtime." },
+  { id: "http", label: "HTTP", desc: "Raw request and response exchanges, where the wire format is the thing being shown." },
+  { id: "python", label: "Python", desc: "Used where the pattern's home is data or ML tooling." },
+  { id: "sql", label: "SQL", desc: "Schema and query sketches, where the mechanism lives in the database." },
+  { id: "json", label: "JSON", desc: "A payload or config shape shown on its own." },
+  { id: "javascript", label: "JavaScript", desc: "Used where the sketch must run untyped, as shipped browser code does." },
+  { id: "protobuf", label: "Protocol Buffers", desc: "A schema definition where the contract, not the code, is the point." },
+  { id: "lua", label: "Lua", desc: "Embedded scripting, as a gateway or cache runs it." },
+  { id: "text", label: "Plain text", desc: "No highlighting — for output, logs and anything that is not a language." },
+];
 
 /* ---- reading levels ----
  * Every page reads at three depths — the SAME block skeleton at every lens, with the
@@ -137,6 +237,79 @@ export const TAGS = new Set([
   "testability", "testing", "throughput", "transactions", "transformation",
   "ui-architecture", "validation",
 ]);
+
+/* What earns each tag, for the reader browsing the vocabulary rather than the build.
+ * One line per tag, saying what a page must be ABOUT to carry it — not restating the tag,
+ * which is the failure mode a generated gloss falls into ("groups pages about caching").
+ * audit-vocab.mjs holds this to TAGS in both directions, so a new tag needs its line here
+ * in the same change. Descriptions interpolate raw, so they may carry <code>. */
+export const TAG_DESC = {
+  abstraction: "Hiding a concrete thing behind a name, so callers depend on the name.",
+  "access-control": "Deciding who may do what, once identity is already established.",
+  "api-design": "The shape of a contract between a caller and a service.",
+  asynchrony: "Work that continues after the caller stops waiting for it.",
+  authentication: "Establishing who the caller actually is.",
+  availability: "Staying answerable when parts of the system are not.",
+  backpressure: "Letting a slow consumer push back on a fast producer instead of drowning.",
+  batching: "Trading latency for throughput by handling many items as one.",
+  boundaries: "Where one part of a system stops and the next begins.",
+  buffering: "Holding work in the middle to absorb a mismatch in rate.",
+  caching: "Keeping a copy closer or cheaper to read, and paying the staleness bill.",
+  cloud: "Managed platform services, and what depending on them costs.",
+  "code-smell": "A structure that works but signals a design going wrong.",
+  composition: "Building behaviour by assembling parts rather than extending a type.",
+  concurrency: "More than one thing in flight, and the coordination that demands.",
+  consistency: "Which readers see which writes, and when.",
+  coordination: "Getting independent participants to agree on something.",
+  "data-access": "How code reaches storage, and what that coupling costs.",
+  "data-modeling": "Choosing the shapes data is stored and queried in.",
+  decoupling: "Removing a dependency so two parts can change apart.",
+  "domain-modeling": "Letting the business domain, not the database, shape the code.",
+  durability: "Surviving a crash with the accepted writes intact.",
+  edge: "Work done near the user rather than at the origin.",
+  encapsulation: "Keeping state private so invariants have one owner.",
+  "error-handling": "What happens on the unhappy path, deliberately.",
+  "event-driven": "Reacting to things that happened rather than being told what to do.",
+  extensibility: "Adding a case without editing what already works.",
+  immutability: "Values that never change, so nothing changes underneath a reader.",
+  "instantiation-control": "Deciding what gets created, when, and by whom.",
+  integration: "Joining systems that were not designed together.",
+  isolation: "Containing a failure or a workload so it cannot spread.",
+  latency: "How long one operation takes, as felt by the caller.",
+  legacy: "Working with a system you cannot rewrite.",
+  lifecycle: "Creation, reuse and disposal, and who is responsible for each.",
+  "load-balancing": "Spreading work across interchangeable workers.",
+  "low-level-design": "Class-and-object design: an interview kata at the scale of one component.",
+  "machine-learning": "Serving or training models as a systems problem.",
+  maintainability: "How cheaply the next person can change it safely.",
+  messaging: "Passing work as messages instead of calls.",
+  modularity: "Splitting a system into parts that can be understood alone.",
+  observability: "Being able to tell what the system is doing from outside it.",
+  operations: "Running the thing: deploys, capacity, incidents.",
+  partitioning: "Splitting data or work so no single node holds all of it.",
+  performance: "Doing the same work with less time or less hardware.",
+  persistence: "Storing state so it outlives the process.",
+  polymorphism: "One call site, several behaviours, chosen at run time.",
+  "read-optimization": "Shaping storage around how it is read rather than written.",
+  readability: "Code a stranger can follow without a guide.",
+  replication: "Keeping more than one copy, and reconciling them.",
+  resilience: "Degrading rather than collapsing when a dependency fails.",
+  "resource-management": "Bounding scarce things — connections, memory, threads.",
+  routing: "Choosing where a request goes.",
+  scalability: "Handling more load by adding capacity rather than rewriting.",
+  security: "Keeping a hostile caller from getting what they want.",
+  "separation-of-concerns": "One reason to change per part.",
+  "state-management": "Where mutable state lives and who may touch it.",
+  "system-design": "Whole-system design at interview scale: requirements to architecture.",
+  "test-doubles": "Standing in for a real collaborator during a test.",
+  testability: "Designing so the thing can be checked in pieces.",
+  testing: "How the system is proved to work.",
+  throughput: "How much work completes per unit of time.",
+  transactions: "Grouping changes so they land together or not at all.",
+  transformation: "Converting data from one shape into another.",
+  "ui-architecture": "Structuring a client: rendering, state and data fetching.",
+  validation: "Rejecting bad input at the boundary, before it becomes state.",
+};
 
 /* Quick-filter facets for the hub search. A CLOSED, authored mapping — like TAGS and the
  * relation verbs, this is the ONE place the FE/BE/DB/AI and goal groupings are defined.
@@ -329,7 +502,7 @@ export const ATTRIBUTES = [
   { name: "register", scope: "element", required: false, shape: "closed",
     desc: "The single lens an element renders at, replacing its simpler sibling instead of adding to it. A rare tool, for the few places where showing both versions at once would be wrong; <code>data-kb-level</code> is the default. An element carries at most one of the two." },
   { name: "polarity", scope: "element", required: false, shape: "closed",
-    desc: "Which side of a multi-sided block an item argues — <code>pro</code>/<code>con</code>, <code>when</code>/<code>avoid</code>, and a production block's <code>knob</code>/<code>signal</code>/<code>failure</code>/<code>check</code>." },
+    desc: "Which side of a multi-sided block an item argues. A closed set of eight, across the three blocks that have sides — <a href=\"#polarities\">listed above</a>." },
   { name: "example", scope: "element", required: false, shape: "text",
     desc: "Identifies one real-world implementation in the &ldquo;In the wild&rdquo; block, so it can be cited and lens-tagged individually." },
   { name: "lang", scope: "element", required: true, shape: "closed",
@@ -427,15 +600,38 @@ export const BANDS = [
     ],
   },
 
-  { id: "concurrency", kind: "lens", label: "Concurrency",          short: "Concurrency", anchor: "lens-conc-h",  groups: [{ id: "concurrency", label: null }] },
-  { id: "messaging",   kind: "lens", label: "Messaging",            short: "Messaging",   anchor: "lens-msg-h",   groups: [{ id: "messaging",   label: null }] },
-  { id: "caching",     kind: "lens", label: "Caching",              short: "Caching",     anchor: "lens-cache-h", groups: [{ id: "caching",     label: null }] },
-  { id: "ddd",         kind: "lens", label: "Domain-Driven Design",  short: "DDD",         anchor: "lens-ddd-h",   groups: [{ id: "ddd",         label: null }] },
-  { id: "functional",  kind: "lens", label: "Functional",           short: "Functional",  anchor: "lens-fp-h",    groups: [{ id: "functional",  label: null }] },
-  { id: "testing",     kind: "lens", label: "Testing",              short: "Testing",     anchor: "lens-test-h",  groups: [{ id: "testing",     label: null }] },
-  { id: "security",    kind: "lens", label: "Security",             short: "Security",    anchor: "lens-sec-h",   groups: [{ id: "security",    label: null }] },
-  { id: "frontend",    kind: "lens", label: "Frontend",             short: "Frontend",    anchor: "lens-fe-h",    groups: [{ id: "frontend",    label: null }] },
-  { id: "ml",          kind: "lens", label: "Machine Learning",     short: "ML",          anchor: "lens-ml-h",    groups: [{ id: "ml",          label: null }] },
+  /* The nine lenses. Each `desc` is read in three places — the bands section of vocab.html,
+   * the section lead on map/stack.html (build-stack-page.mjs), and the briefing line in
+   * site/patterns/<lens>/CLAUDE.md (build-claude.mjs) — so each one keeps the "cuts across
+   * the ladder rather than being a rung on it" framing that the CLAUDE.md fallback used to
+   * supply. Adding or reworking one rewrites all three artifacts; `make all` converges. */
+  { id: "concurrency", kind: "lens", label: "Concurrency",          short: "Concurrency", anchor: "lens-conc-h",
+    desc: "Sharing work across threads and cores without sharing the bugs — a concern at every elevation, not a rung on the ladder",
+    groups: [{ id: "concurrency", label: null }] },
+  { id: "messaging",   kind: "lens", label: "Messaging",            short: "Messaging",   anchor: "lens-msg-h",
+    desc: "Moving work between components as messages rather than calls, which changes the failure modes at any elevation",
+    groups: [{ id: "messaging",   label: null }] },
+  { id: "caching",     kind: "lens", label: "Caching",              short: "Caching",     anchor: "lens-cache-h",
+    desc: "Trading freshness for speed, and paying the invalidation bill that comes with it — applicable wherever a read is expensive",
+    groups: [{ id: "caching",     label: null }] },
+  { id: "ddd",         kind: "lens", label: "Domain-Driven Design",  short: "DDD",         anchor: "lens-ddd-h",
+    desc: "Letting the business domain shape the code's boundaries, which reshapes how you build at every elevation",
+    groups: [{ id: "ddd",         label: null }] },
+  { id: "functional",  kind: "lens", label: "Functional",           short: "Functional",  anchor: "lens-fp-h",
+    desc: "Composing behaviour from values and pure transformations instead of mutable state — a style you apply at any elevation",
+    groups: [{ id: "functional",  label: null }] },
+  { id: "testing",     kind: "lens", label: "Testing",              short: "Testing",     anchor: "lens-test-h",
+    desc: "Making a system provable in pieces, which is a property you design in at every elevation rather than add at the end",
+    groups: [{ id: "testing",     label: null }] },
+  { id: "security",    kind: "lens", label: "Security",             short: "Security",    anchor: "lens-sec-h",
+    desc: "Deciding who may do what, and containing the blast when that decision is wrong — a concern that cuts through every rung",
+    groups: [{ id: "security",    label: null }] },
+  { id: "frontend",    kind: "lens", label: "Frontend",             short: "Frontend",    anchor: "lens-fe-h",
+    desc: "Structuring the client — state, rendering and data fetching — with the same forces that shape a server, one layer closer to the user",
+    groups: [{ id: "frontend",    label: null }] },
+  { id: "ml",          kind: "lens", label: "Machine Learning",     short: "ML",          anchor: "lens-ml-h",
+    desc: "Serving and training models as a system problem: throughput, freshness and cost, rather than the modelling itself",
+    groups: [{ id: "ml",          label: null }] },
 ];
 
 /* Editorial groups for the Themes section, in five subsections because 34 tiles under one

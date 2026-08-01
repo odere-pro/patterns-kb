@@ -1,7 +1,7 @@
 # patterns/distributed/resilience
 
 **IV · Network → Resilience** — 13 patterns.
-Keeping many services reliable, fast, and consistent across a network
+Keeping many services reliable, fast, and consistent across a network.
 
 Pages here: bulkhead, circuit-breaker, compensating-transaction, distributed-tracing, fault-injection, health-endpoint, load-leveling, load-shedding, rate-limiter, request-coalescing, retry-backoff, timeout-deadline, token-bucket
 

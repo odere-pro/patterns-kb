@@ -64,7 +64,7 @@ belongs to is an attribute edit and no file move; changing its band is both.`;
   return `# ${dir}
 
 **${heading}** — ${list.length} pattern${list.length === 1 ? "" : "s"}.
-${b.desc ?? `A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.`}
+${b.desc}.
 
 Pages here: ${list.map((n) => n.id).sort().join(", ")}
 

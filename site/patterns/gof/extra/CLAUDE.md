@@ -1,7 +1,7 @@
 # patterns/gof/extra
 
 **I · Objects & Classes → Also Essential** — 6 patterns.
-Gang of Four, 1994 — the 23 patterns everything else stands on, plus a few essentials the book missed
+Gang of Four, 1994 — the 23 patterns everything else stands on, plus a few essentials the book missed.
 
 Pages here: dependency-injection, lazy-initialization, monostate, null-object, object-pool, service-locator
 

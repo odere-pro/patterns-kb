@@ -1,7 +1,7 @@
 # patterns/architecture
 
 **III · Architecture** — 14 patterns.
-Shaping how a whole system's components are arranged
+Shaping how a whole system's components are arranged.
 
 Pages here: big-compute, big-data, cqrs, eda, event-sourcing, hexagonal, layered, microkernel, microservices, mvc, mvp, mvvm, pipe-filter, web-queue-worker
 

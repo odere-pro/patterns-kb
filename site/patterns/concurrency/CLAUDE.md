@@ -1,7 +1,7 @@
 # patterns/concurrency
 
 **Concurrency (lens)** — 14 patterns.
-A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
+Sharing work across threads and cores without sharing the bugs — a concern at every elevation, not a rung on the ladder.
 
 Pages here: actor-model, backpressure, batching, copy-on-write, future-promise, lock-free, monitor-object, producer-consumer, reactor, rw-lock, scheduling, semaphore, thread-confinement, thread-pool
 

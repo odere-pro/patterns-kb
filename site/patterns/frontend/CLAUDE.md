@@ -1,7 +1,7 @@
 # patterns/frontend
 
 **Frontend (lens)** — 6 patterns.
-A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
+Structuring the client — state, rendering and data fetching — with the same forces that shape a server, one layer closer to the user.
 
 Pages here: atomic-design, container-presentational, flux, micro-frontends, provider, render-props
 

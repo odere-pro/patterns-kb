@@ -1,7 +1,7 @@
 # patterns/security
 
 **Security (lens)** — 8 patterns.
-A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
+Deciding who may do what, and containing the blast when that decision is wrong — a concern that cuts through every rung.
 
 Pages here: authentication-enforcer, authorization-enforcer, intercepting-validator, least-privilege, quarantine, secure-logger, secure-session-manager, single-access-point
 

@@ -1,7 +1,7 @@
 # patterns/gof/behavioral
 
 **I · Objects & Classes → Behavioral** — 11 patterns.
-Gang of Four, 1994 — the 23 patterns everything else stands on, plus a few essentials the book missed
+Gang of Four, 1994 — the 23 patterns everything else stands on, plus a few essentials the book missed.
 
 Pages here: chain-of-responsibility, command, interpreter, iterator, mediator, memento, observer, state, strategy, template-method, visitor
 

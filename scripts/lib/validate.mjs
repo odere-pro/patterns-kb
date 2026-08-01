@@ -5,8 +5,13 @@
  * Needs no graph.json, so a single page validates in ~50ms.
  */
 import { parse } from "../vendor/node-html-parser.mjs";
-import { BLOCKS, OPTIONAL_BLOCKS, TAGS, RELATION_TYPES, LEVELS, folderFor } from "./model.mjs";
+import { BLOCKS, OPTIONAL_BLOCKS, TAGS, RELATION_TYPES, LEVELS, POLARITIES, SKETCH_LANGS, folderFor } from "./model.mjs";
 import { pruneForLens } from "./lens.mjs";
+
+/* Both vocabularies are authored as lists carrying prose for vocab.html; membership is
+ * all this file needs, so flatten them once at module load rather than per page. */
+const POLARITY_NAMES = new Set(POLARITIES.map((x) => x.name));
+const LANG_IDS = new Set(SKETCH_LANGS.map((x) => x.id));
 
 /** Block-vocabulary problems for one page: missing, unknown, out of order. */
 export function blockProblems(present, kind) {
@@ -188,6 +193,16 @@ export function validatePage(root, relPath) {
     if (!LEVELS.includes(lv)) p(`data-kb-level "${lv}" is not in the closed vocabulary (${LEVELS.join("/")})`);
   }
   for (const msg of lensProblems(root)) p(msg);
+
+  /* Polarity: which side of a multi-sided block an item argues. The shape was declared
+   * "closed" from the start but nothing enforced membership, so a typo shipped as a
+   * silently unstyled item. Checked here rather than in audit-vocab.mjs so the authoring
+   * hook fails the writer immediately; audit-vocab mirrors it at corpus scale. */
+  for (const el of root.querySelectorAll("[data-kb-polarity]")) {
+    const pol = el.getAttribute("data-kb-polarity");
+    if (!POLARITY_NAMES.has(pol))
+      p(`data-kb-polarity "${pol}" is not in the closed vocabulary (${[...POLARITY_NAMES].join("/")})`);
+  }
   /* The ladder is cumulative: its rungs carry data-kb-level, so advanced reads
    * basic+advanced and expert reads all three. */
   const explain = root.querySelector('[data-kb-block="explain"]');
@@ -203,6 +218,17 @@ export function validatePage(root, relPath) {
   if (sketch) {
     const raw = sketch.querySelector("pre")?.text ?? "";
     if (!raw.includes('data-kb-lang="')) p("sketch code is missing data-kb-lang");
+  }
+
+  /* And the language it declares is one the highlighter knows. Read off the RAW text for
+   * the same reason as above — <pre> is a raw-text element, so querySelectorAll can never
+   * see the inner <code>. A sketch is not the only place a lang may appear, so this scans
+   * every <pre> on the page rather than just the sketch block. */
+  for (const pre of root.querySelectorAll("pre")) {
+    for (const m of (pre.text ?? "").matchAll(/data-kb-lang="([^"]*)"/g)) {
+      if (!LANG_IDS.has(m[1]))
+        p(`data-kb-lang "${m[1]}" is not in the closed vocabulary (${[...LANG_IDS].join("/")})`);
+    }
   }
 
   return problems;

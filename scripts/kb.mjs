@@ -6,44 +6,9 @@
  * diagrams and navigation chrome and returns the metadata and the prose, so a question
  * costs a couple of thousand tokens instead of hundreds of thousands.
  *
- *   kb.mjs find <query…> [--tag T] [--band B] [--kind K] [--level L]
- *                                 search names, essences, aliases, tags and symptoms
- *   kb.mjs get <id> [--block B] [--level L]   one page, or one block of it;
- *                                 --level basic|advanced|expert scopes to a reading level
- *                                 --json on the wild/production blocks also dumps `items`
- *                                 in the writers' own shape — edit one, hand the lot back
- *   kb.mjs brief <query…> [--theme <id>] [--n 5]   one-call scout bundle: the find hits,
- *                                 the governing theme's decide table, and the typed
- *                                 neighbours of the top hits — replaces the 3-6 calls an
- *                                 agent otherwise spends re-deriving exactly this sequence
- *   kb.mjs related <id>           what it combines with, replaces, is confused for
- *   kb.mjs backlinks <id>         what points here — typed inbound edges + prose mentions
- *   kb.mjs refs [<id> | --file <path>]   what this page points AT, read live off the page:
- *                                 relations, prose links, theme members, mermaid clicks
- *   kb.mjs ls [--band B] [--kind K]
- *   kb.mjs validate [<id> | --file <path>]   structural lint; no argument = every page
- *
- * Writing (authoring goes through here, so the data stays well-formed):
- *   kb.mjs set <id> --aliases '["breaker","CB"]' --tags '[…]' --solves '[…]' [--favourite true|false]
- *   kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
- *   kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
- *                                 both replace the whole block — dump it with
- *                                 `get --block wild|production --json` and hand back every
- *                                 item. Each takes an optional "level", and text may carry
- *                                 <code>; all other markup is escaped. Round trips clean.
- *   kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   the three-level ladder
- *                                 (cumulative: the rungs stack; all three empty removes the block)
- *   kb.mjs level <id> <element-id> <basic|advanced|expert|none>      THE mechanism —
- *                                 accretion: visible from this level up. Untagged is the basic core.
- *   kb.mjs register <id> <element-id> <basic|advanced|expert|none>   RARE — variant: rendered at
- *                                 exactly this lens, for the few places where showing both would be wrong
- *                                 (elements only — sections always show, at every lens)
- *   kb.mjs link <from> <verb> <to> [--note "…"] [--note-back "…"]   both sides at once
- *   kb.mjs unlink <a> <b>         drop the edge from both pages, whatever verb each used
- *   kb.mjs new <id> --kind pattern|hazard|theme|principle|design|capability --band <b> [--group <g>] --name "…" --order <n>
- *
- *   --json      structured output instead of text
- *   --diagrams  keep the mermaid source (omitted by default as noise)
+ * The command surface is NOT documented here. It lives in lib/cli-spec.mjs, which this
+ * file prints its usage from and build-vocab.mjs renders onto vocab.html — one source,
+ * two renderers. Run `node scripts/kb.mjs` with no arguments for the full list.
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -55,6 +20,13 @@ import { mergedSynonyms } from "./lib/expansions.mjs";
 import { indexNodes, proseIndexer, scoreQuery } from "./lib/search.mjs";
 import { validatePage } from "./lib/validate.mjs";
 import { pageSkeleton } from "./lib/template.mjs";
+import { usageText } from "./lib/cli-spec.mjs";
+
+const USAGE_HEADER = `kb.mjs — read the knowledge base without reading the HTML.
+
+The whole corpus is ~490k tokens, more than fits in a context window. This is the way in:
+it strips styles, scripts, diagrams and navigation chrome and returns the metadata and the
+prose. Every term it prints is defined on site/vocab.html.`;
 
 const PARSE_OPTS = { comment: true };
 /* KB_ROOT lets the smoke tests point the reader/writer at a fixture corpus; normal runs
@@ -1016,6 +988,8 @@ ${items}
   console.log(`  3. node scripts/kb.mjs link ${id} <verb> <other-id> --note "…"`);
   console.log(`  4. renumber data-kb-order neighbours if needed, then make all && make check`);
 } else {
-  console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("*/")[0].split("\n").slice(1).map((l) => l.replace(/^ \* ?/, "").replace(/^\/\* ?/, "")).join("\n"));
+  /* Rendered from lib/cli-spec.mjs rather than from this file's own header comment: the
+   * surface is also published on vocab.html, and two hand-maintained copies drift. */
+  console.log(usageText(USAGE_HEADER));
   process.exit(cmd ? 1 : 0);
 }

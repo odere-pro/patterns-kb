@@ -1,7 +1,7 @@
 # patterns/enterprise
 
 **II · Application** — 8 patterns.
-Organizing one app's business logic and data access (Fowler, PoEAA)
+Organizing one app's business logic and data access (Fowler, PoEAA).
 
 Pages here: active-record, data-mapper, dto, gateway, repository, service-layer, transaction-script, unit-of-work
 

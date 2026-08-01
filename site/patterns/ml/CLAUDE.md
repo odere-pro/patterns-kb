@@ -1,7 +1,7 @@
 # patterns/ml
 
 **Machine Learning (lens)** — 4 patterns.
-A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
+Serving and training models as a system problem: throughput, freshness and cost, rather than the modelling itself.
 
 Pages here: embeddings, evaluation, feature-engineering, generalization
 

@@ -1,7 +1,7 @@
 # patterns/gof/creational
 
 **I · Objects & Classes → Creational** — 5 patterns.
-Gang of Four, 1994 — the 23 patterns everything else stands on, plus a few essentials the book missed
+Gang of Four, 1994 — the 23 patterns everything else stands on, plus a few essentials the book missed.
 
 Pages here: abstract-factory, builder, factory-method, prototype, singleton
 

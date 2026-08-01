@@ -1,7 +1,7 @@
 # patterns/caching
 
 **Caching (lens)** — 8 patterns.
-A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
+Trading freshness for speed, and paying the invalidation bill that comes with it — applicable wherever a read is expensive.
 
 Pages here: cache-aside, client-side-cache, distributed-cache, in-process-cache, read-through, refresh-ahead, write-behind, write-through
 

@@ -13,14 +13,22 @@ Regenerate with `make all`; `make check` fails when any is stale.
 ## Hand-authored
 
 Everything else — `theme.js`, `lens.js`, `search.js`, `favourites.js`, `progress.js`,
-`sketch.js`, `diagram.js`, `graph-core.js`, `graph-view.js`, the CSS, the vendored
-libraries. Edits here cannot break KB validity, so the post-edit hook only syntax-checks
+`sketch.js`, `diagram.js`, `vocab.js`, `graph-core.js`, `graph-view.js`, the CSS, the
+vendored libraries. Edits here cannot break KB validity, so the post-edit hook only syntax-checks
 `.js` files (`node --check`). Vendored libraries (`vendor/`) are third-party — update by
 replacing the file and its LICENSE, never by editing.
 
 `graph-core.js` is the exception to "verified by hand": it is covered by
 `scripts/test/graph-core.test.mjs` (`make test`), which loads the shipped file the way
 the page does. Logic that moves out of it stops being tested.
+
+`vocab.js` follows the same split for the same reason. It runs vocab.html's two modes by
+RELOCATING the rendered `.vocab-item` nodes into an A-Z list and back, and restores the
+grouped view from a snapshot taken at load — restoring by re-sorting instead would quietly
+alphabetise the relation verbs out of their editorial order and the blocks out of skeleton
+order, and the page would still render. So the ordering is DOM-free, exported as
+`window.KB_VOCAB_SORT`, and covered by `scripts/test/vocab-sort.test.mjs`; the file guards
+on `typeof document` so the test loads it with no DOM stub at all.
 
 ## The interactive graph (`map/graph.html`) is three layers
 

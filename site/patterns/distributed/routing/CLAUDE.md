@@ -1,7 +1,7 @@
 # patterns/distributed/routing
 
 **IV · Network → Routing + Scale** — 29 patterns.
-Keeping many services reliable, fast, and consistent across a network
+Keeping many services reliable, fast, and consistent across a network.
 
 Pages here: ambassador, api-gateway, api-routing, api-versioning, async-request-reply, autoscaling, bff, blue-green-deployment, canary-release, cdn, compute-resource-consolidation, consistent-hashing, deployment-stamp, feature-flag, functional-partitioning, gatekeeper, geode, geohash, load-balancer, object-storage, pagination, reverse-proxy, service-mesh, sharding, sidecar, stateless-service, sticky-session, valet-key, vertical-partitioning
 

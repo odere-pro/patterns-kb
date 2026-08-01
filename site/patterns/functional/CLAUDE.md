@@ -1,7 +1,7 @@
 # patterns/functional
 
 **Functional (lens)** — 6 patterns.
-A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
+Composing behaviour from values and pure transformations instead of mutable state — a style you apply at any elevation.
 
 Pages here: currying, functor, immutability, lens-optics, monad, pipeline
 

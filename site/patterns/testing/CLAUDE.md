@@ -1,7 +1,7 @@
 # patterns/testing
 
 **Testing (lens)** — 9 patterns.
-A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
+Making a system provable in pieces, which is a property you design in at every elevation rather than add at the end.
 
 Pages here: arrange-act-assert, dummy-object, fake-object, golden-master, mock-object, page-object, test-data-builder, test-spy, test-stub
 

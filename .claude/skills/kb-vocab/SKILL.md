@@ -1,27 +1,48 @@
 ---
 name: kb-vocab
-description: Review, extend or retire the patterns-kb vocabularies — the closed tag set, the 17 relation verbs, the reading levels, the authored data-kb-* attributes, and the search synonym table that bridges a searcher's words to the corpus's. Use when someone asks to "add a tag", "retire a tag", "audit the vocabulary", "the search doesn't find this page", "add a synonym", "regenerate the expansion table", "why is make check complaining about a tag", "document a new data-kb attribute", "update vocab.html", or "what does kb:prerequisite mean".
+description: Review, extend or retire the patterns-kb vocabularies — the closed tag set, the 17 relation verbs, the 7 page kinds, the block glosses, the polarity and sketch-language value sets, the reading levels, the band and group ids, the authored data-kb-* attributes, the kb.mjs command surface, and the search synonym table that bridges a searcher's words to the corpus's. Also owns vocab.html itself, its generator and its two reading modes. Use when someone asks to "add a tag", "retire a tag", "audit the vocabulary", "the search doesn't find this page", "add a synonym", "regenerate the expansion table", "why is make check complaining about a tag", "document a new data-kb attribute", "add a section to vocab.html", "update vocab.html", "what are the legal values for this attribute", or "what does kb:prerequisite mean".
 ---
 
 # Evolving the vocabularies
 
-Five vocabularies describe every page. Four are **closed** — a value outside the set fails
-the build. The fifth, the synonym table, is open but structurally validated. All five live
-in `scripts/lib/model.mjs` except the table, and **none of them may be edited alone**: each
-has a page, a projection or a check that must move with it.
+Eleven vocabularies describe every page and the tools that read them. Ten are **closed** —
+a value outside the set fails the build. The eleventh, the synonym table, is open but
+structurally validated. All of them live in `scripts/lib/model.mjs` except the CLI surface
+and the generated half of the table, and **none may be edited alone**: each has a fragment
+on `vocab.html`, a projection or a check that must move with it.
 
 | Vocabulary | Source | Enforced by | Breaks if wrong |
 |---|---|---|---|
-| Tags (65) | `TAGS` | `build.mjs`, `validate.mjs`, `audit-vocab.mjs` | a page filters into nothing |
-| Relation verbs (17) | `RELATION_TYPES` | `build.mjs`, `audit-relations.mjs` | a one-way or dangling edge |
-| Reading levels (3) | `LEVELS` | `validate.mjs` | a block renders empty at a lens |
+| Page kinds (7) | `KINDS` | `audit-vocab.mjs` (K1) | the kind tables disagree |
+| Blocks (34) | `BLOCK_DESC` + `BLOCKS` | `validate.mjs`, `audit-vocab.mjs` | a missing or out-of-order block |
 | Attributes (22) | `ATTRIBUTES` | `audit-vocab.mjs` | an undocumented attribute ships |
+| Polarity values (8) | `POLARITIES` | `validate.mjs`, `audit-vocab.mjs` (V4) | an item argues no side |
+| Reading levels (3) | `LEVELS` | `validate.mjs` | a block renders empty at a lens |
+| Relation verbs (17) | `RELATION_TYPES` | `build.mjs`, `audit-relations.mjs` | a one-way or dangling edge |
+| JSON-LD properties (7) | `JSONLD_PROPS` | `audit-vocab.mjs` (V3) | an emitted term resolves nowhere |
+| Bands (13) & groups (9 named) | `BANDS` | `validate.mjs` (path must agree) | a page filed off its own band |
+| Tags (65) | `TAGS` | `build.mjs`, `validate.mjs`, `audit-vocab.mjs` | a page filters into nothing |
+| Sketch languages (9) | `SKETCH_LANGS` | `validate.mjs`, `audit-vocab.mjs` (V4, T4) | a sketch ships un-highlighted |
+| CLI commands (17) | `scripts/lib/cli-spec.mjs` | — (kb.mjs renders its usage from it) | the docs drift from the tool |
 | Synonyms | `SYNONYMS` + `scripts/data/expansion-synonyms.json` | `expansions.mjs`, `audit-vocab.mjs` | a bridge that never fires |
 
-**Not in scope:** the editorial ordering arrays in the same file — `BANDS`,
-`THEME_GROUPS`, `DESIGN_GROUPS`, `HAZARD_ORDER`, `PRINCIPLE_GROUPS`, `CAPABILITY_ORDER`,
+**`BANDS` is partly in scope, and this is a change.** Its ids and its `desc` prose are
+rendered on `vocab.html`, so editing a band description regenerates that page — and two
+others, because `build-stack-page.mjs` and `build-claude.mjs` read the same field. Which
+pages a band *contains* and where it sits on the hub is still the **kb-hub** skill.
+
+**Not in scope:** the remaining editorial ordering arrays — `THEME_GROUPS`,
+`DESIGN_GROUPS`, `HAZARD_ORDER`, `PRINCIPLE_GROUPS`, `CAPABILITY_ORDER`,
 `COMPARISON_ORDER`. They decide where a page appears on the hub, not what it may say about
 itself, and nothing here validates them. That is the **kb-hub** skill.
+
+**Every term needs a fragment on `vocab.html`, and the id scheme is not uniform.** Four
+families keep **bare** ids because `audit-vocab.mjs` checks them by name and `kb:kind`
+dereferences to `vocab.html#kind`: the 17 verbs, the 7 JSON-LD properties, the 3 levels,
+and `data-kb-*` for the 22 attributes. Everything else is **prefixed** — `kind-`, `block-`,
+`polarity-`, `band-`, `group-`, `tag-`, `lang-`, `cmd-` — because the sets collide: five
+tags are also band ids (`caching`, `concurrency`, `messaging`, `security`, `testing`), and
+every unsubdivided band's group id equals its band id.
 
 **Start every task here:**
 
@@ -129,16 +150,26 @@ fail, and they will look like two unrelated failures.
 ## Touching vocab.html
 
 **Never edit it.** It is generated by `scripts/build-vocab.mjs` as a pure function of
-`model.mjs`, which is what keeps the ontology and the prose describing it the same thing.
-Edit the model, then the generator if the page needs a new section, then run
+`model.mjs` and `cli-spec.mjs`, which is what keeps the ontology and the prose describing it
+the same thing. Edit the model, then the generator if the page needs a new section, then run
 `node scripts/build-vocab.mjs` — `--check` demands byte-identity, so a stale page fails the
 build.
 
-Adding a term to `RELATION_TYPES`, `ATTRIBUTES` or `JSONLD_PROPS` without a rendered
-fragment fails `audit-vocab.mjs` (V2). Adding a `data-kb-*` to the toolchain without an
-`ATTRIBUTES` entry fails V1. Emitting a `kb:` term in the JSON-LD with no definition fails
-V3. These exist because the page claims every term resolves to a fragment on it, and that
-claim was false for sixteen attributes before anything checked it.
+Adding a term to any closed vocabulary without a rendered fragment fails `audit-vocab.mjs`
+(V2). Adding a `data-kb-*` to the toolchain without an `ATTRIBUTES` entry fails V1.
+Emitting a `kb:` term in the JSON-LD with no definition fails V3. A page using a polarity or
+sketch language outside its set fails V4; a set member no page uses fails T4. These exist
+because the page claims every term resolves to a fragment on it, and that claim was false
+for sixteen attributes before anything checked it.
+
+**The page renders in two modes over one copy of the DOM**, and the generator's header
+explains the three invariants that hold it up. Two matter when adding a section: a
+`.vocab-list` may contain nothing but `.vocab-item` children (`site/assets/vocab.js`
+snapshots each list to restore the authored order after an A–Z toggle), and the page must
+never gain an element with class `controls` (`search.js` would mount its hub UI on it and
+bind a second ⌘K). Every row goes through the generator's `term()` helper, which mints the
+id, the sort key and the type chip together. Ordering logic is unit-tested through
+`window.KB_VOCAB_SORT` in `scripts/test/vocab-sort.test.mjs`.
 
 ## Verification
 

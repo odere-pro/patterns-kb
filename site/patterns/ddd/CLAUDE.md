@@ -1,7 +1,7 @@
 # patterns/ddd
 
 **Domain-Driven Design (lens)** — 6 patterns.
-A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
+Letting the business domain shape the code's boundaries, which reshapes how you build at every elevation.
 
 Pages here: acl, aggregate, bounded-context, domain-event, entity, value-object
 

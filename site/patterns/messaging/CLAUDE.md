@@ -1,7 +1,7 @@
 # patterns/messaging
 
 **Messaging (lens)** — 21 patterns.
-A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
+Moving work between components as messages rather than calls, which changes the failure modes at any elevation.
 
 Pages here: aggregator, claim-check, competing-consumers, content-based-router, correlation-identifier, dead-letter-channel, fan-in, fan-out, idempotency, message-encoding, message-queue, message-router, message-translator, messaging-bridge, priority-queue, pubsub, recipient-list, scatter-gather, sequential-convoy, splitter, wire-tap
 

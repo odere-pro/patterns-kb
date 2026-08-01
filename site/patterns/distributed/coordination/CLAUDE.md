@@ -1,7 +1,7 @@
 # patterns/distributed/coordination
 
 **IV · Network → Coordination + Data** — 27 patterns.
-Keeping many services reliable, fast, and consistent across a network
+Keeping many services reliable, fast, and consistent across a network.
 
 Pages here: bloom-filter, change-data-capture, conditional-write, container-orchestration, count-min-sketch, distributed-lock, external-configuration-store, federated-identity, gossip-protocol, hyperloglog, inbox, index-table, leader-election, lsm-tree, mapreduce, materialized-view, optimistic-concurrency-control, outbox, pessimistic-locking, quorum-consensus, replication, saga, sliding-window, strangler-fig, sweeper, workflow-orchestration, write-ahead-log
 

@@ -593,6 +593,69 @@ test("audit-vocab.mjs fails when a page's JSON-LD emits an undefined kb: term", 
   }
 });
 
+test("audit-vocab.mjs fails when a namespaced vocabulary loses its fragment", () => {
+  /* The verb check above covers the four families whose ids are bare. Everything added
+   * since — kinds, blocks, polarities, bands, groups, tags, languages — is checked through
+   * one prefixed loop, so one case proves the shape. Tags are the interesting member: they
+   * had no anchors at all until the page was rebuilt around a single row component. */
+  const root = vocabReady();
+  try {
+    edit(root, join("site", "vocab.html"), 'id="tag-caching"', 'id="tag-elsewhere"');
+    const r = run("audit-vocab.mjs", root);
+    assert.equal(r.status, 1, "a tag with no definition must fail");
+    assert.match(r.stderr, /V2 NO FRAGMENT: tag "caching"/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("audit-vocab.mjs fails on a sketch language the closed set never named", () => {
+  /* The corpus-scale half of the membership rule validate.mjs enforces per page. Written
+   * against data-kb-lang rather than data-kb-polarity because polarity sits in a generated
+   * region — build-pages.mjs re-derives it, so a mutation made before the build is simply
+   * overwritten and proves nothing. The lang is authored and survives. Edited AFTER the
+   * build for the same reason: this gate exists for a page edited by hand and not yet
+   * rebuilt. Both values run through one loop, so this covers the shape. */
+  const root = vocabReady();
+  try {
+    edit(root, ALPHA, 'data-kb-lang="typescript"', 'data-kb-lang="cobol"');
+    const r = run("audit-vocab.mjs", root);
+    assert.equal(r.status, 1, "an unknown sketch language must fail the corpus gate");
+    assert.match(r.stderr, /V4 UNKNOWN VALUE/);
+    assert.match(r.stderr, /data-kb-lang="cobol"/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("validate.mjs rejects a polarity outside the closed vocabulary", () => {
+  /* The same rule one layer earlier. audit-vocab is the corpus sweep; this is the check the
+   * authoring hook runs, so a writer hears about it while they still have the page open. */
+  const root = built();
+  try {
+    edit(root, ALPHA, 'data-kb-polarity="con"', 'data-kb-polarity="neutral"');
+    const r = run("kb.mjs", root, "validate", "alpha");
+    assert.equal(r.status, 1, "an invented polarity must not validate");
+    assert.match(r.stdout + r.stderr, /closed vocabulary/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("validate.mjs rejects a sketch language the highlighter does not know", () => {
+  /* data-kb-lang lives on a <code> inside a <pre>, which the parser hands back as raw text
+   * — so this is read off the raw source, and a DOM query would silently never fire. */
+  const root = built();
+  try {
+    edit(root, ALPHA, 'data-kb-lang="typescript"', 'data-kb-lang="cobol"');
+    const r = run("kb.mjs", root, "validate", "alpha");
+    assert.equal(r.status, 1, "an unknown sketch language must not validate");
+    assert.match(r.stdout + r.stderr, /closed vocabulary/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("audit-vocab.mjs warns when a tag maps 1:1 onto a kind", () => {
   /* gamma is the fixture's only theme; give it a tag no pattern carries and that tag
    * covers 100% of one kind, which is what a kind marker is. It warns, never fails —

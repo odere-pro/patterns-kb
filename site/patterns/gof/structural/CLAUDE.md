@@ -1,7 +1,7 @@
 # patterns/gof/structural
 
 **I · Objects & Classes → Structural** — 7 patterns.
-Gang of Four, 1994 — the 23 patterns everything else stands on, plus a few essentials the book missed
+Gang of Four, 1994 — the 23 patterns everything else stands on, plus a few essentials the book missed.
 
 Pages here: adapter, bridge, composite, decorator, facade, flyweight, proxy
 
