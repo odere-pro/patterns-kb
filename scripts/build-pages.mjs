@@ -67,6 +67,13 @@ const ITEMS = [
   { block: "siblings", sel: ".fluency-item", idOf: (_el, i) => `siblings-item-${i + 1}` },
   { block: "deepdives", sel: ".prose > h3", idOf: (_el, i) => `deepdives-dive-${i + 1}` },
   { block: "sketch", sel: "details.sketch", idOf: (_el, i) => `sketch-variant-${i + 1}` },
+  /* A design's requirements live in .functional / .nonfunctional lists rather than in
+   * .prose, so the generic list rule below never reaches them and every FR and NFR was
+   * unaddressable — the one block a lens could not move. Top-level rows only: an NFR's
+   * nested sub-list travels with the row that owns it, and pages that want a sub-item
+   * addressed give it a keyed id by hand (youtube's requirements-nfr-scale-2). */
+  { block: "requirements", sel: ".functional ol > li", idOf: (_el, i) => `requirements-fr-${i + 1}` },
+  { block: "requirements", sel: ".nonfunctional > ul > li", idOf: (_el, i) => `requirements-nfr-${i + 1}` },
 ];
 const keyed = (block, key) => (key ? `${block}-${key}` : null);
 /* Prose paragraphs in ANY block: <block>-p-N. Applied generically after ITEMS. */

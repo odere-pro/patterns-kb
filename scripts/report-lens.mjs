@@ -44,6 +44,12 @@ const SITE = join(ROOT, "site");
 const IMPLEMENTATION = new Set([
   "distributed", "messaging", "caching", "enterprise", "architecture", "concurrency", "security",
 ]);
+/* A design's `relationships` list is counted here but cannot be lens-tagged (the block is
+ * written by kb.mjs link and validate exempts it), and it grows with the number of patterns
+ * the case study demonstrates, not with how much a junior has to read. Typical designs
+ * spend 200-300 basic words on it; persona-identification spends 715 across ~25 edges,
+ * which is why it sits at the ceiling on the LEANEST narrative of any design (779 words).
+ * Judge such a page on its narrative — do not tag real content away to buy the difference. */
 const BANDS_W = {
   pattern: (band, hasProduction) =>
     IMPLEMENTATION.has(band) ? [550, 900] : hasProduction ? [350, 750] : [350, 600],

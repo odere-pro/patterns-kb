@@ -124,18 +124,18 @@
         <div class="functional">
           <h3>Functional</h3>
           <ol>
-            <li>Search for businesses by name, location (latitude/longitude), and category.</li>
-            <li>View a business and its reviews.</li>
-            <li>Leave a review on a business — a required 1–5 star rating plus optional text.</li>
+            <li id="requirements-fr-1">Search for businesses by name, location (latitude/longitude), and category.</li>
+            <li id="requirements-fr-2">View a business and its reviews.</li>
+            <li id="requirements-fr-3">Leave a review on a business — a required 1–5 star rating plus optional text.</li>
           </ol>
           <p class="prose">A constraint carried through the whole design: a user may leave <strong>only one review per business</strong>. Out of scope: adding or editing the business catalogue, map views, and recommendations.</p>
         </div>
         <div class="nonfunctional">
           <h3>Non-functional</h3>
           <ul>
-            <li><strong>Latency</strong> — search returns in under 500&nbsp;ms.</li>
-            <li><strong>Availability</strong> — highly available; eventual consistency is acceptable (a rating that lags a few seconds is fine).</li>
-            <li><strong>Scale</strong> — 100M daily users and 10M businesses, with reads dwarfing writes by roughly 1000:1.</li>
+            <li id="requirements-nfr-1"><strong>Latency</strong> — search returns in under 500&nbsp;ms.</li>
+            <li id="requirements-nfr-2"><strong>Availability</strong> — highly available; eventual consistency is acceptable (a rating that lags a few seconds is fine).</li>
+            <li id="requirements-nfr-3"><strong>Scale</strong> — 100M daily users and 10M businesses, with reads dwarfing writes by roughly 1000:1.</li>
           </ul>
           <p class="prose">The interesting non-functionals here are latency and the query shape — every system claims to be fault-tolerant and scalable, so the design focuses on what is specifically hard about search.</p>
         </div>
@@ -146,8 +146,8 @@
       <h2 class="doc-h" id="h-sizing">Right-sizing</h2>
       <div class="prose">
         <p id="sizing-p-1"><strong>Reads.</strong> 100M daily users issuing searches and page views dominate the load — this is the number the architecture has to survive, and it is why a purpose-built search index earns its place.</p>
-        <p id="sizing-p-2"><strong>Writes.</strong> Reviews are rare next to reads: at a ~1000:1 ratio, 100M users produce on the order of <strong>~100k reviews/day ≈ 1 write/sec</strong>. Even a large surge stays trivial for a single database. This one figure quietly rules out a message queue and a separate write pipeline later on.</p>
-        <p id="sizing-p-3" data-kb-level="advanced"><strong>Storage.</strong> 10M businesses × ~1&nbsp;KB ≈ <strong>10&nbsp;GB</strong> of business data. Reviews are larger: 10M businesses × ~100 reviews × ~1&nbsp;KB ≈ <strong>1&nbsp;TB</strong> — still comfortably inside one modern instance. Nothing here forces sharding; the read <em>shape</em>, not the data volume, is the real problem to solve.</p>
+        <p id="sizing-p-2"><strong>Writes.</strong> Reviews are rare next to reads: at a ~1000:1 ratio, 100M users produce on the order of <strong>~100k reviews/day ≈ 1 write/sec</strong>. Even a large surge stays trivial for a single database. This one figure quietly rules out a <a href="../patterns/messaging/message-queue.html">message queue</a> and a separate write pipeline later on.</p>
+        <p id="sizing-p-3" data-kb-level="advanced"><strong>Storage.</strong> 10M businesses × ~1&nbsp;KB ≈ <strong>10&nbsp;GB</strong> of business data. Reviews are larger: 10M businesses × ~100 reviews × ~1&nbsp;KB ≈ <strong>1&nbsp;TB</strong> — still comfortably inside one modern instance. Nothing here forces sharding; the read shape, not the data volume, is the real problem to solve.</p>
       </div>
     </section>
 
@@ -223,7 +223,7 @@ flowchart TB
       <h2 class="doc-h" id="h-deep">Deep dives</h2>
       <div class="prose">
         <h3 id="deepdives-dive-1">1 · Keeping the average rating fresh and cheap</h3>
-        <p id="deepdives-p-1">Search results show a rating, so serving it must be cheap. The naïve option — a <code>JOIN</code> and <code>AVG</code> over the reviews table on every query — gets more expensive as popular businesses accumulate reviews, recomputes work that has not changed, and competes with real reads. A periodic cron that writes an <code>average_rating</code> column fixes the cost but introduces staleness: a fresh five-star review on a struggling café would not show up for hours. The right move is to update the rating <em>synchronously</em> as each review is written, incrementally: keep <code>num_reviews</code> alongside the average and compute <code>new_avg = (old_avg × n + new_rating) / (n + 1)</code> — a few CPU cycles, cheap enough to do inline. This is a maintained <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of the reviews, one column that turns an aggregate query into a single column read.</p>
+        <p id="deepdives-p-1">Search results show a rating, so serving it must be cheap. The naïve option — a <code>JOIN</code> and <code>AVG</code> over the reviews table on every query — gets more expensive as popular businesses accumulate reviews, recomputes work that has not changed, and competes with real reads. A periodic cron that writes an <code>average_rating</code> column fixes the cost but introduces staleness: a fresh five-star review on a struggling café would not show up for hours. The right move is to update the rating synchronously as each review is written, incrementally: keep <code>num_reviews</code> alongside the average and compute <code>new_avg = (old_avg × n + new_rating) / (n + 1)</code> — a few CPU cycles, cheap enough to do inline. This is a maintained <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of the reviews, one column that turns an aggregate query into a single column read.</p>
         <p id="deepdives-p-2" data-kb-level="advanced">The incremental update opens a race: two reviews for the same business read <code>n = 100, avg = 4.0</code> at once, each computes a new average from that stale pair, and the second write silently overwrites the first — one review vanishes from the maths. The fix is <a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">optimistic concurrency control</a>: read the current <code>num_reviews</code>, attempt the update conditioned on it being unchanged, and if the count moved, re-read and retry. Because writes run at about one per second, contention is essentially nil and a retry practically never fires — which is also why a message queue and a separate consumer, a defensible answer at high write volume, is unneeded complexity here.</p>
 
         <h3 id="deepdives-dive-2" data-kb-level="advanced">2 · One review per user, enforced where it can't be bypassed</h3>

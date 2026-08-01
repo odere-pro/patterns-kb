@@ -93,6 +93,14 @@ conceptual page carrying the block is banded to 750 rather than 600. Do not try 
 difference back by cutting variations, tradeoffs or the sketch; the block is a fixed cost,
 not authored depth. A conceptual page WITHOUT the block keeps the tighter 600 ceiling.
 
+**The design kind's navigation tax.** A design's `relationships` block is counted by
+`report-lens` but cannot be tagged — kb.mjs link writes it and make check exempts it — and it
+grows with the number of patterns the case study demonstrates, not with how much a junior
+reads. Most designs spend 200–300 basic words there; `persona-identification` spends 715
+across ~25 edges, which puts it at the ceiling on the leanest narrative of any design (779
+words). Judge such a page on its narrative and leave it alone. Tagging real content away to
+buy back a navigation list is how a good page gets hollowed out.
+
 **On a rich page the tag default INVERTS.** Do not ask "is this line sophisticated enough
 to hide?" — ask "does basic still fit its band?" and tag depth downward until it does. A
 page with production + wild + full variations will carry 15–40 `level` tags, not the 0–6 of
@@ -160,10 +168,17 @@ its bands are close together and the work is differentiation, not reduction.
 | block | ids |
 |---|---|
 | tradeoffs / usage / variations / production | `tradeoffs-{pro,con}-N`, `usage-{when,avoid}-N`, `variations-item-N`, `production-{knob,signal,failure,check}-N` |
-| any prose block | `<block>-p-N` on each `.prose > p` |
+| any prose block | `<block>-p-N` on each `.prose > p`, `<block>-li-N` on each `.prose li`, `<block>-fig-N` on each `figure.diagram` |
 | wild / tour / fluency | keyed: `wild-<example>`, `tour-<member>`, `fluency-<theme>` (reorder-proof) |
 | deepdives | `deepdives-dive-N` on each `h3` |
 | sketch | `sketch-variant-N` on each `details.sketch` |
+| a sketch in any OTHER block | `<block>-sketch-N` — a design's HTTP contract, a dive's code sample |
+| requirements (design) | `requirements-fr-N` on each `.functional ol > li`, `requirements-nfr-N` on each top-level `.nonfunctional > ul > li` |
+
+An element the build mints no id for cannot be moved by a lens, so it renders at basic
+forever. Where a page needs one anyway — a grouped block's `h3`/`h4`, a whole `<ol>`, an
+NFR's nested sub-item — hand-mint it in the same shape (`<block>-h3-N`, `<block>-ol-N`, or a
+keyed `requirements-nfr-scale-2`) and tag it; the build leaves ids it does not own alone.
 
 Never set a level or register on a `<section>` (blocks always show) or inside the explain
 block (structural — edit via `kb.mjs explain`). The writers refuse both — if one refuses
@@ -186,6 +201,12 @@ Lens data goes ONLY through these writers — never hand-edit a `data-kb-*` attr
 (Variant *paragraphs* are ordinary prose: write them in the HTML, `make all` mints their
 ids, then tag.) The post-edit hook runs `make check` (~0.8s) on every site/ edit; a sweep's
 orchestrator runs `make all && make check` once per batch, and all lens QA runs POST-build.
+
+**Never run `make all` while authoring agents are still writing.** It rewrites the generated
+region of every page in the corpus, so a build racing an agent's write can clobber it. Let
+the batch go quiet first; until it does, `kb.mjs validate --file <path>` is the per-page gate
+and it needs no build. Tagging alone never moves an id — only inserting or deleting an
+element does — so a deferred build costs nothing but the staleness warning.
 
 ## Self-check (per page)
 

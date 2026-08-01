@@ -101,7 +101,7 @@
     <section class="doc-section" id="description" aria-labelledby="h-problem" data-kb-block="description">
       <h2 class="doc-h" id="h-problem">Understanding the problem</h2>
       <div class="prose">
-        <p id="description-p-1">Take a social platform's public API — post, fetch a timeline, upload a photo. Left unmetered, a single buggy client or a botnet can drown the backend, and one heavy user can starve everyone else. The fix is a request-level rate limiter that admits, say, 100 requests per minute per user and answers the overflow with <code>HTTP 429 Too Many Requests</code>. It has to be enforced <em>server-side</em>: a client SDK can be asked to behave, but it cannot be trusted to, so client-side throttling is at best a courtesy layer, never the real defence. The interesting engineering is not the counting rule itself but keeping one honest count when the machines doing the counting are many and the traffic is enormous.</p>
+        <p id="description-p-1">Take a social platform's public API — post, fetch a timeline, upload a photo. Left unmetered, a single buggy client or a botnet can drown the backend, and one heavy user can starve everyone else. The fix is a request-level <a href="../patterns/distributed/resilience/rate-limiter.html">rate limiter</a> that admits, say, 100 requests per minute per user and answers the overflow with <code>HTTP 429 Too Many Requests</code>. It has to be enforced server-side: a client SDK can be asked to behave, but it cannot be trusted to, so client-side throttling is at best a courtesy layer, never the real defence. The interesting engineering is not the counting rule itself but keeping one honest count when the machines doing the counting are many and the traffic is enormous.</p>
       </div>
     </section>
 
@@ -129,19 +129,19 @@
         <div class="functional">
           <h3>Functional</h3>
           <ol>
-            <li>Identify the client behind each request — by user ID, IP address, or API key — so the right limits apply.</li>
-            <li>Allow or deny each request against configurable rules (for example, 100 requests/minute/user), enforcing the most restrictive rule when several apply.</li>
-            <li>On rejection, return HTTP 429 with helpful headers: the ceiling, the count remaining, and when the window resets.</li>
+            <li id="requirements-fr-1">Identify the client behind each request — by user ID, IP address, or API key — so the right limits apply.</li>
+            <li id="requirements-fr-2">Allow or deny each request against configurable rules (for example, 100 requests/minute/user), enforcing the most restrictive rule when several apply.</li>
+            <li id="requirements-fr-3">On rejection, return HTTP 429 with helpful headers: the ceiling, the count remaining, and when the window resets.</li>
           </ol>
           <p class="prose">Out of scope: analytics or ad-hoc querying over rate-limit data, and long-term persistence of that data — it is disposable, per-window state.</p>
         </div>
         <div class="nonfunctional">
           <h3>Non-functional</h3>
           <ul>
-            <li><strong>Latency</strong> — the check adds under 10&nbsp;ms to a request; it sits in the hot path of every call.</li>
-            <li><strong>Availability</strong> — high; eventual consistency is acceptable, so a small cross-node drift in the count is fine.</li>
-            <li><strong>Scale</strong> — 1M requests/second across 100M daily actives.</li>
-            <li><strong>Correctness under contention</strong> — concurrent requests for the same client must not both slip through one remaining slot.</li>
+            <li id="requirements-nfr-1"><strong>Latency</strong> — the check adds under 10&nbsp;ms to a request; it sits in the hot path of every call.</li>
+            <li id="requirements-nfr-2"><strong>Availability</strong> — high; eventual consistency is acceptable, so a small cross-node drift in the count is fine.</li>
+            <li id="requirements-nfr-3"><strong>Scale</strong> — 1M requests/second across 100M daily actives.</li>
+            <li id="requirements-nfr-4"><strong>Correctness under contention</strong> — concurrent requests for the same client must not both slip through one remaining slot.</li>
           </ul>
         </div>
       </div>
@@ -192,7 +192,7 @@ Content-Type: application/json
   "message": "Limit of 100 requests/minute reached. Try again in 60s." }</code></pre>
       </details>
       <div class="prose">
-        <p id="interface-p-2" data-kb-level="advanced">The <code>X-RateLimit-*</code> headers turn a blunt rejection into a contract: a well-behaved client reads <code>Retry-After</code> and backs off instead of hammering the door. The design chooses to <em>fail fast</em> rather than queue overflow — queuing an interactive request burns memory, makes latency unpredictable, and invites users to retry a call they think stalled, piling on more load. Queuing only earns its place in batch systems that can tolerate the wait.</p>
+        <p id="interface-p-2" data-kb-level="advanced">The <code>X-RateLimit-*</code> headers turn a blunt rejection into a contract: a well-behaved client reads <code>Retry-After</code> and backs off instead of hammering the door. The design chooses to <a href="../principles/fail-fast.html">fail fast</a> rather than queue overflow — queuing an interactive request burns memory, makes latency unpredictable, and invites users to retry a call they think stalled, piling on more load. Queuing only earns its place in batch systems that can tolerate the wait.</p>
       </div>
     </section>
 
@@ -223,7 +223,7 @@ flowchart TB
         <p id="deepdives-p-1">Four algorithms trade accuracy against memory. A <strong>fixed-window counter</strong> — one bucket per minute — is trivial but has an ugly boundary: 100 requests at 12:00:59 plus 100 at 12:01:00 is 200 in two seconds, double the intended rate. A <strong>sliding-window log</strong> stores every request's timestamp and is exact, but a 1000/min user needs 1000 stored timestamps, which does not survive millions of users. A <strong>sliding-window counter</strong> keeps just the current and previous window's counts and weights them by how far into the window you are — cheap and much smoother, at the cost of assuming traffic is evenly spread. The chosen one is the <strong>token bucket</strong>: each client holds a bucket of up to N tokens that refills at a steady rate; a request spends one token, an empty bucket is a reject. It captures both dimensions of real traffic — the refill rate caps the sustained load, the bucket depth allows a burst — while storing only two numbers per client. Stripe uses this shape for its API. Its state is exactly <code>(tokens, last_refill)</code>, and tokens are computed lazily from elapsed time rather than ticked by a timer.</p>
 
         <h3 id="deepdives-dive-2" data-kb-level="advanced">2 · One honest count without a race</h3>
-        <p id="deepdives-p-2" data-kb-level="advanced">Sharing bucket state in Redis is the easy half. The trap is the read-modify-write. If a gateway does <code>HMGET</code> to read the count, computes the refill in application code, then writes it back, two simultaneous requests for the same client can both read the same starting count, both decide a token is free, and both write — over-admitting when only one slot existed. Wrapping the writes in <code>MULTI/EXEC</code> does not save you, because the <em>read</em> that the decision hinges on happened outside the transaction. This is a textbook <a href="../hazards/race-condition.html">race condition</a> on a distributed counter, and the fix is to widen the atomic boundary to cover the whole sequence: push read, refill-calculation, and write into a single Redis <strong>Lua script</strong> that runs atomically on the shard. Redis's <a href="../patterns/caching/distributed-cache.html">shared, in-memory store</a> is a good fit here precisely because its single-threaded execution makes such a script indivisible, its ops are sub-millisecond, and an <code>EXPIRE</code> on each key reclaims idle buckets for free.</p>
+        <p id="deepdives-p-2" data-kb-level="advanced">Sharing bucket state in Redis is the easy half. The trap is the read-modify-write. If a gateway does <code>HMGET</code> to read the count, computes the refill in application code, then writes it back, two simultaneous requests for the same client can both read the same starting count, both decide a token is free, and both write — over-admitting when only one slot existed. Wrapping the writes in <code>MULTI/EXEC</code> does not save you, because the read that the decision hinges on happened outside the transaction. This is a textbook <a href="../hazards/race-condition.html">race condition</a> on a distributed counter, and the fix is to widen the atomic boundary to cover the whole sequence: push read, refill-calculation, and write into a single Redis <strong>Lua script</strong> that runs atomically on the shard. Redis's <a href="../patterns/caching/distributed-cache.html">shared, in-memory store</a> is a good fit here precisely because its single-threaded execution makes such a script indivisible, its ops are sub-millisecond, and an <code>EXPIRE</code> on each key reclaims idle buckets for free.</p>
       </div>
       <details class="sketch" id="deepdives-sketch-1" data-kb-level="advanced">
         <summary>The atomic token-bucket check, as one Lua script</summary>

@@ -236,9 +236,13 @@ block still passes on its surviving checklist items, while a reader at basic mee
 "Tuning knobs" with no knobs under it. So each `.prod-group` is checked by name too —
 basic keeps one knob, one signal, one failure mode and its checklist gates. Element ids
 are minted by `make all`
-(`<block>-p-N` on prose paragraphs, keyed ids like `wild-envoy`, `tour-<member>`,
-`deepdives-dive-N`) — positional ids renumber when a paragraph is inserted, so re-run
-`make all` before tagging. Figures take these attributes too — the primary topology
+(`<block>-p-N` on prose paragraphs, `<block>-sketch-N` on a collapsed sketch outside the
+`sketch` block, `requirements-{fr,nfr}-N` on a design's requirement rows, keyed ids like
+`wild-envoy`, `tour-<member>`, `deepdives-dive-N`) — positional ids renumber when a
+paragraph is inserted, so re-run `make all` before tagging. An element with no id cannot be
+moved by a lens and renders at basic forever; where a page needs one the build does not
+mint — a grouped block's `h3`/`h4`, a whole list — hand-mint it in the same shape and tag
+it, and the build will leave it alone. Figures take these attributes too — the primary topology
 diagram stays untagged, the sequence diagram carries `data-kb-level="advanced"` — and
 lens.js re-renders mermaid on lens change.
 
