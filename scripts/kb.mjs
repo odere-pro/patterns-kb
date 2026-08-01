@@ -51,7 +51,8 @@ import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, TAGS, esc, folderFor, band as bandOf, PROSE_LINK_EXCLUDE, KIND_DIR } from "./lib/model.mjs";
 import { pruneForLens } from "./lib/lens.mjs";
-import { mergedSynonyms, own, STOP } from "./lib/expansions.mjs";
+import { mergedSynonyms } from "./lib/expansions.mjs";
+import { indexNodes, proseIndexer, scoreQuery } from "./lib/search.mjs";
 import { validatePage } from "./lib/validate.mjs";
 import { pageSkeleton } from "./lib/template.mjs";
 
@@ -94,37 +95,10 @@ const inline = (el) => el.text.replace(/\s+/g, " ").trim();
 const richOf = (el) => (el ? el.innerHTML.replace(/\s+/g, " ").trim() : "");
 
 /* STOP lives in lib/expansions.mjs now, shared with the vocabulary extractor; the hub
- * keeps an inline copy in search.js (plain file:// script) pinned by the parity test. */
-
-/* Sentence-level index of a page's visible prose, built on demand. */
-const proseCache = new Map();
-function prose(path, level = null) {
-  /* The cache key carries the level — the same path scoped to two different levels
-   * holds two different texts, and a path-only key would serve the wrong one. */
-  const key = level ? `${path}@${level}` : path;
-  if (proseCache.has(key)) return proseCache.get(key);
-  const full = parse(readFileSync(join(SITE, path), "utf8"), PARSE_OPTS);
-  // Only the visible document — <head> would otherwise contribute the title and the
-  // JSON-LD, matching every query against machine metadata rather than prose.
-  const root = full.querySelector("main") ?? full;
-  for (const n of root.querySelectorAll(NOISE)) n.remove();
-  for (const n of root.querySelectorAll("figure.diagram")) n.remove();
-  pruneForLens(root, level);
-  const text = root.text.replace(/[ \t]+/g, " ");
-  const lines = text.split(/\n|(?<=[.!?])\s+/).map((l) => l.trim()).filter((l) => l.length > 25);
-  const hits = new Map();
-  for (const line of lines) {
-    const low = line.toLowerCase();
-    for (const w of new Set(low.split(/[^a-z]+/).filter((w) => w.length > 2))) {
-      const cur = hits.get(w);
-      if (cur) cur.n++;
-      else hits.set(w, { n: 1, line });
-    }
-  }
-  const v = { hits };
-  proseCache.set(key, v);
-  return v;
-}
+ * keeps an inline copy in search.js (plain file:// script) pinned by the parity test.
+ * The scorer and the prose index moved to lib/search.mjs, so the relevance fixture can
+ * score the corpus in-process instead of paying a spawn per query. */
+const bodyOf = proseIndexer(SITE, LEVEL);
 
 function render(el, out = []) {
   for (const c of el.childNodes) {
@@ -297,74 +271,24 @@ function readPage(id) {
   return { node, root, blocks };
 }
 
-/* Shared by `find` and `brief`: score the filtered catalog against a query. The weights,
- * the synonym bridge and the coverage multiplier live here once, so the two commands
- * cannot drift apart.
+/* Shared by `find` and `brief`: score the filtered catalog against a query. The scoring
+ * itself lives in lib/search.mjs, so the CLI and the relevance fixture measure the same
+ * thing and the two commands cannot drift apart.
  *
  * The synonym bridge: curated SYNONYMS (lib/model.mjs) layered over the machine-generated
  * expansion table (lib/expansions.mjs), curated wins. build.mjs projects the same merge
  * into catalog.js, so the offline hub search scores the same bridge.
  *
- * Reading all pages costs disk, not context — only the output is charged in tokens. So
- * search the full prose, not just the index, and return the line that matched. Curated
- * fields still outrank body text.
- *
- * Two different questions wear the same clothes. "circuit breaker" is a lookup — the
- * name is the answer. "one slow dependency blocks my threads" is a description, where
- * a name match is usually incidental (every hit on "dependency" would drag in
- * Dependency Injection) and what the page SAYS matters more than what it is called. */
+ * Passing `bodyOf` is what separates the CLI from the hub: page prose joins the scoring
+ * and the matched line comes back as `why`. Curated fields still outrank body text. */
 function searchCatalog(q, candidates, limit) {
-  const terms = [...new Set(q.split(/\s+/).filter((t) => t.length > 2 && !STOP.has(t)))];
-  const SYN = mergedSynonyms(SYNONYMS);
-  const naming = terms.length <= 2;
-  const W = naming
-    ? { id: 6, name: 5, solves: 5, tags: 3, essence: 3, curated: 2, body: 1 }
-    : { id: 2, name: 2, solves: 6, tags: 3, essence: 3, curated: 1, body: 2 };
-
-  return candidates.map((n) => {
-    const curated = [n.id, n.name, n.essence, ...(n.aliases ?? []), ...(n.tags ?? []), ...(n.solves ?? [])]
-      .join(" ").toLowerCase();
-    let score = 0;
-    if (n.id === q || n.name.toLowerCase() === q || (n.aliases ?? []).some((a) => a.toLowerCase() === q)) score += 100;
-
-    const body = prose(n.path, LEVEL);
-    let why = null, matched = 0;
-    for (const term of terms) {
-      /* Score the term itself at full weight, then its synonyms at half; a term
-       * counts as matched once, on its best variant. */
-      let best = 0, bestWhy = null;
-      /* `own` and not `SYN[term] ?? []`: the merged map is an object literal, so it
-       * inherits Object.prototype. `SYN["constructor"]` returns a function — not nullish,
-       * so `??` never fires and the spread threw, taking `find` down with exit 1 on any
-       * query containing constructor/toString/valueOf/hasOwnProperty. `builder` and
-       * `dummy-object` both author "my constructor takes…" in their own solves, so their
-       * canonical symptom text was unsearchable. Mirrored in search.js. */
-      const variants = [term, ...own(SYN, term)];
-      for (let vi = 0; vi < variants.length; vi++) {
-        const t = variants[vi];
-        const mult = vi === 0 ? 1 : 0.5;
-        let s = 0, line = null;
-        if (n.id.includes(t)) s += W.id;
-        if (n.name.toLowerCase().includes(t)) s += W.name;
-        if ((n.solves ?? []).some((x) => x.toLowerCase().includes(t))) s += W.solves;
-        if ((n.tags ?? []).some((x) => x.toLowerCase().includes(t))) s += W.tags;
-        /* A page with no solves (themes) carries what symptom vocabulary it has in the
-         * essence — score it at the solves weight there, so a one-field page is not
-         * silently outranked by pages with five. Mirrored in search.js. */
-        if (n.essence.toLowerCase().includes(t)) s += (n.solves?.length ? W.essence : W.solves);
-        else if (curated.includes(t)) s += W.curated;
-        const hits = body.hits.get(t);
-        if (hits) { s += Math.min(hits.n, 3) * W.body; line = hits.line; }
-        if (s * mult > best) { best = s * mult; bestWhy = line; }
-      }
-      if (best > 0) { score += best; matched++; why ||= bestWhy; }
-    }
-    // Covering more of what was asked beats mentioning one word a lot. Guard the
-    // divisor: a query of only short words ("CB") leaves no terms, and NaN would
-    // silently drop an otherwise exact alias hit.
-    score *= 1 + matched / Math.max(terms.length, 1);
-    return { n, score, why };
-  }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, limit);
+  return scoreQuery({
+    index: indexNodes(candidates),
+    q,
+    syn: mergedSynonyms(SYNONYMS),
+    bodyOf,
+    limit,
+  });
 }
 
 /* ---------------- commands ---------------- */
