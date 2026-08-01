@@ -80,6 +80,12 @@ nothing. Adding one is deliberate — put it in `TAGS` first, and only if it wil
 apply to 3+ pages. (The first sweep of this KB, written by 18 agents with no shared list,
 produced 280 tags of which 154 were used exactly once. Hence the closed list.)
 
+All three numbers above are **build rules, not advice**. `validate.mjs` fails a page outside
+2-5 and `kb.mjs set --tags` refuses one before it reaches a file; `audit-vocab.mjs` fails any
+tag in `TAGS` used on fewer than 3 pages, and warns when a tag lands on every page of one
+kind and nowhere else — that tag groups what `data-kb-kind` already groups. Retiring a tag
+means retagging every page that carries it, so it is its own change: the **kb-vocab** skill.
+
 **`aliases`** — only genuinely used alternate names ("CB", "pub/sub", "Policy", "The Blob").
 `[]` is a perfectly good answer; many patterns have none. Do not invent nicknames.
 

@@ -57,15 +57,43 @@ export function vocabularyHash(vocab) {
  * the table was generated — coverage degrades, nothing is wrong). */
 export function validateExpansions({ meta, expansions }, vocab) {
   const errors = [];
+  const keys = Object.keys(expansions);
   for (const [key, targets] of Object.entries(expansions)) {
     if (!/^[a-z][a-z-]{2,}$/.test(key)) errors.push(`expansion key "${key}" is not a lowercase word`);
     if (STOP.has(key)) errors.push(`expansion key "${key}" is a stopword`);
     if (!Array.isArray(targets) || !targets.length || targets.length > 4)
       errors.push(`expansion "${key}" must map to 1–4 words (got ${Array.isArray(targets) ? targets.length : typeof targets})`);
+    const seen = new Set();
     for (const t of targets ?? []) {
       if (t === key) errors.push(`expansion "${key}" references itself`);
       else if (!vocab.has(t)) errors.push(`expansion "${key}" → "${t}": target is not in the corpus vocabulary`);
+      /* The scorers substring-match, so a target CONTAINING its key can never add a hit:
+       * anything the target matches, the shorter key already matched. The reverse
+       * (`alerting` → `alert`) is the whole point of the table — inflection stripping —
+       * so this rule is directional, and the symmetric reading would reject 92 good
+       * bridges. */
+      if (t !== key && t.includes(key))
+        errors.push(`expansion "${key}" → "${t}": the target contains the key, so the bridge can never add a match`);
+      if (seen.has(t)) errors.push(`expansion "${key}" lists "${t}" twice`);
+      seen.add(t);
     }
+  }
+  /* Sorted keys keep a re-stamp's diff to the stamp, and `entries` is what tells a reader
+   * the file was not hand-edited past its own bookkeeping. */
+  const sorted = [...keys].sort();
+  for (let i = 0; i < keys.length; i++) {
+    if (keys[i] !== sorted[i]) {
+      errors.push(`expansion keys are not sorted — "${keys[i]}" appears where "${sorted[i]}" belongs; run: node scripts/report-vocab.mjs --restamp`);
+      break;
+    }
+  }
+  if (meta) {
+    if (meta.entries !== keys.length)
+      errors.push(`meta.entries says ${meta.entries} but the table holds ${keys.length}`);
+    if (!/^sha256:[0-9a-f]{16}$/.test(String(meta.corpusHash ?? "")))
+      errors.push(`meta.corpusHash "${meta.corpusHash}" is not a sha256:<16 hex> stamp`);
+    if (!Number.isInteger(meta.vocabSize) || meta.vocabSize <= 0)
+      errors.push(`meta.vocabSize "${meta.vocabSize}" is not a positive integer`);
   }
   const drift = meta && meta.corpusHash !== vocabularyHash(vocab)
     ? `corpus vocabulary changed since expansion-synonyms.json was generated ` +

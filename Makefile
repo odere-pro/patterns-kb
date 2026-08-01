@@ -32,6 +32,7 @@ check: ## Verify generated artifacts are in sync, no dangling links, diagrams pa
 	@node scripts/check-links.mjs
 	@node scripts/check-mermaid.mjs
 	@node scripts/audit-relations.mjs
+	@node scripts/audit-vocab.mjs
 
 test: ## Smoke-test the builders/checkers against the fixture corpus (scripts/test/)
 	@node --test scripts/test/*.test.mjs

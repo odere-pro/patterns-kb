@@ -45,7 +45,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, esc, folderFor, band as bandOf, PROSE_LINK_EXCLUDE, KIND_DIR } from "./lib/model.mjs";
+import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, TAGS, esc, folderFor, band as bandOf, PROSE_LINK_EXCLUDE, KIND_DIR } from "./lib/model.mjs";
 import { pruneForLens } from "./lib/lens.mjs";
 import { mergedSynonyms, STOP } from "./lib/expansions.mjs";
 import { validatePage } from "./lib/validate.mjs";
@@ -480,6 +480,22 @@ if (cmd === "get") {
     for (const key of ["aliases", "tags", "solves"]) {
       const v = parseList(key, strings);
       if (v === null) continue;
+      /* Tags are the one list with a closed vocabulary and a size contract, and this is
+       * the last point before it reaches a file. Catching it here names the offending tag
+       * and the whole legal set; catching it in `make check` names a page. */
+      if (key === "tags") {
+        const unknown = v.filter((t) => !TAGS.has(t));
+        if (unknown.length) {
+          console.error(`--tags: not in the closed vocabulary: ${unknown.join(", ")}`);
+          console.error(`  legal tags: ${[...TAGS].join(" ")}`);
+          console.error("  add one to TAGS in scripts/lib/model.mjs only if it will apply to 3+ pages");
+          process.exit(1);
+        }
+        if (v.length < 2 || v.length > 5) {
+          console.error(`--tags: ${v.length} given; a page needs 2-5 (one tag groups nothing, six filter nothing)`);
+          process.exit(1);
+        }
+      }
       if (v.length) doc.setAttribute(`data-kb-${key}`, JSON.stringify(v));
       else doc.removeAttribute(`data-kb-${key}`);
       touched.push(`${key}=${v.length}`);
@@ -949,8 +965,31 @@ ${items}
   const kind = opt("kind"), bandId = opt("band"), name = opt("name"), order = opt("order");
   const group = opt("group") ?? bandId;
   if (!id || !kind || !name || order == null || (kind === "pattern" && !bandId)) {
-    console.error('usage: kb.mjs new <id> --kind pattern|hazard|theme|principle|design|capability|comparison --band <b> [--group <g>] --name "…" --order <n>\n  (--band is required only for --kind pattern)');
+    console.error('usage: kb.mjs new <id> --kind pattern|hazard|theme|principle|design|capability|comparison --band <b> [--group <g>] --name "…" --order <n> [--tags \'["a","b"]\']\n  (--band is required only for --kind pattern)');
     process.exit(1);
+  }
+  /* Tags at scaffold time, so a page can be born inside the 2-5 contract instead of
+   * waiting for a `set` call the author may not reach before the next `make check`.
+   * Parsed here rather than through the writer branch's parseList, which is scoped to it. */
+  let newTags = null;
+  const rawTags = opt("tags");
+  if (rawTags != null) {
+    try { newTags = JSON.parse(rawTags); }
+    catch (e) { console.error(`--tags is not valid JSON: ${e.message}`); process.exit(1); }
+    if (!Array.isArray(newTags) || newTags.some((t) => typeof t !== "string" || !t.trim())) {
+      console.error("--tags must be a JSON array of non-empty strings");
+      process.exit(1);
+    }
+    const unknown = newTags.filter((t) => !TAGS.has(t));
+    if (unknown.length) {
+      console.error(`--tags: not in the closed vocabulary: ${unknown.join(", ")}`);
+      console.error(`  legal tags: ${[...TAGS].join(" ")}`);
+      process.exit(1);
+    }
+    if (newTags.length < 2 || newTags.length > 5) {
+      console.error(`--tags: ${newTags.length} given; a page needs 2-5`);
+      process.exit(1);
+    }
   }
   /* Guard the kind before folderFor sees it: an unknown kind makes folderFor return
    * undefined and the failure surfaces as a raw TypeError out of join(). */
@@ -964,11 +1003,11 @@ ${items}
   const file = join(SITE, dir, `${id}.html`);
   if (existsSync(file)) { console.error(`already exists: ${relative(ROOT, file)}`); process.exit(1); }
 
-  const html = pageSkeleton({ id, name, kind, band, group: kind === "pattern" ? group : kind, order });
+  const html = pageSkeleton({ id, name, kind, band, group: kind === "pattern" ? group : kind, order, tags: newTags });
   writeFileSync(file, html);
   console.log(`${relative(ROOT, file)} written. Next:`);
   console.log(`  1. replace the TODOs (prose, diagram, sketch, essence)`);
-  console.log(`  2. node scripts/kb.mjs set ${id} --aliases … --tags … --solves …`);
+  console.log(`  2. node scripts/kb.mjs set ${id} --aliases … ${newTags ? "" : "--tags … "}--solves …`);
   console.log(`  3. node scripts/kb.mjs link ${id} <verb> <other-id> --note "…"`);
   console.log(`  4. renumber data-kb-order neighbours if needed, then make all && make check`);
 } else {

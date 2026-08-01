@@ -91,7 +91,13 @@ Each folder under `site/` has its own CLAUDE.md with local rules.
   presence may not.
 - The relation vocabulary (17 verbs), the **tag vocabulary** and the **level vocabulary**
   (`basic`/`advanced`/`expert`) are **closed**. Adding a tag means adding it to `TAGS` in
-  `scripts/lib/model.mjs` first, and only if it will honestly apply to 3+ pages.
+  `scripts/lib/model.mjs` first, and only if it will honestly apply to 3+ pages — that is
+  now a build rule, not advice: every page carries **2-5 tags** and every tag in the set is
+  used on **3+ pages**, so a speculative tag turns the build red.
+- **Every term a page describes itself with is defined on `vocab.html`.** Each `data-kb-*`
+  has an `ATTRIBUTES` entry, each emitted `kb:` term has a fragment, and
+  `scripts/audit-vocab.mjs` fails the build on either half. Growing or retiring any of it —
+  including the search synonym table — is the **kb-vocab** skill.
 - An `explain` block, when present, holds exactly one item per level, in order.
 - A page's **path must match** its `data-kb-band` / `data-kb-group`.
 - No dangling, one-way or contradictory links; every generated artifact in sync.
@@ -108,7 +114,8 @@ site/index.html · vocab.html · map/graph.html   DERIVED (graph.html = interact
                                                 its runtime is hand-authored assets/graph-view.js + graph.css,
                                                 over the unit-tested assets/graph-core.js)
 scripts/kb.mjs        the reader/writer — your interface to all of it
-scripts/lib/model.mjs the taxonomy and both closed vocabularies
+scripts/lib/model.mjs the taxonomy, every closed vocabulary, and the ontology's own prose
+scripts/report-vocab.mjs  the vocabulary worklist (drift, unbridged pages, tag audit)
 ```
 
 `make` on its own lists every target.

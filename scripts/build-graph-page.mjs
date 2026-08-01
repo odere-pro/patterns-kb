@@ -22,6 +22,19 @@ const N = graph.nodes;
 const count = (kind) => Object.values(N).filter((n) => n.kind === kind).length;
 const counts = Object.fromEntries(["pattern", "hazard", "theme", "principle", "design", "capability", "comparison"].map((k) => [k, count(k)]));
 
+/* The essence names what is actually on the canvas. A kind declared but not yet authored
+ * is dropped rather than announced as "0 product comparisons", which reads as a bug. */
+const INVENTORY_LABELS = [
+  ["pattern", "patterns", "pattern"], ["design", "case studies", "case study"],
+  ["theme", "themes", "theme"], ["hazard", "hazards", "hazard"],
+  ["principle", "principles", "principle"], ["capability", "cloud capabilities", "cloud capability"],
+  ["comparison", "product comparisons", "product comparison"],
+];
+const andList = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}` : xs.join(""));
+const live = INVENTORY_LABELS.filter(([k]) => counts[k] > 0);
+const inventory = andList(live.map(([k, plural]) => `${counts[k]} ${plural}`));
+const kindsPhrase = andList(live.map(([, , singular]) => singular));
+
 /* ---- verb legend: one toggle per family ----
  * A family is a symmetric verb or a directional pair; its canonical id is the
  * sorted-first verb — the SAME canonicalization graph-view.js and graph.css use, so the
@@ -49,7 +62,10 @@ const legend = families.map((f) =>
  * canvas (kinds are shape-coded, bands are color-coded). */
 const KIND_GLYPHS = { pattern: "●", hazard: "▲", theme: "■", principle: "◎", design: "◆", capability: "✚", comparison: "✦" };
 const KIND_LABELS = { pattern: "Patterns", hazard: "Hazards", theme: "Themes", principle: "Principles", design: "Case studies", capability: "Cloud capabilities", comparison: "Comparisons" };
-const kindBtns = Object.entries(KIND_LABELS).map(([kind, label]) =>
+/* A kind with no pages yet gets no chip: toggling it would filter the canvas to nothing
+ * and say nothing about why. The kind stays declared in the model and its chip returns
+ * the moment its first page lands. */
+const kindBtns = Object.entries(KIND_LABELS).filter(([kind]) => counts[kind] > 0).map(([kind, label]) =>
   `          <button type="button" class="gbtn kind-btn" data-kind="${kind}" aria-pressed="true"><span class="kshape" aria-hidden="true">${KIND_GLYPHS[kind]}</span>${esc(label)}</button>`,
 ).join("\n");
 
@@ -80,7 +96,7 @@ const html = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Interactive Graph · Map</title>
-  <meta name="description" content="Every pattern, hazard, theme, principle, case study, cloud capability and product comparison on one live force-directed canvas — filter by kind, band, tag, favourites or what you have practiced, color your own groups, tune the physics, and follow the ${graph.meta.relationships} typed relationships.">
+  <meta name="description" content="Every ${kindsPhrase} on one live force-directed canvas — filter by kind, band, tag, favourites or what you have practiced, color your own groups, tune the physics, and follow the ${graph.meta.relationships} typed relationships.">
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
   <link rel="stylesheet" href="../assets/graph.css">
@@ -99,7 +115,7 @@ const html = `<!doctype html>
     <header class="doc-head">
       <p class="doc-kicker">Map · The whole web</p>
       <h1 class="doc-title">Interactive Graph</h1>
-      <p class="doc-essence">${counts.pattern} patterns, ${counts.design} case studies, ${counts.theme} themes, ${counts.hazard} hazards, ${counts.principle} principles, ${counts.capability} cloud capabilities and ${counts.comparison} product comparisons, wired by ${graph.meta.relationships} typed relationships — one live canvas. Drag, zoom, filter by kind, band, tag (<code>tag:caching</code>), favourites or what you have practiced, color your own groups, and tune the forces. Click a node to trace its neighbourhood; double-click to open its page. Your ★ and ✓ are the same ones the hub and the pages carry — toggle them from the selected node's card.</p>
+      <p class="doc-essence">${inventory}, wired by ${graph.meta.relationships} typed relationships — one live canvas. Drag, zoom, filter by kind, band, tag (<code>tag:caching</code>), favourites or what you have practiced, color your own groups, and tune the forces. Click a node to trace its neighbourhood; double-click to open its page. Your ★ and ✓ are the same ones the hub and the pages carry — toggle them from the selected node's card.</p>
       <div class="doc-metarow">
         <span class="badge">Interactive</span>
         <span class="badge muted">${graph.meta.relationships} relationships</span>

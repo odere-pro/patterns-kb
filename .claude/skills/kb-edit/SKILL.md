@@ -111,10 +111,13 @@ anything not in it:
 ERROR: singleton: tag(s) not in the closed vocabulary: made-up-tag
 ```
 
-That is not an obstacle to route around. A tag exists to group patterns; inventing one for
-a single page is how the vocabulary rotted last time (see the tag rules in
-[html5-authoring.md](../../rules/html5-authoring.md)). If the tag genuinely applies to 3+
-pages, add it to `TAGS` and say which pages.
+That is not an obstacle to route around. A tag exists to group pages; inventing one for a
+single page is how the vocabulary rotted last time — the first sweep of this KB produced
+280 tags, 154 of them used exactly once. A page carries **2-5 tags**, all from `TAGS` in
+`scripts/lib/model.mjs`, and every tag in that set must be used on **3+ pages** — both are
+enforced, so a speculative tag turns the build red. If the tag genuinely applies to three
+pages that already exist, add it to `TAGS` in alphabetical position and say which pages.
+Growing or retiring the vocabulary itself is the **kb-vocab** skill.
 
 ## Fixing a wrong real-world example
 

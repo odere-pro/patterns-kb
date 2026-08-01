@@ -162,7 +162,14 @@ export function validatePage(root, relPath) {
     try { v = JSON.parse(raw); } catch { p(`data-kb-${key} is not valid JSON`); continue; }
     if (!Array.isArray(v) || v.some((x) => typeof x !== "string" || !x.trim()))
       p(`data-kb-${key} must be a JSON array of non-empty strings`);
-    else if (key === "tags") for (const t of v) if (!TAGS.has(t)) p(`tag "${t}" is not in the closed vocabulary`);
+    else if (key === "tags") {
+      for (const t of v) if (!TAGS.has(t)) p(`tag "${t}" is not in the closed vocabulary`);
+      /* Two is the floor because one tag groups a page with nothing; five is the ceiling
+       * because a page tagged with everything is filtered by nothing. Corpus-wide the
+       * companion rule — every tag used on 3+ pages — lives in audit-vocab.mjs. */
+      if (v.length < 2 || v.length > 5)
+        p(`data-kb-tags carries ${v.length} tag(s); a page needs 2-5`);
+    }
   }
 
   /* Relations use known verbs and name a target. (Both-sidedness needs the whole

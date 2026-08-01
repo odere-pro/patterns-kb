@@ -200,13 +200,19 @@
     bar.className = "facetbar";
     bar.setAttribute("aria-label", "Quick filters");
     FACETS.forEach(function (rail) {
+      // A chip whose predicate matched nothing filters to an empty hub and explains
+      // nothing about why. build.mjs ships ids:[] for a kind with no pages yet — the
+      // `comparison` kind is declared and ordered but has no pages — so skip those, and
+      // skip a rail left with no chips rather than shipping a bare label.
+      var live = rail.chips.filter(function (c) { return c.ids && c.ids.length; });
+      if (!live.length) return;
       var group = document.createElement("div");
       group.className = "facet-rail";
       var label = document.createElement("span");
       label.className = "facet-rail-label";
       label.textContent = rail.rail;
       group.appendChild(label);
-      rail.chips.forEach(function (c) {
+      live.forEach(function (c) {
         var btn = document.createElement("button");
         btn.type = "button";
         btn.className = "facet-chip";

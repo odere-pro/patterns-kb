@@ -111,7 +111,7 @@ function jsonLdFor(node) {
     "kb:band": node.band,
     "kb:group": node.group,
   };
-  // schema.org has nothing with the precision of a 13-verb ontology (isRelatedTo is the
+  // schema.org has nothing with the precision of a 17-verb ontology (isRelatedTo is the
   // closest and means almost nothing), so relations use the KB vocabulary.
   for (const r of node.relations) {
     const term = `kb:${r.type}`;

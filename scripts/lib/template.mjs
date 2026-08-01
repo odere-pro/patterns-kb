@@ -292,7 +292,7 @@ const COMPARISON_BLOCKS = () => [
   REL_SECTION("How it relates"),
 ].join("\n\n");
 
-export function pageSkeleton({ id, name, kind, band, group, order }) {
+export function pageSkeleton({ id, name, kind, band, group, order, tags }) {
   const dir = folderFor({ kind, band, group });
   const p = "../".repeat(dir.split("/").length);
   const b = kind === "pattern" ? bandOf(band) : null;
@@ -326,7 +326,7 @@ export function pageSkeleton({ id, name, kind, band, group, order }) {
   <script src="${p}assets/lens.js"></script>
 </head>
 <body class="${bodyClass}">
-  <main class="doc-wrap" data-kb-id="${id}" data-kb-kind="${kind}" data-kb-band="${band}" data-kb-group="${group}" data-kb-essence="TODO — the terse one-liner" data-kb-order="${order}">
+  <main class="doc-wrap" data-kb-id="${id}" data-kb-kind="${kind}" data-kb-band="${band}" data-kb-group="${group}" data-kb-essence="TODO — the terse one-liner" data-kb-order="${order}"${tags?.length ? `\n        data-kb-tags='${JSON.stringify(tags)}'` : ""}>
 
     <nav class="crumb" aria-label="Breadcrumb">
       <a href="${p}index.html">Map</a>

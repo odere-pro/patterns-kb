@@ -53,27 +53,44 @@ test("vocabularyHash: insertion order does not matter", () => {
 });
 
 test("validateExpansions: rejects structural violations, warns on drift", () => {
-  const vocab = new Set(["leak", "cache"]);
-  const meta = { corpusHash: vocabularyHash(vocab), vocabSize: 2 };
+  const vocab = new Set(["leak", "cache", "leaking"]);
+  const meta = { corpusHash: vocabularyHash(vocab), vocabSize: 3, entries: 7 };
   const bad = validateExpansions({ meta, expansions: {
     "growing": ["leak"],          // fine
     "Bad-Key!": ["leak"],         // not a lowercase word
     "the": ["leak"],              // stopword key
     "self": ["self"],             // self-reference (also dangling)
     "dangling": ["gone"],         // target not in vocab
-    "toomany": ["leak", "cache", "leak", "cache", "leak"],  // > 4 targets
+    "toomany": ["leak", "cache", "leak", "cache", "leak"],  // > 4 targets (also duplicated)
+    "leak": ["leaking"],          // target CONTAINS the key — the bridge can never add a hit
   } }, vocab);
   assert.ok(bad.errors.some((e) => e.includes("Bad-Key!")));
   assert.ok(bad.errors.some((e) => e.includes(`"the" is a stopword`)));
   assert.ok(bad.errors.some((e) => e.includes("references itself")));
   assert.ok(bad.errors.some((e) => e.includes(`"gone": target is not in the corpus vocabulary`)));
   assert.ok(bad.errors.some((e) => e.includes("1–4 words")));
+  assert.ok(bad.errors.some((e) => e.includes("the target contains the key")), "E1");
+  assert.ok(bad.errors.some((e) => e.includes(`lists "leak" twice`)), "E2");
+  assert.ok(bad.errors.some((e) => e.includes("not sorted")), "E5");
   assert.equal(bad.drift, null, "matching hash should not report drift");
 
-  const drifted = validateExpansions({ meta: { corpusHash: "sha256:stale", vocabSize: 1 },
-    expansions: { growing: ["leak"] } }, vocab);
+  /* Well-formed meta, stale hash: drift and nothing else. A malformed stamp would now
+   * raise a structural error too, which is a different failure. */
+  const drifted = validateExpansions({
+    meta: { corpusHash: `sha256:${"0".repeat(16)}`, vocabSize: 1, entries: 1 },
+    expansions: { growing: ["leak"] },
+  }, vocab);
   assert.deepEqual(drifted.errors, []);
   assert.ok(drifted.drift && drifted.drift.includes("regenerate"));
+
+  /* And the stamp's own shape is checked, so a hand-edited meta cannot go unnoticed. */
+  const malformed = validateExpansions({
+    meta: { corpusHash: "sha256:stale", vocabSize: 0, entries: 99 },
+    expansions: { growing: ["leak"] },
+  }, vocab);
+  assert.ok(malformed.errors.some((e) => e.includes("is not a sha256")), "E6 hash shape");
+  assert.ok(malformed.errors.some((e) => e.includes("is not a positive integer")), "E6 vocabSize");
+  assert.ok(malformed.errors.some((e) => e.includes("meta.entries says 99")), "E5 entries");
 });
 
 /* ---------------- 2. the live table ---------------- */

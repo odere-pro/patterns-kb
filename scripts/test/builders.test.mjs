@@ -98,8 +98,10 @@ test("build.mjs rejects a one-way relationship", () => {
 });
 
 test("build.mjs rejects a tag outside the closed vocabulary", () => {
+  /* Two tags in the bad value, so this still tests MEMBERSHIP rather than tripping the
+   * separate 2-5 count rule. */
   const root = withFixture((r) =>
-    edit(r, ALPHA, `data-kb-tags='["concurrency"]'`, `data-kb-tags='["made-up-tag"]'`));
+    edit(r, ALPHA, `data-kb-tags='["concurrency","isolation"]'`, `data-kb-tags='["made-up-tag","isolation"]'`));
   try {
     const r = run("build.mjs", root);
     assert.equal(r.status, 1, "unknown tag must fail the build");
@@ -527,5 +529,97 @@ test("kb.mjs get --level never truncates the item dump", () => {
     assert.deepEqual(parsed.items.wild, written, "…but the items are not, or a round trip would delete one");
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* ---------------- audit-vocab.mjs ----------------
+ * The vocabularies and the page documenting them, held to each other. T2 (every tag used
+ * on 3+ pages) and S1 (no dead curated synonym) are corpus-scale and skipped under
+ * KB_ROOT, so they are exercised by `make check` against site/, not here. */
+
+/* audit-vocab reads a built graph AND the generated vocab.html, so the fixture needs
+ * both. build-pages.mjs supplies the JSON-LD that V3 inspects. */
+function vocabReady(mutate) {
+  const root = built(mutate);
+  assert.equal(run("build-pages.mjs", root).status, 0);
+  assert.equal(run("build-vocab.mjs", root).status, 0);
+  return root;
+}
+
+test("audit-vocab.mjs passes the clean fixture", () => {
+  const root = vocabReady();
+  try {
+    const r = run("audit-vocab.mjs", root);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Every term the pages use is defined/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("audit-vocab.mjs fails on a data-kb-* the ontology never documents", () => {
+  const root = vocabReady((r) => edit(r, ALPHA, "data-kb-kind=", 'data-kb-bogus="x" data-kb-kind='));
+  try {
+    const r = run("audit-vocab.mjs", root);
+    assert.equal(r.status, 1, "an undocumented attribute must fail");
+    assert.match(r.stderr, /V1 UNDOCUMENTED: data-kb-bogus/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("audit-vocab.mjs fails when a relation verb has no fragment on vocab.html", () => {
+  const root = vocabReady();
+  try {
+    edit(root, join("site", "vocab.html"), 'id="combines-with"', 'id="combines-elsewhere"');
+    const r = run("audit-vocab.mjs", root);
+    assert.equal(r.status, 1, "a verb with no definition must fail");
+    assert.match(r.stderr, /V2 NO FRAGMENT: relation verb "combines-with"/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("audit-vocab.mjs fails when a page's JSON-LD emits an undefined kb: term", () => {
+  const root = vocabReady();
+  try {
+    edit(root, ALPHA, '"kb:kind"', '"kb:notaterm"');
+    const r = run("audit-vocab.mjs", root);
+    assert.equal(r.status, 1, "an undefined emitted term must fail");
+    assert.match(r.stderr, /V3 UNDEFINED TERM/);
+    assert.match(r.stderr, /kb:notaterm/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("audit-vocab.mjs warns when a tag maps 1:1 onto a kind", () => {
+  /* gamma is the fixture's only theme; give it a tag no pattern carries and that tag
+   * covers 100% of one kind, which is what a kind marker is. It warns, never fails —
+   * retiring such a tag means retagging every page that carries it. */
+  const root = vocabReady((r) =>
+    edit(r, GAMMA, `data-kb-tags='["concurrency","isolation"]'`, `data-kb-tags='["caching","isolation"]'`));
+  try {
+    const r = run("audit-vocab.mjs", root);
+    assert.equal(r.status, 0, "a kind marker warns rather than failing");
+    assert.match(r.stdout, /T3 KIND MARKER: "caching"/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("validate.mjs holds a page to 2-5 tags", () => {
+  for (const [tags, why] of [
+    [`["concurrency"]`, "one tag groups nothing"],
+    [`["concurrency","isolation","caching","latency","routing","security"]`, "six tags filter nothing"],
+  ]) {
+    const root = built((r) => edit(r, ALPHA, `data-kb-tags='["concurrency","isolation"]'`, `data-kb-tags='${tags}'`));
+    try {
+      const r = run("kb.mjs", root, "validate", "alpha");
+      assert.equal(r.status, 1, why);
+      assert.match(r.stdout + r.stderr, /2-5/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
