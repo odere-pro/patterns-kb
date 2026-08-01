@@ -93,21 +93,24 @@ const PROSE_SECTION = (id, anchor, heading, block) => `    <section class="doc-s
 
 /* The three-level ladder is mandatory on every kind, so the scaffold carries it with
  * TODO rungs. Same markup `kb.mjs explain` writes — that command replaces the whole
- * block, so the author can fill it either way. */
+ * block, so the author can fill it either way. The rungs carry `data-kb-level`, not
+ * `data-kb-register`, because the lenses are cumulative: at advanced the reader sees the
+ * basic and advanced rungs stacked, so each rung continues the one above rather than
+ * restating it. */
 const EXPLAIN_SECTION = () => `    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
       <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
       <div class="explain">
-        <div class="explain-item" id="explain-basic" data-kb-register="basic">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
           <p>TODO — the failure-first story in plain words, no jargon.</p>
         </div>
-        <div class="explain-item" id="explain-advanced" data-kb-register="advanced">
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
-          <p>TODO — name the mechanism precisely in one breath.</p>
+          <p>TODO — the mechanism, continuing the basic rung rather than re-telling it.</p>
         </div>
-        <div class="explain-item" id="explain-expert" data-kb-register="expert">
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
           <h3>Expert</h3>
-          <p>TODO — selection criteria, the tradeoff bill, the counter-moves.</p>
+          <p>TODO — selection criteria, the tradeoff bill, and the counter-move for each cost.</p>
         </div>
       </div>
     </section>`;

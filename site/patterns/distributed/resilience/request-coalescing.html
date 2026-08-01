@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Request Coalescing · Patterns</title>
+  <meta name="description" content="Request Coalescing — Collapses concurrent identical requests into one in-flight call">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#request-coalescing",
+  "identifier": "request-coalescing",
+  "name": "Request Coalescing",
+  "description": "Collapses concurrent identical requests into one in-flight call",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-resilience",
+  "kb:combines-with": [
+    {
+      "@id": "../../caching/read-through.html#read-through",
+      "name": "Read-Through",
+      "kb:note": "The cache that owns the miss path is the natural place to put the gate"
+    },
+    {
+      "@id": "../../concurrency/batching.html#batching",
+      "name": "Batching",
+      "kb:note": "Collapse the duplicates first, then batch the distinct keys that remain"
+    },
+    {
+      "@id": "./timeout-deadline.html#timeout-deadline",
+      "name": "Timeout / Deadline",
+      "kb:note": "A bound on the shared call is what stops one hung fetch hanging every waiter"
+    },
+    {
+      "@id": "./load-shedding.html#load-shedding",
+      "name": "Load Shedding",
+      "kb:note": "Both bound what reaches the origin — one by removing duplicates, the other by refusing excess"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "../../caching/refresh-ahead.html#refresh-ahead",
+      "name": "Refresh-Ahead",
+      "kb:note": "Refresh before expiry so the gap never opens, rather than guarding the gap when it does"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../../hazards/cache-stampede.html#cache-stampede",
+      "name": "Cache Stampede",
+      "kb:note": "Collapsing the concurrent misses is what stops one expiry becoming a herd of identical queries"
+    },
+    {
+      "@id": "../../../hazards/thundering-herd.html#thundering-herd",
+      "name": "Thundering Herd",
+      "kb:note": "The waiters released together share one call instead of each making their own"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="request-coalescing" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-resilience" data-kb-essence="Collapses concurrent identical requests into one in-flight call" data-kb-order="135" data-kb-aliases="[&quot;single-flight&quot;,&quot;request collapsing&quot;,&quot;duplicate suppression&quot;]" data-kb-tags="[&quot;caching&quot;,&quot;concurrency&quot;,&quot;latency&quot;,&quot;resilience&quot;,&quot;throughput&quot;]" data-kb-solves="[&quot;hundreds of requests hit the database for the same row the moment the cache entry expires&quot;,&quot;the same expensive query runs many times in parallel because every caller missed at once&quot;,&quot;our origin sees a burst of identical reads even though the cache hit rate looks fine&quot;,&quot;one popular key going cold takes the backend down with it&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Request Coalescing</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network</p>
+      <h1 class="doc-title">Request Coalescing</h1>
+      <p class="doc-essence">When several callers ask for the same thing at the same time, only the first is allowed to do the work — the rest wait on the answer it is already fetching, so N simultaneous requests cost the backend exactly one.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="request-coalescing">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1">A popular cache entry expires. In the next forty milliseconds eight hundred requests arrive wanting it, every one of them misses, and every one asks the database for the same row. Seven hundred and ninety-nine of those queries are waste — they compute an answer another query is already computing. <strong>Request coalescing</strong> puts one gate in front of the work: the first caller to arrive starts the fetch and registers it under the key it is fetching, and everyone who arrives while that fetch is running waits on its result instead of starting their own. One backend call is made, and all eight hundred callers are served from it.</p>
+        <p data-kb-level="advanced" id="description-p-2">The mechanism is a map from key to in-flight promise, guarded so that check-and-insert is one atomic step. On arrival a caller looks the key up: a hit means subscribe to the existing call, a miss means store your own promise first and then do the work. The entry is removed when the call settles — on failure as well as on success, or the next caller inherits a rejection that has nothing to do with its own attempt.</p>
+        <p data-kb-level="advanced" id="description-p-3">The force it resolves is that caching and concurrency are usually designed as though they were independent, and they are not. A cache turns repeated reads into one read <em>over time</em>; it does nothing about repeated reads <em>at the same instant</em>, because none of them has finished writing the entry yet. That gap is where a <a href="../../../hazards/cache-stampede.html">cache stampede</a> lives, and adding cache capacity never closes it. Coalescing closes it by making duplicate concurrent work impossible rather than merely unlikely.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>A hundred people walk up to a counter within a second, all asking the same question. You can send a hundred runners to fetch a hundred copies of one answer, or send one runner and have everybody wait for them to come back. Sending one runner is the whole idea: the first person to ask starts the errand, and everyone who asks while it is running gets handed the same answer when it arrives.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>The runner is a shared in-flight promise in a concurrent map keyed by the request, and the correctness of the pattern rests entirely on making check-and-insert atomic — two callers that both look, both miss, and both start work have reproduced the problem the pattern exists to solve. A per-key lock or an atomic compute-if-absent gives you that guarantee. Scope matters as much as the mechanism: an in-process map deduplicates within one instance, so a fleet of fifty still sends up to fifty calls, and cutting that further means moving the gate to a shared store or moving the fill behind a <a href="../../caching/read-through.html">read-through</a> cache that owns the miss path for everyone.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Reach for it when duplicate concurrent work is expensive and the answer is genuinely shareable; skip it when requests only look identical, because coalescing on a key that omits the tenant or the caller's permissions serves one user another user's data. The bill has three lines and each has a counter-move. Shared fate — one slow or failed fetch is now every waiter's — is paid with a timeout on the shared call and a bound on how many may wait, so a hung leader fails fast for everyone rather than hanging everyone. Head-of-line latency, where a caller arriving at the last millisecond waits out the whole fetch, is paid by serving stale on arrival and coalescing the refresh behind it. And deduplication is only as wide as the map, so on a large fleet measure the residual concurrency you actually get before assuming the origin sees one call rather than one per instance.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    C1["Caller A"] --&gt;|"1 ask for key K"| G["Coalescer"]
+    C2["Caller B"] --&gt;|"2 ask for key K"| G
+    C3["Caller C"] --&gt;|"3 ask for key K"| G
+    subgraph atomic["One atomic check-and-insert"]
+      G --&gt;|"4 claim K, or find the claim"| M[("In-flight map: key to promise")]
+    end
+    G --&gt;|"5 first claimant only"| O[("Origin")]
+    O --&gt;|"6 one result"| G
+    G --&gt;|"7 the same result to all three"| C1
+        </pre>
+        <figcaption>Three callers want key K at once. Step 5 happens once because step 4 is atomic — B and C find A's claim instead of making their own — and step 7 fans the single result back out.</figcaption>
+      </figure>
+      <div class="prose">
+        <p id="structure-p-1">The subgraph is what carries the guarantee. If looking the key up and inserting your own promise are two separate steps, two callers can both pass the lookup before either inserts, the origin sees two calls, and the pattern degrades to no pattern at all under exactly the load it was added for.</p>
+      </div>
+      <figure class="diagram" data-kb-level="advanced" id="structure-fig-2">
+        <pre class="mermaid">
+sequenceDiagram
+    participant A as Caller A
+    participant B as Caller B
+    participant G as Coalescer
+    participant O as Origin
+    A-&gt;&gt;G: get(K)
+    G-&gt;&gt;G: miss, so claim K
+    G-&gt;&gt;O: fetch K
+    B-&gt;&gt;G: get(K)
+    G-&gt;&gt;G: hit, so wait on A's claim
+    O--xG: times out
+    G-&gt;&gt;G: release the claim on K
+    G--&gt;&gt;A: error
+    G--&gt;&gt;B: the same error
+        </pre>
+        <figcaption>The failure branch is where the pattern is usually got wrong. B shares A's fate, and the claim must be released on rejection as well as on success — otherwise the next caller waits on a promise that has already failed.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">In-process single-flight</dt>
+        <dd>One map per instance and no coordination. It costs nothing to operate and removes duplicate work inside a process, but a fleet of N instances still sends up to N concurrent calls to the origin. This is the default, and it is usually enough.</dd>
+        <dt id="variations-item-2">Cross-process coalescing</dt>
+        <dd>The gate moves to a shared store: whoever wins a short-lived lock does the fetch and publishes the result, and the losers poll or subscribe for it. Origin concurrency falls to one across the whole fleet, at the price of a network round-trip on the happy path and a lock whose holder can die mid-fetch.</dd>
+        <dt id="variations-item-3">Serve-stale-and-refresh</dt>
+        <dd>Waiters are handed the expired value immediately while exactly one refresh runs behind them. Nobody blocks, so head-of-line latency disappears, and the cost is that callers knowingly read data that is a little out of date.</dd>
+        <dt id="variations-item-4">Windowed batching of adjacent keys</dt>
+        <dd>A short window collects <em>different</em> keys and issues one multi-get instead of collapsing identical ones. That is <a href="../../concurrency/batching.html">batching</a> rather than coalescing — it trades a small fixed latency for far fewer round-trips — and the two compose: collapse the duplicates, then batch what remains.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Bounds origin concurrency per key at one, so a burst of identical misses costs a single backend call rather than hundreds.</li>
+            <li data-kb-level="advanced" id="tradeoffs-pro-2" data-kb-polarity="pro">Needs no coordination in its common form — a map and a lock inside one process, with nothing extra to deploy or operate.</li>
+            <li data-kb-level="advanced" id="tradeoffs-pro-3" data-kb-polarity="pro">Protects the origin without asking callers to behave, so it still holds when a new client ships without the retry discipline everyone assumed.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Waiters share the leader's fate: one slow or failed fetch becomes slow or failed for everyone attached to it.</li>
+            <li data-kb-level="advanced" id="tradeoffs-con-2" data-kb-polarity="con">A caller arriving late waits out the whole in-flight fetch, so its latency is worse than an uncoalesced call would have been.</li>
+            <li data-kb-level="advanced" id="tradeoffs-con-3" data-kb-polarity="con">The key is a correctness boundary. Omit the tenant, the locale or the permission scope and one caller is served another's data.</li>
+            <li data-kb-level="expert" id="tradeoffs-con-4" data-kb-polarity="con">Deduplication is only as wide as the map, so on a large fleet the origin still sees roughly one call per instance unless the gate is shared.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Many callers want the same expensive thing at the same moment — a <a href="../../../hazards/hot-key.html">hot key</a> expiring, a cold start, a cache flush.</li>
+            <li data-kb-level="advanced" id="usage-when-2" data-kb-polarity="when">The origin is the scarce resource and duplicate work is what exhausts it, rather than genuine distinct demand.</li>
+            <li data-kb-level="advanced" id="usage-when-3" data-kb-polarity="when">The answer is shareable between those callers without a further authorization check.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The requests are not truly identical — anything varying by caller, tenant or permission must not share one result.</li>
+            <li data-kb-level="advanced" id="usage-avoid-2" data-kb-polarity="avoid">The work has side effects. Collapsing two writes into one silently drops the second, which is a correctness bug rather than an optimization.</li>
+            <li data-kb-level="advanced" id="usage-avoid-3" data-kb-polarity="avoid">Every caller needs its own freshest read, as in a compare-and-set loop that must observe the newest value.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — a single-flight gate over any async loader</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">/* One entry per key while a fetch is running. In a single-threaded runtime the
+ * get-then-set below cannot interleave, which is what makes it atomic here; the
+ * same two lines in a threaded language need a per-key lock or computeIfAbsent. */
+export function coalesce&lt;T&gt;(load: (key: string) =&gt; Promise&lt;T&gt;) {
+  const inFlight = new Map&lt;string, Promise&lt;T&gt;&gt;();
+
+  return function get(key: string): Promise&lt;T&gt; {
+    const existing = inFlight.get(key);
+    if (existing) return existing;           // someone is already fetching this
+
+    const call = load(key).finally(() =&gt; {
+      // Release on rejection too, or the next caller waits on a dead promise.
+      inFlight.delete(key);
+    });
+
+    inFlight.set(key, call);
+    return call;
+  };
+}
+
+// 800 concurrent misses on one key produce exactly one loadUser call.
+const getUser = coalesce(loadUser);
+await Promise.all(Array.from({ length: 800 }, () =&gt; getUser("u-42")));
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="read-through"><a href="../../caching/read-through.html">Read-Through</a><span class="rel-note">The cache that owns the miss path is the natural place to put the gate</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="batching"><a href="../../concurrency/batching.html">Batching</a><span class="rel-note">Collapse the duplicates first, then batch the distinct keys that remain</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="timeout-deadline"><a href="./timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">A bound on the shared call is what stops one hung fetch hanging every waiter</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="load-shedding"><a href="./load-shedding.html">Load Shedding</a><span class="rel-note">Both bound what reaches the origin — one by removing duplicates, the other by refusing excess</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="refresh-ahead"><a href="../../caching/refresh-ahead.html">Refresh-Ahead</a><span class="rel-note">Refresh before expiry so the gap never opens, rather than guarding the gap when it does</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="cache-stampede"><a href="../../../hazards/cache-stampede.html">Cache Stampede</a><span class="rel-note">Collapsing the concurrent misses is what stops one expiry becoming a herd of identical queries</span></div>
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="thundering-herd"><a href="../../../hazards/thundering-herd.html">Thundering Herd</a><span class="rel-note">The waiters released together share one call instead of each making their own</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <!-- kb:generated — mentions; derived from other pages' prose links, edit the prose, not this -->
+    <aside class="mentions" id="mentioned-by" aria-labelledby="h-mentions">
+      <h2 class="mentions-h" id="h-mentions">Mentioned by</h2>
+      <p class="mentions-lead">These pages link here from their prose without declaring a typed relationship.</p>
+      <ul class="mention-list">
+        <li class="mention-item"><a href="../../../themes/scaling-reads.html">Scaling Reads</a><span class="mention-kind">theme</span></li>
+        <li class="mention-item"><a href="../../../designs/top-k.html">Top-K</a><span class="mention-kind">design</span></li>
+      </ul>
+    </aside>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

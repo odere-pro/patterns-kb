@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Load Shedding · Patterns</title>
+  <meta name="description" content="Load Shedding — Rejects work early once the server is past what it can serve">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#load-shedding",
+  "identifier": "load-shedding",
+  "name": "Load Shedding",
+  "description": "Rejects work early once the server is past what it can serve",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-resilience",
+  "kb:combines-with": [
+    {
+      "@id": "./bulkhead.html#bulkhead",
+      "name": "Bulkhead",
+      "kb:note": "Partitions bound which pool saturates; shedding decides what to do once one has"
+    },
+    {
+      "@id": "../../concurrency/backpressure.html#backpressure",
+      "name": "Backpressure",
+      "kb:note": "Backpressure asks the producer to slow down; shedding refuses when it will not or cannot"
+    },
+    {
+      "@id": "./retry-backoff.html#retry-backoff",
+      "name": "Retry with Backoff",
+      "kb:note": "A refusal only helps if the caller backs off — otherwise it returns as more load"
+    },
+    {
+      "@id": "../routing/autoscaling.html#autoscaling",
+      "name": "Autoscaling",
+      "kb:note": "Shedding holds the line for the minutes capacity takes to arrive"
+    },
+    {
+      "@id": "./request-coalescing.html#request-coalescing",
+      "name": "Request Coalescing",
+      "kb:note": "Coalescing removes duplicate demand; what remains is genuine, and shedding decides how much of it fits"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "./rate-limiter.html#rate-limiter",
+      "name": "Rate Limiter",
+      "kb:note": "Self-protection from a live load signal, rather than a per-client quota agreed in advance"
+    },
+    {
+      "@id": "./load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "Refuse the burst when the work cannot wait; queue it when it can"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../../hazards/cascading-failure.html#cascading-failure",
+      "name": "Cascading Failure",
+      "kb:note": "Refusing the excess is what stops one saturated service dragging its callers down with it"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="load-shedding" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-resilience" data-kb-essence="Rejects work early once the server is past what it can serve" data-kb-order="136" data-kb-aliases="[&quot;admission control&quot;,&quot;brownout&quot;,&quot;graceful degradation under load&quot;]" data-kb-tags="[&quot;resilience&quot;,&quot;availability&quot;,&quot;latency&quot;,&quot;throughput&quot;,&quot;performance&quot;]" data-kb-solves="[&quot;under a spike every request gets slower until none of them finish in time&quot;,&quot;the server looks busy but throughput has collapsed and nobody is being served&quot;,&quot;we keep accepting work we have no chance of completing before the caller gives up&quot;,&quot;a burst of traffic takes the whole service down instead of just the excess&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Load Shedding</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network</p>
+      <h1 class="doc-title">Load Shedding</h1>
+      <p class="doc-essence">Past the point where a server can serve everything asked of it, it stops trying — cheaply refusing the requests it cannot finish in time, so the ones it accepts still get answered instead of everything degrading until no response arrives soon enough to be worth anything.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="load-shedding">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1">A service that accepts everything offered to it does not fail cleanly when demand passes its capacity — it fails by getting slower. Queues lengthen, each request waits longer for a thread, and eventually every response arrives after the caller has given up and retried, which adds still more load. Throughput collapses while the machine looks busy, and nobody is served. <strong>Load shedding</strong> is the decision to stop accepting: measure how loaded you are right now, and once past a threshold refuse some of the incoming work immediately and cheaply, so that what you do accept still completes inside its deadline.</p>
+        <p data-kb-level="advanced" id="description-p-2">The signal is a live measure of saturation rather than a request count — in-flight concurrency, queue depth, thread-pool utilization, or the gap between observed latency and the target. When it crosses the threshold the admission check returns <code>503</code> with a <code>Retry-After</code> before any expensive work begins, and the refusal must be far cheaper than serving would have been or shedding becomes its own load. What gets shed is a policy decision: uniform random is the cheapest, by priority is the useful one, so a health check or a checkout survives while a bulk export is refused.</p>
+        <p data-kb-level="advanced" id="description-p-3">The force it resolves is that a queue stops being a buffer once arrivals exceed the service rate — it becomes a latency amplifier. Work admitted beyond capacity does not wait its turn and then succeed; it waits, times out at the caller, and is retried, so the server spends its scarce capacity computing answers nobody is still listening for. Shedding converts that into an immediate <em>no</em>, and a fast no is worth more to a caller than a slow maybe, because it is the only answer they can act on.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>A restaurant with twenty tables can take a hundred bookings for eight o'clock. Everyone turns up, everyone waits, the kitchen is swamped, and the food arrives so late that even the people who got a table are unhappy — a hundred served badly instead of twenty served well. The alternative is to say "sorry, we're full" at the door. It feels worse to the person turned away, and it is the only way the people inside get dinner.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>"We're full" has to be decided from a signal that tracks saturation — in-flight concurrency, queue depth, or measured latency against the target — and not from a fixed requests-per-second number, which goes stale the moment a dependency slows down or an instance is added. The check runs at admission, before the request has cost anything, and answers <code>503</code> with <code>Retry-After</code> so the caller backs off instead of retrying straight into the same wall. Shedding by priority is what makes it worth the complexity: classify requests once at the edge and drop the cheapest-to-lose class first, so bulk and best-effort traffic pays for the survival of checkout and health checks.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Reach for it when overload is a real operating condition rather than a hypothetical, and when a fast refusal genuinely serves the caller better than a slow success — nearly always for interactive traffic, nearly never for durable work that can wait in a queue. Three costs, each with its counter-move. Refusals are visible failures that count against availability, so publish the shed rate as its own metric and keep it out of the error budget, or someone will tune the system to stop shedding and get the collapse back. A threshold on the wrong signal sheds while idle or accepts while drowning, so drive it from concurrency or latency and let it adapt rather than pinning a constant. And shedding is local by construction — each instance protects only itself, so a hot shard melts behind a healthy-looking fleet average, which is why it pairs with <a href="./bulkhead.html">bulkhead</a> for isolation and with load-aware balancing for placement. The honest framing is that shedding never creates capacity. It only decides who goes unserved, and choosing that deliberately beats letting the queue choose at random.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    C["Callers"] --&gt;|"1 request arrives"| AD["Admission check"]
+    subgraph gate["Decided before any resource is committed"]
+      AD --&gt;|"2 read current saturation"| S[("Load signal: in-flight, queue depth, latency")]
+    end
+    AD --&gt;|"3 under threshold, so admit"| W["Worker pool"]
+    AD --&gt;|"4 over threshold, so 503 with Retry-After"| C
+    W --&gt;|"5 served inside its deadline"| C
+    W --&gt;|"6 feeds the signal back"| S
+        </pre>
+        <figcaption>How does a server past capacity keep serving anyone? Step 2 happens before step 3 commits anything, so a refusal at step 4 costs almost nothing — and step 6 is what keeps the threshold tracking reality instead of a guess.</figcaption>
+      </figure>
+      <div class="prose">
+        <p id="structure-p-1">The subgraph is the boundary that makes the pattern work. Once a request holds a thread, a connection or a database slot, refusing it has already spent the thing that was scarce — so the decision has to sit in front of the pool rather than inside it.</p>
+      </div>
+      <figure class="diagram" data-kb-level="advanced" id="structure-fig-2">
+        <pre class="mermaid">
+sequenceDiagram
+    participant Lo as Bulk caller
+    participant Hi as Checkout caller
+    participant A as Admission check
+    participant W as Worker pool
+    Note over W: 34 in flight, both classes under threshold
+    Lo-&gt;&gt;A: POST /export
+    A-&gt;&gt;W: admit
+    Note over W: 35 in flight, bulk ceiling reached
+    Lo-&gt;&gt;A: POST /export
+    A--&gt;&gt;Lo: 503, Retry-After 5
+    Hi-&gt;&gt;A: POST /checkout
+    A-&gt;&gt;W: admit, the interactive ceiling is higher
+    W--&gt;&gt;Hi: 200, inside the deadline
+        </pre>
+        <figcaption>Priority is what turns shedding from a blunt instrument into a useful one. The same saturation refuses the export and admits the checkout, so the traffic worth least pays for the traffic worth most.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Concurrency-limited admission</dt>
+        <dd>Cap the number of requests in flight and refuse anything beyond it. The signal needs no tuning against traffic shape because it measures the scarce resource itself rather than a proxy for it — this is the version worth trying first.</dd>
+        <dt id="variations-item-2">Priority shedding</dt>
+        <dd>Requests carry a class assigned at the edge and the threshold applies per class, so bulk work is refused well before interactive work is. It needs a classification everyone agrees on and callers who declare it honestly, and it is what makes shedding a product decision rather than a technical one.</dd>
+        <dt id="variations-item-3">Deadline-aware shedding</dt>
+        <dd>Each request carries the time it has left, and anything whose remaining budget is smaller than the current queue wait is dropped on arrival — the caller would have abandoned it anyway. It discards precisely the work that was already worthless, and it is worth nothing unless deadlines are propagated end to end.</dd>
+        <dt id="variations-item-4">Adaptive thresholds</dt>
+        <dd>The limit is inferred rather than configured, by watching throughput against concurrency and settling near the point where more concurrency stops buying more throughput. It survives dependency slowdowns and hardware changes that a constant does not, at the cost of a control loop that can oscillate.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Holds throughput up under overload: what is accepted still finishes in time, instead of everything finishing too late to matter.</li>
+            <li data-kb-level="advanced" id="tradeoffs-pro-2" data-kb-polarity="pro">Turns a slow, ambiguous failure into a fast, explicit one the caller can act on — back off, fail over, or degrade its own feature.</li>
+            <li data-kb-level="advanced" id="tradeoffs-pro-3" data-kb-polarity="pro">Lets you choose what to lose. With priorities, the traffic worth least absorbs the shortage.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Refusals are real failures for real users, and they count against availability even when shedding was the right call.</li>
+            <li data-kb-level="advanced" id="tradeoffs-con-2" data-kb-polarity="con">The threshold is only as good as its signal; on the wrong one it sheds while idle or accepts while drowning.</li>
+            <li data-kb-level="advanced" id="tradeoffs-con-3" data-kb-polarity="con">A caller that retries immediately turns a refusal into more load, so it works only if the client honours the backoff.</li>
+            <li data-kb-level="expert" id="tradeoffs-con-4" data-kb-polarity="con">It is local to an instance, so a hot shard can be shedding hard while the fleet average looks healthy and nothing scales out.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Demand can outrun capacity faster than capacity can be added, so waiting for <a href="../routing/autoscaling.html">autoscaling</a> is not an answer.</li>
+            <li data-kb-level="advanced" id="usage-when-2" data-kb-polarity="when">A fast refusal serves the caller better than a slow success — most interactive request paths.</li>
+            <li data-kb-level="advanced" id="usage-when-3" data-kb-polarity="when">Traffic separates into classes worth different amounts, so there is something you would rather lose first.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The work is deferrable. A durable queue that absorbs the burst serves everyone eventually, which beats refusing them.</li>
+            <li data-kb-level="advanced" id="usage-avoid-2" data-kb-polarity="avoid">Every request is equally critical and none may be dropped, as with payment capture or an audit trail.</li>
+            <li data-kb-level="advanced" id="usage-avoid-3" data-kb-polarity="avoid">What you actually want is fairness between customers rather than self-protection — that is a <a href="./rate-limiter.html">rate limiter</a>, and the two answer different questions.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — concurrency-limited admission with two priority classes</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">/* The decision is made before the handler runs, so a refusal costs one
+ * comparison instead of a thread, a connection and a database slot. */
+const INTERACTIVE_LIMIT = 50;     // what this instance can hold in flight
+const BULK_LIMIT = 35;            // bulk traffic is refused earlier
+
+let inFlight = 0;
+
+function admit(priority: "interactive" | "bulk"): boolean {
+  const ceiling = priority === "bulk" ? BULK_LIMIT : INTERACTIVE_LIMIT;
+  if (inFlight &gt;= ceiling) return false;
+  inFlight++;
+  return true;
+}
+
+export async function handle(req: Request, run: () =&gt; Promise&lt;Response&gt;) {
+  const priority = classify(req);
+  if (!admit(priority)) {
+    shedRate.inc({ priority });                 // count sheds separately from errors
+    return new Response("overloaded", {
+      status: 503,
+      headers: { "Retry-After": "5" },          // tell the caller to back off
+    });
+  }
+  try {
+    return await run();
+  } finally {
+    inFlight--;                                 // release on failure too, or the limit leaks
+  }
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                      <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="bulkhead"><a href="./bulkhead.html">Bulkhead</a><span class="rel-note">Partitions bound which pool saturates; shedding decides what to do once one has</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="backpressure"><a href="../../concurrency/backpressure.html">Backpressure</a><span class="rel-note">Backpressure asks the producer to slow down; shedding refuses when it will not or cannot</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="retry-backoff"><a href="./retry-backoff.html">Retry with Backoff</a><span class="rel-note">A refusal only helps if the caller backs off — otherwise it returns as more load</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="autoscaling"><a href="../routing/autoscaling.html">Autoscaling</a><span class="rel-note">Shedding holds the line for the minutes capacity takes to arrive</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="request-coalescing"><a href="./request-coalescing.html">Request Coalescing</a><span class="rel-note">Coalescing removes duplicate demand; what remains is genuine, and shedding decides how much of it fits</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="rate-limiter"><a href="./rate-limiter.html">Rate Limiter</a><span class="rel-note">Self-protection from a live load signal, rather than a per-client quota agreed in advance</span></div>
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="load-leveling"><a href="./load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">Refuse the burst when the work cannot wait; queue it when it can</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="cascading-failure"><a href="../../../hazards/cascading-failure.html">Cascading Failure</a><span class="rel-note">Refusing the excess is what stops one saturated service dragging its callers down with it</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <!-- kb:generated — mentions; derived from other pages' prose links, edit the prose, not this -->
+    <aside class="mentions" id="mentioned-by" aria-labelledby="h-mentions">
+      <h2 class="mentions-h" id="h-mentions">Mentioned by</h2>
+      <p class="mentions-lead">These pages link here from their prose without declaring a typed relationship.</p>
+      <ul class="mention-list">
+        <li class="mention-item"><a href="../../../themes/streaming.html">Streaming</a><span class="mention-kind">theme</span></li>
+      </ul>
+    </aside>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>
