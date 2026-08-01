@@ -47,7 +47,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 import { RELATION_TYPES, REL_ORDER, SYNONYMS, BLOCKS, LEVELS, LEVEL_LABELS, TAGS, esc, folderFor, band as bandOf, PROSE_LINK_EXCLUDE, KIND_DIR } from "./lib/model.mjs";
 import { pruneForLens } from "./lib/lens.mjs";
-import { mergedSynonyms, STOP } from "./lib/expansions.mjs";
+import { mergedSynonyms, own, STOP } from "./lib/expansions.mjs";
 import { validatePage } from "./lib/validate.mjs";
 import { pageSkeleton } from "./lib/template.mjs";
 
@@ -399,7 +399,13 @@ if (cmd === "get") {
       /* Score the term itself at full weight, then its synonyms at half; a term
        * counts as matched once, on its best variant. */
       let best = 0, bestWhy = null;
-      const variants = [term, ...(SYN[term] ?? [])];
+      /* `own` and not `SYN[term] ?? []`: the merged map is an object literal, so it
+       * inherits Object.prototype. `SYN["constructor"]` returns a function — not nullish,
+       * so `??` never fires and the spread threw, taking `find` down with exit 1 on any
+       * query containing constructor/toString/valueOf/hasOwnProperty. `builder` and
+       * `dummy-object` both author "my constructor takes…" in their own solves, so their
+       * canonical symptom text was unsearchable. Mirrored in search.js. */
+      const variants = [term, ...own(SYN, term)];
       for (let vi = 0; vi < variants.length; vi++) {
         const t = variants[vi];
         const mult = vi === 0 ? 1 : 0.5;

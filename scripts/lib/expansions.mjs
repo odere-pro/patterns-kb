@@ -31,6 +31,23 @@ export function mergedSynonyms(curated) {
   return { ...loadExpansions().expansions, ...curated };
 }
 
+/* Own-property lookup into a synonym map, returning [] for anything not authored.
+ *
+ * The merged map is an object literal and therefore inherits Object.prototype, so
+ * `SYN["constructor"]` returns a function rather than undefined. `SYN[t] ?? []` and
+ * `SYN[t] || []` both sail past that: the CLI spread it and crashed with exit 1, the hub
+ * concatenated it and scored a stringified function. Queries containing `constructor`,
+ * `toString`, `valueOf` or `hasOwnProperty` are not hypothetical — `builder` and
+ * `dummy-object` both author "my constructor takes…" in their own data-kb-solves.
+ *
+ * Deliberately NOT fixed by making the map prototype-less: search-parity.test.mjs
+ * deep-equals the projected catalog against this map with assert/strict, which compares
+ * prototypes, and the browser's copy arrives as a plain JSON object literal either way.
+ * site/assets/search.js keeps an ES5 twin of this guard. */
+export function own(map, key) {
+  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : [];
+}
+
 /* The searchable vocabulary: every 3+-letter non-stopword in the catalog fields the
  * scorers match against. An expansion target outside this set can never score —
  * that is the structural invariant validateExpansions enforces. */

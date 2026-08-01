@@ -34,6 +34,13 @@
     how: 1, does: 1, has: 1, have: 1, its: 1, his: 1, her: 1, their: 1, them: 1,
     they: 1, was: 1, were: 1, will: 1, would: 1, should: 1 };
 
+  // Every map here is an object literal keyed by a QUERY WORD, so it inherits
+  // Object.prototype: STOP["constructor"] is a function, hence truthy, and the term was
+  // silently dropped as a stopword — "constructor" returned zero pages on a KB full of
+  // creational patterns. Same trap in SYN and in the dedupe below. Own-property lookups
+  // only. Mirrors `own()` in scripts/lib/expansions.mjs.
+  function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+
   // Raw score for one term (or synonym variant) against a node's fields — no multiplier.
   function termScore(n, t, naming, hay, solves, tags) {
     var s = 0;
@@ -58,7 +65,7 @@
     for (var i = 0; i < terms.length; i++) {
       // Score the term at full weight, then each synonym at half; the term counts as
       // matched once, on its best variant. Mirrors scripts/kb.mjs.
-      var variants = [terms[i]].concat(SYN[terms[i]] || []);
+      var variants = [terms[i]].concat(has(SYN, terms[i]) ? SYN[terms[i]] : []);
       var best = 0;
       for (var v = 0; v < variants.length; v++) {
         var got = termScore(n, variants[v], naming, hay, solves, tags) * (v === 0 ? 1 : 0.5);
@@ -75,7 +82,7 @@
     // Dedupe terms, mirroring kb.mjs — a repeated word must not score twice.
     var seen = {};
     var terms = q.split(/\s+/).filter(function (t) {
-      if (t.length <= 2 || STOP[t] || seen[t]) return false;
+      if (t.length <= 2 || has(STOP, t) || has(seen, t)) return false;
       seen[t] = 1;
       return true;
     });

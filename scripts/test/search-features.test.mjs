@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createContext, runInContext } from "node:vm";
 import { SYNONYMS } from "../lib/model.mjs";
-import { loadExpansions, mergedSynonyms, corpusVocabulary, vocabularyHash, validateExpansions } from "../lib/expansions.mjs";
+import { loadExpansions, mergedSynonyms, own, corpusVocabulary, vocabularyHash, validateExpansions } from "../lib/expansions.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
@@ -169,4 +169,44 @@ test("cli: semantic bridges reach the symptom's page", () => {
   assert.ok(giant.includes("god-object"), `expected god-object in top-5, got ${giant.join(", ")}`);
   const outdated = cli("outdated cache", "--n", "5").map((x) => x.id);
   assert.ok(outdated.includes("stale-cache"), `expected stale-cache in top-5, got ${outdated.join(", ")}`);
+});
+
+/* ---------------- 4. inherited-property keys ----------------
+ * Both scorers key object literals by a QUERY WORD, so every lookup inherits
+ * Object.prototype. `SYN["constructor"]` is a function: the CLI spread it and died with
+ * exit 1, and the hub's `STOP["constructor"]` was truthy so the term was dropped as a
+ * stopword. Neither is hypothetical — `builder` and `dummy-object` both author
+ * "my constructor takes…" in their own data-kb-solves, so a KB full of creational
+ * patterns returned nothing for "constructor". */
+
+const PROTO_KEYS = ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"];
+
+test("own(): inherited properties never leak out of a synonym map", () => {
+  const syn = mergedSynonyms(SYNONYMS);
+  for (const k of PROTO_KEYS) {
+    assert.deepEqual(own(syn, k), [], `own() must return [] for inherited key "${k}"`);
+    assert.ok(Array.isArray(own(syn, k)), `own("${k}") must stay spreadable`);
+  }
+  // …without breaking a real entry.
+  assert.ok(own(syn, "stale").includes("expired"), "a real key still resolves");
+});
+
+test("hub: a query naming a prototype member is scored, not swallowed", () => {
+  const matches = loadHub();
+  const hits = ranked(matches("constructor"));
+  assert.ok(hits.length >= 5,
+    `"constructor" must reach the creational patterns, got ${hits.length}: ${hits.join(", ")}`);
+  assert.ok(hits.includes("builder"), `expected builder among ${hits.join(", ")}`);
+  // The rest must be inert rather than throwing or matching everything.
+  for (const k of PROTO_KEYS.filter((x) => x !== "constructor")) {
+    assert.doesNotThrow(() => matches(k), `hub must not throw on "${k}"`);
+  }
+});
+
+test("cli: find survives a query naming a prototype member", () => {
+  // builder's own canonical solves text — it used to exit 1 on this exact sentence.
+  const hits = cli("my constructor takes eleven arguments and half of them are null", "--n", "5");
+  assert.ok(hits.length, "find must return results, not crash");
+  assert.equal(hits[0].id, "builder", `expected builder first, got ${hits.map((h) => h.id).join(", ")}`);
+  for (const k of PROTO_KEYS) assert.doesNotThrow(() => cli(k, "--n", "1"), `find must not throw on "${k}"`);
 });
