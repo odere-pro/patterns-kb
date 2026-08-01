@@ -30,11 +30,12 @@
     };
 
     var ink = v("--ink", "#14202E");
-    var inkSoft = v("--ink-soft", "#51606F");
     var line = v("--line", "#C7D2DE");
     var accent = v("--accent", "#1D5FA8");
     var accentSoft = v("--accent-soft", "#E3ECF6");
     var paperRaised = v("--paper-raised", "#FFFFFF");
+    var brass = v("--brass", "#8A6A1E");
+    var brassSoft = v("--brass-soft", "#F2ECDA");
 
     mermaid.initialize({
       startOnLoad: false,
@@ -50,14 +51,27 @@
         secondaryBorderColor: line,
         tertiaryColor: paperRaised,
         tertiaryBorderColor: line,
-        lineColor: inkSoft,
+        /* Edges, arrowheads and signal lines are hairlines: derive them from --ink,
+           not --ink-soft, or they wash out against the dark paper. */
+        lineColor: ink,
         textColor: ink,
+        titleColor: ink,
         mainBkg: accentSoft,
         nodeBorder: accent,
         clusterBkg: paperRaised,
         clusterBorder: line,
         edgeLabelBackground: paperRaised,
         actorTextColor: ink,
+        signalColor: ink,
+        signalTextColor: ink,
+        /* mermaid leaves notes and activation bars unthemed — a fixed #fff5ad note and
+           an activation bar shaded from the background. Both break in dark mode: the
+           note glares, the bar disappears. Pin both to palette tokens. */
+        noteBkgColor: brassSoft,
+        noteBorderColor: brass,
+        noteTextColor: ink,
+        activationBkgColor: accentSoft,
+        activationBorderColor: accent,
         sequenceNumberColor: paperRaised,
         fontSize: "14px"
       }
