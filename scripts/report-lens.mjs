@@ -88,6 +88,13 @@ function weigh(html, lens) {
    * where the band is tightest (on pubsub: 267w, 32% of basic but 11% of expert). Left
    * in, it pushes authors to cut usage and production items to pay for a link list. */
   for (const n of root.querySelectorAll('[data-kb-block="relationships"]')) n.remove();
+  /* "Mentioned by" is the same kind of thing one step further out, and the argument above
+   * applies to it verbatim: generated, lens-invariant, no minted ids, an index of
+   * neighbours rather than reading matter. It is worse in one respect — its size is set by
+   * OTHER pages' prose, so an author cannot shrink it by editing the page it sits on. A
+   * corpus-wide linking pass grew it on 249 pages at once and pushed six of them out of
+   * band without a word of their own prose changing. */
+  for (const n of root.querySelectorAll("aside.mentions")) n.remove();
   pruneForLens(root, lens);
   return root.text.split(/\s+/).filter(Boolean).length;
 }
