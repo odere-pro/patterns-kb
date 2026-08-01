@@ -34,24 +34,62 @@ builder (**kb-hub**); a change to how it *behaves* lives here.
 
 ## The fixed control cluster
 
-Four floating controls, all `position: fixed`, all injected at runtime:
+Five floating controls, all `position: fixed`, all injected at runtime, all on the RIGHT
+edge. **Sizes and offsets are tokens, not constants** — `--control-size` (2.8rem, the
+smallest square that clears the 44px touch-target minimum), `--control-edge` (0.9rem
+from the viewport edge), `--control-gap` and `--control-step` (one whole slot). They
+were hand-typed as `0.9 / 3.4 / 5.9rem` and every one had to be re-derived by hand
+whenever the box changed, so the stack now counts slots:
 
-- `.theme-toggle` — top `0.9rem`, right `0.9rem` (theme.js, every page)
-- `.lens-group` — top `0.9rem`, right `3.4rem`; drops to bottom-right under 620px
-- `.practice-toggle` — top `3.4rem`, right `0.9rem`, **content pages only**
-  (progress.js injects it iff `input.practice-box[data-id]` exists — the hub has chips
-  instead). It proxies the metarow checkbox: click → flip `pageBox.checked` → dispatch
-  `change`, so the checkbox stays the single source of the change event and the store
-  write. `aria-pressed` mirrors state; practiced paints `--ok` green.
-- `.fav-toggle` — top `5.9rem`, right `0.9rem`, **content pages only** (favourites.js
-  injects it iff `main.doc-wrap[data-kb-id]` exists). Unlike the practiced toggle it
-  proxies nothing — favourites.js also injects the metarow `.favourite` button, so both
-  controls call the same `toggle(id)` and are repainted together. Gold `#e0a800`.
+- `.theme-toggle` — slot 0 (theme.js, every page)
+- `.lens-group` — top row, one step left of the toggles; height `--control-size`; drops
+  to bottom-right under 620px
+- `.practice-toggle` — slot 1, **content pages only** (progress.js injects it iff
+  `input.practice-box[data-id]` exists — the hub has chips instead). It proxies the
+  metarow checkbox: click → flip `pageBox.checked` → dispatch `change`, so the checkbox
+  stays the single source of the change event and the store write. `aria-pressed`
+  mirrors state; practiced paints `--ok` green.
+- `.fav-toggle` — slot 2, **content pages only** (favourites.js injects it iff
+  `main.doc-wrap[data-kb-id]` exists). Unlike the practiced toggle it proxies nothing —
+  favourites.js also injects the metarow `.favourite` button, so both controls call the
+  same `toggle(id)` and are repainted together. Gold `#e0a800`.
+- `.section-nav` — vertically centred, below the stack: a flex column of at most two
+  `.section-nav-btn` arrows (section-nav.js, content pages over two viewports tall).
 
-Adding a fifth control: inject from its own script, style it in `tokens.css` next to
-these, give it an `aria-pressed`/`aria-label`, and pick a slot that survives the 620px
-breakpoint (the lens group moves to the bottom edge there). The right column is filling
-up — a fifth would land at `8.4rem`, which starts to crowd short pages.
+The four square controls share one box rule in `tokens.css`; only position, glyph and
+pressed colour differ. A new control joins that selector list rather than copying the
+box a fifth time.
+
+**`.doc-wrap` reserves the column** with a `padding-right` that subtracts the page's own
+gutter, so no control ever renders over prose. The page keeps no guaranteed gutter —
+`--content-width` is `clamp(66rem, 57rem + 14vw, 81rem)` — so below about 1230px the
+wrap runs edge to edge and without the reservation the arrows sit on the last characters
+of every line. Changing `--control-size` means checking that reservation still clears it.
+
+Adding a sixth control: inject from its own script, add it to the shared box selector in
+`tokens.css`, give it an `aria-pressed`/`aria-label`, and take the next slot with
+`calc(var(--control-edge) + 3 * var(--control-step))`. The right column is filling up —
+slot 3 starts to crowd short pages.
+
+### section-nav.js
+
+Injects the up/down pair. Three things about it are load-bearing:
+
+- **The stop list is `section.doc-section` plus every `h3[id]` inside one.** The id is
+  not a filter bolted on: a stop needs an anchor for `scrollIntoView` and
+  `replaceState`, and the build stamps an id onto exactly the headings that are real
+  sub-sections. Card labels ("Basic", "Pros", "Functional") carry none and are skipped
+  for free — which is why a case study gains its deep dives as stops while a pattern or
+  theme page gains nothing.
+- **Each arrow exists only while it has somewhere to go** — no up arrow at the top, no
+  down arrow at the bottom. Detaching rather than disabling matches how every other
+  control expresses "does not apply here", so it adds no new hide mechanism. The
+  down arrow needs an explicit `atBottom()` guard: the last block starts within the
+  final screenful, so its top never reaches the reading line however far you scroll.
+- **It re-syncs on more than scroll** — `kb-lens-change` (a deep dive tagged expert
+  disappears at basic, changing the stop list) and a `ResizeObserver` on `document.body`
+  (mermaid replaces each diagram long after the script runs, and a page only becomes
+  two viewports tall once its diagrams land).
 
 ## Rules that keep this layer sane
 
