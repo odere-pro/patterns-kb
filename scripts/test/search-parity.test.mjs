@@ -133,9 +133,10 @@ test("hub returns nothing for queries with no scorable terms", () => {
  * but the two must still be answering the same question. Overlap is measured, not
  * asserted per query; the floor catches weight drift in either scorer.
  *
- * Recorded value: 26/30. Expect it to fall when the CLI gains something the hub cannot
- * have — body-length normalisation deflates a long page's prose bonus, and a catalog-only
- * scorer has no way to reproduce that. A fall for any other reason is drift. */
+ * Recorded value: 22/30, down from 26 when the CLI gained body-length normalisation. That
+ * drop is structural, not a regression — deflating a long page's prose bonus is something
+ * a catalog-only scorer has no way to reproduce. A fall for any other reason is drift, and
+ * the floor of 17 is what catches it. */
 test("hub and CLI podiums still overlap once prose joins the CLI", () => {
   const { KB_MATCHES } = loadHub();
   const bodyOf = proseIndexer(SITE, null);

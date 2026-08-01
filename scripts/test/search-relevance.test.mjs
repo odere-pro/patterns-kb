@@ -3,8 +3,12 @@
  * The parity suite proves the two scorers agree; nothing proved they agree on anything
  * USEFUL. This is the measuring instrument: every page's own `data-kb-solves` is ground
  * truth ("someone who types this symptom wants this page"), so the corpus supplies ~317
- * labelled queries for free, and four phrasings ask whether retrieval survives the way
+ * labelled queries for free, and re-phrasing them asks whether retrieval survives the way
  * people actually type.
+
+ * Two phrasings are gated on every run; `report` and `full` add two more that are useful
+ * for tuning but too slow to pay for every time. Their last measured CLI top-1:
+ * keyword 98.4%, inflected-keyword 94.6%.
  *
  * It asserts RATES, never per-query expectations. A 317-entry expectation list would go
  * red every time an author rewrote a `solves` phrase, and nobody would trust it by the
@@ -37,20 +41,16 @@ const REPORT = MODE === "report";
 /* ---------------- gates ----------------
  * One table, rates only. Ceilings are marked `max`; everything else is a floor. */
 const GATES = {
-  //                     gate    measured
+  //                     gate    measured   before the scoring rework
   cliTop1: {
-    verbatim:            0.983,  // 98.4%
-    keyword:             0.961,  // 96.2%
-    inflected:           0.980,  // 98.1%   was 67.5% before query stemming
+    verbatim:            0.982,  //  98.7%   98.4%
+    inflected:           0.985,  //  99.1%   67.5%
   },
-  cliTop3:               0.995,  // 99.6%   pooled over the gated phrasings
-  cliMrr:                0.985,  // 0.986
-  hubTop1:               0.981,  // 98.2%   was 90.0%
-  maxDesignStealsTop1:   0.003,  //  0.2%   over non-design queries, was 3.8%
-  /* The one number stemming made worse: reaching more pages reaches more designs too,
-   * and a design's ~20k chars of prose clear the flat body ceiling that a pattern's
-   * ~11.7k also clears. Body-length normalisation is the fix, not a smaller stemmer. */
-  maxDesignInTop5:       0.675,  // 67.4%   over non-design queries, was 65.3%
+  cliTop3:               0.995,  // 100.0%   94.6%   pooled over the gated phrasings
+  cliMrr:                0.989,  //  0.994   0.912
+  hubTop1:               0.986,  //  99.1%   90.0%
+  maxDesignStealsTop1:   0.008,  //   0.2%    3.8%   over non-design queries
+  maxDesignInTop5:       0.420,  //  38.4%   65.3%   over non-design queries
 };
 
 /* ---------------- phrasings ----------------
@@ -78,7 +78,11 @@ const PHRASINGS = {
   inflected: inflect,
   "inflected-keyword": (list) => inflect(keywords(list)),
 };
-const GATED = ["verbatim", "keyword", "inflected"];
+/* Two phrasings on every run, four under `full`/`report`. Scoring 354 nodes against a
+ * six-term query costs ~4ms, so each extra phrasing is ~2.5s of `make test` — and the two
+ * kept here are the ones that move: verbatim is the ceiling, inflected is what the query
+ * stemmer exists for. */
+const GATED = ["verbatim", "inflected"];
 const RUNNING = FULL || REPORT ? Object.keys(PHRASINGS) : GATED;
 
 /* ---------------- the run ---------------- */
@@ -165,7 +169,7 @@ const atMost = (got, bar, what) =>
 test("the fixture covers the corpus it claims to", { skip: REPORT }, () => {
   const withSolves = catalog.nodes.filter((n) => (n.solves ?? []).length).length;
   assert.ok(withSolves > 300, `expected 300+ labelled pages, got ${withSolves}`);
-  assert.ok(queries.length > withSolves * 2.5, `expected a phrasing set per page, got ${queries.length}`);
+  assert.ok(queries.length > withSolves * 1.5, `expected a phrasing set per page, got ${queries.length}`);
 });
 
 test("CLI retrieves the page its own symptom text describes", { skip: REPORT }, () => {

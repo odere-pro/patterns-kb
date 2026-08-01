@@ -94,6 +94,10 @@ export function indexNodes(nodes) {
     aliases: (n.aliases ?? []).map((a) => a.toLowerCase()),
     tags: (n.tags ?? []).map((t) => t.toLowerCase()),
     solves: (n.solves ?? []).map((s) => s.toLowerCase()),
+    /* Two concatenations that exist only as miss gates: `curated` covers every field, so a
+     * term absent from it is absent from all of them; `solvesText` says whether picking a
+     * best `solves` phrase is worth the scan at all. */
+    solvesText: (n.solves ?? []).join(" ").toLowerCase(),
     curated: [n.id, n.name, n.essence, ...(n.aliases ?? []), ...(n.tags ?? []), ...(n.solves ?? [])]
       .join(" ").toLowerCase(),
   }));
@@ -146,6 +150,43 @@ export function proseIndexer(site, level = null) {
 
 /* ---------------- the scorer ---------------- */
 
+/* The ONE `solves` phrase a query is really about.
+ *
+ * Every phrase used to be OR-ed, so a page with five of them had five times the surface
+ * area of a page with one, and a long case study could collect `W.solves` for "thread"
+ * from one symptom and "blocks" from another it never wrote together. Score the single
+ * phrase that covers the most query terms instead: cohesion, not coverage. First phrase
+ * wins a tie, and both scorers walk `solves` in catalog order, so the choice is
+ * deterministic.
+ *
+ * Pages with no `solves` — themes — are untouched; they keep scoring their essence at the
+ * solves weight. */
+/* `curatedHit` narrows the scan to the variants this node can possibly match: a variant
+ * absent from `curated` is absent from `solves`, which `curated` contains. On a typical
+ * node that leaves one or two variants to try instead of a dozen. */
+function bestSolvesPhrase(solves, variantsByTerm, curatedHit, offset) {
+  let best = null, bestN = 0;
+  for (let i = 0; i < solves.length; i++) {
+    const phrase = solves[i];
+    let n = 0;
+    for (let j = 0; j < variantsByTerm.length; j++) {
+      const vs = variantsByTerm[j], base = offset[j];
+      for (let k = 0; k < vs.length; k++) {
+        if (curatedHit[base + k] && phrase.includes(vs[k])) { n++; break; }
+      }
+    }
+    if (n > bestN) { bestN = n; best = phrase; }
+  }
+  return best;
+}
+
+/* A plain loop rather than .some(): this runs 354 nodes deep inside a per-term,
+ * per-variant loop, and the closure .some() allocates costs more than the search. */
+function anyIncludes(list, t) {
+  for (let i = 0; i < list.length; i++) if (list[i].includes(t)) return true;
+  return false;
+}
+
 /* Score one query against an index built by indexNodes().
  *
  * `bodyOf` is optional and IS the seam: omit it and this function is the hub's algorithm
@@ -159,14 +200,44 @@ export function scoreQuery({ index, q, syn, bodyOf, limit }) {
   const W = weightsFor(terms);
   const variantsByTerm = terms.map((t) => termVariants(t, syn));
 
+  /* Every variant flattened, plus where each term's run starts. `curated` is the only
+   * string each variant is ever searched for twice — once to decide whether the node is
+   * worth scoring at all, once inside the term loop — so search it once into `curatedHit`
+   * and read the answer twice. On a corpus-wide sweep that halves the dominant cost. */
+  const flat = [];
+  const offset = [];
+  for (const vs of variantsByTerm) { offset.push(flat.length); for (const v of vs) flat.push(v); }
+  const curatedHit = new Uint8Array(flat.length);
+
+  /* Bodies are indexed before anything is scored, because the length normalisation below
+   * needs the mean over the candidate set. Under --tag/--kind that mean is over the
+   * FILTERED candidates, which is the intent: long means long for this question. */
   const bodies = bodyOf ? index.map((e) => bodyOf(e.n)) : null;
+  const Lavg = bodies && bodies.length
+    ? bodies.reduce((a, b) => a + b.tokens, 0) / bodies.length
+    : 0;
 
   const out = [];
   for (let i = 0; i < index.length; i++) {
     const e = index[i];
     const body = bodies ? bodies[i] : null;
+    /* One deflation factor per page, not one per term — it depends on nothing else. */
+    const norm = body && Lavg > 0 ? Math.max(1, 0.25 + 0.75 * body.tokens / Lavg) : 1;
     let score = 0;
-    if (e.id === query || e.name === query || e.aliases.some((a) => a === query)) score += 100;
+    if (e.id === query || e.name === query || e.aliases.indexOf(query) >= 0) score += 100;
+
+    /* One pass over the flattened variants. `curated` concatenates every field scored
+     * below, so a miss here is a miss in all of them, and a node no variant touches costs
+     * nothing further. */
+    let touchesSolves = false;
+    for (let k = 0; k < flat.length; k++) {
+      const h = e.curated.includes(flat[k]);
+      curatedHit[k] = h ? 1 : 0;
+      /* Only a variant already known to be somewhere in this node is worth looking for in
+       * its `solves`, which is why this second search is inside the branch. */
+      if (h && !touchesSolves && e.solvesText.includes(flat[k])) touchesSolves = true;
+    }
+    const phrase = touchesSolves ? bestSolvesPhrase(e.solves, variantsByTerm, curatedHit, offset) : null;
 
     let why = null, matched = 0;
     for (let ti = 0; ti < terms.length; ti++) {
@@ -178,15 +249,11 @@ export function scoreQuery({ index, q, syn, bodyOf, limit }) {
         const t = variants[vi];
         const mult = vi === 0 ? 1 : 0.5;
         let s = 0, line = null;
-        /* `curated` concatenates every field below, so a miss here is a miss in all of
-         * them — one substring search instead of five on the ~95% of nodes a given term
-         * never touches. The relevance fixture runs ~2,000 queries over 354 nodes, and
-         * this gate is most of what keeps it under a second. */
-        if (e.curated.includes(t)) {
+        if (curatedHit[offset[ti] + vi]) {
           if (e.id.includes(t)) s += W.id;
           if (e.name.includes(t)) s += W.name;
-          if (e.solves.some((x) => x.includes(t))) s += W.solves;
-          if (e.tags.some((x) => x.includes(t))) s += W.tags;
+          if (phrase !== null && phrase.includes(t)) s += W.solves;
+          if (anyIncludes(e.tags, t)) s += W.tags;
           /* A page with no solves (themes) carries what symptom vocabulary it has in the
            * essence — score it at the solves weight there, so a one-field page is not
            * silently outranked by pages with five. */
@@ -195,7 +262,12 @@ export function scoreQuery({ index, q, syn, bodyOf, limit }) {
         }
         if (body) {
           const hits = body.hits.get(t);
-          if (hits) { s += Math.min(hits.n, 3) * W.body; line = hits.line; }
+          /* The prose bonus caps at three mentions, which every page of any length
+           * clears — so the flat version simply paid long pages more. Deflate it by how
+           * much longer than average this page is. The floor of 1 means only long pages
+           * are touched: a short page is never rewarded for being short, because a
+           * one-line page mentioning a word once is not thereby a better answer. */
+          if (hits) { s += Math.min(hits.n, 3) * W.body / norm; line = hits.line; }
         }
         if (s * mult > best) { best = s * mult; bestWhy = line; }
       }

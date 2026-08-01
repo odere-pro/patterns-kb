@@ -20,8 +20,28 @@
   var catalog = (window.KB_CATALOG && window.KB_CATALOG.nodes) || [];
   if (!catalog.length) return;
 
-  var byId = {};
-  catalog.forEach(function (n) { byId[n.id] = n; });
+  // Lowercase every field the scorer matches against, once at load rather than once per
+  // keystroke. `hay` concatenates them all and doubles as the cheap miss gate.
+  // Mirrors indexNodes() in scripts/lib/search.mjs.
+  var INDEX = catalog.map(function (n) {
+    var aliases = n.aliases || [], tags = n.tags || [], solves = n.solves || [];
+    var low = function (x) { return String(x).toLowerCase(); };
+    return {
+      id: n.id,
+      name: low(n.name),
+      essence: low(n.essence),
+      aliases: aliases.map(low),
+      tags: tags.map(low),
+      solves: solves.map(low),
+      hay: [n.id, n.name, n.essence].concat(aliases, tags, solves).join(" ").toLowerCase()
+    };
+  });
+
+  // Two different questions wear the same clothes. "circuit breaker" is a lookup — the
+  // name is the answer. "one slow dependency blocks my threads" is a description, where a
+  // name match is usually incidental. Mirrors weightsFor() in scripts/lib/search.mjs.
+  var W_NAMING = { id: 6, name: 5, solves: 5, tags: 3, essence: 3, curated: 2 };
+  var W_DESCRIBING = { id: 2, name: 2, solves: 6, tags: 3, essence: 3, curated: 1 };
 
   // Synonym bridge, projected from lib/model.mjs into the catalog by build.mjs — the same map
   // kb.mjs find uses, so the browser and the CLI agree. A term scores full weight, its
@@ -78,34 +98,56 @@
     return out;
   }
 
-  // Raw score for one term (or synonym variant) against a node's fields — no multiplier.
-  function termScore(n, t, naming, hay, solves, tags) {
+  // Raw score for one term (or variant) against a node's fields — no multiplier.
+  // `hay` concatenates every field below, so a miss there is a miss in all of them: one
+  // substring search instead of five on the nodes a term never touches.
+  function termScore(e, t, W, phrase) {
+    if (e.hay.indexOf(t) < 0) return 0;
     var s = 0;
-    if (n.id.indexOf(t) >= 0) s += naming ? 6 : 2;
-    if (n.name.toLowerCase().indexOf(t) >= 0) s += naming ? 5 : 2;
-    if (solves.some(function (x) { return x.toLowerCase().indexOf(t) >= 0; })) s += naming ? 5 : 6;
-    if (tags.some(function (x) { return x.toLowerCase().indexOf(t) >= 0; })) s += 3;
+    if (e.id.indexOf(t) >= 0) s += W.id;
+    if (e.name.indexOf(t) >= 0) s += W.name;
+    if (phrase !== null && phrase.indexOf(t) >= 0) s += W.solves;
+    if (e.tags.some(function (x) { return x.indexOf(t) >= 0; })) s += W.tags;
     // A page with no solves (themes) carries what symptom vocabulary it has in the
-    // essence — score it at the solves weight there. Mirrors kb.mjs.
-    if (n.essence.toLowerCase().indexOf(t) >= 0) s += solves.length ? 3 : (naming ? 5 : 6);
-    else if (hay.indexOf(t) >= 0) s += naming ? 2 : 1;
+    // essence — score it at the solves weight there. Mirrors scripts/lib/search.mjs.
+    if (e.essence.indexOf(t) >= 0) s += e.solves.length ? W.essence : W.solves;
+    else s += W.curated;
     return s;
   }
 
-  function score(n, q, terms, naming) {
-    var s = 0, matched = 0;
-    var aliases = n.aliases || [], tags = n.tags || [], solves = n.solves || [];
-    if (n.id === q || n.name.toLowerCase() === q ||
-        aliases.some(function (a) { return a.toLowerCase() === q; })) s += 100;
+  // The ONE solves phrase a query is really about. Every phrase used to be OR-ed, so a
+  // page with five had five times the surface area of a page with one, and a long case
+  // study could collect the solves weight for "thread" from one symptom and "blocks" from
+  // another it never wrote together. Score the phrase covering the most query terms
+  // instead — cohesion, not coverage. First phrase wins a tie, and both scorers walk
+  // solves in catalog order. Mirrors bestSolvesPhrase() in scripts/lib/search.mjs.
+  function bestSolvesPhrase(solves, variantsByTerm) {
+    var best = null, bestN = 0;
+    for (var i = 0; i < solves.length; i++) {
+      var n = 0;
+      for (var j = 0; j < variantsByTerm.length; j++) {
+        var vs = variantsByTerm[j];
+        for (var k = 0; k < vs.length; k++) {
+          if (solves[i].indexOf(vs[k]) >= 0) { n++; break; }
+        }
+      }
+      if (n > bestN) { bestN = n; best = solves[i]; }
+    }
+    return best;
+  }
 
-    var hay = [n.id, n.name, n.essence].concat(aliases, tags, solves).join(" ").toLowerCase();
+  function score(e, q, terms, variantsByTerm, W) {
+    var s = 0, matched = 0;
+    if (e.id === q || e.name === q || e.aliases.indexOf(q) >= 0) s += 100;
+
+    var phrase = e.solves.length ? bestSolvesPhrase(e.solves, variantsByTerm) : null;
     for (var i = 0; i < terms.length; i++) {
       // Score the term at full weight, then each variant at half; the term counts as
       // matched once, on its best variant. Mirrors scripts/lib/search.mjs.
-      var variants = termVariants(terms[i]);
+      var variants = variantsByTerm[i];
       var best = 0;
       for (var v = 0; v < variants.length; v++) {
-        var got = termScore(n, variants[v], naming, hay, solves, tags) * (v === 0 ? 1 : 0.5);
+        var got = termScore(e, variants[v], W, phrase) * (v === 0 ? 1 : 0.5);
         if (got > best) best = got;
       }
       if (best > 0) { s += best; matched++; }
@@ -123,11 +165,12 @@
       seen[t] = 1;
       return true;
     });
-    var naming = terms.length <= 2;
+    var W = terms.length <= 2 ? W_NAMING : W_DESCRIBING;
+    var variantsByTerm = terms.map(termVariants);
     var raw = {}, max = 0;
-    catalog.forEach(function (n) {
-      var s = score(n, q, terms, naming);
-      if (s > 0) { raw[n.id] = s; if (s > max) max = s; }
+    INDEX.forEach(function (e) {
+      var s = score(e, q, terms, variantsByTerm, W);
+      if (s > 0) { raw[e.id] = s; if (s > max) max = s; }
     });
     // A broad symptom weakly matches most of the corpus — "slow", "blocks" and "threads"
     // each turn up somewhere on ~100 pages. Filtering in place preserves page order, not
