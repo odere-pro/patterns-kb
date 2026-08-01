@@ -54,6 +54,15 @@ node scripts/kb.mjs level <id> <element-id> <basic|advanced|expert|none>      # 
 node scripts/kb.mjs register <id> <element-id> <basic|advanced|expert|none>   # rare: replaces the lower version
 ```
 
+`wild` and `production` replace the whole block. Never re-type the neighbours from the
+rendered prose — it drops their `data-kb-level` tags and their inline `<code>`. Dump them
+in the writer's own shape, edit the one entry, hand the lot back:
+
+```
+node scripts/kb.mjs get <id> --block wild --json          # → .items.wild, ready to re-supply
+node scripts/kb.mjs get <id> --block production --json    # → .items.production.{knobs,signals,failures,checklist}
+```
+
 Sections never carry a lens attribute — blocks show at every lens, and `make check`
 fails any block that renders empty at one. The sizing bands per kind, the stacking rule
 and the per-lens audit procedure live in the **kb-explain** skill.

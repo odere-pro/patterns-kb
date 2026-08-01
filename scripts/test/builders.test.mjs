@@ -416,3 +416,116 @@ test("audit-relations.mjs fails when a fluency item names a theme that never tou
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/* --- the wild/production round trip ---------------------------------------
+ * Both writers replace the whole block, so fixing one entry means re-supplying its
+ * neighbours. `get --json` dumps them in the writers' own shape to make that a round
+ * trip rather than a re-type — and the round trip has to be lossless, because the
+ * rendered prose these were otherwise re-typed from carries neither the data-kb-level
+ * tags (1,900+ of them across the live corpus) nor the inline <code>. */
+
+/* The writers take an id; the dump comes back off the built page. */
+function dumpItems(root, id) {
+  const r = run("kb.mjs", root, "get", id, "--json");
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout).items ?? {};
+}
+
+test("kb.mjs wild round-trips level tags and inline <code>, and escapes everything else", () => {
+  const root = built();
+  try {
+    const written = [
+      { id: "plain", name: "Plain", note: "No tag, no markup." },
+      { id: "tagged", name: "Go <code>x/time/rate</code>", note: "Its <code>rate.Limiter</code> is a token bucket.", level: "advanced" },
+      { id: "risky", name: "Risky", note: 'Not a link: <a href="x">x</a> & <b>bold</b>.', level: "expert" },
+    ];
+    assert.equal(run("kb.mjs", root, "wild", "alpha", "--items", JSON.stringify(written)).status, 0);
+    assert.equal(run("build.mjs", root).status, 0);
+
+    const page = readFileSync(join(root, ALPHA), "utf8");
+    assert.match(page, /<code>rate\.Limiter<\/code>/, "<code> is the one tag that survives");
+    assert.doesNotMatch(page, /<a href="x">/, "a hand-passed link is escaped, not rendered");
+    assert.match(page, /&lt;a href="x"&gt;/, "…and lands as visible text instead");
+    assert.match(page, /data-kb-example="tagged" data-kb-level="advanced"/, "the lens tag is written");
+
+    /* The property that matters: dump it, hand it straight back, nothing moves. The dump
+     * reports what is ON the page, so the escaped item comes back escaped — and feeding
+     * that in again is still a no-op, since an existing entity is never re-escaped. */
+    const first = dumpItems(root, "alpha").wild;
+    assert.deepEqual(first.slice(0, 2), written.slice(0, 2), "clean items dump exactly as written");
+    assert.equal(first[2].note, 'Not a link: &lt;a href="x"&gt;x&lt;/a&gt; &amp; &lt;b&gt;bold&lt;/b&gt;.',
+      "the escaped item dumps in its authored form");
+    assert.equal(run("kb.mjs", root, "wild", "alpha", "--items", JSON.stringify(first)).status, 0);
+    assert.equal(run("build.mjs", root).status, 0);
+    assert.deepEqual(dumpItems(root, "alpha").wild, first, "re-supplying the dump is a fixed point");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("kb.mjs production round-trips level tags; a checklist gate takes both forms", () => {
+  const root = built();
+  try {
+    const knobs = [
+      { label: "Pool size", note: "How many connections the pool holds." },
+      { label: "Timeout", note: "Bound on <code>read_timeout</code>.", level: "advanced" },
+    ];
+    const signals = [{ label: "Queue depth", note: "Items waiting." }];
+    const failures = [{ label: "Saturation", note: "Everything queues.", level: "expert" }];
+    /* A bare string is the everyday form; the object form carries a lens tag back. */
+    const checklist = ["Set an explicit timeout.", { text: "Load-test the pool.", level: "advanced" }];
+    assert.equal(run("kb.mjs", root, "production", "alpha",
+      "--knobs", JSON.stringify(knobs), "--signals", JSON.stringify(signals),
+      "--failures", JSON.stringify(failures), "--checklist", JSON.stringify(checklist)).status, 0);
+    assert.equal(run("build.mjs", root).status, 0);
+
+    const dumped = dumpItems(root, "alpha").production;
+    assert.deepEqual(dumped.knobs, knobs);
+    assert.deepEqual(dumped.signals, signals);
+    assert.deepEqual(dumped.failures, failures);
+    assert.deepEqual(dumped.checklist, [{ text: "Set an explicit timeout." }, { text: "Load-test the pool.", level: "advanced" }],
+      "a bare string dumps as an object; the tagged one keeps its level");
+
+    assert.equal(run("kb.mjs", root, "production", "alpha",
+      "--knobs", JSON.stringify(dumped.knobs), "--signals", JSON.stringify(dumped.signals),
+      "--failures", JSON.stringify(dumped.failures), "--checklist", JSON.stringify(dumped.checklist)).status, 0);
+    assert.equal(run("build.mjs", root).status, 0);
+    assert.deepEqual(dumpItems(root, "alpha").production, dumped, "re-supplying the dump is a fixed point");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("kb.mjs rejects an item level outside the closed vocabulary", () => {
+  const root = built();
+  try {
+    const r = run("kb.mjs", root, "wild", "alpha", "--items",
+      JSON.stringify([{ id: "x", name: "X", note: "n", level: "senior" }]));
+    assert.equal(r.status, 1, "an invented level must not reach the page");
+    assert.match(r.stderr, /level must be one of/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("kb.mjs get --level never truncates the item dump", () => {
+  /* The trap this exists to close: a --level basic dump handed back to the writer
+   * would delete every item above that lens. Items read off the unpruned page. */
+  const root = built();
+  try {
+    const written = [
+      { id: "plain", name: "Plain", note: "Untagged." },
+      { id: "deep", name: "Deep", note: "Expert only.", level: "expert" },
+    ];
+    assert.equal(run("kb.mjs", root, "wild", "alpha", "--items", JSON.stringify(written)).status, 0);
+    assert.equal(run("build.mjs", root).status, 0);
+
+    const scoped = run("kb.mjs", root, "get", "alpha", "--block", "wild", "--level", "basic", "--json");
+    assert.equal(scoped.status, 0, scoped.stderr);
+    const parsed = JSON.parse(scoped.stdout);
+    assert.doesNotMatch(parsed.blocks.wild, /Expert only/, "the prose IS scoped to the lens");
+    assert.deepEqual(parsed.items.wild, written, "…but the items are not, or a round trip would delete one");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
