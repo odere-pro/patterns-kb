@@ -62,6 +62,11 @@ stated contract is why blocks drift.
 | `levels` | kb-design-levels |
 | `relationships` | kb-design-relationships |
 | any block of a **pattern** page | kb-pattern-blocks |
+| any block of a **hazard** page | kb-hazard-blocks |
+| any block of a **theme** page | kb-theme-blocks |
+| any block of a **principle** page | kb-principle-blocks |
+| any block of a **capability** page | kb-capability-blocks |
+| any block of a **comparison** page | kb-comparison-blocks |
 
 Whole-page review runs every block's self-check in page order, plus the cross-block
 coverage contract: every FR lands somewhere visible in `architecture`, every NFR has a deep

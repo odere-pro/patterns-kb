@@ -1,7 +1,7 @@
 # patterns — a static, build-less knowledge base. These targets are dev conveniences.
 .DEFAULT_GOAL := help
 
-.PHONY: help serve check test all all-impl graph pages vocab hub graph-page claude relations kb
+.PHONY: help serve check test all all-impl graph pages vocab hub graph-page claude relations kb lint-claude
 
 # Serialised against other sessions: six of the builders below read back what build.mjs
 # writes, so two concurrent `make all` runs interleave into a hub built from one graph and
@@ -41,6 +41,7 @@ check: ## Verify generated artifacts are in sync, no dangling links, diagrams pa
 	@node scripts/audit-relations.mjs
 	@node scripts/audit-vocab.mjs
 	@node scripts/audit-products.mjs
+	@node scripts/lint-claude.mjs
 
 test: ## Smoke-test the builders/checkers against the fixture corpus (scripts/test/)
 	@node --test scripts/test/*.test.mjs
@@ -50,6 +51,9 @@ relations: ## Cross-check every page's rendered relationships against graph.json
 
 products: ## Re-fetch every vendor documentation URL in the product registry (needs network)
 	@node scripts/audit-products.mjs --online
+
+lint-claude: ## Lint the .claude/ skills and agents — frontmatter, names, references, kind coverage
+	@node scripts/lint-claude.mjs
 
 diagrams: ## Parse every mermaid diagram with the vendored engine that renders it
 	@node scripts/check-mermaid.mjs

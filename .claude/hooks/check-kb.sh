@@ -8,6 +8,10 @@
 #   site/assets/**/*.js    → node --check (hand-authored runtime — syntax only;
 #                            presentation cannot break KB validity)
 #   site/assets/* (rest)   → nothing
+#   .claude/**             → lint-claude.mjs (skill/agent frontmatter, names,
+#                            cross-references, kind coverage — a malformed SKILL.md
+#                            silently fails to register, so it gets the same
+#                            edit-time net as the pages)
 #
 # Reads the hook payload on stdin; exits 2 to surface a problem back to Claude.
 set -uo pipefail
@@ -56,6 +60,16 @@ case "$file" in
       echo "page is structurally valid but make check FAILED (graph/derived artifacts):" >&2
       echo "$out" | grep -iE 'error|stale|dangling|discrepanc|one-way|not in the closed|missing|unexpected' | head -12 >&2
       remind
+      exit 2
+    fi
+    exit 0
+    ;;
+  */.claude/worktrees/*) exit 0 ;;  # another session's checkout — its own hooks cover it
+  */.claude/*)
+    out=$(node scripts/lint-claude.mjs 2>&1)
+    if [ $? -ne 0 ]; then
+      echo "lint-claude FAILED after editing a .claude asset:" >&2
+      echo "$out" | head -12 >&2
       exit 2
     fi
     exit 0

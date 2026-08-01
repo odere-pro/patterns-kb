@@ -81,6 +81,11 @@ Which skill owns what, for the parts that are not a page's prose:
 | the hub, and where a page appears on it | **kb-hub** |
 | re-filing a page into another band or group | **kb-move** |
 | any block of a pattern page | **kb-pattern-blocks** |
+| any block of a hazard page | **kb-hazard-blocks** |
+| any block of a theme page | **kb-theme-blocks** |
+| any block of a principle page | **kb-principle-blocks** |
+| any block of a capability page | **kb-capability-blocks** |
+| any block of a comparison page | **kb-comparison-blocks** |
 | `make all` / `make check` / the worklists | **kb-verify** |
 | tokens, `hub.css`, `pattern.css` | **kb-styles** |
 | the client scripts and their stores | **kb-site-ui** |
