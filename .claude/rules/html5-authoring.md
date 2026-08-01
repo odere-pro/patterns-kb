@@ -171,6 +171,7 @@ kind-flavoured ("The question", "Understanding the problem") — so
 | principle | `description` `explain` `rationale` `applying` `overreach` `relationships` |
 | design | `description` `explain` `requirements` `sizing`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
 | capability | `description` `explain` `capabilities` `mapping` `choosing` `portability` `relationships` |
+| comparison | `description` `explain` `contenders` `matrix` `choosing` `relationships` |
 
 `*` optional (per kind — see `OPTIONAL_BLOCKS` in model.mjs; a theme's `relationships` is
 optional because themes join the graph through tour membership). A **design** is a worked
@@ -222,6 +223,28 @@ They join the graph through `implements` (see Relationships), which gives each p
 pattern at work rather than a product you can buy. Where the platform **requires** a
 discipline of you instead of providing it — elastic compute needs your service to be
 stateless — the verb is `prerequisite`, not `implements`.
+
+A **comparison** takes ONE product decision as its subject — the managed services and the
+open-source contenders for a single capability area, side by side. Where a capability page
+names provider-neutral **shapes** and keeps products out of its taxonomy, a comparison
+names the **products**: `contenders` is a `dl.variations` of one card per product, each
+carrying its shape, its license and owner, and where to rent it; `matrix` is a
+`table.decision` in a `.table-scroll` with the deciding conditions down the side and the
+contenders across the top; `choosing` argues the per-condition verdicts, opening with the
+null option or the cloud default. The matrix keeps **at least one untagged `<tr>`** for the
+same reason `mapping` must. Comparisons carry `data-kb-solves` like a pattern, take the
+product names as `aliases` (that is how "alternative to Kafka" resolves), live flat in
+`site/comparisons/`, and take their hub order from `COMPARISON_ORDER` in model.mjs, which
+shadows `CAPABILITY_ORDER`. They join the graph through `specializes` (the capability page
+is the wider subject) and `implements` (these products ARE the pattern, runnable or
+buyable).
+
+The **anti-fabrication** rule bites hardest of all on a comparison, and decays fastest:
+the contender cards and the matrix carry license, ownership, managed-offering and scale
+claims about named products, and licenses change — Redis relicensed, RabbitMQ changed
+owners, Redpanda's BSL converts on a clock. State only what you are sure of at time of
+writing; when unsure, omit the claim rather than the contender. These pages are standing
+targets for the **kb-fact-check** sweep.
 
 **`variations`** — a `<dl class="variations">` of `<dt>` name / `<dd>` explanation pairs.
 CSS renders each pair as one card, so the `<dt>` is the card's heading: keep it short, and
