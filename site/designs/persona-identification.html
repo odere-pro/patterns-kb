@@ -284,7 +284,7 @@
               <ul>
                 <li>The flow's recorded state and what the client was told must never diverge.</li>
                 <li>Behaviour is asynchronous end to end; when speed and correctness pull apart, correctness wins.</li>
-                <li>Idempotency: a repeated or replayed input — a create, a vendor callback, a delivery — leaves the flow in the same state as its first arrival.</li>
+                <li><a href="../patterns/messaging/idempotency.html">Idempotency</a>: a repeated or replayed input — a create, a vendor callback, a delivery — leaves the flow in the same state as its first arrival.</li>
               </ul>
             </li>
             <li id="requirements-nfr-4" data-kb-level="advanced"><strong>Availability &amp; resilience</strong>
@@ -333,7 +333,7 @@
     <section class="doc-section" id="sizing" aria-labelledby="h-sizing" data-kb-block="sizing">
       <h2 class="doc-h" id="h-sizing">Right-sizing</h2>
       <div class="prose">
-        <p id="sizing-p-1"><strong>The problem:</strong> a flow that waits days on people and vendors — ~75 person-flows a day today (assumed: ~100 merchant onboardings a week, ×5 person checks), design target 10k/day. <strong>The shape:</strong> event-driven, and the volumes do not decide it — the waits do. A request thread cannot be held for a day, a verdict must reach the client exactly once across crashes, and the regulator asks for the history itself, so every wait becomes a durable row and every state change an appended event. Current state is materialised on the flow row rather than folded from the log on each read: the audit obligation wants the append-only history, nothing in the requirements wants replay-on-read. <strong>The stores:</strong> four per region — operational Postgres (flows, history, queue, outbox/inbox), a separate encrypted vault for personal data, object storage for documents, and a small shared cache holding circuit-breaker state. <strong>The deployment unit:</strong> residency means one full stack per region — every number below is per-region, the largest region dominates, and adding a region multiplies stacks, not load.</p>
+        <p id="sizing-p-1"><strong>The problem:</strong> a flow that waits days on people and vendors — ~75 person-flows a day today (assumed: ~100 merchant onboardings a week, ×5 person checks), design target 10k/day. <strong>The shape:</strong> event-driven, and the volumes do not decide it — the waits do. A request thread cannot be held for a day, a verdict must reach the client exactly once across crashes, and the regulator asks for the history itself, so every wait becomes a durable row and every state change an appended event. Current state is materialised on the flow row rather than folded from the log on each read: the audit obligation wants the append-only history, nothing in the requirements wants replay-on-read. <strong>The stores:</strong> four per region — operational Postgres (flows, history, queue, outbox/inbox), a separate encrypted vault for personal data, object storage for documents, and a small <a href="../patterns/caching/distributed-cache.html">shared cache</a> holding circuit-breaker state. <strong>The deployment unit:</strong> residency means one full stack per region — every number below is per-region, the largest region dominates, and adding a region multiplies stacks, not load.</p>
         <p id="sizing-p-2" data-kb-level="advanced"><strong>Required capabilities:</strong></p>
         <ul id="sizing-ul-1" data-kb-level="advanced">
           <li id="sizing-li-1">Durable transactional store — the state machine and its append-only history; a transition and its consequences commit together or not at all (mandatory). → NFR: consistency.</li>
@@ -384,7 +384,7 @@
           <li id="entities-li-1">Business truth vs operational bookkeeping — <code>flow</code> and its append-only <code>flow_transition</code> history never mix with <code>task</code> attempts, locks and backoff.</li>
           <li id="entities-li-2">PII vs everything else — personal data lives in a separate vault the operational store references only by opaque id.</li>
         </ul>
-        <p id="entities-p-2" data-kb-level="advanced">A flow's current business state — which of the five states it is in — is materialised on its own row, so reading it is a primary-key lookup; every transition into that state is appended to <code>flow_transition</code> and never rewritten, so the audit view is a projection over those rows, not a second write path. Three constraints do most of the work:</p>
+        <p id="entities-p-2" data-kb-level="advanced">A flow's current business state — which of the five states it is in — is materialised on its own row, so reading it is a primary-key lookup; every transition into that state is appended to <code>flow_transition</code> and never rewritten, so the audit view is a <a href="../patterns/distributed/coordination/materialized-view.html">projection</a> over those rows, not a second write path. Three constraints do most of the work:</p>
         <ul id="entities-ul-2" data-kb-level="advanced">
           <li id="entities-li-3">The partial unique index <code>one_open_flow</code> is the duplicate-invite rule.</li>
           <li id="entities-li-4">The inbox's three-column uniqueness is the callback dedup (deep dive 3).</li>
@@ -654,9 +654,8 @@ CREATE UNIQUE INDEX one_open_flow ON flow (client_id, email_hash)
 <pre><code class="language-http" data-kb-lang="http">POST /flows
 Idempotency-Key: 7c9e-4b1a-…                     client-generated UUID, opaque to us
 {
-  "email":      "jane@example.com",
-  "webhookUrl": "https://client.example/hooks/kyc"
-}
+  "email": "jane@example.com"                    the verdict goes to the client's
+}                                                registered webhook_url — not per-flow
 
 202 Accepted
 { "flowId": "flow_9c31", "state": "initiated" }
@@ -788,8 +787,8 @@ X-Signature: sha256=…                            vendor-authenticated, private
       <div id="interface-group-5" class="endpoint-group" data-kb-level="advanced">
         <h3>Outbound — the webhook the client receives</h3>
         <div class="endpoint">
-          <h4><code>POST {webhookUrl}</code></h4>
-          <p>The result and failure events, at-least-once, HMAC-signed with the per-client secret. <code>eventId</code> is the client's dedup key — stable across retries and replays.</p>
+          <h4><code>POST {client.webhook_url}</code></h4>
+          <p>The result and failure events, at-least-once, to the endpoint the client registered at onboarding, HMAC-signed with the per-client secret. <code>eventId</code> is the client's dedup key — stable across retries and replays.</p>
           <details class="sketch" open id="interface-sketch-7">
             <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST https://client.example/hooks/kyc
@@ -1025,7 +1024,7 @@ flowchart LR
       <div id="deepdives-prose-5" class="prose" data-kb-level="advanced">
 
         <h3 id="deepdives-dive-4">4 · Surviving the vendors — and every other stall → NFR: availability &amp; resilience</h3>
-        <p id="deepdives-p-14"><strong>Vendor failure degrades latency, never correctness.</strong> The ID vendor's ~6 hours a week of downtime is absorbed by the queue: the <a href="../patterns/distributed/resilience/circuit-breaker.html">circuit breaker</a> opens, tasks get a pushed-out <code>run_after</code> (<a href="../patterns/distributed/resilience/retry-backoff.html">retry with backoff</a> recorded on the task row — which is also how the flow queues-and-waits through the outage), and the flow simply waits — consistent with a system that already promised asynchrony and chose consistency over speed. One worker pool per vendor (a <a href="../patterns/distributed/resilience/bulkhead.html">bulkhead</a>) means a stalled sanctions vendor cannot starve ID verification, and every task carries its own <a href="../patterns/distributed/resilience/timeout-deadline.html">deadline</a> because no vendor publishes one. Three mechanisms make the rest graceful rather than accidental:</p>
+        <p id="deepdives-p-14"><strong>Vendor failure degrades latency, never correctness.</strong> The ID vendor's ~6 hours a week of downtime is absorbed by the queue: the <a href="../patterns/distributed/resilience/circuit-breaker.html">circuit breaker</a> opens, tasks get a pushed-out <code>run_after</code> (<a href="../patterns/distributed/resilience/retry-backoff.html">retry with backoff</a> recorded on the task row — which is also how the flow queues-and-waits through the outage), and the flow simply waits — consistent with a system that already promised asynchrony and chose consistency over speed. One <a href="../patterns/concurrency/thread-pool.html">worker pool</a> per vendor (a <a href="../patterns/distributed/resilience/bulkhead.html">bulkhead</a>) means a stalled sanctions vendor cannot starve ID verification, and every task carries its own <a href="../patterns/distributed/resilience/timeout-deadline.html">deadline</a> because no vendor publishes one. Three mechanisms make the rest graceful rather than accidental:</p>
         <ul>
           <li id="deepdives-li-1"><strong>Shared breaker state.</strong> The breaker for each vendor lives in the shared cache, not in each worker process. Per-replica breakers each need their own failure streak before opening — N replicas take N× the damage and then send N half-open probes. One shared record per vendor: every worker consults it before claiming, one probe decides recovery.</li>
           <li id="deepdives-li-2"><strong>Fallback providers with governed weights.</strong> Where a second provider exists, workers split traffic by weights held in the same cache. The weights are driven by recorded health metrics — the per-provider error rate and latency already collected for alerting — decaying back toward the default as health recovers, with a manual override that outranks the automation during incidents or contract changes. A weighted split with no update mechanism is a hardcoded constant nobody dares touch.</li>
@@ -1495,7 +1494,7 @@ sequenceDiagram
           <li id="levels-li-10">Names where breaker state lives and what moves the fallback weights — the mechanism, not just the intent.
             <details class="sketch" id="levels-sketch-10">
               <summary>The answer</summary>
-              <div class="prose"><p id="levels-p-10">One breaker record per vendor in the shared cache — per-process breakers make N replicas absorb N× the failures before the last one opens, then send N half-open probes at a recovering vendor; shared, the first replica to hit the threshold opens the circuit for everyone and one probe decides recovery. The weights are moved by recorded health: per-provider error rate and latency, already collected for alerting, are folded into cache-held weights that degrade a failing provider's share and decay back as it recovers — with a manual pin that outranks the automation (dives 4 and 8, Q5–Q6).</p></div>
+              <div class="prose"><p id="levels-p-10">One breaker record per vendor in the shared cache — per-process breakers make N replicas absorb N× the failures before the last one opens, then send N half-open probes at a recovering vendor; shared, the first replica to hit the threshold opens the circuit for everyone and one probe decides recovery. The weights are moved by recorded health: per-provider error rate and latency, already collected for alerting, are folded into cache-held weights that degrade a failing provider's share and decay back as it recovers — with a manual pin that outranks the automation (dive 4 and dive 12, Q5–Q6).</p></div>
             </details>
           </li>
           <li id="levels-li-11">States the CAP position and points at the one eventually-consistent surface.

@@ -51,6 +51,11 @@ Contracts the layers share — break one and the page silently degrades:
 - **Settings persist in localStorage** (`kb-graph-settings`, versioned); `#n=<id>` in
   the URL hash deep-links a selected node. Search query, selection and zoom do not
   persist.
+- **Visitor state is shared with the rest of the site** — `graph-view.js` reads and
+  writes `kb-favourites-v1` (favourites.js: overrides only over the authored pick) and
+  `elevation-map-progress-v1` (progress.js) itself, because the graph page loads neither
+  script, and re-folds them on a `storage` event so an open map keeps up with another tab.
+  Same stores, same rules, three writers.
 
 Changing graph behavior? Use the **kb-graph** skill — it carries the full contract and
 the manual verification checklist.

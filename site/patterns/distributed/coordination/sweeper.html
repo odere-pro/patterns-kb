@@ -150,7 +150,7 @@
         <p id="description-p-1">A worker picks up a task and its machine dies. Nothing raises an error, because nothing happened: the task sits there marked as in progress, the customer waiting on it hears nothing, and no amount of logging will tell you, because there is nothing to log. The only way to find out is to go and look. So run a small job every minute or so that asks one question — what should have moved on by now and has not? — and does one thing to each row it finds: hand the task back so another worker can take it, give up on it out loud so a person hears, or release whatever it was holding.</p>
         <p id="description-p-2" data-kb-level="advanced">A sweeper is a scheduled job whose entire input is a query for records that should have moved on by now. It runs every N seconds or minutes, selects rows matching a staleness predicate — <code>locked_at &lt; now() - interval</code>, <code>attempts &gt; budget</code>, <code>state = 'pending' AND created_at &lt; deadline</code> — and applies one resolution per row: reclaim it for another worker, escalate it to a dead state and tell somebody, or expire it and release whatever it was holding. It is the janitor of a distributed system, and it is almost always a handful of indexed queries rather than a service.</p>
         <p id="description-p-3" data-kb-level="advanced">The force it resolves is that <strong>failure by absence produces no event</strong>. Every other component in a system is driven by something happening: a request arrives, a message is delivered, a callback fires. But the worker that died mid-task sends nothing. The user who abandoned checkout clicks nothing. The vendor that never called back generates no callback. These failures announce themselves with silence, and silence has no listener — so the only way to notice is for someone to go looking on a clock. That is the whole pattern: a periodic scan is the event source for non-events.</p>
-        <p id="description-p-4" data-kb-level="advanced">The hard part is what the sweeper does to your failure model. Once it exists, correctness depends on a background job running on time. A sweep that lags, crashes, or silently stops leaves leases held and resources locked — and because sweeps fall behind precisely when the system is busiest, it degrades exactly when the damage is worst. This is why mature designs push work out of the sweeper wherever they can: give the record a TTL so the store expires it, or check expiry lazily when the record is next read, so no external actor decides correctness. What stays in the sweeper is what genuinely needs an <em>action</em> — notifying a client that their request failed, alerting an operator, releasing a resource that nobody will read again soon. A sweeper that only had to answer "is this expired?" should not have been a sweeper.</p>
+        <p id="description-p-4" data-kb-level="advanced">The hard part is what the sweeper does to your failure model. Once it exists, correctness depends on a background job running on time. A sweep that lags, crashes, or silently stops leaves leases held and resources locked — and because sweeps fall behind precisely when the system is busiest, it degrades exactly when the damage is worst. This is why mature designs push work out of the sweeper wherever they can: give the record a TTL so the store expires it, or check expiry lazily when the record is next read, so no external actor decides correctness. What stays in the sweeper is what genuinely needs an action — notifying a client that their request failed, alerting an operator, releasing a resource that nobody will read again soon. A sweeper that only had to answer "is this expired?" should not have been a sweeper.</p>
         <p id="description-p-5" data-kb-level="advanced">Two properties are non-negotiable in the implementation. It must be <strong>idempotent</strong> — the same row swept twice, or swept by two instances, must not double-escalate or double-release. And it must <strong>guard its writes against live workers</strong>, because it is racing them by design: the task it judges abandoned may be a slow worker still holding it. A conditional update (<code>WHERE locked_by = $seen AND locked_at = $seen</code>) turns that race into a write that affects zero rows rather than a task stolen from a healthy worker.</p>
       </div>
     </section>
@@ -228,7 +228,7 @@ flowchart LR
         <dd data-kb-level="advanced">Find records whose counterpart never arrived: an upload row with no blob, a blob with no row, a reservation whose payment never came. Usually a two-sided query with a grace period long enough that in-flight work is never mistaken for an orphan.</dd>
 
         <dt id="variations-item-5" data-kb-level="advanced">Lazy expiry instead of a sweep</dt>
-        <dd data-kb-level="advanced">No job at all: store the expiry timestamp, and treat the record as expired the next time anything reads it. Correctness stops depending on a job running on time, and the cost moves into every read path. The right default when nothing needs to <em>happen</em> at the moment of expiry — but it leaves the resource nominally held until someone looks, so it cannot free capacity on its own.</dd>
+        <dd data-kb-level="advanced">No job at all: store the expiry timestamp, and treat the record as expired the next time anything reads it. Correctness stops depending on a job running on time, and the cost moves into every read path. The right default when nothing needs to happen at the moment of expiry — but it leaves the resource nominally held until someone looks, so it cannot free capacity on its own.</dd>
 
         <dt id="variations-item-6" data-kb-level="advanced">Self-expiring records</dt>
         <dd data-kb-level="advanced">Let the store do it: a TTL on the key, a visibility timeout on the message, a session-bound ephemeral node. Zero code and no timing dependency, at the cost of needing a store that offers it and giving up any hook at the moment of expiry — nobody is told, nothing is escalated.</dd>
@@ -254,7 +254,7 @@ flowchart LR
             <li id="tradeoffs-con-1" data-kb-polarity="con">Correctness starts depending on a job running on time — a lagging or dead sweep leaves resources held, and sweeps fall behind exactly when the system is busiest.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">It races the live workers it inspects: without a guarded, idempotent update it will steal a task from a slow-but-healthy holder, or escalate the same record twice.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Polling cost scales with table size, not with the amount of stuck work — an unindexed predicate turns into a full scan on a timer.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">It is usually a singleton, so it needs a lock or leader election to avoid running N times — and a sweeper that dies quietly fails silently, which raises the question of who sweeps the sweeper.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">It is usually a singleton, so it needs a lock or <a href="./leader-election.html">leader election</a> to avoid running N times — and a sweeper that dies quietly fails silently, which raises the question of who sweeps the sweeper.</li>
             <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">The staleness threshold is a tuning bind: too aggressive kills work that was merely slow, too lax leaves resources stranded past the point anyone cares — derive it from measured worker duration at the p99, and let a live worker renew its lease rather than race the clock.</li>
           </ul>
         </div>
@@ -458,6 +458,16 @@ setInterval(() =&gt; withLeaderLock('sweeper', () =&gt; sweepOnce(db, notify)), 
       </div>
 
 </section>
+
+    <!-- kb:generated — mentions; derived from other pages' prose links, edit the prose, not this -->
+    <aside class="mentions" id="mentioned-by" aria-labelledby="h-mentions">
+      <h2 class="mentions-h" id="h-mentions">Mentioned by</h2>
+      <p class="mentions-lead">These pages link here from their prose without declaring a typed relationship.</p>
+      <ul class="mention-list">
+        <li class="mention-item"><a href="../../../designs/bitly.html">Bitly</a><span class="mention-kind">design</span></li>
+        <li class="mention-item"><a href="../../../designs/design-rate-limiter.html">Rate Limiter</a><span class="mention-kind">design</span></li>
+      </ul>
+    </aside>
 
     <nav class="docnav" aria-label="Pattern navigation">
       <a class="prev" href="../../../index.html#band-dist-h">← Network</a>

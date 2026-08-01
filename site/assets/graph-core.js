@@ -71,7 +71,9 @@
 
   /* ---------------- query language ----------------
    * AND of space-separated terms; "-" negates a term. Operators: tag:x (substring of
-   * any tag), kind:x / band:x (exact), fav:true|false. Bare words form one phrase
+   * any tag), kind:x / band:x (exact), fav:true|false, practiced:true|false — the last
+   * two read the visitor's own state, folded onto the nodes by graph-view.js from the
+   * same localStorage stores favourites.js and progress.js own. Bare words form one phrase
    * matched by substring against id/name/aliases OR by the hub scorer (KB_MATCHES) —
    * so both "circuit" and "one slow dependency blocks my threads" work. An unknown
    * op: prefix is treated as plain text.
@@ -99,7 +101,7 @@
       var neg = t.charAt(0) === "-";
       if (neg) t = t.slice(1);
       if (!t) return;
-      var m = t.match(/^(tag|kind|band|fav):(.+)$/);
+      var m = t.match(/^(tag|kind|band|fav|practiced):(.+)$/);
       var f = null;
       if (m) {
         var v = m[2];
@@ -110,7 +112,11 @@
         };
         else if (m[1] === "kind") f = function (n) { return n.kind === v; };
         else if (m[1] === "band") f = function (n) { return n.band === v; };
-        else f = function (n) { return !!n.favourite === (v === "true"); };
+        else {
+          // fav:/practiced: — the visitor's own two flags, same shape, same store rules.
+          var flag = m[1] === "fav" ? "favourite" : "practiced";
+          f = function (n) { return !!n[flag] === (v === "true"); };
+        }
       } else if (neg) {
         f = function (n) { return textMatch(n, t); };
       } else {
@@ -137,7 +143,7 @@
     families[demoFamily] = false;   // half the edges — the main hairball source
     return {
       v: SETTINGS_VERSION,
-      filters: { kinds: { pattern: 1, hazard: 1, theme: 1, principle: 1, design: 1 }, bands: {}, favs: false, orphans: false },
+      filters: { kinds: { pattern: 1, hazard: 1, theme: 1, principle: 1, design: 1 }, bands: {}, favs: false, practiced: false, orphans: false },
       families: families,            // family -> false when hidden; absent means visible
       groups: [],                    // [{q, color}] — first match wins, color 1..8
       display: { arrows: false, labelZoom: 1.4, nodeScale: 1, edgeScale: 1 },
@@ -188,6 +194,7 @@
       if (!filters.kinds[n.kind]) s.off = 1;
       if (n.band && filters.bands[n.band] === false) s.off = 1;
       if (filters.favs && !n.favourite) s.off = 1;
+      if (filters.practiced && !n.practiced) s.off = 1;
       if (qTest && !qTest(n)) s.off = 1;
       st[n.id] = s;
     });

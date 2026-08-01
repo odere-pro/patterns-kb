@@ -8,10 +8,14 @@
  *
  * Obsidian-style: the force simulation stays LIVE — dragging tugs neighbours along,
  * and the Forces sliders retune the layout in real time. The settings panel filters
- * by kind/band/favourites/orphans and a small query language (tag:x kind:x band:x
- * fav:true, free text, "-" negates), colors user-defined groups (first match wins),
- * and adjusts display (arrows, label fade, node size, edge width). Settings persist
- * in localStorage; #n=<id> deep-links a node.
+ * by kind/band/favourites/practiced/orphans and a small query language (tag:x kind:x
+ * band:x fav:true practiced:true, free text, "-" negates), colors user-defined groups
+ * (first match wins), and adjusts display (arrows, label fade, node size, edge width).
+ * Settings persist in localStorage; #n=<id> deep-links a node.
+ *
+ * The favourite and practiced flags are the SITE's, not the page's: they are read from
+ * and written back to the same two localStorage stores favourites.js and progress.js
+ * own, and a `storage` event keeps an open map in step with the rest of the site.
  *
  * Presentation discipline: this file toggles CLASSES and sets NUMERIC CSS custom
  * properties (--gv-*) on SVG elements; every color lives in graph.css keyed off theme
@@ -44,17 +48,6 @@
   var nodes = model.nodes;
   var byId = model.byId;
 
-  /* graphdata.js carries the AUTHORED favourite, which is only the default — the visitor's
-     own picks live in localStorage, owned by favourites.js (overrides only, so a missing id
-     means "no opinion, use the default"). Fold them in here, once, so "★ Favourites only"
-     and the `fav:true` query mean the same thing on the graph as on the hub. Applied to the
-     node data rather than inside computeVisibility, which stays a pure function of it. */
-  try {
-    var favOverrides = JSON.parse(localStorage.getItem("kb-favourites-v1") || "{}") || {};
-    nodes.forEach(function (n) {
-      if (Object.prototype.hasOwnProperty.call(favOverrides, n.id)) n.favourite = !!favOverrides[n.id];
-    });
-  } catch (e) { /* unreadable store — the authored defaults stand */ }
   var edges = model.edges;
   var neighbors = model.neighbors;   // id -> {id: 1} across every family (ego-highlight)
   var degree = model.degree;
@@ -69,6 +62,79 @@
     };
   });
   function metaOf(id) { return meta[id] || { tags: [], aliases: [] }; }
+
+  /* ---------------- visitor state: favourite + practiced ----------------
+   * Both flags belong to the whole site, not to this page: favourites.js owns
+   * kb-favourites-v1 and progress.js owns elevation-map-progress-v1, and every hub chip
+   * and content page reads and writes them. The graph loads neither script, so it speaks
+   * to the two stores directly — under exactly their rules:
+   *
+   *   favourite — OVERRIDES ONLY. graphdata.js carries the AUTHORED pick, which is just
+   *     the default; an id lands in the store only while the visitor disagrees with it,
+   *     so re-favouriting an authored favourite DELETES the key instead of writing true.
+   *     That is what lets re-curating the picks later still move everyone who never
+   *     expressed an opinion.
+   *   practiced — a plain id -> true map, keyed by the same page id the hub checkbox uses.
+   *     Unmarking deletes the key; every reader tests truthiness.
+   *
+   * The state is folded onto the node data rather than into computeVisibility, which
+   * stays a pure function of it. A `storage` event — another tab toggling a page or the
+   * hub — refolds and repaints, so an open map never drifts out of step with the site. */
+  var FAV_KEY = "kb-favourites-v1";
+  var PRACTICE_KEY = "elevation-map-progress-v1";
+
+  nodes.forEach(function (n) { n.favDefault = !!n.favourite; });   // the authored pick
+
+  function readStore(key) {
+    try { return JSON.parse(localStorage.getItem(key) || "{}") || {}; }
+    catch (e) { return {}; }        // denied, absent or corrupt — no opinion
+  }
+  function writeStore(key, obj) {
+    try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) { /* storage denied */ }
+  }
+  function owns(obj, k) { return Object.prototype.hasOwnProperty.call(obj, k); }
+
+  function foldVisitorState() {
+    var fav = readStore(FAV_KEY), practiced = readStore(PRACTICE_KEY);
+    nodes.forEach(function (n) {
+      n.favourite = owns(fav, n.id) ? !!fav[n.id] : n.favDefault;
+      n.practiced = !!practiced[n.id];
+    });
+  }
+  foldVisitorState();
+
+  function toggleFavourite(id) {
+    var n = byId[id];
+    if (!n) return;
+    var store = readStore(FAV_KEY);      // re-read: another tab may have written since
+    n.favourite = !n.favourite;
+    if (n.favourite === n.favDefault) delete store[id];
+    else store[id] = n.favourite;
+    writeStore(FAV_KEY, store);
+    afterVisitorChange();
+  }
+  function togglePracticed(id) {
+    var n = byId[id];
+    if (!n) return;
+    var store = readStore(PRACTICE_KEY);
+    n.practiced = !n.practiced;
+    if (n.practiced) store[id] = true;
+    else delete store[id];
+    writeStore(PRACTICE_KEY, store);
+    afterVisitorChange();
+  }
+  function afterVisitorChange() {
+    render();          // the class, and the ★/✓ filters if either is on
+    paintTipState();
+  }
+
+  // Fires only in OTHER tabs of the same origin — precisely the drift this guards.
+  // A null key means the whole store was cleared (the hub's Reset button).
+  window.addEventListener("storage", function (ev) {
+    if (ev.key !== null && ev.key !== FAV_KEY && ev.key !== PRACTICE_KEY) return;
+    foldVisitorState();
+    afterVisitorChange();
+  });
 
   function radius(d) { return Math.min(15, 4 + 1.9 * Math.sqrt(degree[d.id] || 1)); }
 
@@ -378,6 +444,7 @@
       var s = st[d.id];
       var c = "node kind-" + d.kind + (d.band ? " band-" + d.band : "");
       if (d.favourite) c += " fav";
+      if (d.practiced) c += " practiced";
       for (var i = 0; i < groupTests.length; i++) {
         var g = groupTests[i];
         if (g.test && g.test(d)) { c += " grp-" + g.color; break; }
@@ -434,6 +501,27 @@
     }).join("") + "</div>";
   }
 
+  /* The selected card also OWNS the two visitor flags — toggling here writes the same
+   * localStorage the hub star and the page's Practiced box write, so the map is a place
+   * to curate from and not just a read-only mirror. (f and p do it from the keyboard.) */
+  function stateHtml() {
+    return '<span class="tip-state">' +
+      '<button type="button" class="tip-state-btn" data-state="fav">★ Favourite</button>' +
+      '<button type="button" class="tip-state-btn" data-state="practiced">✓ Practiced</button>' +
+      "</span>";
+  }
+  function paintTipState() {
+    if (tip.hidden || !tipNode || !byId[tipNode]) return;
+    var n = byId[tipNode];
+    Array.prototype.forEach.call(tip.querySelectorAll("[data-state]"), function (b) {
+      var fav = b.getAttribute("data-state") === "fav";
+      var on = fav ? !!n.favourite : !!n.practiced;
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.title = (on ? "Click to unmark " : "Mark ") + (fav ? "favourite" : "practiced") +
+        ": " + n.name + (fav ? " (f)" : " (p)");
+    });
+  }
+
   function showTip(d, full) {
     clearTimeout(tipTimer);
     tipNode = d.id;
@@ -443,17 +531,26 @@
       '<span class="tip-name">' + esc(d.name) + "</span>" +
       '<span class="tip-kind">' + esc(d.kind + (d.band ? " · " + d.band : "")) + "</span>" +
       '<span class="tip-essence">' + esc(d.essence || "") + "</span>" +
+      (full ? stateHtml() : "") +
       (m.tags.length ? '<span class="tip-tags">' + m.tags.map(function (t) {
         return '<button type="button" class="tip-tag" data-tag="' + esc(t) + '">#' + esc(t) + "</button>";
       }).join(" ") + "</span>" : "") +
       (full ? relationsHtml(d) : "") +
       '<a href="' + esc(PAGE_PREFIX + d.path) + '">Open page →</a>';
     tip.hidden = false;
+    paintTipState();
     placeTip(d);
   }
 
-  // One delegated listener: neighbour names re-select; tags become a tag: filter.
+  // One delegated listener: the two state buttons write their store; neighbour names
+  // re-select; tags become a tag: filter.
   tip.addEventListener("click", function (ev) {
+    var state = ev.target.closest("[data-state]");
+    if (state && tipNode) {
+      if (state.getAttribute("data-state") === "fav") toggleFavourite(tipNode);
+      else togglePracticed(tipNode);
+      return;
+    }
     var sel = ev.target.closest("[data-sel]");
     if (sel && byId[sel.dataset.sel]) {
       selectedId = sel.dataset.sel;
@@ -521,6 +618,8 @@
     .on("keydown", function (ev, d) {
       if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); activate(d); }
       if (ev.key === "o") window.location.href = PAGE_PREFIX + d.path;
+      if (ev.key === "f") toggleFavourite(d.id);
+      if (ev.key === "p") togglePracticed(d.id);
     });
 
   svg.on("click", function (ev) {
@@ -585,6 +684,10 @@
   });
   var favToggle = on("fav-toggle", "change", function () {
     settings.filters.favs = favToggle.checked;
+    render(); save();
+  });
+  var practicedToggle = on("practiced-toggle", "change", function () {
+    settings.filters.practiced = practicedToggle.checked;
     render(); save();
   });
   var orphanToggle = on("orphans-toggle", "change", function () {
@@ -713,6 +816,7 @@
       b.setAttribute("aria-pressed", settings.filters.bands[b.dataset.band] === false ? "false" : "true");
     });
     if (favToggle) favToggle.checked = settings.filters.favs;
+    if (practicedToggle) practicedToggle.checked = settings.filters.practiced;
     if (orphanToggle) orphanToggle.checked = settings.filters.orphans;
     document.querySelectorAll(".legend-btn").forEach(function (b) {
       b.setAttribute("aria-pressed", famHidden(b.dataset.family) ? "false" : "true");
