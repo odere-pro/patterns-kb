@@ -1,9 +1,9 @@
 # patterns/security
 
-**Security (lens)** — 8 patterns.
+**Security (lens)** — 9 patterns.
 Deciding who may do what, and containing the blast when that decision is wrong — a concern that cuts through every rung.
 
-Pages here: authentication-enforcer, authorization-enforcer, intercepting-validator, least-privilege, quarantine, secure-logger, secure-session-manager, single-access-point
+Pages here: agent-sandboxing, authentication-enforcer, authorization-enforcer, intercepting-validator, least-privilege, quarantine, secure-logger, secure-session-manager, single-access-point
 
 Every page in this folder declares `data-kb-band="security"` and
 `data-kb-group="security"`. The path is checked against them — `make check` fails if a

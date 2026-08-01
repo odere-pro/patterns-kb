@@ -1,9 +1,9 @@
 # patterns/distributed/routing
 
-**IV · Network → Routing + Scale** — 30 patterns.
+**IV · Network → Routing + Scale** — 32 patterns.
 Keeping many services reliable, fast, and consistent across a network.
 
-Pages here: ambassador, api-gateway, api-routing, api-versioning, async-request-reply, autoscaling, bff, blue-green-deployment, canary-release, cdn, compute-resource-consolidation, consistent-hashing, deployment-stamp, feature-flag, functional-partitioning, gatekeeper, geode, geohash, load-balancer, object-storage, pagination, reverse-proxy, service-discovery, service-mesh, sharding, sidecar, stateless-service, sticky-session, valet-key, vertical-partitioning
+Pages here: acp, ambassador, api-gateway, api-routing, api-versioning, async-request-reply, autoscaling, bff, blue-green-deployment, canary-release, cdn, compute-resource-consolidation, consistent-hashing, deployment-stamp, feature-flag, functional-partitioning, gatekeeper, geode, geohash, load-balancer, mcp, object-storage, pagination, reverse-proxy, service-discovery, service-mesh, sharding, sidecar, stateless-service, sticky-session, valet-key, vertical-partitioning
 
 Every page in this folder declares `data-kb-band="distributed"`, and one of
 `data-kb-group="distributed-routing"` or `data-kb-group="distributed-scale"` — these groups render as separate

@@ -1,9 +1,9 @@
 # patterns/architecture
 
-**III · Architecture** — 16 patterns.
+**III · Architecture** — 17 patterns.
 Shaping how a whole system's components are arranged.
 
-Pages here: big-compute, big-data, cqrs, eda, event-sourcing, hexagonal, layered, microkernel, microservices, mvc, mvp, mvvm, pipe-filter, repr, vertical-slice, web-queue-worker
+Pages here: ai-agent, big-compute, big-data, cqrs, eda, event-sourcing, hexagonal, layered, microkernel, microservices, mvc, mvp, mvvm, pipe-filter, repr, vertical-slice, web-queue-worker
 
 Every page in this folder declares `data-kb-band="architecture"` and
 `data-kb-group="architecture"`. The path is checked against them — `make check` fails if a
