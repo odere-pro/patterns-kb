@@ -191,6 +191,13 @@ too, commit only your hunks rather than sweeping theirs in.
 
 ## Conventions
 
-- **Relative links only** — the site must work from `file://` as well as GitHub Pages.
+- **Relative links only** — the site must work from `file://` as well as GitHub Pages. The one
+  carve-out is **vendor documentation**: a product named in a capability's mapping table links
+  the vendor's own docs, because that answer only exists off-site. Those URLs live in
+  `scripts/lib/products.mjs` and nowhere else, they open in a new tab
+  (`target="_blank" rel="noopener noreferrer"`), and `scripts/audit-products.mjs` gates them in
+  `make check` — an entry no cell uses, or one pointing at a homepage rather than at
+  documentation, fails the build. `make products` re-fetches the lot. Navigation stays
+  relative; only the outbound product link is absolute.
 - **Vendored, never CDN** — mermaid, d3 and the HTML parser all live in-repo. There is no
   `package.json`, no `node_modules`, and no npm in CI. Keep it that way.

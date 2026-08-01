@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 import { BANDS, COMPARISON_ORDER, esc } from "./lib/model.mjs";
+import { linkifyProducts, PROVIDER_COLUMNS } from "./lib/products.mjs";
 
 const ROOT = process.env.KB_ROOT
   ? resolve(process.env.KB_ROOT)
@@ -104,7 +105,14 @@ function serviceRow(p, entry, chips) {
     const c = rowCells(src, maps);
     if (c && c.length) {
       facet = `<a href="../${src.path}#${maps}">${c[0]}</a>`;
-      cells = c.slice(1, 1 + SERVICE_COLS);
+      /* Each service cell is linkified against ITS OWN column's product registry, so the
+       * reader can go straight to the vendor's documentation. The column index is what
+       * decides whose docs a name resolves to: "Application Load Balancer" is an AWS product
+       * and also Google's layer-7 balancer. A cell that already carries an internal link to a
+       * comparison page keeps it — linkifyProducts skips inside an existing anchor, so the
+       * internal link wins for that name and "patterns link in, products link out" holds. */
+      cells = c.slice(1, 1 + SERVICE_COLS)
+        .map((cell, i) => linkifyProducts(cell, PROVIDER_COLUMNS[i]));
       while (cells.length < SERVICE_COLS) cells.push(DASH);
       cls = "";
     }

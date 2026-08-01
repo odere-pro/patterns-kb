@@ -209,6 +209,21 @@ the pattern an "Implemented by" backlink — distinct from "Demonstrated by", wh
 study showing the pattern at work. Where the platform requires a discipline of you rather than
 providing it, the verb is \`prerequisite\`, not \`implements\`.
 
+Add \`data-kb-maps="mapping-row-N"\` to that edge to pin it to the one row naming the products,
+which is what \`site/map/stack.html\` copies into its cells; an unpinned edge degrades to a link
+to the whole table, and for a pattern that genuinely needs the whole table — Big Data wants both
+the batch and the streaming path — that is the honest answer rather than a shortfall. **Row ids
+are minted positionally**, so inserting a row renumbers every row below it and silently
+repoints the pins on that page: add rows below the last pin, or re-check each pin resolves to
+the label it did before.
+
+The product names in these cells are what \`scripts/lib/products.mjs\` turns into outbound links
+to vendor documentation, matched per column so "Application Load Balancer" resolves to AWS in
+one column and Google Cloud in another. Register the base product name, not the whole cell:
+"SQS" links inside "SQS FIFO queues" and leaves the feature words as prose. \`make check\` runs
+\`audit-products.mjs\`, which fails a registry entry no cell uses and reports cells naming
+products the registry has not got.
+
 Read with \`node ../../scripts/kb.mjs get <id>\`. See the root CLAUDE.md for the contract.
 `;
 }

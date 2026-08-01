@@ -18,6 +18,12 @@ vendored libraries. Edits here cannot break KB validity, so the post-edit hook o
 `.js` files (`node --check`). Vendored libraries (`vendor/`) are third-party — update by
 replacing the file and its LICENSE, never by editing.
 
+**`.prod` in `pattern.css` is the site's only outbound link class.** It styles the vendor
+documentation links on `map/stack.html` and marks them with a trailing ↗, because everything
+else here is relative and stays put. The URLs are not authored in any page — they come from
+`scripts/lib/products.mjs`, the single registry `make check` gates. See the root CLAUDE.md for
+the carve-out to "relative links only".
+
 `graph-core.js` is the exception to "verified by hand": it is covered by
 `scripts/test/graph-core.test.mjs` (`make test`), which loads the shipped file the way
 the page does. Logic that moves out of it stops being tested.
