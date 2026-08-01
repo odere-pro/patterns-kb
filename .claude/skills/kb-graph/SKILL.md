@@ -58,6 +58,15 @@ straight into `graph-view.js` is logic nothing verifies but a human.
   (exact), `fav:true|false`; bare words form one phrase matched by substring on
   id/name/aliases OR via `window.KB_MATCHES` (search.js — the only search coupling).
   Empty query: match-all as a filter, match-nothing as a group.
+- **Visitor state is the SITE's, not the page's**: `favourite` and `practiced` live in
+  the two localStorage stores the rest of the site owns — `kb-favourites-v1`
+  (favourites.js, OVERRIDES ONLY over the authored `data-kb-favourite`, so returning to
+  the authored value deletes the key) and `elevation-map-progress-v1` (progress.js, a
+  plain id → true map). The graph page loads neither script, so `graph-view.js` reads and
+  writes both directly under those same rules, folds them onto the node data (never into
+  `computeVisibility`, which stays pure), and re-folds on a `storage` event so an open map
+  tracks toggles made in another tab. The selected node's card and the `f`/`p` keys toggle
+  them back. Change the rules here and in favourites.js/progress.js together.
 - **Persistence**: one versioned localStorage key `kb-graph-settings`
   (`{v:1, filters, families, groups, display, forces}`). Corrupt or wrong version →
   defaults. Sections merge over the defaults so a new key never leaves a hole — except
@@ -88,8 +97,9 @@ Nothing automated drives the canvas, so the d3 half still needs the checklist be
 
 1. Console clean; graph appears already settled, drifting gently; drag is springy and
    the node floats free on release (not pinned).
-2. Filters: `cache`, `tag:caching`, `tag:caching -kind:design`, `fav:true`, kind
-   toggles, band chips (the colored Groups row), favourites, orphans (with
+2. Filters: `cache`, `tag:caching`, `tag:caching -kind:design`, `fav:true`,
+   `practiced:true`, kind
+   toggles, band chips (the colored Groups row), favourites, practiced, orphans (with
    `demonstrated-by` off, the case studies strand — bar the two joined to each other by
    another verb). Escape clears the search.
 3. Links: each family toggles its edges; `demonstrated-by` off by default.
@@ -105,5 +115,10 @@ Nothing automated drives the canvas, so the d3 half still needs the checklist be
    as an absent key; Restore defaults resets live; a corrupted `kb-graph-settings` value
    falls back to defaults.
 9. Theme toggle recolors nodes, edges, arrowheads and group swatches.
+9b. Visitor state: a favourite carries the brass stroke, a practiced node is hollowed
+    out; the selected card's ★/✓ (and `f`/`p` on a focused node) write the shared stores —
+    unfavouriting an authored pick stores `false`, re-favouriting DELETES the key. With
+    the hub open in a second tab, a star or Practiced box toggled there repaints the map
+    without a reload, and the reverse holds.
 10. Narrow viewport (≤900px): panel stacks below the canvas with sections closed;
     resizing refits the view. Noscript fallback renders.

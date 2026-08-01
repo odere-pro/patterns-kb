@@ -80,7 +80,7 @@ const html = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Interactive Graph · Map</title>
-  <meta name="description" content="Every pattern, hazard, theme, principle and case study on one live force-directed canvas — filter by kind, band, tag or favourites, color your own groups, tune the physics, and follow the ${graph.meta.relationships} typed relationships.">
+  <meta name="description" content="Every pattern, hazard, theme, principle and case study on one live force-directed canvas — filter by kind, band, tag, favourites or what you have practiced, color your own groups, tune the physics, and follow the ${graph.meta.relationships} typed relationships.">
   <link rel="stylesheet" href="../assets/tokens.css">
   <link rel="stylesheet" href="../assets/pattern.css">
   <link rel="stylesheet" href="../assets/graph.css">
@@ -99,7 +99,7 @@ const html = `<!doctype html>
     <header class="doc-head">
       <p class="doc-kicker">Map · The whole web</p>
       <h1 class="doc-title">Interactive Graph</h1>
-      <p class="doc-essence">${counts.pattern} patterns, ${counts.design} case studies, ${counts.theme} themes, ${counts.hazard} hazards and ${counts.principle} principles, wired by ${graph.meta.relationships} typed relationships — one live canvas. Drag, zoom, filter by kind, band, tag (<code>tag:caching</code>) or favourites, color your own groups, and tune the forces. Click a node to trace its neighbourhood; double-click to open its page.</p>
+      <p class="doc-essence">${counts.pattern} patterns, ${counts.design} case studies, ${counts.theme} themes, ${counts.hazard} hazards and ${counts.principle} principles, wired by ${graph.meta.relationships} typed relationships — one live canvas. Drag, zoom, filter by kind, band, tag (<code>tag:caching</code>), favourites or what you have practiced, color your own groups, and tune the forces. Click a node to trace its neighbourhood; double-click to open its page. Your ★ and ✓ are the same ones the hub and the pages carry — toggle them from the selected node's card.</p>
       <div class="doc-metarow">
         <span class="badge">Interactive</span>
         <span class="badge muted">${graph.meta.relationships} relationships</span>
@@ -107,15 +107,16 @@ const html = `<!doctype html>
     </header>
 
     <div class="graph-stage">
-      <svg id="kb-graph" role="application" aria-label="Pattern relationship graph. Tab to a node, Enter to select, o to open its page."></svg>
+      <svg id="kb-graph" role="application" aria-label="Pattern relationship graph. Tab to a node, Enter to select, o to open its page, f to favourite it, p to mark it practiced."></svg>
       <aside id="graph-panel" aria-label="Graph settings">
         <details class="panel-sec" open>
           <summary>Filters</summary>
-          <input class="graph-input" id="graph-search" type="search" placeholder="Search — name, symptom, tag:x, kind:x" aria-label="Filter the graph: free text, tag:x, kind:x, band:x, fav:true; prefix - negates" title="Shortcut: ⌘K (Ctrl+K)" autocomplete="off" spellcheck="false">
+          <input class="graph-input" id="graph-search" type="search" placeholder="Search — name, symptom, tag:x, kind:x" aria-label="Filter the graph: free text, tag:x, kind:x, band:x, fav:true, practiced:true; prefix - negates" title="Shortcut: ⌘K (Ctrl+K)" autocomplete="off" spellcheck="false">
           <div class="panel-row" role="group" aria-label="Kinds — click to show or hide">
 ${kindBtns}
           </div>
           <label class="panel-toggle"><input type="checkbox" id="fav-toggle"> ★ Favourites only</label>
+          <label class="panel-toggle"><input type="checkbox" id="practiced-toggle"> ✓ Practiced only</label>
           <label class="panel-toggle"><input type="checkbox" id="orphans-toggle"> Hide orphans</label>
         </details>
         <details class="panel-sec">

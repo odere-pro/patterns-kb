@@ -17,7 +17,10 @@
  *
  * Controls, all wired here: the hub's per-chip star, the hub's ★ Favourites filter, and —
  * on a content page — a metarow button plus a floating one in the fixed control cluster.
- * Content pages carry no favourite markup; both page controls are injected below. */
+ * Content pages carry no favourite markup; both page controls are injected below.
+ *
+ * One control lives elsewhere: the graph page loads none of this, so graph-view.js reads
+ * and writes this same store under the same override rule. Change the rule in both. */
 (function () {
   "use strict";
   var STORAGE_KEY = "kb-favourites-v1";

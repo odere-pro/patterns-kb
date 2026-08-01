@@ -1,6 +1,8 @@
 /* progress.js — shared "practiced" tracking for the hub and every pattern page.
    One localStorage store keyed by data-id, so a toggle anywhere is reflected everywhere.
-   Hub chips use input.chip-box; individual pages use input.practice-box. */
+   Hub chips use input.chip-box; individual pages use input.practice-box. The graph page
+   loads none of this and speaks to the same store directly (graph-view.js) — "anywhere"
+   includes the map. */
 (function () {
   "use strict";
   var STORAGE_KEY = "elevation-map-progress-v1";

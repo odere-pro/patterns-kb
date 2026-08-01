@@ -193,6 +193,21 @@ test("compileQuery: fav:true|false splits on the editorial pick", () => {
   assert.deepEqual(matching(core, "fav:false"), ["beta", "gamma", "delta", "lonely"]);
 });
 
+/* practiced is not in graphdata: graph-view.js folds it onto the nodes from the same
+ * localStorage store the hub checkboxes write. The core only sees the folded flag. */
+test("compileQuery: practiced:true|false splits on the visitor's own progress", () => {
+  const core = loadCore();
+  const { nodes } = core.buildGraph(fixture());
+  nodes.forEach((n) => { n.practiced = n.id === "beta" || n.id === "delta"; });
+  const run = (q) => nodes.filter(core.compileQuery(q, ctx(null))).map((n) => n.id);
+  assert.deepEqual(run("practiced:true"), ["beta", "delta"]);
+  assert.deepEqual(run("practiced:false"), ["alpha", "gamma", "lonely"]);
+  assert.deepEqual(run("kind:pattern -practiced:true"), ["alpha"], "composes and negates");
+  // Nothing folded in yet — every node is simply unpractised, not unknown.
+  const fresh = core.buildGraph(fixture()).nodes;
+  assert.deepEqual(fresh.filter(core.compileQuery("practiced:true", ctx(null))).map((n) => n.id), []);
+});
+
 test("compileQuery: terms are ANDed and '-' negates", () => {
   const core = loadCore();
   assert.deepEqual(matching(core, "kind:pattern tag:cach"), ["alpha"]);
@@ -230,7 +245,7 @@ test("compileQuery: the scorer widens the phrase, it never narrows it", () => {
 /* ---- visibility ---- */
 
 const ALL_KINDS = { pattern: 1, hazard: 1, theme: 1, principle: 1, design: 1 };
-const filters = (over) => Object.assign({ kinds: Object.assign({}, ALL_KINDS), bands: {}, favs: false, orphans: false }, over);
+const filters = (over) => Object.assign({ kinds: Object.assign({}, ALL_KINDS), bands: {}, favs: false, practiced: false, orphans: false }, over);
 function visible(core, opts) {
   const { nodes, edges } = core.buildGraph(fixture());
   const vis = core.computeVisibility(nodes, edges, opts);
@@ -244,6 +259,17 @@ test("computeVisibility: kind, band and favourite filters each hide their nodes"
   assert.deepEqual(visible(core, { filters: filters({ bands: { caching: false } }) }).ids,
     ["alpha", "gamma", "delta", "lonely"], "a band filter only bites on banded nodes");
   assert.deepEqual(visible(core, { filters: filters({ favs: true }) }).ids, ["alpha"]);
+});
+
+test("computeVisibility: the practiced filter hides everything not worked through", () => {
+  const core = loadCore();
+  const { nodes, edges } = core.buildGraph(fixture());
+  nodes.forEach((n) => { n.practiced = n.id === "alpha" || n.id === "beta"; });
+  const ids = (f) => core.computeVisibility(nodes, edges, { filters: f }).visNodes.map((n) => n.id);
+  assert.deepEqual(ids(filters({ practiced: true })), ["alpha", "beta"]);
+  // Independent of the favourite filter, and ANDed with it — alpha is the only both.
+  assert.deepEqual(ids(filters({ practiced: true, favs: true })), ["alpha"]);
+  assert.deepEqual(ids(filters()), ["alpha", "beta", "gamma", "delta", "lonely"], "off by default");
 });
 
 test("computeVisibility: the search predicate composes with the filters", () => {
@@ -323,6 +349,8 @@ test("loadSettings: nothing stored yields the defaults, with demonstrates hidden
   const s = core.loadSettings(null, DEMO);
   assert.deepEqual(s, core.defaultSettings(DEMO));
   assert.equal(s.families[DEMO], false, "the hairball family starts hidden");
+  assert.equal(s.filters.favs, false);
+  assert.equal(s.filters.practiced, false, "neither visitor-state filter starts on");
   assert.equal(s.v, core.SETTINGS_VERSION);
 });
 
@@ -342,6 +370,14 @@ test("loadSettings: a stored section is merged over the defaults, never half-app
   assert.equal(s.display.arrows, true);
   assert.equal(s.display.labelZoom, 1.4);
   assert.equal(s.filters.kinds.pattern, 1, "an absent section is untouched");
+});
+
+test("loadSettings: a blob stored before a filter existed still gains its default", () => {
+  const core = loadCore();
+  // What a visitor who last opened the map before the practiced filter shipped has.
+  const s = core.loadSettings(JSON.stringify({ v: 1, filters: { kinds: { pattern: 1 }, bands: {}, favs: true, orphans: false } }), DEMO);
+  assert.equal(s.filters.favs, true, "what they set survives");
+  assert.equal(s.filters.practiced, false, "what did not exist yet defaults, not undefined");
 });
 
 test("loadSettings: a family switched back ON survives the reload", () => {
