@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Synchronous I/O · Patterns</title>
+  <meta name="description" content="Synchronous I/O — A thread sits blocked while I/O completes, doing no work">
+  <link rel="stylesheet" href="../assets/tokens.css">
+  <link rel="stylesheet" href="../assets/pattern.css">
+  <script src="../assets/theme.js"></script>
+  <script src="../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#synchronous-io",
+  "identifier": "synchronous-io",
+  "name": "Synchronous I/O",
+  "description": "A thread sits blocked while I/O completes, doing no work",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../vocab.html"
+  },
+  "kb:kind": "hazard",
+  "kb:band": "hazard",
+  "kb:group": "hazard",
+  "kb:mitigated-by": [
+    {
+      "@id": "../patterns/concurrency/reactor.html#reactor",
+      "name": "Reactor",
+      "kb:note": "A few threads wait on many I/O sources at once, so concurrency stops being capped by thread count"
+    },
+    {
+      "@id": "../patterns/concurrency/future-promise.html#future-promise",
+      "name": "Future / Promise",
+      "kb:note": "Name the pending answer so the request can wait without its thread waiting too"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc hazard">
+  <main class="doc-wrap" data-kb-id="synchronous-io" data-kb-kind="hazard" data-kb-band="hazard" data-kb-group="hazard" data-kb-essence="A thread sits blocked while I/O completes, doing no work" data-kb-order="26" data-kb-aliases="[&quot;blocking I/O&quot;,&quot;blocking calls&quot;]" data-kb-tags="[&quot;performance&quot;,&quot;concurrency&quot;,&quot;asynchrony&quot;,&quot;throughput&quot;,&quot;resource-management&quot;]" data-kb-solves="[&quot;requests queue while the CPU sits nearly idle&quot;,&quot;every worker thread is parked on the same call in the thread dump&quot;,&quot;adding more threads is the only thing that helps and it stops helping&quot;,&quot;a slow dependency turns into timeouts on unrelated endpoints&quot;,&quot;the server reports it is out of capacity on a machine that is not busy&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../index.html#hazards-h">Hazards</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Synchronous I/O</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Hazard</p>
+      <h1 class="doc-title">Synchronous I/O</h1>
+      <p class="doc-essence">A thread issues an I/O call and then waits, holding its stack and its memory but consuming no processor, until the answer arrives. The work the machine could be doing meanwhile is not done, and the number of requests the process can have in flight is capped by how many threads it can afford rather than by how much work it can do.</p>
+      <div class="doc-metarow">
+        <span class="badge">Hazard</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="synchronous-io">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1"><strong>Synchronous I/O</strong> blocks the calling thread until the operation completes — a read from a store, a call to a remote service, a message taken from a queue, a write to a file. During the wait the thread does nothing and cannot be given to anyone else, because its stack is mid-call. That is affordable when the wait is microseconds and the callers are few. It stops being affordable when the wait is a network round-trip and the process is meant to serve thousands of concurrent requests: the threads are all present, all idle, and all unavailable.</p>
+        <p id="description-p-2" data-kb-level="advanced">The distinctive symptom is a saturated system that is not busy. Processor utilization sits low while the request queue grows and new arrivals wait for a thread rather than for the work; latency stays flat and then goes vertical at the point where every worker is blocked. A thread dump taken at that moment is the proof — nearly every worker parked on the same call. It also spreads: a single blocking call buried inside a library blocks whatever calls it, so an otherwise asynchronous path is only as non-blocking as its most synchronous link.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>Your service can carry two hundred things at once and it is carrying twenty, because the other hundred and eighty workers are standing still waiting for an answer from somewhere else. The machine itself is nearly idle, and requests are queueing anyway, because there is no free worker to give them to. A worker that is waiting is not working. Let it put the request down and do something useful while the answer travels, then pick that request back up when the answer lands, and the same machine carries far more at once without running any faster.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>Separate the two things that are waiting: the request must wait for its answer, and the thread need not. A blocking call fuses them by keeping the stack alive for the whole round-trip, so concurrency is capped by thread count rather than by work, and that cap is set by memory and scheduling rather than by throughput. The non-blocking form registers the operation, hands the worker back, and resumes on a continuation when the answer arrives, which is how a handful of threads hold tens of thousands of outstanding calls. The trap is that one blocking link makes everything above it synchronous, whatever the signatures promise.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>The conversion has costs worth naming one by one. Control flow becomes continuations, so stack traces stop describing the call path, and the counter is correlation carried explicitly through the trace. Blocking work dropped onto an event-loop thread stalls every request that thread was carrying, so libraries you cannot change go on a separate bounded pool — containment rather than a cure, and the containment is what keeps them off the request path. Short, uncontended operations can cost more to dispatch and re-synchronize than to wait for, so measure instead of converting on principle. And expect the pressure to move downstream: freeing the callers raises how many requests reach the dependency at once, turning thread starvation into a saturated store, so pair the change with a concurrency limit and a deadline per call or you have only relocated the queue to somewhere you control less.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="causes" aria-labelledby="h-causes" data-kb-block="causes">
+      <h2 class="doc-h" id="h-causes">How it happens</h2>
+      <figure class="diagram" id="causes-fig-1">
+        <pre class="mermaid">
+flowchart TB
+    A["Arriving requests"] -->|"1 · take a worker"| B["Worker thread pool<br/>fixed size"]
+    B -->|"2 · issue the call and block"| C["Remote store or service"]
+    C -->|"3 · answer, tens of ms later"| B
+    B -->|"4 · worker freed"| D["Response"]
+    A -->|"5 · no worker left"| E["Request queue grows"]
+    E -->|"6 · wait exceeds the limit"| F["Timeouts, while the processor idles"]
+        </pre>
+        <figcaption>Each worker is held for the whole round-trip at step 2–3, so the pool empties long before the machine is busy. Arrivals then queue for a thread rather than for work, and the failure at step 6 is a wait for capacity that exists but is parked.</figcaption>
+      </figure>
+      <div class="prose">
+        <ul>
+          <li id="causes-li-1"><strong>It is the obvious way to write it.</strong> Call, get an answer, use the answer — the code reads top to bottom and matches how the operation is described. The asynchronous version says the same thing with more ceremony, and nothing in the source hints at what the blocking version costs under load.</li>
+          <li id="causes-li-2"><strong>The result is genuinely needed next.</strong> Where the following line depends on the value, waiting feels not merely simplest but mandatory — and the distinction that matters, between this request waiting and this thread waiting, is invisible from inside the function.</li>
+          <li id="causes-li-3"><strong>The library offers nothing else.</strong> A dependency exposing only blocking calls forces its callers to block, whatever the surrounding code intended.</li>
+          <li id="causes-li-4" data-kb-level="advanced"><strong>A blocking call hides inside an asynchronous one.</strong> A method whose signature promises not to block can still perform synchronous I/O internally, so a single such link makes the whole chain above it synchronous while its callers still believe otherwise.</li>
+          <li id="causes-li-5" data-kb-level="advanced"><strong>Small waits are assumed to stay small.</strong> A call that was a local file read or an in-memory lookup when it was written keeps its blocking shape after the thing it reads moves behind a network, where the wait is three orders of magnitude longer.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="cost" aria-labelledby="h-cost" data-kb-block="cost">
+      <h2 class="doc-h" id="h-cost">What it costs</h2>
+      <div class="prose">
+        <ul>
+          <li id="cost-li-1"><strong>Concurrency is capped by threads, not by work.</strong> The number of requests the process can have in flight equals the number of workers, so a wait of tens of milliseconds sets a ceiling on throughput that no amount of spare processor can lift.</li>
+          <li id="cost-li-2"><strong>The machine idles while the queue grows.</strong> Utilization stays low and requests still time out, which is the most misleading pair of numbers in an incident — the system looks under-loaded exactly as it fails.</li>
+          <li id="cost-li-3" data-kb-level="advanced"><strong>Each blocked worker holds memory it is not using.</strong> Its stack stays allocated for the whole wait, so raising the pool size to compensate buys concurrency in exchange for footprint and for scheduler time spent switching between threads that are all doing nothing.</li>
+          <li id="cost-li-4" data-kb-level="advanced"><strong>It couples your availability to theirs.</strong> A dependency that slows down converts directly into exhausted workers here, so their latency becomes your outage — the mechanism behind <a href="./cascading-failure.html">Cascading Failure</a>.</li>
+          <li id="cost-li-5" data-kb-level="expert"><strong>The collapse is a cliff.</strong> While a worker is free, latency is the dependency's latency; once the last one is taken, every arrival waits for a whole round-trip before it even starts, and response time steps up by a multiple rather than drifting.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="doc-section" id="mitigation" aria-labelledby="h-mitigation" data-kb-block="mitigation">
+      <h2 class="doc-h" id="h-mitigation">Getting out</h2>
+      <div class="prose">
+        <p id="mitigation-p-1">Stop conflating the request waiting with the thread waiting. The request must wait for its answer; the thread need not, and releasing it is the whole of the fix. Where the runtime offers a non-blocking version of the call, take it — the operation is registered, the worker goes back to the pool, and the continuation runs when the answer arrives, so one worker can carry many requests in flight. A <strong><a href="../patterns/concurrency/future-promise.html">Future / Promise</a></strong> is how that pending answer is named and composed while the thread that asked for it is somewhere else.</p>
+        <p id="mitigation-p-2" data-kb-level="advanced">Underneath, this is the <strong><a href="../patterns/concurrency/reactor.html">Reactor</a></strong>: a small number of threads waiting on many I/O sources at once and dispatching each event as it becomes ready, instead of one thread per outstanding operation. It is what lets a process hold tens of thousands of open calls on a handful of workers. The price is real — the linear story becomes a set of continuations, stack traces stop describing the call path, and any genuinely blocking work dropped into an event-loop thread stalls every request that thread was carrying, not just its own.</p>
+        <p id="mitigation-p-3" data-kb-level="advanced">Wrapping a blocking call in an asynchronous signature does not remove the block; it moves it to another thread, and that thread is now blocked instead. Done deliberately — on a bounded pool kept separate from the request path — it is a reasonable containment for a library you cannot change, and it is a form of <a href="../patterns/distributed/resilience/bulkhead.html">Bulkhead</a>: the blocking work can exhaust its own pool without touching the workers answering requests. Done accidentally, it adds a hop and a context switch to buy nothing.</p>
+        <p id="mitigation-p-4" data-kb-level="expert">Not every call should change. An operation that is genuinely short and uncontended can cost more to dispatch and re-synchronize than it costs to wait for, so measure before converting; the general rule holds because most I/O is neither. And expect the bottleneck to move rather than vanish: unblocking the threads raises how many requests reach the dependency at once, which turns a thread-starved caller into a saturated store or a throttled downstream. Pair the change with a limit on concurrent calls and a deadline on each one, or you have simply relocated the queue to somewhere with less control over it.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Mitigated by</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="reactor"><a href="../patterns/concurrency/reactor.html">Reactor</a><span class="rel-note">A few threads wait on many I/O sources at once, so concurrency stops being capped by thread count</span></div>
+          <div class="rel-item" data-kb-rel="mitigated-by" data-kb-to="future-promise"><a href="../patterns/concurrency/future-promise.html">Future / Promise</a><span class="rel-note">Name the pending answer so the request can wait without its thread waiting too</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../index.html#hazards-h">← Hazards</a>
+      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="next" href="../index.html#hazards-h">Hazards →</a>
+    </nav>
+  </main>
+
+  <script src="../assets/vendor/mermaid.min.js"></script>
+  <script src="../assets/diagram.js"></script>
+  <script src="../assets/progress.js"></script>
+  <script src="../assets/favourites.js"></script>
+</body>
+</html>
