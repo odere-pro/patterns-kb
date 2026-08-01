@@ -59,6 +59,15 @@ export const PRODUCTS = {
     "EC2 Auto Scaling": "https://docs.aws.amazon.com/autoscaling/",
     "Amazon EC2": "https://docs.aws.amazon.com/ec2/",
     "RDS": "https://docs.aws.amazon.com/rds/",
+    "Amazon Keyspaces": "https://docs.aws.amazon.com/keyspaces/",
+    "AWS CloudTrail": "https://docs.aws.amazon.com/cloudtrail/",
+    "AWS Config": "https://docs.aws.amazon.com/config/",
+    "AWS Organizations": "https://docs.aws.amazon.com/organizations/",
+    /* Registered as the lowercase phrase, not "AWS Organizations service control policies":
+     * both cells that say it spell the prefix differently, and the phrase matches inside each. */
+    "service control policies": "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html",
+    "AWS X-Ray": "https://docs.aws.amazon.com/xray/",
+    "AWS Distro for OpenTelemetry": "https://aws-otel.github.io/docs/introduction",
   },
   azure: {
     "Azure API Management": "https://learn.microsoft.com/azure/api-management/",
@@ -93,6 +102,13 @@ export const PRODUCTS = {
     "Microsoft Entra ID": "https://learn.microsoft.com/entra/fundamentals/",
     "Virtual Machine Scale Sets": "https://learn.microsoft.com/azure/virtual-machine-scale-sets/",
     "Azure Virtual Machines": "https://learn.microsoft.com/azure/virtual-machines/",
+    "Azure Managed Instance for Apache Cassandra": "https://learn.microsoft.com/azure/managed-instance-apache-cassandra/",
+    "Azure Data Lake Storage": "https://learn.microsoft.com/azure/storage/blobs/data-lake-storage-introduction",
+    "Azure Policy": "https://learn.microsoft.com/azure/governance/policy/",
+    "Azure Web Application Firewall": "https://learn.microsoft.com/azure/web-application-firewall/",
+    "Azure activity log": "https://learn.microsoft.com/azure/azure-monitor/platform/activity-log",
+    "Azure Monitor Agent": "https://learn.microsoft.com/azure/azure-monitor/agents/azure-monitor-agent-overview",
+    "Application Insights": "https://learn.microsoft.com/azure/azure-monitor/app/app-insights-overview",
   },
   google: {
     "API Gateway": "https://cloud.google.com/api-gateway/docs",
@@ -119,6 +135,16 @@ export const PRODUCTS = {
     "Pub/Sub": "https://cloud.google.com/pubsub/docs",
     "Workflows": "https://cloud.google.com/workflows/docs",
     "Compute Engine": "https://cloud.google.com/compute/docs",
+    /* Registered under the CURRENT product names, which are the shorter ones. The cells still
+     * say "Cloud Bigtable" and "Cloud Spanner"; the boundary rule matches inside both, so the
+     * link survives whichever way a cell is later reworded. */
+    "Bigtable": "https://cloud.google.com/bigtable/docs",
+    "Spanner": "https://cloud.google.com/spanner/docs",
+    "Cloud Audit Logs": "https://cloud.google.com/logging/docs/audit",
+    "Cloud Trace": "https://cloud.google.com/trace/docs",
+    "Ops Agent": "https://cloud.google.com/monitoring/agent/ops-agent",
+    "Organization Policy Service": "https://cloud.google.com/resource-manager/docs/organization-policy/overview",
+    "Vertex AI Vector Search": "https://cloud.google.com/vertex-ai/docs/vector-search/overview",
   },
   oss: {
     "Apache Airflow": "https://airflow.apache.org/docs/",
@@ -156,6 +182,15 @@ export const PRODUCTS = {
     "rclone": "https://rclone.org/docs/",
     "Harbor": "https://goharbor.io/docs/",
     "Knative": "https://knative.dev/docs/",
+    "CockroachDB": "https://www.cockroachlabs.com/docs/",
+    "YugabyteDB": "https://docs.yugabyte.com/",
+    "Coraza": "https://coraza.io/docs/",
+    "ModSecurity": "https://github.com/owasp-modsecurity/ModSecurity/wiki",
+    "OpenTelemetry Collector": "https://opentelemetry.io/docs/collector/",
+    "Fluent Bit": "https://docs.fluentbit.io/manual",
+    "Vector": "https://vector.dev/docs/",
+    "Jaeger": "https://www.jaegertracing.io/docs/",
+    "Grafana Tempo": "https://grafana.com/docs/tempo/latest/",
   },
 };
 
