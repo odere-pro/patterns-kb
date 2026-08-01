@@ -1,12 +1,12 @@
 # site/comparisons
 
-**Product comparisons** — 8 pages (the `comparison` kind). Each takes one product
+**Product comparisons** — 10 pages (the `comparison` kind). Each takes one product
 decision as its subject: the managed services and the open-source contenders for a single
 capability area, side by side, compared on the conditions that decide the choice. Order comes
 from `COMPARISON_ORDER` in `scripts/lib/model.mjs` — a page missing from it validates fine
 and silently never appears on the hub.
 
-Pages here: identity-providers, key-value-stores, load-balancers-and-gateways, message-brokers, object-stores, relational-databases, search-engines, workflow-orchestrators
+Pages here: application-platforms, identity-providers, infrastructure-as-code, key-value-stores, load-balancers-and-gateways, message-brokers, object-stores, relational-databases, search-engines, workflow-orchestrators
 
 Blocks, in order: `description` → `explain` → `contenders` → `matrix` → `choosing` → `relationships`.
 

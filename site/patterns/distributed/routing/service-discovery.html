@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Service Discovery · Patterns</title>
+  <meta name="description" content="Service Discovery — Resolve a logical service name to an instance that is alive right now">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#service-discovery",
+  "identifier": "service-discovery",
+  "name": "Service Discovery",
+  "description": "Resolve a logical service name to an instance that is alive right now",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-routing",
+  "kb:combines-with": [
+    {
+      "@id": "./load-balancer.html#load-balancer",
+      "name": "Load Balancer",
+      "kb:note": "Caller-side lookup makes the caller the load balancer, so the two decisions merge"
+    },
+    {
+      "@id": "../resilience/circuit-breaker.html#circuit-breaker",
+      "name": "Circuit Breaker",
+      "kb:note": "A resolved instance can still be failing — the list says registered, not healthy"
+    },
+    {
+      "@id": "./sidecar.html#sidecar",
+      "name": "Sidecar",
+      "kb:note": "A sidecar proxy resolves on the instance's behalf: router simplicity at caller hop counts"
+    },
+    {
+      "@id": "./ambassador.html#ambassador",
+      "name": "Ambassador",
+      "kb:note": "The ambassador is where an out-of-process client puts its discovery logic"
+    }
+  ],
+  "kb:prerequisite": [
+    {
+      "@id": "../resilience/health-endpoint.html#health-endpoint",
+      "name": "Health Endpoint Monitoring",
+      "kb:note": "Eviction needs a readiness signal to act on, or the registry cannot tell alive from answering"
+    }
+  ],
+  "kb:part-of": [
+    {
+      "@id": "./service-mesh.html#service-mesh",
+      "name": "Service Mesh",
+      "kb:note": "A mesh generalizes per-instance resolution across the whole fleet, plus policy and telemetry"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="service-discovery" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-routing" data-kb-essence="Resolve a logical service name to an instance that is alive right now" data-kb-order="151" data-kb-aliases="[&quot;service registry&quot;,&quot;client-side discovery&quot;,&quot;server-side discovery&quot;]" data-kb-tags="[&quot;routing&quot;,&quot;availability&quot;,&quot;operations&quot;,&quot;coordination&quot;]" data-kb-solves="[&quot;my service holds a hard-coded host and port that keeps going stale after deploys&quot;,&quot;new instances come up but nothing sends traffic to them until I redeploy the callers&quot;,&quot;requests keep going to an instance that was terminated ten minutes ago&quot;,&quot;I have no single answer to which instances are actually running right now&quot;,&quot;every scale-out event means editing a config file full of addresses&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Atlas</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Routing</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Service Discovery</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network</p>
+      <h1 class="doc-title">Service Discovery</h1>
+      <p class="doc-essence">Keeps a registry of which service instances are currently running and where, so a caller asks for a service by name and gets an address that works — instead of holding a host and port that was true when the config was written.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="service-discovery">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1"><strong>Service discovery</strong> replaces a configured address with a question asked at call time. A registry holds the current set of instances for each service — a database of services, their instances and their locations — instances add themselves to it as they start and drop out as they stop, and the registry evicts anything it can no longer confirm is healthy. A caller names the service it wants and gets back somewhere to send the request.</p>
+        <p id="description-p-2">The force it resolves is that <strong>instances have stopped being stable things</strong>. A scheduler places them where there is room, a scale-out event doubles them, a rolling deploy replaces every one of them within a minute, and each gets whatever address the platform hands out. Any configured host and port is a snapshot of a fleet that has already changed.</p>
+        <p id="description-p-3">There is one question to answer beyond the registry itself: <strong>who does the lookup</strong>. Either the caller asks the registry and chooses an instance, which also makes it the load balancer — or the caller sends to a single fixed address and a router does the asking on its way through. The registry stays the same in both; what moves is where the discovery code lives and who pays the extra hop.</p>
+        <p id="description-p-4" data-kb-level="expert">The registry is the one address that cannot itself be discovered, so it sits at fixed, well-known locations that every caller is configured with — the bootstrapping problem pushed to exactly one place instead of one per service. That also makes it the component whose availability bounds everyone else's, which is why callers cache what it told them and keep working from the cache for a while. The cache is what makes a registry outage survivable, and also what makes a moved instance keep receiving traffic.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>Your service knows the address of the service it calls because someone typed it into a config file. Then a machine is replaced, a second copy is started to handle load, or a deploy moves everything somewhere new, and that address is now wrong — so calls fail until a person notices and edits the file. Keep a shared list instead, which each running copy adds itself to when it starts and keeps confirming while it is alive. Callers ask the list for the service by name and get somewhere that is answering right now.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>Registration is a lease rather than a fact: an instance renews it while healthy, and the registry drops anything it stops hearing from — so a crash needs no shutdown hook to be noticed. Two placements of the lookup follow. Ask from the caller and it caches the list and picks an instance, which makes it the load balancer too. Ask from a router and the caller only knows one fixed address, at the cost of a hop. Registration itself is either done by the instance or by a platform component watching its lifecycle, which is what a container platform already does for you.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Reach for an explicit registry only when the platform does not already resolve a virtual address to healthy instances — running a second one alongside gives you two answers to the same question. Where you do run it, three costs each have a counter-move. It is on every call path, so its availability bounds yours: pay that by having callers cache the last good list and keep serving from it during an outage. Caching makes every caller's view of the fleet slightly stale, and no lease length removes the window: pay that with retry-and-eject in the caller, so a refused connection is treated as ordinary rather than exceptional. And lease length itself is wrong in both directions — short evicts healthy instances during a garbage-collection pause, long keeps routing to dead ones: pay that by separating liveness from readiness, so a paused instance is temporarily unready rather than permanently gone.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    subgraph Fleet["Instances — addresses assigned at start"]
+        I1["Orders instance A"]
+        I2["Orders instance B"]
+    end
+    REG[("Instance registry")]
+    CL["Caller"]
+    I1 --&gt;|"1 register, then heartbeat"| REG
+    I2 --&gt;|"1 register, then heartbeat"| REG
+    REG --&gt;|"2 health check, evict on silence"| I1
+    CL --&gt;|"3 resolve 'orders'"| REG
+    REG --&gt;|"4 live instance list"| CL
+    CL --&gt;|"5 request to a chosen instance"| I2
+        </pre>
+        <figcaption>What happens when instance A dies without saying so? Step 2 is the only answer — no heartbeat, so the registry evicts it and the list at step 4 no longer contains it. How fast a dead instance stops receiving traffic is a property of that loop alone.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+sequenceDiagram
+    participant C as Caller
+    participant R as Registry
+    participant B as Instance B
+    C-&gt;&gt;R: resolve "orders"
+    R--&gt;&gt;C: [A, B] (cached with TTL)
+    C-&gt;&gt;B: request
+    B--&gt;&gt;C: 200
+    Note over B: B is terminated by the scheduler
+    C-&gt;&gt;B: request (from cache, B is gone)
+    B--x C: connection refused
+    C-&gt;&gt;C: drop B, try next from cache
+    C-&gt;&gt;R: refresh (TTL expired)
+    R--&gt;&gt;C: [A, C]
+        </pre>
+        <figcaption>The failure branch the happy path hides: between B terminating and the cache refreshing, the caller still holds B's address. Discovery narrows that window but never closes it, which is why the caller needs its own retry-and-eject behaviour rather than trusting the list.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Caller-side lookup</dt>
+        <dd>The caller queries the registry, caches the list and picks an instance itself — so it also owns the <a href="./load-balancer.html">load-balancing</a> policy. Fewest hops, at the cost of discovery code in every language you use.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Router-side lookup</dt>
+        <dd data-kb-level="advanced">The caller sends to one fixed address; a <a href="./reverse-proxy.html">reverse proxy</a> or <a href="./api-gateway.html">gateway</a> does the resolution and forwards. Callers hold no discovery logic at all, which is what makes polyglot fleets practical. The router must then speak the protocol, and must itself be replicated and kept available.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Self-registration</dt>
+        <dd data-kb-level="advanced">The instance registers and heartbeats itself. No extra moving part, and the instance knows things about its own readiness the platform cannot see — but every service now carries registry client code and its failure modes.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Third-party registration</dt>
+        <dd data-kb-level="advanced">A platform component watches instance lifecycle and maintains the registry, so services stay unaware they are being discovered. This is what a container platform does for you, and why most teams never write registration code.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Name-service projection</dt>
+        <dd data-kb-level="expert">Project the registry into a naming service the caller already speaks, so a plain hostname resolves to live instances and nothing in the caller changes. Simplest possible client, at the price of the naming layer's own caching — which is frequently more aggressive than the eviction loop it is meant to reflect.</dd>
+        <dt id="variations-item-6" data-kb-level="expert">Sidecar-resolved lookup</dt>
+        <dd data-kb-level="expert">A <a href="./sidecar.html">sidecar</a> proxy alongside each instance does the resolution, giving router-side simplicity in the caller with caller-side hop counts. The shape a <a href="./service-mesh.html">service mesh</a> generalizes across the whole fleet.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Instances can be replaced, moved or multiplied without a config change or a redeploy anywhere else.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">Scaling out is a registration, so new capacity starts receiving traffic without anyone being told about it.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">A failed instance is removed from rotation by the same loop that added it, so eviction needs no separate mechanism.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="expert">The registry becomes a single accurate inventory of what is actually running, which is useful well beyond routing.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The registry is a dependency of every call path, so its availability bounds the availability of everything that resolves through it.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Caller-side lookup means reimplementing discovery per language and framework, and every client is coupled to the registry's API.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Router-side lookup adds a hop and a component to replicate, configure and keep available.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Health-check timing is wrong in both directions: eager eviction removes healthy instances during a pause, lax eviction keeps routing to dead ones.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Cached instance lists mean callers act on a view of the fleet that is always slightly out of date, and no setting removes that window.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Instance addresses are assigned at start rather than configured, so nothing can be written down in advance.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Instance count changes with load, and callers must use new capacity without being redeployed.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You need one authoritative answer to "what is running right now", for routing and for everything else that asks.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Your platform already resolves a stable virtual address to healthy instances — it is doing this, and a second registry is a second truth.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">The fleet is a small fixed set of long-lived hosts, where a configured address list and a health check are simpler and have fewer failure modes.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Callers are outside your control — a published, stable endpoint is the contract, and discovery belongs behind it.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — a registry with lease-based eviction, and a caller that caches</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type Instance = { id: string; url: string; expiresAt: number };
+
+// ---- the registry: registration is a lease, and a heartbeat renews it ----
+class Registry {
+  private byService = new Map&lt;string, Map&lt;string, Instance&gt;&gt;();
+
+  // A registration that is never renewed simply expires. Crash-safe by default:
+  // there is no "deregister" call an instance has to survive long enough to make.
+  heartbeat(service: string, id: string, url: string, leaseMs = 10_000): void {
+    const instances = this.byService.get(service) ?? new Map();
+    instances.set(id, { id, url, expiresAt: Date.now() + leaseMs });
+    this.byService.set(service, instances);
+  }
+
+  resolve(service: string): Instance[] {
+    const now = Date.now();
+    const instances = this.byService.get(service) ?? new Map();
+    for (const [id, i] of instances) if (i.expiresAt &lt;= now) instances.delete(id);
+    return [...instances.values()];
+  }
+}
+
+// ---- the caller: cache the list, and eject an instance the moment it refuses ----
+class Client {
+  private cache: Instance[] = [];
+  private refreshAt = 0;
+
+  constructor(private registry: Registry, private service: string) {}
+
+  async call(path: string): Promise&lt;Response&gt; {
+    if (Date.now() &gt;= this.refreshAt) {
+      this.cache = this.registry.resolve(this.service);
+      this.refreshAt = Date.now() + 5_000;
+    }
+    // The cache is always slightly stale, so a refusal is expected, not exceptional.
+    for (const instance of [...this.cache]) {
+      try {
+        return await fetch(instance.url + path);
+      } catch {
+        this.cache = this.cache.filter((i) =&gt; i.id !== instance.id);
+      }
+    }
+    throw new Error(`no reachable instance of ${this.service}`);
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="consul" id="wild-consul"><strong>Consul</strong><span>Service registry with health checking, where registered services are resolvable both through an HTTP API and as ordinary DNS names — the name-service projection and the explicit-registry variants in one product.</span></div>
+        <div class="wild-item" data-kb-example="kubernetes-services" data-kb-level="advanced" id="wild-kubernetes-services"><strong>Kubernetes Services and EndpointSlices</strong><span>Third-party registration taken to its conclusion: the platform watches pod lifecycle and readiness, maintains the endpoint set itself, and resolves a stable in-cluster name to it, so application code contains no registration or lookup logic at all.</span></div>
+        <div class="wild-item" data-kb-example="eureka" data-kb-level="advanced" id="wild-eureka"><strong>Netflix Eureka</strong><span>The caller-side variant in its best-known form: instances self-register and heartbeat, clients fetch and cache the full registry, and instance selection happens in the client.</span></div>
+        <div class="wild-item" data-kb-example="zookeeper" data-kb-level="expert" id="wild-zookeeper"><strong>Apache ZooKeeper</strong><span>Used for discovery through ephemeral nodes, whose lifetime is tied to the registering session — so an instance disappearing from the registry is the same event as its connection dropping.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Lease or heartbeat interval</strong> — How often an instance must confirm it is alive. Sets the floor on how long a dead instance stays in the registry, and the load the registry carries.</li>
+            <li data-kb-level="advanced" id="production-knob-2" data-kb-polarity="knob"><strong>Client cache refresh interval</strong> — How long a caller reuses a resolved list. Longer survives registry outages better and keeps stale addresses longer.</li>
+            <li data-kb-level="advanced" id="production-knob-3" data-kb-polarity="knob"><strong>Health-check type and thresholds</strong> — Whether the registry polls an endpoint or waits for a heartbeat, plus how many consecutive failures evict. Separating liveness from readiness lives here.</li>
+            <li data-kb-level="expert" id="production-knob-4" data-kb-polarity="knob"><strong>Instance-selection policy</strong> — How a caller or router picks from the list — round robin, least outstanding requests, zone-preferring. Only meaningful in the caller-side variant.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Registry resolution latency and error rate</strong> — How long a lookup takes and how often it fails. On the critical path of every first call, so it is the registry metric that reaches users.</li>
+            <li data-kb-level="advanced" id="production-signal-2" data-kb-polarity="signal"><strong>Registered instance count per service</strong> — How many instances the registry believes are live, against how many were actually deployed. A persistent gap is registration or eviction going wrong.</li>
+            <li data-kb-level="advanced" id="production-signal-3" data-kb-polarity="signal"><strong>Connection failures to resolved addresses</strong> — How often a caller reaches an address the registry gave it and finds nothing. The direct measure of how stale the fleet view is.</li>
+            <li data-kb-level="expert" id="production-signal-4" data-kb-polarity="signal"><strong>Time from instance stop to eviction</strong> — The observed gap between an instance terminating and leaving every caller list, which is the lease interval plus the cache interval, not either alone.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Traffic to terminated instances</strong> — Callers hold cached addresses for instances the scheduler already removed, so a share of requests fails during every deploy or scale-in.</li>
+            <li data-kb-level="advanced" id="production-failure-2" data-kb-polarity="failure"><strong>Registry outage stops new lookups</strong> — Callers with a warm cache keep working; anything starting cold cannot resolve at all, so an outage looks fine until something restarts.</li>
+            <li data-kb-level="advanced" id="production-failure-3" data-kb-polarity="failure"><strong>Mass eviction on a registry hiccup</strong> — A registry that loses heartbeats briefly evicts healthy instances together, and callers see the fleet empty out at once — the reason registries hold instances during suspected self-failure.</li>
+            <li data-kb-level="expert" id="production-failure-4" data-kb-polarity="failure"><strong>Heartbeat storm at scale</strong> — Renewal traffic grows with instance count and shrinking lease intervals, so the registry saturates on bookkeeping just as the fleet grows.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Callers cache the last good instance list and keep serving from it when the registry is unreachable.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">A caller treats a refused connection as ordinary: it drops that instance and tries the next rather than failing the request.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Liveness and readiness are separate, so a briefly paused instance becomes unready rather than being evicted.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Instance stop is graceful: it goes unready and drains before terminating, rather than relying on eviction to notice.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">The registry is replicated across failure domains, since it sits on every call path.</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">The observed stop-to-eviction time is measured end to end, not assumed from the lease interval.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="load-balancer"><a href="./load-balancer.html">Load Balancer</a><span class="rel-note">Caller-side lookup makes the caller the load balancer, so the two decisions merge</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="circuit-breaker"><a href="../resilience/circuit-breaker.html">Circuit Breaker</a><span class="rel-note">A resolved instance can still be failing — the list says registered, not healthy</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="sidecar"><a href="./sidecar.html">Sidecar</a><span class="rel-note">A sidecar proxy resolves on the instance's behalf: router simplicity at caller hop counts</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="ambassador"><a href="./ambassador.html">Ambassador</a><span class="rel-note">The ambassador is where an out-of-process client puts its discovery logic</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Requires</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prerequisite" data-kb-to="health-endpoint"><a href="../resilience/health-endpoint.html">Health Endpoint Monitoring</a><span class="rel-note">Eviction needs a readiness signal to act on, or the registry cannot tell alive from answering</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Part of</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="part-of" data-kb-to="service-mesh"><a href="./service-mesh.html">Service Mesh</a><span class="rel-note">A mesh generalizes per-instance resolution across the whole fleet, plus policy and telemetry</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./async-request-reply.html">← Asynchronous Request-Reply</a>
+      <a class="up" href="../../../index.html">↑ The Atlas</a>
+      <a class="next" href="../../../index.html#band-dist-h">Routing →</a>
+    </nav>
+  </main>
+
+  <!-- kb:generated — page scripts; edit PAGE_SCRIPTS in scripts/lib/model.mjs, not this -->
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/favourites.js"></script>
+  <script src="../../../assets/section-nav.js"></script>
+  <script src="../../../assets/catalog.js"></script>
+  <script src="../../../assets/search.js"></script>
+  <script src="../../../assets/palette.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>
