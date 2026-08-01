@@ -79,7 +79,10 @@ portals and GitHub repos (including awesome-list link hubs) is the **kb-harvest*
 Running a full KB-grounded system design — interview → requirements → entities/API →
 HLD → component zoom-ups → critique → stack — is the **sys-design** skill, which uses
 **grill-me** for the interview and the kb-scout / component-designer / design-critic
-agents so the KB reading never bloats the main context.
+agents so the KB reading never bloats the main context. Prefer it here over the generic
+`architect` / `planner` / `code-architect` agents: those answer from memory, this one
+cites the corpus. Scouting agents open with `kb.mjs brief <query>` — find hits, the
+governing theme's decide table and the top hits' neighbours in one call.
 Full contract, including how to add a page: **[.claude/rules/html5-authoring.md](.claude/rules/html5-authoring.md)**.
 How the prose must read: **[.claude/rules/tone.md](.claude/rules/tone.md)** — the house
 register, distilled from AWS Prescriptive Guidance, Azure Architecture Center and the

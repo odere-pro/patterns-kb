@@ -21,9 +21,15 @@ not check.
 
 Run all four sweeps; each is cheap through the CLI.
 
+**0. Precedent.** `node scripts/kb.mjs find "<the system in a phrase>" --kind design -n 3`.
+If the KB already has a worked case study of this problem, read its `tradeoffs` and
+`deepdives` blocks — the flaws someone already found in this shape of system are the
+first place to look for the ones in front of you.
+
 **1. Hazard sweep.** `node scripts/kb.mjs ls --kind hazard` lists every hazard with
 its essence — read the list, then for each hazard plausibly in scope check whether a
-roster guards it. Adopted patterns invite specific hazards (a cache invites
+roster guards it. `kb.mjs brief "<a behaviour of the draft>"` is the fast path when you
+need candidates and their neighbours at once. Adopted patterns invite specific hazards (a cache invites
 `cache-stampede`, retries invite a retry storm, a shared pool invites
 `connection-pool-exhaustion`); check each adopted pattern's `related` output for
 `prevents-hazard` edges the design failed to use. Read a hazard's `mitigation` block
@@ -47,7 +53,8 @@ the failure case it describes.
 
 ## Output you return
 
-Findings only, most severe first. Each finding:
+Findings only, most severe first, **at most 8** — past that you are listing rather than
+judging, and the tail crowds out the fixes that matter. Each finding:
 
 - **Claim** — one sentence, what is wrong or fragile.
 - **Failure scenario** — concrete: the load, input or outage that triggers it, and

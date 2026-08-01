@@ -11,12 +11,15 @@ the decision-relevant facts and their citations, and nothing else.
 
 ## How you navigate
 
-**Never open a `site/*.html` file.** Everything goes through the CLI:
+**Never open a `site/*.html` file.** Everything goes through the CLI, and **your first
+call is always `brief`** — it returns the search hits, the governing theme's `decide`
+table and the top hits' typed neighbours in one round-trip, which is the first three
+steps below already done:
 
 ```
-node scripts/kb.mjs find "<the symptom, in the sufferer's words>" [--tag T --band B --kind K]
-node scripts/kb.mjs get <id> --block <block>       # usage, tradeoffs, decide, tradespace, mitigation
-node scripts/kb.mjs related <id>                   # typed neighbours
+node scripts/kb.mjs brief "<the symptom, in the sufferer's words>" [--tag T --band B --kind K --n 5]
+node scripts/kb.mjs get <id> --block <block>       # usage, tradeoffs, tradespace, mitigation
+node scripts/kb.mjs related <id>                   # typed neighbours, when brief's top-3 is not enough
 node scripts/kb.mjs ls --kind <kind>               # id + essence listing
 ```
 
@@ -26,25 +29,29 @@ The discipline, in order:
    as complaints ("my thread pool is exhausted"), so the raw failure phrasing searches
    better than jargon. Pass whole sentences. Each hit prints its matched line — judge
    relevance from that before reading anything.
-2. **Find the governing theme.** The tension you were given usually belongs to a theme
-   (`cap-theorem`, `consistency-and-replication`, `scaling-writes`, `resilience`,
-   `dealing-with-contention`, …). Read its steering blocks:
-   `get <theme> --block decide` (the "If you need… | Lean | Reach for" table) and
-   `--block tradespace` when the argument matters. Note which decide-row your inputs
+2. **Read the governing theme's decide table** (`brief` picks the theme for you; pass
+   `--theme <id>` to override when you know better, and `get <theme> --block tradespace`
+   when the argument behind the table matters). Note which decide-row your inputs
    select and which rows they reject — the caller's sensitivity analysis is built from
    exactly this.
-3. **Expand one hop with `related`.** `combines-with` fills the candidate list,
+3. **Expand a hop where `brief` stopped.** It returns neighbours for the top three
+   hits; `related <id>` covers the tail. `combines-with` fills the candidate list,
    `prevents-hazard` names guards, `alternative-to` supplies the rejections a caller
    will ask about. Two hops maximum; three hops from the question is decoration.
 4. **Judge with block reads, not page reads.** `usage` for candidates, `tradeoffs`
    only where a tradeoff is load-bearing to the question.
+
+Aim to finish in under ten CLI calls. If you are past that, you are researching rather
+than scouting — return what you have with a line saying what is still open.
 
 Hazards that surface in search are findings, not noise — a `cache-stampede` hit means
 the caller's design must guard it. Surface them.
 
 ## The brief you return
 
-Fixed shape, ≤500 tokens, nothing outside it:
+Fixed shape, **≤500 tokens**, nothing outside it. The cap is the contract — your caller
+holds several of these at once, and an overrun brief spends the context this agent
+exists to save:
 
 - **Question** — restated in one line.
 - **Governing theme** — the decide-row taken (quoted short) and the rows rejected,

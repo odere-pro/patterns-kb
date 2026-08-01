@@ -43,6 +43,9 @@ relations: ## Cross-check every page's rendered relationships against graph.json
 diagrams: ## Parse every mermaid diagram with the vendored engine that renders it
 	@node scripts/check-mermaid.mjs
 
+diagrams-file: ## Parse the mermaid fences in one markdown file — make diagrams-file FILE=tmp/designs/x.md
+	@node scripts/check-mermaid-file.mjs $(FILE)
+
 graph: ## Derive the relationship graph from the pages (site/assets/graph.json)
 	@node scripts/build.mjs
 

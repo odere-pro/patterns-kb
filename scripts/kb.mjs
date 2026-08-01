@@ -12,6 +12,10 @@
  *                                 --level basic|advanced|expert scopes to a reading level
  *                                 --json on the wild/production blocks also dumps `items`
  *                                 in the writers' own shape — edit one, hand the lot back
+ *   kb.mjs brief <query…> [--theme <id>] [--n 5]   one-call scout bundle: the find hits,
+ *                                 the governing theme's decide table, and the typed
+ *                                 neighbours of the top hits — replaces the 3-6 calls an
+ *                                 agent otherwise spends re-deriving exactly this sequence
  *   kb.mjs related <id>           what it combines with, replaces, is confused for
  *   kb.mjs backlinks <id>         what points here — typed inbound edges + prose mentions
  *   kb.mjs refs [<id> | --file <path>]   what this page points AT, read live off the page:
@@ -293,6 +297,76 @@ function readPage(id) {
   return { node, root, blocks };
 }
 
+/* Shared by `find` and `brief`: score the filtered catalog against a query. The weights,
+ * the synonym bridge and the coverage multiplier live here once, so the two commands
+ * cannot drift apart.
+ *
+ * The synonym bridge: curated SYNONYMS (lib/model.mjs) layered over the machine-generated
+ * expansion table (lib/expansions.mjs), curated wins. build.mjs projects the same merge
+ * into catalog.js, so the offline hub search scores the same bridge.
+ *
+ * Reading all pages costs disk, not context — only the output is charged in tokens. So
+ * search the full prose, not just the index, and return the line that matched. Curated
+ * fields still outrank body text.
+ *
+ * Two different questions wear the same clothes. "circuit breaker" is a lookup — the
+ * name is the answer. "one slow dependency blocks my threads" is a description, where
+ * a name match is usually incidental (every hit on "dependency" would drag in
+ * Dependency Injection) and what the page SAYS matters more than what it is called. */
+function searchCatalog(q, candidates, limit) {
+  const terms = [...new Set(q.split(/\s+/).filter((t) => t.length > 2 && !STOP.has(t)))];
+  const SYN = mergedSynonyms(SYNONYMS);
+  const naming = terms.length <= 2;
+  const W = naming
+    ? { id: 6, name: 5, solves: 5, tags: 3, essence: 3, curated: 2, body: 1 }
+    : { id: 2, name: 2, solves: 6, tags: 3, essence: 3, curated: 1, body: 2 };
+
+  return candidates.map((n) => {
+    const curated = [n.id, n.name, n.essence, ...(n.aliases ?? []), ...(n.tags ?? []), ...(n.solves ?? [])]
+      .join(" ").toLowerCase();
+    let score = 0;
+    if (n.id === q || n.name.toLowerCase() === q || (n.aliases ?? []).some((a) => a.toLowerCase() === q)) score += 100;
+
+    const body = prose(n.path, LEVEL);
+    let why = null, matched = 0;
+    for (const term of terms) {
+      /* Score the term itself at full weight, then its synonyms at half; a term
+       * counts as matched once, on its best variant. */
+      let best = 0, bestWhy = null;
+      /* `own` and not `SYN[term] ?? []`: the merged map is an object literal, so it
+       * inherits Object.prototype. `SYN["constructor"]` returns a function — not nullish,
+       * so `??` never fires and the spread threw, taking `find` down with exit 1 on any
+       * query containing constructor/toString/valueOf/hasOwnProperty. `builder` and
+       * `dummy-object` both author "my constructor takes…" in their own solves, so their
+       * canonical symptom text was unsearchable. Mirrored in search.js. */
+      const variants = [term, ...own(SYN, term)];
+      for (let vi = 0; vi < variants.length; vi++) {
+        const t = variants[vi];
+        const mult = vi === 0 ? 1 : 0.5;
+        let s = 0, line = null;
+        if (n.id.includes(t)) s += W.id;
+        if (n.name.toLowerCase().includes(t)) s += W.name;
+        if ((n.solves ?? []).some((x) => x.toLowerCase().includes(t))) s += W.solves;
+        if ((n.tags ?? []).some((x) => x.toLowerCase().includes(t))) s += W.tags;
+        /* A page with no solves (themes) carries what symptom vocabulary it has in the
+         * essence — score it at the solves weight there, so a one-field page is not
+         * silently outranked by pages with five. Mirrored in search.js. */
+        if (n.essence.toLowerCase().includes(t)) s += (n.solves?.length ? W.essence : W.solves);
+        else if (curated.includes(t)) s += W.curated;
+        const hits = body.hits.get(t);
+        if (hits) { s += Math.min(hits.n, 3) * W.body; line = hits.line; }
+        if (s * mult > best) { best = s * mult; bestWhy = line; }
+      }
+      if (best > 0) { score += best; matched++; why ||= bestWhy; }
+    }
+    // Covering more of what was asked beats mentioning one word a lot. Guard the
+    // divisor: a query of only short words ("CB") leaves no terms, and NaN would
+    // silently drop an otherwise exact alias hit.
+    score *= 1 + matched / Math.max(terms.length, 1);
+    return { n, score, why };
+  }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
 /* ---------------- commands ---------------- */
 const cmd = positional[0];
 
@@ -367,70 +441,7 @@ if (cmd === "get") {
     }
     process.exit(0);
   }
-  const terms = [...new Set(q.split(/\s+/).filter((t) => t.length > 2 && !STOP.has(t)))];
-  const limit = Number(opt("n") ?? 8);
-
-  // The synonym bridge: curated SYNONYMS (lib/model.mjs) layered over the machine-generated
-  // expansion table (lib/expansions.mjs), curated wins. build.mjs projects the same merge
-  // into catalog.js, so the offline hub search scores the same bridge.
-  const SYN = mergedSynonyms(SYNONYMS);
-
-  // Reading all 146 pages costs disk, not context — only the output is charged in
-  // tokens. So search the full prose, not just the index, and return the line that
-  // matched. Curated fields still outrank body text.
-  // Two different questions wear the same clothes. "circuit breaker" is a lookup — the
-  // name is the answer. "one slow dependency blocks my threads" is a description, where
-  // a name match is usually incidental (every hit on "dependency" would drag in
-  // Dependency Injection) and what the page SAYS matters more than what it is called.
-  const naming = terms.length <= 2;
-  const W = naming
-    ? { id: 6, name: 5, solves: 5, tags: 3, essence: 3, curated: 2, body: 1 }
-    : { id: 2, name: 2, solves: 6, tags: 3, essence: 3, curated: 1, body: 2 };
-
-  const scored = candidates.map((n) => {
-    const curated = [n.id, n.name, n.essence, ...(n.aliases ?? []), ...(n.tags ?? []), ...(n.solves ?? [])]
-      .join(" ").toLowerCase();
-    let score = 0;
-    if (n.id === q || n.name.toLowerCase() === q || (n.aliases ?? []).some((a) => a.toLowerCase() === q)) score += 100;
-
-    const body = prose(n.path, LEVEL);
-    let why = null, matched = 0;
-    for (const term of terms) {
-      /* Score the term itself at full weight, then its synonyms at half; a term
-       * counts as matched once, on its best variant. */
-      let best = 0, bestWhy = null;
-      /* `own` and not `SYN[term] ?? []`: the merged map is an object literal, so it
-       * inherits Object.prototype. `SYN["constructor"]` returns a function — not nullish,
-       * so `??` never fires and the spread threw, taking `find` down with exit 1 on any
-       * query containing constructor/toString/valueOf/hasOwnProperty. `builder` and
-       * `dummy-object` both author "my constructor takes…" in their own solves, so their
-       * canonical symptom text was unsearchable. Mirrored in search.js. */
-      const variants = [term, ...own(SYN, term)];
-      for (let vi = 0; vi < variants.length; vi++) {
-        const t = variants[vi];
-        const mult = vi === 0 ? 1 : 0.5;
-        let s = 0, line = null;
-        if (n.id.includes(t)) s += W.id;
-        if (n.name.toLowerCase().includes(t)) s += W.name;
-        if ((n.solves ?? []).some((x) => x.toLowerCase().includes(t))) s += W.solves;
-        if ((n.tags ?? []).some((x) => x.toLowerCase().includes(t))) s += W.tags;
-        /* A page with no solves (themes) carries what symptom vocabulary it has in the
-         * essence — score it at the solves weight there, so a one-field page is not
-         * silently outranked by pages with five. Mirrored in search.js. */
-        if (n.essence.toLowerCase().includes(t)) s += (n.solves?.length ? W.essence : W.solves);
-        else if (curated.includes(t)) s += W.curated;
-        const hits = body.hits.get(t);
-        if (hits) { s += Math.min(hits.n, 3) * W.body; line = hits.line; }
-        if (s * mult > best) { best = s * mult; bestWhy = line; }
-      }
-      if (best > 0) { score += best; matched++; why ||= bestWhy; }
-    }
-    // Covering more of what was asked beats mentioning one word a lot. Guard the
-    // divisor: a query of only short words ("CB") leaves no terms, and NaN would
-    // silently drop an otherwise exact alias hit.
-    score *= 1 + matched / Math.max(terms.length, 1);
-    return { n, score, why };
-  }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, limit);
+  const scored = searchCatalog(q, candidates, Number(opt("n") ?? 8));
 
   if (AS_JSON) { console.log(JSON.stringify(scored.map((x) => ({ ...x.n, why: x.why })), null, 2)); }
   else if (!scored.length) { console.log(`no match for "${q}"`); }
@@ -440,6 +451,70 @@ if (cmd === "get") {
       if (why) console.log(`    ↳ ${why.length > 150 ? why.slice(0, 150) + "…" : why}`);
     }
     console.log(`\n${scored.length} match(es). Next: kb.mjs get <id> [--block usage]`);
+  }
+} else if (cmd === "brief") {
+  /* One round-trip for an agent: the find hits, the governing theme's decide table, and
+   * the typed neighbours of the top hits. Exists because a scouting agent otherwise
+   * spends 3-6 process spawns re-deriving exactly this sequence, and each spawn is a
+   * full model round-trip on its side. */
+  const q = positional.slice(1).join(" ").toLowerCase();
+  if (!q) { console.error("usage: kb.mjs brief <query…> [--theme <id>] [--tag T] [--band B] [--kind K] [--n 5]"); process.exit(1); }
+  const fTag = opt("tag"), fBand = opt("band"), fKind = opt("kind");
+  const candidates = load("catalog.json").nodes.filter((n) =>
+    (!fTag || (n.tags ?? []).includes(fTag)) && (!fBand || n.band === fBand) && (!fKind || n.kind === fKind));
+  const scored = searchCatalog(q, candidates, Number(opt("n") ?? 5));
+  if (!scored.length) { console.log(`no match for "${q}"`); process.exit(0); }
+
+  const graph = load("graph.json");
+  let themeId = opt("theme");
+  if (themeId && graph.nodes[themeId]?.kind !== "theme") { console.error(`not a theme id: ${themeId}`); process.exit(1); }
+  if (!themeId) {
+    /* The governing theme: a theme among the hits wins; otherwise the theme most of the
+     * top hits belong to. Either can come back empty — not every question has one. */
+    themeId = scored.find((x) => x.n.kind === "theme")?.n.id ?? null;
+    if (!themeId) {
+      const counts = new Map();
+      for (const { n } of scored)
+        for (const t of graph.nodes[n.id]?.themes ?? []) counts.set(t.id, (counts.get(t.id) ?? 0) + 1);
+      themeId = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    }
+  }
+  const themeBlocks = themeId ? readPage(themeId).blocks : {};
+
+  /* Neighbours for the top hits only — the tail's relations are a `related` call away. */
+  const related = {};
+  for (const { n } of scored.slice(0, 3)) {
+    if (n.kind === "theme") continue;
+    related[n.id] = relationsOf(readPage(n.id).root);
+  }
+
+  if (AS_JSON) {
+    console.log(JSON.stringify({
+      query: q,
+      matches: scored.map((x) => ({ ...x.n, why: x.why })),
+      theme: themeId ? { id: themeId, decide: themeBlocks.decide ?? null } : null,
+      related,
+    }, null, 2));
+  } else {
+    console.log(`# brief: ${q}\n\n## matches\n`);
+    for (const { n, why } of scored) {
+      console.log(`${n.id}  (${n.kind}/${n.band})  — ${n.essence}`);
+      if (why) console.log(`    ↳ ${why.length > 150 ? why.slice(0, 150) + "…" : why}`);
+    }
+    if (themeId) {
+      console.log(`\n## theme: ${themeId} — decide\n`);
+      console.log(themeBlocks.decide ?? "(no decide block on this theme)");
+    }
+    for (const [id, rels] of Object.entries(related)) {
+      console.log(`\n## related: ${id}\n`);
+      const byType = {};
+      for (const r of rels) (byType[r.label] ||= []).push(r);
+      for (const [label, list] of Object.entries(byType)) {
+        console.log(`${label}:`);
+        for (const r of list) console.log(`  ${r.to}${r.note ? ` — ${r.note}` : ""}`);
+      }
+    }
+    console.log(`\nNext: kb.mjs get <id> --block usage|tradeoffs`);
   }
 } else if (cmd === "set" || cmd === "wild" || cmd === "production" || cmd === "explain" || cmd === "level" || cmd === "register") {
   /* Writing goes through here rather than hand-edited attribute strings: the JSON is

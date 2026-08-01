@@ -33,6 +33,18 @@ Rules per question:
 Typical grills run 2–4 rounds. **Hard cap: 5 rounds.** Whatever is still unknown after
 that is parked as an assumption or an unanswerable, not asked again.
 
+### Unattended mode
+
+Invoked with `--defaults` — a batch evaluation, a scheduled run, or a user who said
+"just assume sensible things" — ask **nothing**. Instead: work the same taxonomy, write
+down the question you would have asked and the default you would have offered, and take
+that default. Every one lands in **Assumptions** with its question, so the card shows
+exactly what a real interview would have changed.
+
+An unattended card is weaker by construction and must say so in one line at the top.
+Never fake an interview: no invented answers, and no assumption stated as if the user
+had confirmed it.
+
 ## Question taxonomy
 
 Pick each round's questions from whichever of these is the most load-bearing unknown —

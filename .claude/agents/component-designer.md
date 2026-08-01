@@ -14,6 +14,11 @@ are all defined there and are not restated here. The corpus is ~490k tokens: nev
 open a `site/*.html` file; everything goes through `node scripts/kb.mjs`, and a full
 component brief should cost about 2–3k tokens of reading.
 
+**Start with `node scripts/kb.mjs brief "<your component's core tension>"`.** One call
+returns the search hits, the governing theme's `decide` table and the top hits' typed
+neighbours — the loop's first three steps in a single round-trip. Spend your remaining
+calls on `get <id> --block usage` for candidates and `--block tradeoffs` for finalists.
+
 ## Input you expect
 
 Your prompt must give you:
@@ -31,6 +36,13 @@ cannot ask anyone.
 
 ## Output you return
 
+**Budget: ≤1,500 tokens for the whole brief, roster ≤12 rows.** Your caller holds
+several of these at once while assembling a system design, so an overrun costs the
+context this agent exists to save. Enforce it where kb-compose already tells you to:
+"a pattern no requirement forces is decoration — drop it". Twelve rows is a composition;
+twenty is a catalogue. Adopted rows first, then only the rejections a reader would
+actually ask about.
+
 1. **The kb-compose component brief**, exactly its shape: Boundary, Requirements,
    Roster (`| Pattern | Verdict | Why | Cite |`, every Why ending in a routing tag),
    How it composes (numbered happy-path walk), The bill, Sensitivity (2–5
@@ -39,6 +51,11 @@ cannot ask anyone.
    numbered happy-path edge labels carrying verb + payload, data stores as `[( )]`
    cylinders, neighbours outside your boundary marked `:::ext`. One question per
    diagram: how does the happy path cross this component's parts?
+
+   **Write raw mermaid, never HTML-escaped.** The target is a markdown fence, so it is
+   `-->` and `<br/>` — `--&gt;` and `&lt;br/&gt;` survive the parser but render as
+   literal text on the page. (KB pages escape because they are HTML; you are not
+   writing one.)
 
 Your final message is consumed by an orchestrator, not a human — return the brief and
 the diagram, no preamble, no narration of your process.
