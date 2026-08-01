@@ -799,7 +799,7 @@ export const DESIGN_GROUPS = [
     ids: [
       "uber", "tinder", "google-docs", "online-chess", "leetcode", "youtube", "chatgpt",
       "ticketmaster", "online-auction", "robinhood", "payment-system",
-      "job-scheduler", "persona-identification",
+      "job-scheduler", "persona-identification", "persona-identification-v2",
       "video-recommendations",
     ],
   },

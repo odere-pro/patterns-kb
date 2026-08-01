@@ -1,9 +1,9 @@
 # site/designs
 
-**Case studies** — 40 worked designs (the `design` kind). Each breaks one real
+**Case studies** — 41 worked designs (the `design` kind). Each breaks one real
 system down the way a strong interview answer would, and `demonstrates` the patterns it uses.
 
-Pages here: ad-click-aggregator, amazon-locker, bitly, bookmyshow, camelcamelcamel, chatgpt, connect-four, design-distributed-cache, design-rate-limiter, distributed-rate-limiter, dropbox, elevator, fb-live-comments, fb-news-feed, fb-post-search, file-system, google-docs, google-news, gopuff, instagram, inventory-management, job-scheduler, leetcode, logging-service, metrics-monitoring, online-auction, online-chess, parking-lot, payment-system, persona-identification, robinhood, strava, ticketmaster, tinder, top-k, uber, web-crawler, whatsapp, yelp, youtube
+Pages here: ad-click-aggregator, amazon-locker, bitly, bookmyshow, camelcamelcamel, chatgpt, connect-four, design-distributed-cache, design-rate-limiter, distributed-rate-limiter, dropbox, elevator, fb-live-comments, fb-news-feed, fb-post-search, file-system, google-docs, google-news, gopuff, instagram, inventory-management, job-scheduler, leetcode, logging-service, metrics-monitoring, online-auction, online-chess, parking-lot, payment-system, persona-identification, persona-identification-v2, robinhood, strava, ticketmaster, tinder, top-k, uber, web-crawler, whatsapp, yelp, youtube
 
 Blocks, in order: `description` → `explain` → `requirements` → `sizing` → `entities` → `interface` → `architecture` → `deepdives` → `tradeoffs` → `levels` → `relationships`.
 Optional: `sizing`, `interface`, `levels`, `explain` — a low-level-design kata may skip

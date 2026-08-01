@@ -15,19 +15,9 @@ The goal is to have visual represantagtion of knowladge tree
 - what tradeoffs
 - what page led to this one 1 level back and forward
 
-## Task ideas
+## Skills
 
-- add attempts to the SQL table to move poisoned message to DLQ
-- competing consumers - multiple sanction lists
-- add schedulers, for retres, DLQs
-- Do I need message routing?
-- Do I need fan-in to merge (converge) the result? Fan in should block the conclusion
-- Outbox - State and event commit together; a relay delivers afterwards to fix double writes
-- Event Sourcing - One append is both state and event, so nothing diverges
-- What is better for inbox and outbox pessimistic or optimistic lock? (Does not span connections, services, or time — it lives and dies with one transaction, so it is not a distributed lock.)
-- Should I use wire tap pattern for observability?
-- where to use autoscaling (min-max up-down) and redundency? <https://odere-pro.github.io/patterns-kb/themes/spike-handling.html>, how to tell producer to slowdown (backpreasure)
-- availability for email photo send, and consistency (strong or evantual) for the result
+- create skill to convert HTML KB page into markdown file, add to the KB page, download as markdown file
 
 ## Questions
 
