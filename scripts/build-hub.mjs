@@ -85,20 +85,19 @@ const cards = (ids, sect, badge) =>
   ids.map((id) => tile(N[id], { sect, badge: badge ? badge(N[id]) : "" })).join("\n");
 
 /* A case study declares what KIND of exercise it is in its own data-kb-tags, which
- * build.mjs carries into graph.json — so the badge cannot disagree with the page. */
+ * build.mjs carries into graph.json — so the badge cannot disagree with the page.
+ *
+ * System design is the DEFAULT rather than a tag of its own: it was one, on 31 of the 40
+ * case studies, and a tag every page of a kind carries but nine groups nothing the Kind
+ * facet does not already group — it only spent a slot at the five-tag ceiling. The two
+ * departures from the norm stay explicit, and the badge is what keeps the split readable
+ * on the tile now that it is no longer selectable as a chip. */
 const KIND_BADGES = [
   ["low-level-design", "Low-level design"],
   ["machine-learning", "Machine learning"],
-  ["system-design", "System design"],
 ];
-function badgeOf(n) {
-  const hit = KIND_BADGES.find(([t]) => (n.tags || []).includes(t));
-  if (!hit) {
-    console.error(`${n.id}: a case study needs one of ${KIND_BADGES.map(([t]) => t).join(" / ")} in its tags`);
-    process.exit(1);
-  }
-  return hit[1];
-}
+const badgeOf = (n) =>
+  KIND_BADGES.find(([t]) => (n.tags || []).includes(t))?.[1] ?? "System design";
 
 /* ------------------------------------------------------- sections & subs ---- */
 

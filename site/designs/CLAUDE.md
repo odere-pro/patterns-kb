@@ -14,7 +14,8 @@ blocks and both may exist.
 The `architecture` block carries the primary mermaid diagram (a `flowchart` for a distributed
 design, a `classDiagram` for a low-level one). A design links to the patterns it uses through the
 typed `relationships` block — `node ../../scripts/kb.mjs link <id> demonstrates <pattern>` writes
-both sides, giving each pattern a "Demonstrated by" backlink. Tag distributed katas
-`system-design` and OOP katas `low-level-design`; designs carry `data-kb-solves` like a pattern.
+both sides, giving each pattern a "Demonstrated by" backlink. Tag OOP katas
+`low-level-design`; a distributed kata carries no kind tag and the hub badges it System design
+by default. Designs carry `data-kb-solves` like a pattern.
 
 Read with `node ../../scripts/kb.mjs get <id>`. See the root CLAUDE.md for the contract.

@@ -233,7 +233,7 @@ export const TAGS = new Set([
   "modularity", "observability", "operations", "partitioning", "performance",
   "persistence", "polymorphism", "read-optimization", "readability", "replication",
   "resilience", "resource-management", "routing", "scalability", "security",
-  "separation-of-concerns", "state-management", "system-design", "test-doubles",
+  "separation-of-concerns", "state-management", "test-doubles",
   "testability", "testing", "throughput", "transactions", "transformation",
   "ui-architecture", "validation",
 ]);
@@ -300,7 +300,6 @@ export const TAG_DESC = {
   security: "Keeping a hostile caller from getting what they want.",
   "separation-of-concerns": "One reason to change per part.",
   "state-management": "Where mutable state lives and who may touch it.",
-  "system-design": "Whole-system design at interview scale: requirements to architecture.",
   "test-doubles": "Standing in for a real collaborator during a test.",
   testability: "Designing so the thing can be checked in pieces.",
   testing: "How the system is proved to work.",
@@ -690,7 +689,8 @@ export const THEME_ORDER = THEME_GROUPS.flatMap((g) => g.ids);
  * `demonstrates` the patterns they use. Grouped by how much the exercise asks of you, NOT
  * by what kind of exercise it is: a reader picks the next one by whether they are ready
  * for it, and the kind is already on the tile as a badge read from the page's own
- * `data-kb-tags` (`system-design` / `low-level-design` / `machine-learning`).
+ * `data-kb-tags` (`low-level-design` / `machine-learning`, and System design where the
+ * page claims neither).
  *
  * That is why the three ML case studies sit here rather than in a section of their own —
  * they are the same exercise at the same three depths. They remain ordinary theme-kind

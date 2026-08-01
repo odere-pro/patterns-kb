@@ -179,8 +179,11 @@ its `description` ("Understanding the problem") frames it, `requirements` states
 requirements to the cheapest set of technology capabilities the numbers allow, `architecture` carries the primary mermaid
 diagram, `deepdives` argues the hard sub-problems, and the typed `relationships` block joins it to the
 patterns it uses via `demonstrates` (see Relationships). Designs carry `data-kb-solves` like a pattern,
-tag distributed katas `system-design` and OOP ones `low-level-design`, and live flat in `site/designs/`. Same question, same place, on every page — that is what makes block-level
-extraction possible.
+tag OOP katas `low-level-design`, and live flat in `site/designs/`. A distributed kata carries no
+kind tag at all: `system-design` was one until it reached 31 of the 40 case studies and spent a slot
+at the five-tag ceiling to say what the section already said, so the hub badges a case study
+**System design** whenever it claims neither `low-level-design` nor `machine-learning`. Same question,
+same place, on every page — that is what makes block-level extraction possible.
 
 A **principle** is a design maxim (SOLID, DRY, KISS, YAGNI, …), not a mechanism: its
 `description` ("What it says") states it, `rationale` why it helps, `applying` how to honour
