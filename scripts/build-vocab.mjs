@@ -21,7 +21,7 @@ const PROPS = [
   ["kind", "Which of the five page kinds this is — <code>pattern</code>, <code>hazard</code>, <code>theme</code>, <code>principle</code>, or <code>design</code> (a worked case study)."],
   ["band", "The elevation band or lens the pattern belongs to. Also its folder."],
   ["group", "The subdivision within a band, where one exists. Also its folder."],
-  ["note", "Why two things relate, from <em>this</em> side. Each side may phrase it its own way."],
+  ["note", "Why two things relate, from this side. Each side may phrase it its own way."],
   ["role", "What a pattern does in the service of one particular theme."],
   ["in-theme", "A theme whose tour visits this pattern. The inverse of <code>kb:tours</code>."],
   ["tours", "A pattern this theme's tour visits. The inverse of <code>kb:in-theme</code>."],
@@ -87,7 +87,7 @@ const html = `<!doctype html>
     <section class="doc-section" id="relations" aria-labelledby="h-rel">
       <h2 class="doc-h" id="h-rel">Relation verbs</h2>
       <div class="prose">
-        <p>A closed vocabulary. Every relationship is declared on <em>both</em> pages it joins, and <code>make check</code> fails on any that is one-way, dangling, or contradictory. Schema.org has nothing this precise — <code>isRelatedTo</code> is the closest and says almost nothing — so these are the KB's own.</p>
+        <p>A closed vocabulary. Every relationship is declared on both pages it joins, and <code>make check</code> fails on any that is one-way, dangling, or contradictory. Schema.org has nothing this precise — <code>isRelatedTo</code> is the closest and says almost nothing — so these are the KB's own.</p>
       </div>
       <div class="rel-group">
         <div class="rel-list">
