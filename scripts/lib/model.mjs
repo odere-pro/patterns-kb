@@ -142,10 +142,19 @@ export const BLOCK_DESC = {
 
 /* ---- the closed polarity vocabulary ----
  * Which side of a multi-sided block an item argues. Three families, one per block that has
- * sides, in BLOCKS.pattern order. CLOSED as of this change: the shape was declared "closed"
- * in ATTRIBUTES from the start, but nothing enforced membership, so a typo would have
- * shipped as a silently unstyled item. validate.mjs rejects a value outside this set,
- * audit-vocab.mjs mirrors that at corpus scale, and build-vocab.mjs renders it. */
+ * sides, in BLOCKS.pattern order.
+ *
+ * PROJECTED, not authored. build-pages.mjs stamps the attribute from the column an item
+ * sits in (`.col.cons li` → `con`, `.prod-knobs li` → `knob`), which is the one place a
+ * class legitimately implies data, because that projection IS the derivation. So this list
+ * and the ITEMS table there are the same closed set said twice, and build-pages.mjs exits
+ * rather than run if they disagree — a value the ontology has never heard of would
+ * otherwise land on 600 pages in a single build.
+ *
+ * The per-page and corpus checks still earn their place: every consumer reads the
+ * attribute rather than the class, and a hand-edited page carries whatever was typed until
+ * the next `make all`. validate.mjs closes that window on the page, audit-vocab.mjs (V4)
+ * across the corpus, and build-vocab.mjs renders the set. */
 export const POLARITIES = [
   { name: "pro", block: "tradeoffs", desc: "An argument for adopting the page's subject — what it buys you." },
   { name: "con", block: "tradeoffs", desc: "An argument against — what it costs, stated as a fact rather than hedged." },
@@ -173,6 +182,55 @@ export const SKETCH_LANGS = [
   { id: "lua", label: "Lua", desc: "Embedded scripting, as a gateway or cache runs it." },
   { id: "text", label: "Plain text", desc: "No highlighting — for output, logs and anything that is not a language." },
 ];
+
+/* ---- the body-end script list, per kind ----
+ * Which client scripts a page loads, in load order. It is taxonomy like BLOCKS above:
+ * what a kind of page *is* decides what it needs to run.
+ *
+ * It lives here because the authored tags drifted. Fifty-three pages had lost
+ * favourites.js — every capability and every comparison page among them — so the
+ * favourite control silently did not exist on them, and adding one more control meant
+ * hand-editing a set that already carried nine different shapes. build-pages.mjs emits
+ * this list into a `kb:generated` region at the body end, which puts the whole set under
+ * the same "edit the page, not this" rule as the JSON-LD, and makes the next control a
+ * one-line change here.
+ *
+ * Head scripts stay AUTHORED. theme.js and lens.js must run before first paint or the
+ * reader sees a flash of the wrong theme, so they belong in <head> and are none of this
+ * builder's business.
+ *
+ * Two pairs are ordered by dependency — mermaid before diagram.js, highlight before
+ * sketch.js. Everything else is independent, so new entries append. */
+const SCRIPTS_BASE = [
+  /* Every kind may carry a diagram: hazards and themes already do, and nothing stops a
+   * principle or a capability page gaining one. Loading the engine where no diagram
+   * happens to exist today costs a cached file; NOT loading it where one appears
+   * tomorrow renders the mermaid source as text. */
+  "vendor/mermaid.min.js",
+  "diagram.js",
+  "progress.js",
+  "favourites.js",
+  /* Injects the left-edge next-section control, and suppresses itself on a page short
+   * enough to scroll — which is why this is uniform rather than per kind. Measured at
+   * 1440×900, a 7-block capability page runs to 8.6 viewports and an 8-block pattern to
+   * 4.3, so page length does not follow kind and a per-kind list would guess wrong in
+   * both directions. */
+  "section-nav.js",
+];
+/* Syntax highlighting, only where a collapsed code sketch can appear: a pattern's
+ * `sketch` block, and a design's HTTP contracts and deep-dive samples. No page of any
+ * other kind carries `details.sketch`, and the loader is inert without one. */
+const SCRIPTS_CODE = ["vendor/highlight.min.js", "sketch.js"];
+
+export const PAGE_SCRIPTS = {
+  pattern:    [...SCRIPTS_BASE, ...SCRIPTS_CODE],
+  hazard:     [...SCRIPTS_BASE],
+  theme:      [...SCRIPTS_BASE],
+  principle:  [...SCRIPTS_BASE],
+  design:     [...SCRIPTS_BASE, ...SCRIPTS_CODE],
+  capability: [...SCRIPTS_BASE],
+  comparison: [...SCRIPTS_BASE],
+};
 
 /* ---- reading levels ----
  * Every page reads at three depths — the SAME block skeleton at every lens, with the
@@ -233,7 +291,7 @@ export const TAGS = new Set([
   "modularity", "observability", "operations", "partitioning", "performance",
   "persistence", "polymorphism", "read-optimization", "readability", "replication",
   "resilience", "resource-management", "routing", "scalability", "security",
-  "separation-of-concerns", "state-management", "system-design", "test-doubles",
+  "separation-of-concerns", "state-management", "test-doubles",
   "testability", "testing", "throughput", "transactions", "transformation",
   "ui-architecture", "validation",
 ]);
@@ -300,7 +358,6 @@ export const TAG_DESC = {
   security: "Keeping a hostile caller from getting what they want.",
   "separation-of-concerns": "One reason to change per part.",
   "state-management": "Where mutable state lives and who may touch it.",
-  "system-design": "Whole-system design at interview scale: requirements to architecture.",
   "test-doubles": "Standing in for a real collaborator during a test.",
   testability: "Designing so the thing can be checked in pieces.",
   testing: "How the system is proved to work.",
@@ -690,7 +747,8 @@ export const THEME_ORDER = THEME_GROUPS.flatMap((g) => g.ids);
  * `demonstrates` the patterns they use. Grouped by how much the exercise asks of you, NOT
  * by what kind of exercise it is: a reader picks the next one by whether they are ready
  * for it, and the kind is already on the tile as a badge read from the page's own
- * `data-kb-tags` (`system-design` / `low-level-design` / `machine-learning`).
+ * `data-kb-tags` (`low-level-design` / `machine-learning`, and System design where the
+ * page claims neither).
  *
  * That is why the three ML case studies sit here rather than in a section of their own —
  * they are the same exercise at the same three depths. They remain ordinary theme-kind

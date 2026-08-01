@@ -16,7 +16,7 @@ on `vocab.html`, a projection or a check that must move with it.
 | Page kinds (7) | `KINDS` | `audit-vocab.mjs` (K1) | the kind tables disagree |
 | Blocks (34) | `BLOCK_DESC` + `BLOCKS` | `validate.mjs`, `audit-vocab.mjs` | a missing or out-of-order block |
 | Attributes (22) | `ATTRIBUTES` | `audit-vocab.mjs` | an undocumented attribute ships |
-| Polarity values (8) | `POLARITIES` | `validate.mjs`, `audit-vocab.mjs` (V4) | an item argues no side |
+| Polarity values (8) | `POLARITIES` | `build-pages.mjs`, `validate.mjs`, `audit-vocab.mjs` (V4, T4) | an item argues no side |
 | Reading levels (3) | `LEVELS` | `validate.mjs` | a block renders empty at a lens |
 | Relation verbs (17) | `RELATION_TYPES` | `build.mjs`, `audit-relations.mjs` | a one-way or dangling edge |
 | JSON-LD properties (7) | `JSONLD_PROPS` | `audit-vocab.mjs` (V3) | an emitted term resolves nowhere |
@@ -25,6 +25,14 @@ on `vocab.html`, a projection or a check that must move with it.
 | Sketch languages (9) | `SKETCH_LANGS` | `validate.mjs`, `audit-vocab.mjs` (V4, T4) | a sketch ships un-highlighted |
 | CLI commands (17) | `scripts/lib/cli-spec.mjs` | — (kb.mjs renders its usage from it) | the docs drift from the tool |
 | Synonyms | `SYNONYMS` + `scripts/data/expansion-synonyms.json` | `expansions.mjs`, `audit-vocab.mjs` | a bridge that never fires |
+
+**`POLARITIES` is projected, not authored.** `build-pages.mjs` stamps `data-kb-polarity`
+from the column an item sits in (`.col.cons li` → `con`), so that table and this list are
+one closed set said twice — and build-pages exits rather than run if they disagree. Adding
+a polarity therefore means adding the selector there in the same change; adding it here
+alone turns the next build red. The per-page and corpus checks still matter, because every
+consumer reads the attribute rather than the class and a hand-edited page carries whatever
+was typed until the next `make all`.
 
 **`BANDS` is partly in scope, and this is a change.** Its ids and its `desc` prose are
 rendered on `vocab.html`, so editing a band description regenerates that page — and two

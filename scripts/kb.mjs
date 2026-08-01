@@ -709,7 +709,14 @@ ${items}
       const p = join(dir, name);
       return statSync(p).isDirectory() ? walk(p) : p.endsWith(".html") ? [relative(SITE, p)] : [];
     });
-    for (const d of Object.values(KIND_DIR)) targets.push(...walk(join(SITE, d)));
+    /* A kind whose folder does not exist yet is empty, not a crash. KIND_DIR gains a kind
+     * the moment the toolchain learns about it, which is before the first page of that
+     * kind lands — `comparison` sat in the table with no directory for exactly that
+     * window, and a bare walk turned the whole-corpus lint into an ENOENT stack trace. */
+    for (const d of Object.values(KIND_DIR)) {
+      const dir = join(SITE, d);
+      if (existsSync(dir)) targets.push(...walk(dir));
+    }
   }
 
   const problems = [];

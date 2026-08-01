@@ -179,8 +179,11 @@ its `description` ("Understanding the problem") frames it, `requirements` states
 requirements to the cheapest set of technology capabilities the numbers allow, `architecture` carries the primary mermaid
 diagram, `deepdives` argues the hard sub-problems, and the typed `relationships` block joins it to the
 patterns it uses via `demonstrates` (see Relationships). Designs carry `data-kb-solves` like a pattern,
-tag distributed katas `system-design` and OOP ones `low-level-design`, and live flat in `site/designs/`. Same question, same place, on every page — that is what makes block-level
-extraction possible.
+tag OOP katas `low-level-design`, and live flat in `site/designs/`. A distributed kata carries no
+kind tag at all: `system-design` was one until it reached 31 of the 40 case studies and spent a slot
+at the five-tag ceiling to say what the section already said, so the hub badges a case study
+**System design** whenever it claims neither `low-level-design` nor `machine-learning`. Same question,
+same place, on every page — that is what makes block-level extraction possible.
 
 A **principle** is a design maxim (SOLID, DRY, KISS, YAGNI, …), not a mechanism: its
 `description` ("What it says") states it, `rationale` why it helps, `applying` how to honour
@@ -386,9 +389,17 @@ presence must agree.
 ## Generated regions — do not edit
 
 Marked `<!-- kb:generated -->`. Currently the JSON-LD block, the element-level ids
-(`tradeoffs-con-1`, `data-kb-polarity`) and the **"Mentioned by"** list. They are projected
-from the page's own attributes and `make all` will overwrite anything you write there.
-`make check` fails if they are stale.
+(`tradeoffs-con-1`, `data-kb-polarity`), the **"Mentioned by"** list and the **body-end
+script list**. They are projected from the page's own attributes and `make all` will
+overwrite anything you write there. `make check` fails if they are stale.
+
+**The body-end script list** comes from `PAGE_SCRIPTS` in
+[`scripts/lib/model.mjs`](../../scripts/lib/model.mjs), keyed by kind, at the `../` depth
+the page's own path implies. Adding a client script means adding it there, not to 354
+pages: the authored tags had drifted into nine different shapes and 53 pages had silently
+lost `favourites.js`, so the favourite control did not exist on them. The `<head>` scripts
+stay **authored** — `theme.js` and `lens.js` must run before first paint or the reader sees
+a flash of the wrong theme.
 
 **"Mentioned by"** is the one region projected from OTHER pages: the `<aside class="mentions">`
 before the footer nav lists every page that links here in prose without declaring a typed

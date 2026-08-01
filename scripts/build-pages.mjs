@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* build-pages.mjs — refreshes the generated regions inside each page.
  *
- * Three regions, all derived from what the page already says, so none can disagree
+ * Four regions, all derived from what the page already says, so none can disagree
  * with it:
  *   - element-level ids + data-kb-polarity on trade-off / usage / variation items,
  *     which give every claim a stable citation target (…#tradeoffs-con-2) and let a
@@ -11,15 +11,20 @@
  *     data-kb-level lives on finer elements only and is never touched here.
  *   - a JSON-LD block in <head>, projected from the data-kb-* attributes. It is never
  *     hand-written; that is what keeps it honest.
+ *   - the body-end <script src> list, from PAGE_SCRIPTS in lib/model.mjs. Authored tags
+ *     drifted into nine different shapes across the corpus and 53 pages had silently
+ *     lost favourites.js; deriving the list means a new control is one line of taxonomy
+ *     rather than a sweep, and the staleness gate below catches the next drift.
  *
- * Everything else on the page is authored. Run: node scripts/build-pages.mjs [--check]
+ * Everything else on the page is authored — including the <head> scripts, which must run
+ * before first paint. Run: node scripts/build-pages.mjs [--check]
  */
 import { readFileSync } from "node:fs";
 import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { VOCAB_NS, KB_NAME, BLOCK_LEVELS, esc } from "./lib/model.mjs";
+import { VOCAB_NS, KB_NAME, BLOCK_LEVELS, POLARITIES, PAGE_SCRIPTS, esc } from "./lib/model.mjs";
 import { blockProblems, lensProblems } from "./lib/validate.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
@@ -37,6 +42,13 @@ const graph = JSON.parse(readFileSync(join(SITE, "assets", "graph.json"), "utf8"
 
 const MARK = "kb:generated — derived from data-kb-*; edit the page, not this";
 const MENTIONS_MARK = "kb:generated — mentions; derived from other pages' prose links, edit the prose, not this";
+const SCRIPTS_MARK = "kb:generated — page scripts; edit PAGE_SCRIPTS in scripts/lib/model.mjs, not this";
+/* The whole body-end script run, its leading blank line included, and WITH OR WITHOUT the
+ * marker — matching an unmarked run is what let the first build absorb the hand-written
+ * tags it replaces, instead of needing a migration to strip them. Anchored on </body>, so
+ * the <head> scripts (theme.js, lens.js, which stay authored because they run pre-paint)
+ * can never match: nothing in <head> is followed by the closing body tag. */
+const SCRIPTS_RE = /\n(?:[ \t]*<!-- kb:generated — page scripts[^\n]*-->\n)?(?:[ \t]*<script src="[^"]*"><\/script>\n)+(?=[ \t]*<\/body>)/;
 /* The whole region, leading newline included, so stripping it restores the page byte for
  * byte and a rebuild is idempotent. */
 const MENTIONS_RE = /\n[ \t]*<!-- kb:generated — mentions[\s\S]*?<\/aside>\n/;
@@ -85,6 +97,19 @@ const ITEMS = [
   { block: "requirements", sel: ".functional ol > li", idOf: (_el, i) => `requirements-fr-${i + 1}` },
   { block: "requirements", sel: ".nonfunctional > ul > li", idOf: (_el, i) => `requirements-nfr-${i + 1}` },
 ];
+/* This table is the ONLY writer of data-kb-polarity — the attribute is projected from the
+ * column an item sits in, not hand-written — so these eight literals and the POLARITIES
+ * vocabulary published on vocab.html are the same closed set said twice. Held together
+ * here rather than in a checker, because the failure is a value the ontology has never
+ * heard of appearing on 600 pages in one build. */
+{
+  const stamped = [...new Set(ITEMS.map((i) => i.polarity).filter(Boolean))].sort();
+  const declared = POLARITIES.map((p) => p.name).sort();
+  if (JSON.stringify(stamped) !== JSON.stringify(declared)) {
+    console.error(`polarity drift: build-pages stamps [${stamped}] but POLARITIES declares [${declared}] — reconcile scripts/lib/model.mjs and the ITEMS table above.`);
+    process.exit(1);
+  }
+}
 const keyed = (block, key) => (key ? `${block}-${key}` : null);
 /* Prose paragraphs in ANY block: <block>-p-N. Applied generically after ITEMS. */
 const PROSE_P = ".prose > p";
@@ -164,7 +189,19 @@ ${items}
 `;
 }
 
-let changed = 0, stale = [], idsStamped = 0, levelsStamped = 0, mentionsRendered = 0;
+/* The body-end script list for one page, at the ../ depth its own path implies — the same
+ * `hop` the JSON-LD writer uses, because a design one level down and a pattern three levels
+ * down need different prefixes and the site must work from file:// with no server to
+ * resolve an absolute path. An unknown kind throws rather than emitting nothing: a page
+ * silently stripped of every control is far worse than a red build. */
+function scriptsFor(node) {
+  const list = PAGE_SCRIPTS[node.kind];
+  if (!list) throw new Error(`${node.id}: kind "${node.kind}" has no PAGE_SCRIPTS entry — add one in scripts/lib/model.mjs`);
+  const tags = list.map((s) => `  <script src="${hop(node.path, `assets/${s}`)}"></script>`).join("\n");
+  return `  <!-- ${SCRIPTS_MARK} -->\n${tags}\n`;
+}
+
+let changed = 0, stale = [], idsStamped = 0, levelsStamped = 0, mentionsRendered = 0, scriptsRendered = 0;
 const problems = [];
 
 for (const node of Object.values(graph.nodes)) {
@@ -294,6 +331,16 @@ for (const node of Object.values(graph.nodes)) {
     mentionsRendered++;
   }
 
+  /* ---- body-end script list ----
+   * Replace the existing run in place, or insert one on a page that has none (a fixture
+   * page, or a newly scaffolded one). Either way the region ends up as the last thing
+   * before </body>, separated from </main> by the one blank line every page already has. */
+  const scripts = scriptsFor(node);
+  out = SCRIPTS_RE.test(out)
+    ? out.replace(SCRIPTS_RE, `\n${scripts}`)
+    : out.replace(/([ \t]*<\/body>)/, `\n${scripts}$1`);
+  scriptsRendered++;
+
   if (out !== src) {
     if (CHECK) stale.push(node.path);
     else { writeAtomic(file, out); changed++; }
@@ -314,5 +361,5 @@ if (CHECK) {
   console.log("pages are up to date.");
 } else {
   console.log(`pages refreshed: ${changed} written, ${idsStamped} element ids + ${levelsStamped} level stamps, ` +
-              `${mentionsRendered} "Mentioned by" list(s).`);
+              `${mentionsRendered} "Mentioned by" list(s), ${scriptsRendered} script list(s).`);
 }
