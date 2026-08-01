@@ -114,7 +114,7 @@ const html = `<!doctype html>
 <body class="doc theme">
   <main class="doc-wrap graph-page">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../index.html">Map</a>
+      <a href="../index.html">Atlas</a>
       <span class="sep">▸</span>
       <span aria-current="page">Interactive Graph</span>
     </nav>
@@ -190,8 +190,8 @@ ${rankedHtml}
     </noscript>
 
     <nav class="docnav" aria-label="Navigation">
-      <a class="prev" href="../index.html">← The Map</a>
-      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="prev" href="../index.html">← The Atlas</a>
+      <a class="up" href="../index.html">↑ The Atlas</a>
       <a class="next" href="../themes/cap-theorem.html">Themes →</a>
     </nav>
   </main>

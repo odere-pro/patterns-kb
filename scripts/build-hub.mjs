@@ -166,15 +166,12 @@ const hazardSection = {
 };
 
 /* ---- VI: case studies ---- */
-/* `ml-cases-h` is parked on the tier holding the ML studies: the section it used to name is
- * gone, but 6 pages still link to that anchor. Do not drop it. */
-const ML_TIER_ANCHOR = { intermediate: "ml-cases-h" };
 const designSection = {
   key: "sec-cases", anchor: "design-cases-h", title: "Case Studies",
   lead: 'Worked end-to-end designs: each takes one problem from requirements to a diagram of the built system, argues the hard trade-offs, and links every pattern it puts to work. Grouped by how much the exercise asks of you — the badge on each tile says what kind it is.',
   total: DESIGN_ORDER.length,
   body: DESIGN_GROUPS.map((g) => sub({
-    key: `sec-cases-${g.id}`, anchor: ML_TIER_ANCHOR[g.id],
+    key: `sec-cases-${g.id}`,
     label: g.label, note: g.note, count: "sect", total: g.ids.length,
     body: `            <div class="chips">\n${cards(g.ids, `sec-cases-${g.id}`, badgeOf)}\n            </div>`,
   })).join("\n"),

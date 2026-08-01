@@ -80,7 +80,7 @@ const html = `<!doctype html>
 <body class="doc">
   <main class="doc-wrap">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="index.html">Map</a>
+      <a href="index.html">Atlas</a>
       <span class="crumb-sep">▸</span>
       <span aria-current="page">Vocabulary</span>
     </nav>
@@ -187,7 +187,7 @@ ${blockRows}
 
     <nav class="docnav" aria-label="Document navigation">
       <a class="prev" href="map/stack.html">← Pattern → product</a>
-      <a class="up" href="index.html">↑ The Elevation Map</a>
+      <a class="up" href="index.html">↑ The Atlas</a>
       <a class="next" href="map/graph.html">Relationship graph →</a>
     </nav>
   </main>

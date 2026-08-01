@@ -329,7 +329,7 @@ export function pageSkeleton({ id, name, kind, band, group, order, tags }) {
   <main class="doc-wrap" data-kb-id="${id}" data-kb-kind="${kind}" data-kb-band="${band}" data-kb-group="${group}" data-kb-essence="TODO — the terse one-liner" data-kb-order="${order}"${tags?.length ? `\n        data-kb-tags='${JSON.stringify(tags)}'` : ""}>
 
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="${p}index.html">Map</a>
+      <a href="${p}index.html">Atlas</a>
       <span class="sep">▸</span>
       <a href="${p}index.html${crumbAnchor}">${esc(crumbLabel)}</a>
       <span class="sep">▸</span>
@@ -353,7 +353,7 @@ ${blocks}
 
     <nav class="docnav" aria-label="Pattern navigation">
       <a class="prev" href="${p}index.html${crumbAnchor}">← ${esc(crumbLabel)}</a>
-      <a class="up" href="${p}index.html">↑ The Map</a>
+      <a class="up" href="${p}index.html">↑ The Atlas</a>
       <a class="next" href="${p}index.html${crumbAnchor}">${esc(crumbLabel)} →</a>
     </nav>
   </main>

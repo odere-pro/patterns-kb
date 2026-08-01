@@ -175,7 +175,7 @@ const html = `<!doctype html>
 <body class="doc theme">
   <main class="doc-wrap">
     <nav class="crumb" aria-label="Breadcrumb">
-      <a href="../index.html">Map</a>
+      <a href="../index.html">Atlas</a>
       <span class="sep">▸</span>
       <span aria-current="page">From Pattern to Product</span>
     </nav>
@@ -197,7 +197,7 @@ ${sections.join("\n\n")}
 
     <nav class="docnav" aria-label="Navigation">
       <a class="prev" href="graph.html">← Interactive Graph</a>
-      <a class="up" href="../index.html">↑ The Map</a>
+      <a class="up" href="../index.html">↑ The Atlas</a>
       <a class="next" href="../vocab.html">Vocabulary →</a>
     </nav>
   </main>

@@ -18,6 +18,11 @@ has a page, a projection or a check that must move with it.
 | Attributes (22) | `ATTRIBUTES` | `audit-vocab.mjs` | an undocumented attribute ships |
 | Synonyms | `SYNONYMS` + `scripts/data/expansion-synonyms.json` | `expansions.mjs`, `audit-vocab.mjs` | a bridge that never fires |
 
+**Not in scope:** the editorial ordering arrays in the same file — `BANDS`,
+`THEME_GROUPS`, `DESIGN_GROUPS`, `HAZARD_ORDER`, `PRINCIPLE_GROUPS`, `CAPABILITY_ORDER`,
+`COMPARISON_ORDER`. They decide where a page appears on the hub, not what it may say about
+itself, and nothing here validates them. That is the **kb-hub** skill.
+
 **Start every task here:**
 
 ```

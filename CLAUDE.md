@@ -71,7 +71,20 @@ Then `make all` to regenerate, and `make check` to verify. A hook runs `make che
 edit under `site/` — it takes ~0.8s.
 
 **Never edit a `<!-- kb:generated -->` region.** It is projected from the page's own
-attributes and will be overwritten.
+attributes and will be overwritten. The same goes for `site/index.html`, which is generated
+in full and compared byte for byte.
+
+Which skill owns what, for the parts that are not a page's prose:
+
+| Job | Skill |
+|---|---|
+| the hub, and where a page appears on it | **kb-hub** |
+| re-filing a page into another band or group | **kb-move** |
+| any block of a pattern page | **kb-pattern-blocks** |
+| `make all` / `make check` / the worklists | **kb-verify** |
+| tokens, `hub.css`, `pattern.css` | **kb-styles** |
+| the client scripts and their stores | **kb-site-ui** |
+| the interactive graph | **kb-graph** |
 
 Merging a pattern found on the web — improve the existing page, skip, or create a new
 one — is the **kb-intake** skill; discovering those candidates from vendor architecture
@@ -106,7 +119,10 @@ Each folder under `site/` has its own CLAUDE.md with local rules.
   `scripts/audit-vocab.mjs` fails the build on either half. Growing or retiring any of it —
   including the search synonym table — is the **kb-vocab** skill.
 - An `explain` block, when present, holds exactly one item per level, in order.
-- A page's **path must match** its `data-kb-band` / `data-kb-group`.
+- A page's **path must match** its `data-kb-band` / `data-kb-group`, as resolved by
+  `folderFor()`. That is not always one folder per group: a group may carry a `dir` alias
+  in `BANDS` so it renders as its own hub subsection while sharing another group's
+  directory — which is how the Network band split five ways without moving 27 files.
 - No dangling, one-way or contradictory links; every generated artifact in sync.
 
 ## Layout

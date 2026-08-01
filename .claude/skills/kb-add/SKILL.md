@@ -26,10 +26,28 @@ applies when a new reference has outrun its page.
 
 ## 2. Decide where it goes
 
-Band and group decide the folder, and the path is checked against them. Ask which altitude
-it works at (an object? one app? a whole system? a network?) or which lens it is
-(concurrency, messaging, caching, ddd, functional, testing, security). See `BANDS` in
-`scripts/lib/model.mjs`.
+**A pattern** is placed by its band and group, which decide the folder — the path is checked
+against them. Ask which altitude it works at (an object? one app? a whole system? a
+network?) or which lens it is (concurrency, messaging, caching, ddd, functional, testing,
+security). See `BANDS` in `scripts/lib/model.mjs`. The Network band subdivides five ways:
+`distributed-resilience`, `-routing`, `-scale`, `-coordination`, `-data` — and the last two
+pairs share a folder each, so the folder alone will not tell you the group.
+
+**Every other kind is placed by an editorial ordering array**, and this is the step that has
+no other home: a hazard, theme, principle, design, capability or comparison that is not in
+its array validates clean, builds clean, and **never appears on the hub**. `build-hub.mjs`
+now fails on it rather than shipping an unreachable page:
+
+| kind | add the id to |
+|---|---|
+| hazard | `HAZARD_ORDER` |
+| theme | `THEME_GROUPS` (one of five groups) |
+| design / ML case study | `DESIGN_GROUPS` (one of three complexity tiers) |
+| principle | `PRINCIPLE_GROUPS` (craft or systems) |
+| capability | `CAPABILITY_ORDER` |
+| comparison | `COMPARISON_ORDER` |
+
+All in `scripts/lib/model.mjs`. Placement and ordering are the **kb-hub** skill.
 
 ## 3. Scaffold it
 

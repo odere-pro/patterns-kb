@@ -106,10 +106,18 @@ anything else. Do not invent one to fit a page.
 (with a per-side note via `--note-back`); if you edit one by hand instead, edit the neighbour
 too, or `make check` will report it one-way.
 
+**A new non-pattern page also needs placing on the hub.** A pattern is placed automatically
+by its band and group, but a hazard, theme, principle, design, capability or comparison
+appears only if its id is in the matching ordering array in `scripts/lib/model.mjs`
+(`HAZARD_ORDER`, `THEME_GROUPS`, `PRINCIPLE_GROUPS`, `DESIGN_GROUPS`, `CAPABILITY_ORDER`,
+`COMPARISON_ORDER`). `build-hub.mjs` fails rather than shipping an unreachable page. Report
+which array you added the id to; the placement rules are the **kb-hub** skill.
+
 ## Boundaries
 
 - Touch only the ids you were given. Another agent may own the next folder.
 - Never edit a `<!-- kb:generated -->` region — it is overwritten by `make all`.
+- Never edit `site/index.html`; it is generated in full from `scripts/build-hub.mjs`.
 - Do not run `make all`; the orchestrator does that once at the end.
 - Report honestly what you wrote, including what you deliberately left empty. `[]` for
   aliases and no wild block are good answers, not gaps to fill.

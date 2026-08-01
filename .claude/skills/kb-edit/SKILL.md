@@ -30,7 +30,9 @@ wrong", that is `#tradeoffs-con-2`, and you can quote it before changing it.
 | removing a relationship | `kb.mjs unlink <a> <b>` — removes both sides, whatever verb each used |
 | re-typing a relationship | `unlink`, then `link` with the new verb |
 | a relationship's note | edit the `.rel-note` on **both** pages by hand — each side phrases it its own way |
+| a page's band or group | not here — it is a re-filing, and the path must follow. See **kb-move** |
 | anything in `<!-- kb:generated -->` | **do not.** `make all` overwrites it |
+| anything on the hub (`site/index.html`) | **do not.** It is generated in full and compared byte for byte — change `scripts/build-hub.mjs`. See **kb-hub** |
 
 When you rewrite prose, the inline vocabulary is four elements — `<a>`, `<strong>`,
 `<code>`, `<abbr>`. **Never reintroduce `<em>` or `<i>`:** the corpus carries zero of them

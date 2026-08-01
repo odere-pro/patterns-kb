@@ -407,7 +407,11 @@ derivation (`PROSE_LINK_EXCLUDE` in model.mjs), so the list can never feed itsel
    needs no `--band`).
 2. File it at `site/patterns/<band>/[<group>/]<id>.html` (patterns) or `site/<kind>s/<id>.html`
    (hazards, themes, principles, designs, capabilities) — the path must match the band and
-   group it declares.
+   group it declares, as resolved by `folderFor()` in model.mjs. A group carrying an optional
+   `dir` alias in `BANDS` shares another group's directory, so under
+   `site/patterns/distributed/` the folder alone does not name the group: `routing/` holds
+   `distributed-routing` and `distributed-scale`, `coordination/` holds
+   `distributed-coordination` and `distributed-data`.
 3. Give it a `data-kb-order`. Pattern order is editorial, not alphabetical: it drives the hub
    and prev/next. Insert it where it belongs pedagogically and renumber its neighbours.
 4. Add every block for its kind, in order.
@@ -415,5 +419,10 @@ derivation (`PROSE_LINK_EXCLUDE` in model.mjs), so the list can never feed itsel
 6. `node scripts/kb.mjs set <id> --aliases … --tags … --solves …`
 7. `make all && make check`.
 
-The page appears in the hub, the graph, the catalog, the search and its neighbours'
-backlinks automatically. That is the point of deriving everything from the pages.
+A **pattern** now appears in the hub, the graph, the catalog, the search and its
+neighbours' backlinks automatically — that is the point of deriving everything from the
+pages. **Every other kind needs one more step:** its id must go in the editorial ordering
+array for its kind in `scripts/lib/model.mjs` (`HAZARD_ORDER`, `THEME_GROUPS`,
+`DESIGN_GROUPS`, `PRINCIPLE_GROUPS`, `CAPABILITY_ORDER`, `COMPARISON_ORDER`), because the
+hub's order is editorial rather than derivable. `build-hub.mjs` fails on a page that is in
+none of them, rather than shipping a page nothing links to.

@@ -24,8 +24,11 @@ page — that is what makes it readable as a course rather than a pile of articl
 
 ## Three ways to learn from it
 
-**Browse the hub.** [`site/index.html`](site/index.html) is an "elevation map": patterns
-grouped by band, each with a one-line essence. Start anywhere and follow the typed links.
+**Browse the hub.** [`site/index.html`](site/index.html) is the Software Design Atlas:
+eleven collapsible sections — four elevations of pattern, then hazards, case studies,
+themes, lenses, principles, cloud capabilities and comparisons — each tile carrying a
+one-line essence, a practiced checkbox and a favourite star. Start anywhere and follow the
+typed links.
 
 **Search by symptom.** Type the problem you actually have — "one slow dependency blocks my
 threads" — and the hub filters in place. Matches stay in their band, so you see not just
