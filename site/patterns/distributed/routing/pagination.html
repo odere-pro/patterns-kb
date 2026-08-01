@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pagination · Patterns</title>
+  <meta name="description" content="Pagination — Hand back a large collection in bounded slices the caller asks for one at a time">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#pagination",
+  "identifier": "pagination",
+  "name": "Pagination",
+  "description": "Hand back a large collection in bounded slices the caller asks for one at a time",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-routing",
+  "kb:combines-with": [
+    {
+      "@id": "./api-gateway.html#api-gateway",
+      "name": "API Gateway",
+      "kb:note": "The page-size cap belongs at the front door, where it is enforced before a request reaches your handler"
+    },
+    {
+      "@id": "../resilience/rate-limiter.html#rate-limiter",
+      "name": "Rate Limiter",
+      "kb:note": "A page cap bounds one request; a rate limit bounds the sequence of them, and a walk needs both"
+    },
+    {
+      "@id": "../../messaging/scatter-gather.html#scatter-gather",
+      "name": "Scatter-Gather",
+      "kb:note": "Paging a collection spread over shards means a page from each shard and a merge before the answer"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/api-design.html#api-design",
+      "name": "API Design",
+      "kb:role": "Bound what one request can return, however much data exists"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="pagination" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-routing" data-kb-essence="Hand back a large collection in bounded slices the caller asks for one at a time" data-kb-order="143" data-kb-aliases="[&quot;paging&quot;,&quot;cursor pagination&quot;,&quot;keyset pagination&quot;]" data-kb-tags="[&quot;api-design&quot;,&quot;read-optimization&quot;,&quot;performance&quot;,&quot;data-access&quot;]" data-kb-solves="[&quot;a list endpoint times out because the table grew past a million rows&quot;,&quot;the export job re-reads the same record and misses another one entirely&quot;,&quot;page 900 of the search results takes twelve seconds and page 1 takes forty milliseconds&quot;,&quot;one client asked for limit=100000 and took the database down&quot;,&quot;the total count on the results page costs more than the results&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Pagination</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Routing &amp; Scale</p>
+      <h1 class="doc-title">Pagination</h1>
+      <p class="doc-essence">Splits a collection nobody can afford to return whole into bounded pages, and gives the caller a way to ask for the next one. The choice of what marks the boundary — a row count to skip, or the last row you saw — decides whether page ten thousand costs the same as page one, and whether a concurrent write makes a row appear twice or not at all.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Routing &amp; Scale</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="pagination">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1"><strong>Pagination</strong> returns a collection a slice at a time. The caller states how many items it wants, the server returns at most that many, and the response carries whatever the caller must send back to get the next slice. Two families cover almost every API: <strong>offset paging</strong>, where the caller says how many items to skip, and <strong>keyset paging</strong>, where it says which item it last saw.</p>
+        <p id="description-p-2" data-kb-level="advanced">The difference is what the store has to do to find the page. Offset paging compiles to skip-then-take, and the engine still walks and discards every skipped row — so page one is instant and page ten thousand reads a million rows to return twenty-five. Keyset paging compiles to a seek on the sort key (<code>WHERE (created_at, id) &lt; (?, ?) ORDER BY created_at DESC, id DESC LIMIT 25</code>), which lands on the right index entry directly and costs the same on every page. The cursor a public API hands out is usually the second thing wearing a disguise: an opaque token that encodes the sort key, the active filters, and sometimes a snapshot id.</p>
+        <p id="description-p-3" data-kb-level="expert">Two costs are easy to miss until they bite. Offset paging reads a moving collection: insert a row while a client is walking pages and every later page shifts by one, so a row it has not reached yet is skipped, and one it already read arrives again — an export that looks complete and is not. And a total count is a separate full scan of the filtered set, which is why mature APIs return "there is more" rather than "there are 4,182,993". Both are decisions to make deliberately: a cap on page size bounds what one request can cost you, a unique tie-breaker in the sort key stops rows repeating across page boundaries, and a pinned snapshot buys a stable view for as long as you are willing to hold it open.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>An endpoint that returns "all the orders" is fine while there are fifty of them. At five million it reads the whole table, builds a response too big to hold in memory, and times out before the caller sees a byte — and it does that for every caller at once. Return the first twenty-five instead, and include in the response the one thing the caller needs to ask for the next twenty-five. Nobody ever waits for the whole collection, because nobody is ever sent it.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>How the caller names the next slice is the design decision. Offset paging takes a count to skip and a count to take, so any page is directly addressable and a numbered page control works — at the cost of the store walking every skipped row, and of every page shifting when someone inserts. Keyset paging takes the sort key of the last row returned and seeks past it, so cost is flat with depth and already-read rows cannot shift, but you can only go forward from where you are. Whichever you pick, set a default page size and a hard maximum, and sort on a tuple that is unique, or rows on a page boundary will repeat or vanish on their own.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Pick by how deep the traversal goes and who is doing it. A human browsing filtered results rarely passes page five, so offset paging is honest there and buys the page-number control the interface wants; an export, a sync job, or an infinite scroll walks the whole collection, and only keyset paging keeps the last page as cheap as the first. Then pay the bills each one leaves. Offset's drift is paid by pinning the read to a snapshot, or by accepting it and making the consumer idempotent. Keyset's lack of random access is paid by keeping offset paging for the first few pages and switching behind an opaque cursor, which also lets you change strategy later without a client release — sign the token, because a client will eventually try to build one. The missing total count is paid with an approximation, or with a separate endpoint that people call when they actually want it. And cap the page size in the gateway, not only in the handler: an uncapped <code>limit</code> is a denial-of-service parameter you published.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    C["Client"]:::ext
+    subgraph Seek["One page — a seek, never a scan"]
+        API["List endpoint"]
+        IDX[("Ordered index<br/>created_at, id")]
+    end
+    C -->|"1 GET /orders?limit=25"| API
+    API -->|"2 seek past the cursor, read 26"| IDX
+    IDX -->|"3 25 rows plus one lookahead"| API
+    API -->|"4 200 items, next_cursor, has_more"| C
+    C -->|"5 next page: echo next_cursor back"| API
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>How does the caller get page two without the server remembering page one? The cursor travels in the response and comes back in the next request, so every page is a fresh stateless seek — and the twenty-sixth row is read only to answer whether there is more.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+sequenceDiagram
+    participant C as Client
+    participant A as List endpoint
+    participant D as Store
+    C->>A: GET /orders?limit=25&offset=0
+    A->>D: skip 0, take 25
+    D-->>A: rows 1..25
+    A-->>C: rows 1..25
+    Note over D: a new order is inserted<br/>and sorts to position 1
+    C->>A: GET /orders?limit=25&offset=25
+    A->>D: skip 25, take 25
+    D-->>A: rows 25..49 of the NEW order
+    A-->>C: row 25 arrives twice, row 50 never arrives
+        </pre>
+        <figcaption>What breaks when the collection changes mid-walk? Offset counts positions, and an insert moves every position after it — so the client re-reads one row and silently skips another. Keyset paging asks for "everything after this key" and is unaffected.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Offset paging</dt>
+        <dd>The caller sends how many rows to skip and how many to take — <code>?limit=25&amp;offset=50</code> — with defaults for both. Any page is addressable, so a numbered page control and a "jump to last" button both work, which is why nearly every interface starts here. The store still walks the skipped rows, so latency grows with depth, and a concurrent insert or delete shifts every page after it.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Keyset paging</dt>
+        <dd data-kb-level="advanced">The caller sends the sort key of the last row it saw, and the query seeks past it on the index. Cost is flat no matter how deep the walk goes, and rows already returned cannot shift under a concurrent write. You give up random access — there is no page seven — and you need a sort key that is a total order, which usually means appending a unique id as the tie-breaker.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Opaque page token</dt>
+        <dd data-kb-level="advanced">The server encodes the cursor state — sort key, active filters, sometimes a snapshot id — into a single string the client only ever echoes back. It keeps the paging strategy private, so you can move from offset to keyset without a client release, and it stops callers hand-crafting cursors that skip the filters. Sign or encrypt it: an unsigned token is user input that reaches your query planner.</dd>
+        <dt id="variations-item-4" data-kb-level="expert">Snapshot paging</dt>
+        <dd data-kb-level="expert">The first request pins a consistent view — an open transaction, a read timestamp, a search index point-in-time — and every later page reads that version. Drift disappears entirely, which is what a correct export needs. The price is a resource held open for the length of the walk, and a client that stops halfway leaves it there until it expires, so the lifetime has to be short and enforced.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Byte-range paging</dt>
+        <dd data-kb-level="expert">The same idea applied to one large object rather than a collection. The response advertises <code>Accept-Ranges: bytes</code> and a total <code>Content-Length</code>, the client asks for <code>Range: bytes=0-2499</code>, and the server answers <code>206 Partial Content</code> with a <code>Content-Range</code>. It is how a resumable download survives a dropped connection — the client restarts from the last byte it has, not from zero.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Response size and query cost stop depending on how much data exists, so one caller can no longer take the service down by asking a reasonable question.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">The caller sees the first results in milliseconds instead of waiting for a complete answer it will mostly discard.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Each page is an independent stateless request, so pages can be retried, load-balanced across instances, and cached on their own.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Keyset paging makes the last page as cheap as the first, which is what makes a full-collection sync or export viable at all.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">A collection that changes while the caller walks it can deliver a row twice or skip one entirely — offset paging always, keyset paging for rows not yet reached.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Every consumer now has a loop, a termination condition and a retry story where it used to have one call.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">A total count is a second full scan of the filtered set, so "showing 1-25 of 4,182,993" is more expensive than the page it decorates.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Keyset paging gives up random access: there is no page seven, and no jump to the end.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Paging a collection spread over shards needs a page from every shard and a merge, so the work grows with shard count even though the response does not.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">Cursors are a compatibility surface: change the sort order or the filter semantics and every cursor already in a client's hands is wrong.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">A collection endpoint has no upper bound on how many rows it can return.</li>
+            <li id="usage-when-2" data-kb-polarity="when">Callers want the first results quickly and rarely need the rest.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Something walks the whole collection on a schedule — an export, a sync, a reindex — and must not depend on it being small.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">You need a bound you can enforce at the edge on what any single request may cost.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The collection is small and bounded by construction — a country list, a user's payment methods.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The caller needs the whole set atomically to compute an answer, where a bulk export or a stream is the honest interface.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">The data is a continuous feed rather than a collection, where a subscription with an offset — a log, an event stream — already does this better.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — keyset paging with a lookahead row and an opaque cursor</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">const DEFAULT_LIMIT = 25;
+const MAX_LIMIT = 100;   // published, enforced — an uncapped limit is a DoS parameter
+
+type Cursor = { createdAt: string; id: string };
+
+// The cursor is opaque on purpose: encode it, sign it, and clients cannot
+// hand-craft one that skips the filters or outlives a change of sort order.
+const encode = (c: Cursor) =&gt; sign(Buffer.from(JSON.stringify(c)).toString("base64url"));
+const decode = (t: string): Cursor =&gt; JSON.parse(Buffer.from(verify(t), "base64url").toString());
+
+async function listOrders(q: { limit?: number; cursor?: string }) {
+  const limit = Math.min(q.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+  const after = q.cursor ? decode(q.cursor) : undefined;
+
+  // (created_at, id) is a TOTAL order. Sorting on created_at alone lets rows
+  // with an identical timestamp repeat or vanish across a page boundary.
+  const rows = await db.query(
+    `SELECT id, created_at, total
+       FROM orders
+      WHERE customer_id = $1
+        AND ($2::timestamptz IS NULL OR (created_at, id) &lt; ($2, $3))
+      ORDER BY created_at DESC, id DESC
+      LIMIT $4`,
+    [customerId, after?.createdAt ?? null, after?.id ?? null, limit + 1],
+  );
+
+  // Read one extra row to answer "is there more" without counting anything.
+  const hasMore = rows.length &gt; limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  const last = items.at(-1);
+
+  return {
+    items,
+    has_more: hasMore,
+    next_cursor: hasMore &amp;&amp; last ? encode({ createdAt: last.created_at, id: last.id }) : null,
+  };
+}
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="stripe" id="wild-stripe"><strong>Stripe API</strong><span>Cursor pagination across every list endpoint: <code>limit</code> bounds the page, <code>starting_after</code> and <code>ending_before</code> carry an object id rather than an offset, and <code>has_more</code> tells the caller whether to continue. No total count is returned.</span></div>
+        <div class="wild-item" data-kb-example="github" data-kb-level="advanced" id="wild-github"><strong>GitHub REST API</strong><span>Offset paging with <code>page</code> and <code>per_page</code>, and the next page advertised in a <code>Link</code> header with <code>rel="next"</code>, <code>rel="prev"</code> and <code>rel="last"</code> — so a client follows links instead of computing offsets.</span></div>
+        <div class="wild-item" data-kb-example="elasticsearch" data-kb-level="advanced" id="wild-elasticsearch"><strong>Elasticsearch</strong><span>Deep paging is capped rather than merely discouraged: <code>from</code> plus <code>size</code> may not exceed <code>index.max_result_window</code>, which defaults to 10,000. Past that you use <code>search_after</code>, pinned to a point-in-time so the traversal reads one consistent view.</span></div>
+        <div class="wild-item" data-kb-example="kubernetes" data-kb-level="expert" id="wild-kubernetes"><strong>Kubernetes API</strong><span>List requests take a <code>limit</code> and return a <code>continue</code> token that the next request echoes back — an opaque cursor whose encoding the API server is free to change.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Default and maximum page size</strong> — What an omitted <code>limit</code> means and the largest value you will honour. Publish both; an uncapped limit is a denial-of-service parameter, and clamping silently is friendlier than rejecting.</li>
+            <li data-kb-level="advanced" id="production-knob-2" data-kb-polarity="knob"><strong>Sort key tuple</strong> — The columns the page boundary is drawn on. Append a unique id as the last element, or rows sharing a timestamp repeat or vanish across the boundary.</li>
+            <li data-kb-level="advanced" id="production-knob-3" data-kb-polarity="knob"><strong>Cursor encoding and signature</strong> — What goes into the token and how it is protected. Include the filters, so a caller cannot swap them mid-walk, and sign it, because an unsigned token is user input that reaches the query planner.</li>
+            <li data-kb-level="advanced" id="production-knob-4" data-kb-polarity="knob"><strong>Total-count policy</strong> — Whether the response carries an exact count, an estimate, or only <code>has_more</code>. An exact count is a second full scan of the filtered set on every page.</li>
+            <li data-kb-level="expert" id="production-knob-5" data-kb-polarity="knob"><strong>Snapshot lifetime</strong> — How long a pinned read view is held for a paging client. Long enough for an honest export, short enough that an abandoned walk does not pin resources indefinitely.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Latency by page depth</strong> — Response time bucketed by offset or page number. Offset paging shows a clean upward slope here; keyset paging shows a flat line, which is the whole point of it.</li>
+            <li data-kb-level="advanced" id="production-signal-2" data-kb-polarity="signal"><strong>Rows examined per row returned</strong> — How much the store read to produce the page. A ratio far above one is a scan wearing a page-shaped hat.</li>
+            <li data-kb-level="advanced" id="production-signal-3" data-kb-polarity="signal"><strong>Largest requested limit</strong> — The maximum <code>limit</code> seen in a window. It shows whether the published cap is actually enforced at the edge.</li>
+            <li data-kb-level="expert" id="production-signal-4" data-kb-polarity="signal"><strong>Rejected or expired cursor rate</strong> — Requests answered with an invalid-cursor error. A step change follows a sort-order change or a token-format deploy.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Deep-offset scan saturates the store</strong> — A crawler walks to page 50,000 and each request reads millions of rows. CPU on the database climbs while the response size stays constant, so request-rate dashboards show nothing unusual.</li>
+            <li data-kb-level="advanced" id="production-failure-2" data-kb-polarity="failure"><strong>Silent gaps in a full-collection walk</strong> — Writes during an offset-paged export shift the later pages, so the consumer receives one row twice and never receives another. Nothing errors and the output looks complete.</li>
+            <li data-kb-level="advanced" id="production-failure-3" data-kb-polarity="failure"><strong>Unbounded limit as an amplifier</strong> — One caller sends a very large <code>limit</code> and a single request allocates a response big enough to exhaust the process. Enforce the cap at the edge, not only in the handler.</li>
+            <li data-kb-level="expert" id="production-failure-4" data-kb-polarity="failure"><strong>Cursors invalidated by a deploy</strong> — A change to the sort order or filter semantics makes every token already in flight meaningless, so every in-progress traversal restarts at once.</li>
+            <li data-kb-level="expert" id="production-failure-5" data-kb-polarity="failure"><strong>Cross-shard merge cost</strong> — Paging a collection spread over shards fetches a page from each and merges, so work grows with shard count while the response stays the same size.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">A default page size and a hard maximum are documented and enforced</li>
+            <li id="production-check-2" data-kb-polarity="check">The sort key is a total order, with a unique tie-breaker as its last element</li>
+            <li data-kb-level="advanced" id="production-check-3" data-kb-polarity="check">Cursors are opaque and signed, and carry the filters they were issued under</li>
+            <li data-kb-level="advanced" id="production-check-4" data-kb-polarity="check">The index supports the sort key as a seek rather than a scan</li>
+            <li data-kb-level="advanced" id="production-check-5" data-kb-polarity="check">Anything that walks the whole collection uses keyset paging, not offset</li>
+            <li data-kb-level="advanced" id="production-check-6" data-kb-polarity="check">Consumers are idempotent, so a repeated row on a page boundary is harmless</li>
+            <li data-kb-level="expert" id="production-check-7" data-kb-polarity="check">The behaviour of an expired or malformed cursor is defined and tested</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="api-design" id="fluency-api-design"><a href="../../../themes/api-design.html">API Design</a><span>Bound what one request can return, however much data exists</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="api-gateway"><a href="./api-gateway.html">API Gateway</a><span class="rel-note">The page-size cap belongs at the front door, where it is enforced before a request reaches your handler</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="rate-limiter"><a href="../resilience/rate-limiter.html">Rate Limiter</a><span class="rel-note">A page cap bounds one request; a rate limit bounds the sequence of them, and a walk needs both</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="scatter-gather"><a href="../../messaging/scatter-gather.html">Scatter-Gather</a><span class="rel-note">Paging a collection spread over shards means a page from each shard and a merge before the answer</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./api-routing.html">← API Routing</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./api-versioning.html">API Versioning →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/favourites.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

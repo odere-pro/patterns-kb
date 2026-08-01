@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Asynchronous Request-Reply · Patterns</title>
+  <meta name="description" content="Asynchronous Request-Reply — Accept the work, hand back a handle, and let the caller collect the result later">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#async-request-reply",
+  "identifier": "async-request-reply",
+  "name": "Asynchronous Request-Reply",
+  "description": "Accept the work, hand back a handle, and let the caller collect the result later",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-routing",
+  "kb:combines-with": [
+    {
+      "@id": "../../messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "A client that never saw the 202 retries the submit, so the accept has to be safe to repeat"
+    },
+    {
+      "@id": "../resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "The queue between accept and work is what lets a burst of submissions become depth instead of refusals"
+    },
+    {
+      "@id": "../../messaging/claim-check.html#claim-check",
+      "name": "Claim Check",
+      "kb:note": "A large result leaves the status body and becomes a short-lived link the caller fetches"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "../coordination/workflow-orchestration.html#workflow-orchestration",
+      "name": "Workflow Orchestration",
+      "kb:note": "One operation with one terminal state, rather than a durable multi-step process with compensation"
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/api-design.html#api-design",
+      "name": "API Design",
+      "kb:role": "Answer slow work with a handle instead of a held connection"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="async-request-reply" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-routing" data-kb-essence="Accept the work, hand back a handle, and let the caller collect the result later" data-kb-order="145" data-kb-aliases="[&quot;202 Accepted&quot;,&quot;long-running operation&quot;,&quot;LRO&quot;,&quot;polling status endpoint&quot;]" data-kb-tags="[&quot;asynchrony&quot;,&quot;api-design&quot;,&quot;latency&quot;,&quot;messaging&quot;]" data-kb-solves="[&quot;the load balancer kills the connection before the report finishes rendering&quot;,&quot;users click submit twice because nothing happened for ninety seconds and the work runs twice&quot;,&quot;the request thread sits blocked for four minutes doing nothing but waiting&quot;,&quot;the client has no way to find out whether the import finished or died&quot;,&quot;a burst of uploads takes the whole web tier down with it&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Asynchronous Request-Reply</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Routing &amp; Scale</p>
+      <h1 class="doc-title">Asynchronous Request-Reply</h1>
+      <p class="doc-essence">Splits accepting a request from doing the work it asks for. The caller gets an immediate acknowledgement and the address of a status resource; the work runs elsewhere at its own pace, and the caller collects the result by polling that address or by being called back. The reply still arrives — it just no longer has to fit inside one connection.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <span class="badge muted">Routing &amp; Scale</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="async-request-reply">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1"><strong>Asynchronous request-reply</strong> answers a slow request in two parts. The first response says only that the request was accepted and tells the caller where to look for the outcome; the outcome arrives later, when the work is actually done. Nothing about the caller's need changes — it still wants an answer — but the answer stops depending on a connection staying open for the length of the work.</p>
+        <p id="description-p-2" data-kb-level="advanced">Over HTTP the shape is fixed by convention. The submit endpoint validates the request, records it durably, dispatches the work, and answers <code>202 Accepted</code> with a header naming a status resource. A <code>GET</code> on that resource returns the current state — running, succeeded or failed — and may carry <code>Retry-After</code> to pace the caller and an estimate of time remaining. When the operation created something, the status resource answers <code>303 See Other</code> with the new resource's address, so the caller follows one redirect instead of learning a second URL. The states have to be durable, because a caller can poll after your process, or its own, has restarted.</p>
+        <p id="description-p-3" data-kb-level="expert">Two decisions carry most of the risk. The accept must be idempotent: a client that never saw your <code>202</code> will retry the submit, and without a caller-supplied key that retry starts the work a second time. And the caller has to learn about completion somehow — polling works everywhere and costs a request per caller per interval, a callback removes that load but requires the caller to be reachable and requires you to retry and eventually dead-letter an undeliverable result, and a held-open push channel gives the lowest notification latency for the price of a connection per waiting caller. Distinguish the two failure surfaces in the API as well: rejecting the request is a normal error on the submit, while the work failing is a terminal state on the status resource, and collapsing them leaves callers unable to tell "you never took this" from "it did not work".</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>Some requests take minutes — rendering a year-end report, transcoding a video, importing a large file. Answering them on the spot fails twice over: the proxies between you and the caller cut the connection off after a minute or so, and the person watching a spinner decides it hung and clicks again, so now you are doing the work twice. Instead, check the request makes sense, write down that you are going to do it, and reply immediately with a ticket. The caller comes back with the ticket to ask whether it is ready.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>The submit endpoint does the cheap part inline — authorise, validate, persist the job, put it on a durable queue — and returns <code>202 Accepted</code> with the address of a status resource. Workers pull from the queue and update that job record to a terminal state, so their pace is independent of anything the caller is doing. Polling the status resource returns the state and, once the work produced a resource, a <code>303 See Other</code> pointing at it. Two things make this safe rather than merely asynchronous: an idempotency key on the submit, so a retried submission returns the original ticket instead of starting the work again, and a <code>Retry-After</code> on the status response, so callers poll at a rate you chose rather than one they invented.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose the completion signal by who is calling. Polling is the only option that works against a client behind a firewall with no public address, and it is the one that scales worst — a thousand waiting callers on a five-second interval is two hundred requests a second of pure overhead, so return <code>Retry-After</code>, add jitter, and back the interval off as an operation ages. A callback inverts the cost: you notify once, but you have inherited a delivery problem, which means retries with backoff, a dead-letter for endpoints that stay down, and a signature the receiver can verify. Then close the gaps that only show up in production. Give every non-terminal operation a deadline, so a worker that dies mid-job leaves a failed operation rather than one that is running forever. Retain terminal states long enough for a slow caller to collect — an operation that expires before its result is read is a silent data loss. Keep the result payload out of the status body when it is large, handing back a short-lived link instead. And decide what cancellation means before someone asks for it, because "stop, and tell me what state you left behind" is a different feature from "delete the job row".</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    C["Client"]:::ext
+    subgraph Accept["Accept — durable before the 202"]
+        API["Submit endpoint"]
+        J[("Job store")]
+        Q[("Work queue")]
+    end
+    W["Worker"]
+    S["Status endpoint"]
+    C -->|"1 POST /reports, Idempotency-Key"| API
+    API -->|"2 record the job as accepted"| J
+    API -->|"3 enqueue the work"| Q
+    API -->|"4 202 Accepted, Location: /operations/id"| C
+    Q -->|"5 claim"| W
+    W -->|"6 write the terminal state and result"| J
+    C -->|"7 GET /operations/id"| S
+    S -->|"8 read the current state"| J
+    classDef ext stroke-dasharray:4 4
+        </pre>
+        <figcaption>What has to be true before the 202 is sent? The job record and the queue entry both — an acknowledgement that outlives a crash the work does not survive is a promise you cannot keep.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+sequenceDiagram
+    participant C as Client
+    participant A as API
+    participant W as Worker
+    C->>A: POST /reports (Idempotency-Key: k1)
+    A-->>C: 202 Accepted, Location /operations/9, Retry-After 5
+    C->>A: POST /reports (Idempotency-Key: k1) retry, the 202 was lost
+    A-->>C: 202 Accepted, the SAME operation, no second job
+    C->>A: GET /operations/9
+    A-->>C: 200 running, Retry-After 10
+    W->>A: mark operation 9 succeeded, resource /reports/2025
+    C->>A: GET /operations/9
+    A-->>C: 303 See Other, Location /reports/2025
+    C->>A: GET /reports/2025
+    A-->>C: 200 the report
+        </pre>
+        <figcaption>Why does the submit need an idempotency key? The caller cannot tell a lost response from a rejected request, so it retries — and without the key that retry is a second report being rendered and billed.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Polled status resource</dt>
+        <dd>The caller asks the status endpoint how things are going, on an interval the server suggests. It needs nothing of the caller except the ability to make requests, which is why it is the default for public APIs and the only option when callers sit behind a firewall. The cost is a stream of requests that carry no information most of the time, and it grows with the number of waiting callers rather than with the work.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Callback on completion</dt>
+        <dd data-kb-level="advanced">The caller registers a URL when it submits, and you post the outcome there once. Polling load disappears and the caller learns the moment the work finishes. In exchange you have taken on a delivery obligation: the endpoint will be down sometimes, so you need retries with backoff, a dead-letter for what never lands, and a signature the receiver can verify — plus a way for the caller to reconcile after an outage, which usually means keeping the polled status resource anyway.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Held-open push channel</dt>
+        <dd data-kb-level="advanced">The caller opens a server-sent event stream or a websocket and is told the instant the state changes. Notification latency is as low as it goes, which suits an interactive screen watching one job. It costs a live connection per waiting caller, and it recovers badly on its own — a client that reloads has to fall back to a poll to find out what it missed.</dd>
+        <dt id="variations-item-4" data-kb-level="expert">Result behind a claim check</dt>
+        <dd data-kb-level="expert">The terminal status carries a short-lived link to the payload rather than the payload itself, and the caller fetches it from <a href="./object-storage.html">object storage</a>. It keeps the status resource small and cheap to poll no matter how large the output gets, and it lets the download be resumed and range-requested. The link's lifetime is now part of the contract, and it has to outlast a caller that polls slowly.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Fire-and-forget</dt>
+        <dd data-kb-level="expert">There is no reply at all: the submit is acknowledged and the caller never asks again. It is the cheapest shape and the right one for telemetry and notifications, where nobody acts on the outcome. It is the wrong one everywhere else, because the caller has no way to distinguish work that completed from work that was silently dropped.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">The response no longer has to fit inside a connection timeout, so work that takes minutes stops depending on a network nobody controls.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">The request tier stays cheap and stateless while the expensive work runs on hardware suited to it, scaled on its own.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">A durable job record turns a lost connection into a recoverable state, because the caller can always ask again what happened.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">A burst of submissions becomes queue depth rather than a pile of held connections, so load is absorbed instead of refused.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Every caller now writes a loop, a termination condition and a timeout where it used to write one call.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">You are running a job store and a queue, and both of them can now be the reason a request fails.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">Polling load scales with waiting callers rather than with work, and clients that ignore <code>Retry-After</code> set the rate themselves.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Without an idempotency key on the submit, an ambiguous timeout becomes duplicated work the caller never asked for.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">An operation that never reaches a terminal state is invisible: nothing errors, and the caller polls a running job whose worker died an hour ago.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">Terminal state retention is a real deadline — expire it before a slow caller collects and the result is gone with no error anywhere.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">The work routinely takes longer than the timeouts of the proxies and load balancers between you and the caller.</li>
+            <li id="usage-when-2" data-kb-polarity="when">The caller needs the outcome eventually, but not before it can do anything else.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">The expensive work belongs on different hardware or a different scaling curve than the request tier.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">Submissions arrive in bursts you would rather absorb than refuse.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">The work finishes in tens of milliseconds, where a status resource is more machinery than the operation.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The caller cannot proceed without the answer anyway, so polling only relocates the wait and adds a round trip to it.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Nobody ever reads the outcome, where fire-and-forget is honest and a status resource is theatre.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid" data-kb-level="advanced">The process has many meaningful intermediate steps with compensation between them, which a durable workflow models better than a single operation record.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — an idempotent submit and a status resource that redirects on completion</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// SUBMIT: everything durable BEFORE the 202. Acknowledging work you have not
+// yet recorded is a promise that a crash one millisecond later cannot keep.
+app.post("/reports", async (req, res) =&gt; {
+  const key = req.header("Idempotency-Key");
+  if (!key) return res.status(400).json({ error: "Idempotency-Key required" });
+
+  // Insert-or-return: a retried submit gets the ORIGINAL operation, not a second job.
+  const op = await db.one(
+    `INSERT INTO operations (id, idempotency_key, state, params)
+          VALUES (gen_random_uuid(), $1, 'accepted', $2)
+     ON CONFLICT (idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+       RETURNING id, state`,
+    [key, req.body],
+  );
+
+  await queue.enqueue({ operationId: op.id });   // same transaction, or an outbox
+
+  res.status(202)
+     .location(`/operations/${op.id}`)
+     .set("Retry-After", "5")
+     .json({ id: op.id, state: op.state });
+});
+
+// STATUS: one resource, three answers. 303 hands the caller to the result so it
+// never has to learn a second URL, and Retry-After keeps the poll rate yours.
+app.get("/operations/:id", async (req, res) =&gt; {
+  const op = await db.oneOrNone(`SELECT * FROM operations WHERE id = $1`, [req.params.id]);
+  if (!op) return res.sendStatus(404);          // retention expired, or never existed
+
+  switch (op.state) {
+    case "succeeded":
+      return op.resource_url
+        ? res.redirect(303, op.resource_url)
+        : res.json({ state: "succeeded", result: op.result });
+    case "failed":
+      return res.json({ state: "failed", error: op.error });   // 200: the ASK succeeded
+    default:
+      // Back the interval off as the operation ages, so a thousand waiting
+      // callers do not turn into a poll storm against the job store.
+      const age = Date.now() - Date.parse(op.created_at);
+      return res.set("Retry-After", String(Math.min(60, 5 + Math.floor(age / 10_000))))
+                .json({ state: op.state });
+  }
+});
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="google-lro" id="wild-google-lro"><strong>Google Cloud long-running operations</strong><span>A slow method returns an <code>Operation</code> resource instead of a result. It carries <code>done</code>, and then either <code>response</code> or <code>error</code>; callers poll <code>operations.get</code>, and the same shape is reused across services so one client knows how to wait for all of them.</span></div>
+        <div class="wild-item" data-kb-example="azure-async" data-kb-level="advanced" id="wild-azure-async"><strong>Azure Resource Manager async operations</strong><span>Slow control-plane calls answer <code>202 Accepted</code> with an <code>Azure-AsyncOperation</code> or <code>Operation-Location</code> header naming the status resource, plus <code>Retry-After</code> to set the polling interval.</span></div>
+        <div class="wild-item" data-kb-example="aws-textract" data-kb-level="advanced" id="wild-aws-textract"><strong>Amazon Textract</strong><span>Document analysis is split in two: a start call returns a <code>JobId</code>, a get call polls it, and completion can also be published to a notification topic so callers can stop polling entirely.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Polling interval and backoff</strong> — The <code>Retry-After</code> you return and how it grows as an operation ages. Set it, or a thousand waiting clients will choose an interval for you.</li>
+            <li data-kb-level="advanced" id="production-knob-2" data-kb-polarity="knob"><strong>Idempotency key lifetime</strong> — How long a submitted key is remembered and returns the original operation. Shorter than the longest client retry window turns a retry into duplicate work.</li>
+            <li data-kb-level="advanced" id="production-knob-3" data-kb-polarity="knob"><strong>Terminal state retention</strong> — How long a finished operation stays readable. Expire it before a slow caller polls and the result is lost with no error raised anywhere.</li>
+            <li data-kb-level="advanced" id="production-knob-4" data-kb-polarity="knob"><strong>Operation deadline</strong> — The age at which a non-terminal operation is force-failed. Without one, a worker that dies mid-job leaves a job that is running forever.</li>
+            <li data-kb-level="expert" id="production-knob-5" data-kb-polarity="knob"><strong>Callback retry policy</strong> — Attempts, backoff and the dead-letter destination for results that cannot be delivered. A callback you try once is a result you sometimes drop.</li>
+            <li data-kb-level="expert" id="production-knob-6" data-kb-polarity="knob"><strong>Queue visibility timeout</strong> — How long a claimed job is hidden from other workers. Shorter than the work takes and the job is processed twice; much longer and a crashed worker parks it until the timeout expires.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Age of the oldest non-terminal operation</strong> — The single most useful number here. It rises the moment workers stop draining and long before any error rate moves.</li>
+            <li data-kb-level="advanced" id="production-signal-2" data-kb-polarity="signal"><strong>Accepted versus terminal rate</strong> — Submissions in against completions out. A sustained gap is a backlog forming, whatever the queue depth says.</li>
+            <li data-kb-level="advanced" id="production-signal-3" data-kb-polarity="signal"><strong>Poll requests per operation</strong> — How many status reads each operation costs. It shows whether clients honour <code>Retry-After</code> and whether polling is becoming the dominant load.</li>
+            <li data-kb-level="advanced" id="production-signal-4" data-kb-polarity="signal"><strong>Duplicate submission rate</strong> — Submits that matched an existing idempotency key. A rise means clients are timing out before the 202 reaches them.</li>
+            <li data-kb-level="expert" id="production-signal-5" data-kb-polarity="signal"><strong>Callback delivery failure rate</strong> — Notifications that exhausted their retries. Each one is a caller that will never learn the outcome unless it falls back to polling.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Poll storm</strong> — Many clients on a fixed short interval turn waiting into the dominant traffic, and the status reads starve the job store the workers need. Jitter and an ageing backoff are the fix.</li>
+            <li data-kb-level="advanced" id="production-failure-2" data-kb-polarity="failure"><strong>Duplicated work from a lost acknowledgement</strong> — The 202 never reaches the client, the client retries, and without an idempotency key the expensive work runs twice and is billed twice.</li>
+            <li data-kb-level="advanced" id="production-failure-3" data-kb-polarity="failure"><strong>Operations stuck running forever</strong> — A worker dies after claiming a job and before writing a terminal state. Nothing errors; callers poll a job nobody is doing.</li>
+            <li data-kb-level="expert" id="production-failure-4" data-kb-polarity="failure"><strong>Acknowledged but never enqueued</strong> — The 202 is sent before the job record and the queue entry are both durable, so a crash in that window loses work the caller was told you accepted.</li>
+            <li data-kb-level="expert" id="production-failure-5" data-kb-polarity="failure"><strong>Result expired before collection</strong> — Terminal state retention runs out while a slow or offline caller is still coming back for it, and the outcome is gone with no failure recorded.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">The job record and the queue entry are both durable before the 202 is sent</li>
+            <li id="production-check-2" data-kb-polarity="check">The submit is idempotent on a caller-supplied key</li>
+            <li data-kb-level="advanced" id="production-check-3" data-kb-polarity="check">Status responses carry <code>Retry-After</code>, and the interval grows with operation age</li>
+            <li data-kb-level="advanced" id="production-check-4" data-kb-polarity="check">Every non-terminal operation has a deadline that force-fails it</li>
+            <li data-kb-level="advanced" id="production-check-5" data-kb-polarity="check">Terminal state retention outlasts the slowest client that is meant to collect</li>
+            <li data-kb-level="advanced" id="production-check-6" data-kb-polarity="check">A rejected submit and a failed operation are distinguishable in the API</li>
+            <li data-kb-level="expert" id="production-check-7" data-kb-polarity="check">Large results are handed back as a link rather than inlined in the status body</li>
+            <li data-kb-level="expert" id="production-check-8" data-kb-polarity="check">Callbacks retry with backoff and dead-letter, with polling still available as a fallback</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="api-design" id="fluency-api-design"><a href="../../../themes/api-design.html">API Design</a><span>Answer slow work with a handle instead of a held connection</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="idempotency"><a href="../../messaging/idempotency.html">Idempotency</a><span class="rel-note">A client that never saw the 202 retries the submit, so the accept has to be safe to repeat</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="load-leveling"><a href="../resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">The queue between accept and work is what lets a burst of submissions become depth instead of refusals</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="claim-check"><a href="../../messaging/claim-check.html">Claim Check</a><span class="rel-note">A large result leaves the status body and becomes a short-lived link the caller fetches</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="workflow-orchestration"><a href="../coordination/workflow-orchestration.html">Workflow Orchestration</a><span class="rel-note">One operation with one terminal state, rather than a durable multi-step process with compensation</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <!-- kb:generated — mentions; derived from other pages' prose links, edit the prose, not this -->
+    <aside class="mentions" id="mentioned-by" aria-labelledby="h-mentions">
+      <h2 class="mentions-h" id="h-mentions">Mentioned by</h2>
+      <p class="mentions-lead">These pages link here from their prose without declaring a typed relationship.</p>
+      <ul class="mention-list">
+        <li class="mention-item"><a href="../../architecture/web-queue-worker.html">Web-Queue-Worker</a><span class="mention-kind">pattern</span></li>
+      </ul>
+    </aside>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./api-versioning.html">← API Versioning</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="./reverse-proxy.html">Reverse Proxy →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/favourites.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>
