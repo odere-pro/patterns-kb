@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unique ID Generation · Patterns</title>
+  <meta name="description" content="Unique ID Generation — Mint keys on any node without asking a central allocator, and still index well">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#unique-id-generation",
+  "identifier": "unique-id-generation",
+  "name": "Unique ID Generation",
+  "description": "Mint keys on any node without asking a central allocator, and still index well",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-data",
+  "kb:combines-with": [
+    {
+      "@id": "../routing/sharding.html#sharding",
+      "name": "Sharding",
+      "kb:note": "A shard prefix above the timestamp spreads inserts, at the cost of global ordering"
+    },
+    {
+      "@id": "./write-ahead-log.html#write-ahead-log",
+      "name": "Write-Ahead Log",
+      "kb:note": "Random keys pay for their disorder here, as page splits inflate log volume"
+    },
+    {
+      "@id": "../../messaging/idempotency.html#idempotency",
+      "name": "Idempotency",
+      "kb:note": "A client-minted id doubles as the deduplication key for a retried write"
+    },
+    {
+      "@id": "./lsm-tree.html#lsm-tree",
+      "name": "LSM Tree",
+      "kb:note": "Compaction cost depends on key order, so the same ordering that helps a B-tree helps here"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "../../messaging/correlation-identifier.html#correlation-identifier",
+      "name": "Correlation Identifier",
+      "kb:note": "This mints primary keys; a correlation id tags related messages and is never a key"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="unique-id-generation" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-data" data-kb-essence="Mint keys on any node without asking a central allocator, and still index well" data-kb-order="152" data-kb-aliases="[&quot;snowflake id&quot;,&quot;UUIDv7&quot;,&quot;ULID&quot;,&quot;distributed id generation&quot;]" data-kb-tags="[&quot;coordination&quot;,&quot;data-modeling&quot;,&quot;throughput&quot;,&quot;performance&quot;]" data-kb-solves="[&quot;two servers generated the same primary key and one insert failed&quot;,&quot;our inserts got slower as the table grew and the primary key is a random uuid&quot;,&quot;asking the database for the next number has become a bottleneck on the write path&quot;,&quot;I need ids that can be generated while partitioned and merged later without collisions&quot;,&quot;I want to know roughly when a row was created from its id alone&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Atlas</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Data</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Unique ID Generation</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network · Coordination &amp; Data</p>
+      <h1 class="doc-title">Unique ID Generation</h1>
+      <p class="doc-essence">Builds an identifier out of a clock reading, a per-generator identity and a counter, so any node can mint a key that nothing else will ever produce — and, because the clock sits in the high bits, keys still arrive at the index in roughly the order they were created.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="unique-id-generation">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1">Every scheme for minting identifiers across many machines mixes the same three ingredients in different proportions: a <strong>clock reading</strong>, a <strong>generator identity</strong>, and a <strong>counter or some random bits</strong>. The identity keeps two machines apart, the counter keeps one machine's own output apart within a single tick, and the clock puts the whole thing in order.</p>
+        <p id="description-p-2">The force it resolves is a <strong>direct conflict between uniqueness and ordering</strong>. Uniqueness without coordination is easy if you use enough randomness — and randomness destroys ordering, which turns out to cost real money at the storage layer. Put the clock in the most significant bits and the two stop fighting: ids from any node compare by time first, so they sort roughly by creation and land at the tail of an index instead of scattering through it.</p>
+        <p id="description-p-3" data-kb-level="advanced">That is the whole reason to care. A random key sends every insert to a different leaf page, which forces page splits, inflates <a href="./write-ahead-log.html">write-ahead log</a> volume, evicts useful pages from the buffer cache and gives compaction more to do — reported as multiples slower than sequential inserts once write volume is high. A time-ordered key keeps inserts in one hot page that stays cached and fills densely. The same property that makes the key cheap to index also makes it a rough timestamp, which is sometimes convenient and sometimes a leak.</p>
+        <p id="description-p-4" data-kb-level="expert">Two bit layouts dominate. The compact form is 64 bits: one sign bit fixed at zero, 41 bits of milliseconds since a chosen epoch, 10 bits of node id, and 12 bits of sequence — which is 1,024 generators, 4,096 ids per generator per millisecond, and about 69 years before the timestamp field runs out. The 128-bit standard form is specified in RFC 9562 as version 7: 48 bits of Unix milliseconds, a version marker, 12 bits of sub-millisecond sequence, a variant marker, then 62 random bits — no node-id assignment to administer, at twice the storage and index width.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>The database used to hand out the next number, so ids were small, in order, and never repeated. Then there were several databases and several services minting rows, and asking one counter for every id made it the slowest thing on the write path. Switching to a big random number fixes the collisions and quietly makes inserts slower, because rows now arrive at the index in no order at all. Build the id instead: the time, who made it, and a counter — unique because of who made it, in order because the time comes first.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>The ordering is a property of bit position, not of the values: put the timestamp in the most significant bits and lexical comparison becomes time comparison, so every insert lands in the index tail page rather than a random leaf. That single fact separates a fully random 128-bit identifier from a time-ordered one, and it shows up as page splits, write-ahead log volume and buffer-cache churn rather than as anything visible in application code. The compact 64-bit form buys smaller keys by making you assign each generator a node id; the standard 128-bit form buys administration-free uniqueness by spending those bits on randomness instead.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Reach for this only where a single writer's sequence is genuinely insufficient — a native sequence is denser, smaller and simpler, and outgrowing one is a measurement rather than an assumption. Where you do, three costs each have a counter-move. Time-based ids depend on a monotonic clock, and a backwards step can duplicate or misorder: pay that by refusing to mint until the clock catches up, and alerting on the stall rather than hiding it. The tail-page concentration that makes indexing cheap becomes a write hot spot at extreme rates: pay that by prefixing a shard or tenant discriminator above the timestamp, trading global ordering for per-shard ordering. And the embedded timestamp and node id leak creation time and fleet shape to anyone holding a key: pay that by keeping the sortable id internal and exposing an opaque random one at the API boundary.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-struct" data-kb-block="structure">
+      <h2 class="doc-h" id="h-struct">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    subgraph G1["Generator, node id 5"]
+        A1["assemble: time | 5 | seq"]
+    end
+    subgraph G2["Generator, node id 9"]
+        A2["assemble: time | 9 | seq"]
+    end
+    W["Writer"]
+    IDX[("Primary key index")]
+    TAIL["Tail leaf page"]
+    A1 --&gt;|"1 mint locally, no round trip"| W
+    A2 --&gt;|"1 mint locally, no round trip"| W
+    W --&gt;|"2 insert"| IDX
+    IDX --&gt;|"3 time in the high bits, so both land here"| TAIL
+        </pre>
+        <figcaption>Why does the node id sit below the timestamp and not above it? Because step 3 depends on it: with time highest, ids from both generators interleave into the same tail page. Swap the two fields and each node gets its own region of the index, which is what you actually want once that tail page becomes the write hot spot.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+flowchart LR
+    S["sign: 1 bit, always 0"] --&gt; T["timestamp: 41 bits, ms since a chosen epoch"]
+    T --&gt; N["node id: 10 bits, 1024 generators"]
+    N --&gt; Q["sequence: 12 bits, 4096 per node per ms"]
+        </pre>
+        <figcaption>The compact 64-bit layout, most significant field first. Each field is a ceiling you are choosing: 69 years of timestamps, 1,024 generators, and 4,096 ids per generator per millisecond before the minter has to wait for the next tick.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Fully random 128-bit identifier</dt>
+        <dd>No clock, no node id, no coordination — and no ordering. The right answer when the identifier is public and should reveal nothing, and the wrong one when it is also the primary key of a large indexed table.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced">Time-ordered 128-bit identifier</dt>
+        <dd data-kb-level="advanced">A millisecond timestamp prefix, then randomness. Standardized as version 7 in RFC 9562, so most languages have it built in and nothing needs administering. The default choice for a new system.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Compact 64-bit time, node and sequence</dt>
+        <dd data-kb-level="advanced">Half the width of the standard form, which shows up in every index and foreign key on a large table. The price is assigning each generator a distinct node id and keeping that assignment correct as the fleet changes.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Sortable text encoding</dt>
+        <dd data-kb-level="advanced">The same time-ordered bits rendered in a case-insensitive base32 alphabet, so the string sorts the same way the bytes do. Useful when the id travels through systems that only handle text, such as object keys or log lines.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Range allocation from a coordinator</dt>
+        <dd data-kb-level="expert">A coordinator hands each node a block of numbers, and the node mints locally until the block is exhausted. Keeps ids small and dense at the cost of a dependency and one round trip per block — the middle ground between a shared sequence and pure local minting.</dd>
+        <dt id="variations-item-6" data-kb-level="expert">Shard-prefixed identifier</dt>
+        <dd data-kb-level="expert">Put a <a href="../routing/sharding.html">shard</a> or tenant discriminator above the timestamp. Global ordering is given up on purpose, in exchange for spreading inserts across as many hot pages as there are shards.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Any node mints a key with no round trip, so the write path has no central allocator to queue behind or lose.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">A time-ordered key keeps inserts at the index tail, so pages fill densely and the hot pages stay cached.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Writers can be partitioned, offline or in different regions and still produce keys that never collide.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">The key doubles as a rough creation timestamp, which makes range scans and retention windows cheap.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The identifier leaks what it encodes: creation time to anyone holding one, and fleet size to anyone collecting a few.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Correctness depends on the clock, so a backwards step can mint a duplicate or an out-of-order key.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">128-bit keys double index and foreign-key width against a 64-bit integer, on every table that references them.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Node-id assignment is the original coordination problem, moved from once per id to once per process — not removed.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">Each field is a ceiling: the epoch choice sets an exhaustion date, and sequence exhaustion inside one tick blocks the generator until the next.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">Ordering is only as good as clock agreement between nodes, so two ids a few milliseconds apart say nothing reliable about which event happened first.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-use" data-kb-block="usage">
+      <h2 class="doc-h" id="h-use">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">More than one process mints rows for the same logical table, so no single sequence owns the numbering.</li>
+            <li id="usage-when-2" data-kb-polarity="when" data-kb-level="advanced">The identifier is the primary key of a large, heavily-written indexed table, where insert locality shows up in the bill.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">Writers must keep working while partitioned from each other, or offline, and reconcile later.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">One database writer already owns the sequence and has the throughput — a native sequence is smaller, denser and has no clock dependency.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">The identifier is public and must reveal nothing: use randomness, and keep any sortable key internal.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">You need a total order you can reason about across nodes — this gives approximate order, not consensus.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — the 64-bit layout, including the clock-went-backwards branch</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">const EPOCH = 1_700_000_000_000n; // chosen once; changing it invalidates every existing id
+const NODE_BITS = 10n, SEQ_BITS = 12n;
+const MAX_SEQ = (1n &lt;&lt; SEQ_BITS) - 1n;
+
+class IdGenerator {
+  private lastMs = -1n;
+  private seq = 0n;
+
+  constructor(private nodeId: bigint) {
+    if (nodeId &gt;&gt; NODE_BITS) throw new Error("node id does not fit in 10 bits");
+  }
+
+  next(): bigint {
+    let ms = BigInt(Date.now()) - EPOCH;
+
+    if (ms === this.lastMs) {
+      this.seq = (this.seq + 1n) &amp; MAX_SEQ;
+      // 4096 ids used inside one millisecond: the only correct move is to wait.
+      if (this.seq === 0n) ms = this.spinUntilAfter(this.lastMs);
+    } else if (ms &lt; this.lastMs) {
+      // The clock moved backwards. Minting now risks reissuing an id we already
+      // handed out, so refuse rather than produce a duplicate silently.
+      throw new Error(`clock went backwards by ${this.lastMs - ms}ms`);
+    } else {
+      this.seq = 0n;
+    }
+
+    this.lastMs = ms;
+    // Field order IS the sort order: time highest, so ids compare by time first.
+    return (ms &lt;&lt; (NODE_BITS + SEQ_BITS)) | (this.nodeId &lt;&lt; SEQ_BITS) | this.seq;
+  }
+
+  private spinUntilAfter(ms: bigint): bigint {
+    let now = BigInt(Date.now()) - EPOCH;
+    while (now &lt;= ms) now = BigInt(Date.now()) - EPOCH;
+    return now;
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="rfc-9562" id="wild-rfc-9562"><strong>RFC 9562</strong><span>The current UUID specification, published May 2024 to supersede RFC 4122. It standardizes the time-ordered layout as version 7: a 48-bit Unix millisecond timestamp, then a version marker, sub-millisecond sequence bits, a variant marker and random bits.</span></div>
+        <div class="wild-item" data-kb-example="snowflake" data-kb-level="advanced" id="wild-snowflake"><strong>Snowflake</strong><span>The 64-bit generator Twitter announced in 2010, and the name the timestamp-node-sequence layout is now known by generally: 41 bits of milliseconds, 10 bits of machine id, 12 bits of per-millisecond sequence.</span></div>
+        <div class="wild-item" data-kb-example="ulid" data-kb-level="advanced" id="wild-ulid"><strong>ULID</strong><span>The same time-ordered idea specified as a 26-character Crockford base32 string, so the text form sorts the same way the underlying bits do.</span></div>
+        <div class="wild-item" data-kb-example="postgres-uuid" data-kb-level="expert" id="wild-postgres-uuid"><strong>PostgreSQL B-tree indexes</strong><span>Where the cost of random keys is most often measured: scattered inserts force page splits, which shows up as inflated write-ahead log volume and buffer-cache churn rather than as slow queries.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Field widths and epoch</strong> — How many bits go to timestamp, node id and sequence, and which epoch the timestamp counts from. Each choice is a ceiling: generator count, ids per tick, and the date the timestamp field overflows.</li>
+            <li data-kb-level="advanced" id="production-knob-2" data-kb-polarity="knob"><strong>Node-id assignment source</strong> — Where a generator learns its own id — static config, a coordination service lease, or derived from the instance address. Determines what happens when the fleet is replaced.</li>
+            <li data-kb-level="advanced" id="production-knob-3" data-kb-polarity="knob"><strong>Clock-regression policy</strong> — Whether a backwards clock step blocks minting, throws, or is absorbed by a monotonic counter that ignores the wall clock until it catches up.</li>
+            <li data-kb-level="expert" id="production-knob-4" data-kb-polarity="knob"><strong>Key width at rest</strong> — 64-bit integer versus 128-bit value, which propagates into every index and foreign key that references the row.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Index page splits and write amplification</strong> — Splits per second and bytes written to the log per row inserted. The direct measure of whether keys are arriving in order.</li>
+            <li data-kb-level="advanced" id="production-signal-2" data-kb-polarity="signal"><strong>Sequence exhaustion events</strong> — How often a generator uses its whole per-tick sequence and has to wait. Tells you the current headroom against burst write rate.</li>
+            <li data-kb-level="advanced" id="production-signal-3" data-kb-polarity="signal"><strong>Clock offset against a reference</strong> — How far each generator drifts from a trusted time source. Correctness rests on this, and nothing else reports it.</li>
+            <li data-kb-level="expert" id="production-signal-4" data-kb-polarity="signal"><strong>Duplicate-key rejection rate</strong> — Unique-constraint violations on the primary key. Should be exactly zero; anything else means two generators share a node id.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Two generators share a node id</strong> — A misconfigured or reused node id makes two machines produce identical ids in the same millisecond, and the collision surfaces as a unique-constraint violation on insert — or as silent overwrites where there is no constraint.</li>
+            <li data-kb-level="advanced" id="production-failure-2" data-kb-polarity="failure"><strong>Insert throughput decays as the table grows</strong> — The signature of random keys: fine on an empty table, progressively worse as the index outgrows the buffer cache and every insert touches a cold page.</li>
+            <li data-kb-level="advanced" id="production-failure-3" data-kb-polarity="failure"><strong>Clock step stalls the write path</strong> — A time correction moves the clock backwards and the generator refuses to mint until it catches up, so writes block for the length of the correction.</li>
+            <li data-kb-level="expert" id="production-failure-4" data-kb-polarity="failure"><strong>Tail page becomes the write hot spot</strong> — Perfect time ordering concentrates every insert on one leaf page, so the locality win turns into lock contention at the top of the index.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Node ids are unique by construction — leased or derived, not hand-assigned in config where a copy-paste reuses one.</li>
+            <li id="production-check-2" data-kb-polarity="check" data-kb-level="advanced">A backwards clock step blocks minting and raises an alert, rather than being allowed to reissue an id.</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">The key width and the epoch are recorded as decisions, since neither can be changed later without rewriting every stored id.</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Sequence exhaustion is measured, so the per-tick ceiling is known against real burst rates rather than assumed.</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="expert">Any identifier exposed publicly is opaque, so the internal sortable key does not leak creation time or fleet size.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+          <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="sharding"><a href="../routing/sharding.html">Sharding</a><span class="rel-note">A shard prefix above the timestamp spreads inserts, at the cost of global ordering</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="write-ahead-log"><a href="./write-ahead-log.html">Write-Ahead Log</a><span class="rel-note">Random keys pay for their disorder here, as page splits inflate log volume</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="idempotency"><a href="../../messaging/idempotency.html">Idempotency</a><span class="rel-note">A client-minted id doubles as the deduplication key for a retried write</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="lsm-tree"><a href="./lsm-tree.html">LSM Tree</a><span class="rel-note">Compaction cost depends on key order, so the same ordering that helps a B-tree helps here</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="correlation-identifier"><a href="../../messaging/correlation-identifier.html">Correlation Identifier</a><span class="rel-note">This mints primary keys; a correlation id tags related messages and is never a key</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="./sliding-window.html">← Sliding Window</a>
+      <a class="up" href="../../../index.html">↑ The Atlas</a>
+      <a class="next" href="../../../index.html#band-dist-h">Data →</a>
+    </nav>
+  </main>
+
+  <!-- kb:generated — page scripts; edit PAGE_SCRIPTS in scripts/lib/model.mjs, not this -->
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/favourites.js"></script>
+  <script src="../../../assets/section-nav.js"></script>
+  <script src="../../../assets/catalog.js"></script>
+  <script src="../../../assets/search.js"></script>
+  <script src="../../../assets/palette.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>

@@ -1,9 +1,9 @@
 # patterns/distributed/coordination
 
-**IV · Network → Coordination + Data** — 27 patterns.
+**IV · Network → Coordination + Data** — 29 patterns.
 Keeping many services reliable, fast, and consistent across a network.
 
-Pages here: bloom-filter, change-data-capture, conditional-write, container-orchestration, count-min-sketch, distributed-lock, external-configuration-store, federated-identity, gossip-protocol, hyperloglog, inbox, index-table, leader-election, lsm-tree, mapreduce, materialized-view, optimistic-concurrency-control, outbox, pessimistic-locking, quorum-consensus, replication, saga, sliding-window, strangler-fig, sweeper, workflow-orchestration, write-ahead-log
+Pages here: bloom-filter, change-data-capture, conditional-write, container-orchestration, containerization, count-min-sketch, distributed-lock, external-configuration-store, federated-identity, gossip-protocol, hyperloglog, inbox, index-table, leader-election, lsm-tree, mapreduce, materialized-view, optimistic-concurrency-control, outbox, pessimistic-locking, quorum-consensus, replication, saga, sliding-window, strangler-fig, sweeper, unique-id-generation, workflow-orchestration, write-ahead-log
 
 Every page in this folder declares `data-kb-band="distributed"`, and one of
 `data-kb-group="distributed-coordination"` or `data-kb-group="distributed-data"` — these groups render as separate

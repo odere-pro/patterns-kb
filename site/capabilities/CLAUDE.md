@@ -1,13 +1,13 @@
 # site/capabilities
 
-**Cloud capabilities** — 9 pages (the `capability` kind). Each takes one category
+**Cloud capabilities** — 10 pages (the `capability` kind). Each takes one category
 of managed cloud service as its subject and answers the question a reader arrives with when they
 are holding a console: what can I buy here, what is it called on each cloud, and which patterns
 am I still on the hook to build myself. Order comes from `CAPABILITY_ORDER` in
 `scripts/lib/model.mjs` — a page missing from it validates fine and silently never appears on
 the hub.
 
-Pages here: compute, data-analytics, databases, identity, messaging, networking, regions, resources, storage
+Pages here: compute, data-analytics, databases, identity, messaging, networking, observability-platform, regions, resources, storage
 
 Blocks, in order: `description` → `explain` → `capabilities` → `mapping` → `choosing` → `portability` → `relationships`.
 

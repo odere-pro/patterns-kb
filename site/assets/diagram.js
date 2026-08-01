@@ -42,6 +42,12 @@
       securityLevel: "strict",
       theme: "base",
       fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+      /* An entity-relationship schema is wide by nature — a dozen tables with their columns
+         do not compress. Left at the default, mermaid scales the whole thing down to the
+         container and the column text becomes unreadable. Rendering at natural size instead
+         lets `.diagram`'s overflow-x carry it, which is the readable trade. Scoped to `er`
+         on purpose: the corpus's 600 flowcharts are drawn to fit and must keep fitting. */
+      er: { useMaxWidth: false },
       themeVariables: {
         background: paperRaised,
         primaryColor: accentSoft,
@@ -73,6 +79,20 @@
         activationBkgColor: accentSoft,
         activationBorderColor: accent,
         sequenceNumberColor: paperRaised,
+        /* An erDiagram zebra-stripes its attribute rows from two variables mermaid leaves
+           at #ffffff and #f2f2f2 whatever the theme is, so against dark paper — where --ink
+           is near-white — every other row rendered white-on-white and the schema looked
+           half empty. Both stripes are pinned to the SAME token deliberately: the row text
+           is --ink, and any second fill has to be legible against --ink in both themes at
+           once, which an accent tint is not. Mermaid still draws the cell borders, so the
+           rows stay separable without a fill carrying that job. */
+        attributeBackgroundColorOdd: paperRaised,
+        attributeBackgroundColorEven: paperRaised,
+        /* An erDiagram's relationship labels sit on their own filled plate, and mermaid
+           derives that fill from `labelBackground` rather than from edgeLabelBackground
+           above — left unset it resolves light in both themes, so the label text vanished
+           against it on dark paper. */
+        labelBackground: paperRaised,
         fontSize: "14px"
       }
     });
