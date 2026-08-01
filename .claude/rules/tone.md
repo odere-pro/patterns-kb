@@ -13,7 +13,7 @@ Distilled from the three best pattern-documentation corpora:
 - Google Cloud Architecture Framework —
   <https://docs.cloud.google.com/architecture/framework>
 
-## The eight rules
+## The nine rules
 
 1. **Second person, active voice, imperative for advice.** Address the reader as "you";
    headings and directives open with the verb. GCP: "Simplify your design and use fully
@@ -51,6 +51,13 @@ Distilled from the three best pattern-documentation corpora:
    "may possibly be somewhat" is three doing one job badly. "Robust", "scalable",
    "significant" are unpriced claims — replace with the figure or the mechanism.
    "Where feasible" is the acceptable softener for a directive that has real exceptions.
+
+9. **Emphasis is bold. Never italic.** The corpus carries no `<em>` and no `<i>`, and
+   nothing in any stylesheet renders italic. Reach for `<strong>` when a run-in label
+   opens a bullet, `<code>` when the word is an identifier, and nothing at all when the
+   sentence already puts the word where the stress falls — which is the usual answer.
+   A word italicised for contrast ("the totals are computed *before* anyone asks") is a
+   sentence that has not been rewritten yet: move the word, or split the sentence.
 
 ## Format recipes
 
@@ -94,6 +101,7 @@ one diagram or snippet that proves it.
 | subsequently | then |
 | facilitate | let, help |
 | significant / substantial | the actual figure |
+| `<em>` / `<i>` | `<strong>` for a label, `<code>` for an identifier, or nothing |
 
 Also cut: intros that restate the heading, transitions ("with that said"), summaries of
 what you just wrote, adverb intensifiers, "note that".
