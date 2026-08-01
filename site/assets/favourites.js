@@ -52,7 +52,10 @@
     document.querySelectorAll("button.chip-fav[data-fav-id]"),
     function (btn) {
       var id = btn.getAttribute("data-fav-id");
-      var card = btn.closest(".chip") || btn.closest(".theme-card");
+      /* One class, not a compound selector: every hub tile is a .chip now, and the
+         closest() stub in scripts/test/favourites.test.mjs understands a single .class
+         only — a compound would silently return null there and pass nothing to paint. */
+      var card = btn.closest(".chip");
       var e = entry(id, card && card.hasAttribute("data-fav"));
       e.buttons.push(btn);
       if (card) e.cards.push(card);
@@ -62,7 +65,6 @@
       var sep = label.indexOf(": ");
       if (sep > -1) btn.setAttribute("data-fav-name", label.slice(sep + 2));
       btn.addEventListener("click", function (ev) {
-        ev.preventDefault();  // theme cards are links; a star click must not navigate
         ev.stopPropagation();
         toggle(id);
       });
@@ -149,6 +151,12 @@
     filterBtn.addEventListener("click", function () {
       var on = document.body.classList.toggle("fav-only");
       filterBtn.setAttribute("aria-pressed", on ? "true" : "false");
+      /* A favourite inside a collapsed section is a favourite nobody can see — filtering to
+         it would leave the visitor staring at nothing while the button insists there are
+         favourites. Same keyed hold search.js uses, so the two cannot fight over it.
+         The typeof guard is load-bearing: the test sandbox defines document and
+         localStorage but no window, and a bare window.* there is a ReferenceError. */
+      if (typeof window !== "undefined" && window.KB_COLLAPSE) window.KB_COLLAPSE.hold("favourites", on);
     });
   }
 })();

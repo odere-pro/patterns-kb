@@ -412,10 +412,18 @@ export const BANDS = [
     id: "distributed", kind: "elevation", numeral: "IV",
     label: "Network", short: "Distributed", anchor: "band-dist-h",
     desc: "Keeping many services reliable, fast, and consistent across a network",
+    /* Five subsections, and two of them carry a `dir` alias. "Routing & Scale" and
+     * "Coordination & Data" had each grown past 25 patterns — a heading joined by "&" is
+     * a heading doing two jobs, and a subsection that long stops being a subsection. Each
+     * split in two. The folders did NOT move: `dir` points the two new groups at the
+     * directories their pages already sit in, so the split cost 27 attribute edits instead
+     * of 27 file moves plus every relative link into and out of them. See folderFor(). */
     groups: [
       { id: "distributed-resilience",   label: "Resilience" },
-      { id: "distributed-routing",      label: "Routing & Scale" },
-      { id: "distributed-coordination", label: "Coordination & Data" },
+      { id: "distributed-routing",      label: "Routing" },
+      { id: "distributed-scale",        label: "Scale",       dir: "routing" },
+      { id: "distributed-coordination", label: "Coordination" },
+      { id: "distributed-data",         label: "Data",        dir: "coordination" },
     ],
   },
 
@@ -430,51 +438,108 @@ export const BANDS = [
   { id: "ml",          kind: "lens", label: "Machine Learning",     short: "ML",          anchor: "lens-ml-h",    groups: [{ id: "ml",          label: null }] },
 ];
 
-export const THEME_ORDER = [
-  "system-design-interview", "ml-system-design",
-  "cap-theorem", "streaming", "realtime-updates", "spike-handling", "long-running-tasks",
-  "multi-step-processes", "performance", "auth-and-access", "api-design",
-  "frontend-architecture",
-  "architecture-styles", "service-boundaries", "microservices-design", "continuous-delivery",
-  "scalability", "scaling-reads", "scaling-writes", "consistency-and-replication",
-  "observability", "resilience", "genai-scale", "caching",
-  "dealing-with-contention", "proximity-search",
-  /* The design areas of an always-on workload, in the order you meet them: what the
-   * pieces are, how they are bundled, how traffic reaches them, where state lives,
-   * how you know it is well, how you change it safely, and how you run it. */
-  "workload-composition", "scale-units-and-stamps", "global-traffic-and-ingress",
-  "data-platform", "health-modeling", "continuous-validation",
-  "securing-availability", "operating-a-live-system",
+/* Editorial groups for the Themes section, in five subsections because 34 tiles under one
+ * heading is a wall rather than a section. The order inside each group is the order you
+ * meet the questions, not alphabetical. Drives the hub — a page missing from here still
+ * builds and validates and simply never appears on the map, which is why build-hub.mjs
+ * asserts that every non-pattern page is placed in exactly one ordered list. */
+export const THEME_GROUPS = [
+  {
+    id: "starting",
+    label: "Starting a design",
+    note: "The frameworks that turn a vague prompt into a design you can defend.",
+    ids: ["system-design-interview", "ml-system-design"],
+  },
+  {
+    id: "shaping",
+    label: "Shaping the system",
+    note: "Where the boundaries go, what crosses them, and who is allowed through.",
+    ids: [
+      "architecture-styles", "service-boundaries", "microservices-design",
+      "api-design", "frontend-architecture", "auth-and-access",
+    ],
+  },
+  {
+    id: "data",
+    label: "Moving and storing data",
+    note: "What it costs to keep copies in step, and how work gets from one place to another.",
+    ids: [
+      "cap-theorem", "consistency-and-replication", "streaming", "realtime-updates",
+      "long-running-tasks", "multi-step-processes", "caching", "proximity-search",
+    ],
+  },
+  {
+    id: "scale",
+    label: "Scale and speed",
+    note: "Serving more load than one machine can, and answering faster than the naive path allows.",
+    ids: [
+      "scalability", "scaling-reads", "scaling-writes", "performance",
+      "spike-handling", "dealing-with-contention", "genai-scale",
+    ],
+  },
+  {
+    id: "operating",
+    label: "Running it in production",
+    note: "The design areas of an always-on workload, in the order you meet them: what the pieces are, how they are bundled, how traffic reaches them, where state lives, how you know it is well, how you change it safely, and how you run it.",
+    ids: [
+      "resilience", "observability", "continuous-delivery",
+      "workload-composition", "scale-units-and-stamps", "global-traffic-and-ingress",
+      "data-platform", "health-modeling", "continuous-validation",
+      "securing-availability", "operating-a-live-system",
+    ],
+  },
 ];
-/* ML System Design case studies. Kept OUT of THEME_ORDER so they render as their own
- * dedicated hub + graph section ("ML System Design — Case Studies") rather than in the
- * general themes grid. They are ordinary theme-kind pages in every other respect. */
-export const ML_CASE_STUDIES = [
-  "harmful-content", "bot-detection", "video-recommendations",
+export const THEME_ORDER = THEME_GROUPS.flatMap((g) => g.ids);
+/* Case studies — worked end-to-end solutions that break a real system down and
+ * `demonstrates` the patterns they use. Grouped by how much the exercise asks of you, NOT
+ * by what kind of exercise it is: a reader picks the next one by whether they are ready
+ * for it, and the kind is already on the tile as a badge read from the page's own
+ * `data-kb-tags` (`system-design` / `low-level-design` / `machine-learning`).
+ *
+ * That is why the three ML case studies sit here rather than in a section of their own —
+ * they are the same exercise at the same three depths. They remain ordinary theme-kind
+ * pages in site/themes/; only where they render changed.
+ *
+ * The two ids `design-distributed-cache` and `design-rate-limiter` are prefixed to avoid
+ * colliding with the existing `distributed-cache` / `rate-limiter` pattern pages (ids are
+ * a global key). The hub filters these lists to pages that exist, so a tier can be
+ * populated one page at a time. */
+export const DESIGN_GROUPS = [
+  {
+    id: "foundational",
+    label: "Foundational",
+    note: "One clear bottleneck each, and a design that fits on a whiteboard. Start here — every later study assumes these moves.",
+    ids: [
+      "bitly", "design-distributed-cache", "distributed-rate-limiter", "top-k",
+      "web-crawler", "metrics-monitoring",
+      "parking-lot", "elevator", "connect-four", "amazon-locker",
+      "design-rate-limiter", "file-system", "logging-service",
+    ],
+  },
+  {
+    id: "intermediate",
+    label: "Intermediate",
+    note: "Several subsystems that have to agree, and a read or write path hot enough to shape the whole design.",
+    ids: [
+      "ad-click-aggregator", "fb-news-feed", "instagram", "fb-post-search", "google-news",
+      "yelp", "gopuff", "strava", "whatsapp", "fb-live-comments", "dropbox",
+      "camelcamelcamel", "inventory-management", "bookmyshow",
+      "harmful-content", "bot-detection",
+    ],
+  },
+  {
+    id: "advanced",
+    label: "Advanced",
+    note: "Contention, correctness under concurrency, or money and safety on the line — where the interesting answer is a trade-off rather than a component.",
+    ids: [
+      "uber", "tinder", "google-docs", "online-chess", "leetcode", "youtube", "chatgpt",
+      "ticketmaster", "online-auction", "robinhood", "payment-system",
+      "job-scheduler", "persona-identification",
+      "video-recommendations",
+    ],
+  },
 ];
-/* System-design case studies — the `design` kind. Worked end-to-end solutions (the
- * HelloInterview katas) that break a real system down and `demonstrates` the patterns
- * they use. Kept in their own array (like ML_CASE_STUDIES) so they render as a dedicated
- * hub + graph section rather than in the themes grid. Editorial order runs roughly
- * simple → hard, then the low-level-design (OOP) katas, which carry the
- * `low-level-design` tag; the system-design katas carry `system-design`. The two ids
- * `design-distributed-cache` and `design-rate-limiter` are prefixed to avoid colliding
- * with the existing `distributed-cache` / `rate-limiter` pattern pages (ids are a global
- * key). The hub filters this list to pages that exist, so it can be populated one at a time. */
-export const DESIGN_ORDER = [
-  // system design (31)
-  "bitly", "design-distributed-cache", "distributed-rate-limiter", "web-crawler",
-  "top-k", "ad-click-aggregator", "metrics-monitoring",
-  "fb-news-feed", "instagram", "fb-post-search", "google-news",
-  "yelp", "gopuff", "uber", "tinder", "strava",
-  "whatsapp", "fb-live-comments", "google-docs", "online-chess", "leetcode",
-  "dropbox", "youtube", "chatgpt",
-  "ticketmaster", "online-auction", "robinhood", "payment-system",
-  "camelcamelcamel", "job-scheduler", "persona-identification",
-  // low-level design (9)
-  "parking-lot", "elevator", "amazon-locker", "connect-four", "file-system",
-  "logging-service", "inventory-management", "bookmyshow", "design-rate-limiter",
-];
+export const DESIGN_ORDER = DESIGN_GROUPS.flatMap((g) => g.ids);
 /* Cloud capability categories — the `capability` kind. Each takes one category of managed
  * service as its subject, names the provider-neutral capabilities inside it, maps them
  * across AWS / Azure / Google Cloud, and links the patterns the category packages. Order
@@ -501,7 +566,7 @@ export const HAZARD_ORDER = [
   "race-condition", "deadlock", "starvation", "unbounded-queue", "resource-leak", "improper-instantiation",
   "n-plus-1-query", "chatty-io", "extraneous-fetching",
   "busy-database", "monolithic-persistence",
-  "synchronous-io", "busy-front-end", "connection-pool-exhaustion",
+  "synchronous-io", "busy-front-end", "connection-pool-exhaustion", "host-header-rewriting",
   "retry-storm", "thundering-herd", "cascading-failure", "noisy-neighbour",
 ];
 /* Editorial order for the principle section, in two groups because the maxims work at two
@@ -573,6 +638,16 @@ export function folderFor({ kind, band: bandId, group }) {
   const b = BY_ID.get(bandId);
   if (!b) throw new Error(`unknown band: ${bandId}`);
   const subdivided = b.groups.length > 1 || b.groups[0].label !== null;
-  const leaf = subdivided ? `/${group.replace(`${bandId}-`, "")}` : "";
-  return `patterns/${bandId}${leaf}`;
+  if (!subdivided) return `patterns/${bandId}`;
+  /* `dir` is an OPTIONAL per-group folder alias, so two groups may share one directory.
+   * It exists to let a group that grew too big be split for the hub without moving its
+   * pages and rewriting every relative link into and out of them. Absent — the normal
+   * case — the folder is still the group id minus its band prefix, so the path keeps
+   * naming the group.
+   *
+   * Optional chaining, not a lookup-or-throw: build.mjs calls this OUTSIDE a try/catch,
+   * so throwing on an unknown group would turn its tidy "lives in X but its band/group
+   * means Y" failure into a raw stack trace. validate.mjs does catch it. */
+  const g = b.groups.find((x) => x.id === group);
+  return `patterns/${bandId}/${g?.dir ?? group.replace(`${bandId}-`, "")}`;
 }

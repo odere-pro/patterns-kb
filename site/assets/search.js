@@ -4,9 +4,10 @@
  * fetched because fetch() is blocked on file://, and this site must work by
  * double-clicking index.html.
  *
- * It filters the chips already on the page instead of rendering its own result list, so
- * a match stays in its band and group — you keep seeing WHERE a pattern sits, which is
- * the whole point of an elevation map.
+ * It filters the tiles already on the page instead of rendering its own result list, so
+ * a match stays in its section and subsection — you keep seeing WHERE a page sits, which is
+ * the whole point of an atlas. Sections are collapsible, so it also asks collapse.js to
+ * hold them open while a query is live; see apply().
  *
  * Parity note: kb.mjs `find` is this scorer's CLI twin. Its --level flag scopes the
  * *prose* index, which this catalog-only search never reads, so the reading-level lens
@@ -236,42 +237,41 @@
     return both;
   }
 
+  // Every tile on the hub — pattern, hazard, case study, theme, principle, capability,
+  // comparison — is a .chip carrying its OWN data-id. One loop covers the page and no id is
+  // re-derived from an href, which is what broke the moment a card stopped being an <a>.
+  var TILES = ".chip[data-id]";
+  // Anything that must vanish rather than stand as a hollow heading. The collapsible
+  // wrappers are here too: `hidden` on an open <details> hides it whole, because hub.css's
+  // [hidden]{display:none!important} beats the UA display.
+  var HOLDERS = ["details.sub", "details.sec", ".chips"];
+
   function apply() {
     var hits = visibleSet();
     var shown = 0;
 
-    document.querySelectorAll("[data-id]").forEach(function (box) {
-      var chip = box.closest(".chip");
-      if (!chip) return;
-      var on = !hits || hits[box.dataset.id] > 0;
-      chip.hidden = !on;
-      if (on) shown++;
-    });
-    // Hazard chips carry no checkbox, so they have no data-id to key off.
-    document.querySelectorAll(".hazard-chip").forEach(function (chip) {
-      var a = chip.querySelector("a[href]");
-      if (!a) return;
-      var id = a.getAttribute("href").split("/").pop().replace(".html", "");
-      var on = !hits || hits[id] > 0;
-      chip.hidden = !on;
-      if (on) shown++;
-    });
-    document.querySelectorAll(".theme-card").forEach(function (card) {
-      var id = card.getAttribute("href").split("/").pop().replace(".html", "");
-      var on = !hits || hits[id] > 0;
-      card.hidden = !on;
+    document.querySelectorAll(TILES).forEach(function (tile) {
+      var on = !hits || hits[tile.getAttribute("data-id")] > 0;
+      tile.hidden = !on;
       if (on) shown++;
     });
 
     // Collapse anything left empty, so the page doesn't fill with hollow headings.
-    [".group", ".lens-card", ".band", ".themes", ".hazards"].forEach(function (sel) {
+    HOLDERS.forEach(function (sel) {
       document.querySelectorAll(sel).forEach(function (el) {
-        var kids = el.querySelectorAll(".chip, .theme-card");
+        var kids = el.querySelectorAll(".chip");
         if (!kids.length) return;
         var any = Array.prototype.some.call(kids, function (k) { return !k.hidden; });
         el.hidden = hits ? !any : false;
       });
     });
+
+    // A match inside a collapsed section is a match nobody can see. Force every section open
+    // for the duration of the query and hand the visitor's own state back when it clears.
+    // collapse.js owns the store and ignores the toggles WE cause, so the two never fight;
+    // hold() is keyed, so clearing the search cannot re-collapse a section the ★ filter is
+    // still holding open.
+    if (window.KB_COLLAPSE) window.KB_COLLAPSE.hold("search", !!hits);
 
     document.body.classList.toggle("searching", !!hits);
     status.textContent = hits ? shown + " match" + (shown === 1 ? "" : "es") : "";
@@ -348,7 +348,7 @@
     input.addEventListener("keydown", function (e) {
       if (e.key === "Escape") { input.value = ""; clearFacets(); apply(); input.blur(); }
       if (e.key === "Enter") {
-        var first = document.querySelector(".chip:not([hidden]) .chip-name, .theme-card:not([hidden])");
+        var first = document.querySelector(".chip:not([hidden]) .chip-name");
         if (first) first.click();
       }
     });

@@ -23,30 +23,48 @@
     return cb.closest(".chip") || cb.closest(".practice");
   }
 
-  // Hub-only counters (absent on individual pages — guarded).
+  function paintCounts(key, totals) {
+    Object.keys(totals).forEach(function (k) {
+      document.querySelectorAll("[data-count-" + key + '="' + k + '"]').forEach(function (el) {
+        el.textContent = totals[k].d + "/" + totals[k].t;
+      });
+    });
+  }
+
+  /* Hub-only counters (absent on individual pages — guarded). Three dimensions:
+     `group` and `band` are the pattern taxonomy and stay PATTERNS-ONLY, because a band is
+     a set of patterns and nothing else lives in one; `sect` is the hub section, which every
+     tile of every kind carries.
+
+     The headline shows two numbers rather than one. Every page became trackable when the
+     non-pattern tiles gained a checkbox, but silently redefining the single figure a
+     returning visitor has been watching — from 202 to 354 — would make their progress
+     appear to collapse overnight. `data-band` is carried by pattern tiles and nothing else,
+     so it doubles as the discriminator and the split needs no extra markup. */
   function render() {
-    var groupTotals = {}, bandTotals = {}, done = 0, total = 0;
+    var groupTotals = {}, bandTotals = {}, sectTotals = {};
+    var done = 0, total = 0, patDone = 0, patTotal = 0;
     boxes.forEach(function (cb) {
-      if (!cb.classList.contains("chip-box")) return; // only hub chips feed counts
+      if (!cb.classList.contains("chip-box")) return; // only hub tiles feed counts
       var g = cb.getAttribute("data-group");
       var b = cb.getAttribute("data-band");
+      var s = cb.getAttribute("data-sect");
       if (g) { (groupTotals[g] = groupTotals[g] || { d: 0, t: 0 }).t++; }
-      if (b) { (bandTotals[b] = bandTotals[b] || { d: 0, t: 0 }).t++; }
+      if (b) { (bandTotals[b] = bandTotals[b] || { d: 0, t: 0 }).t++; patTotal++; }
+      if (s) { (sectTotals[s] = sectTotals[s] || { d: 0, t: 0 }).t++; }
       total++;
-      if (cb.checked) { done++; if (g) groupTotals[g].d++; if (b) bandTotals[b].d++; }
+      if (cb.checked) {
+        done++;
+        if (g) groupTotals[g].d++;
+        if (b) { bandTotals[b].d++; patDone++; }
+        if (s) sectTotals[s].d++;
+      }
     });
-    Object.keys(groupTotals).forEach(function (g) {
-      document.querySelectorAll('[data-count-group="' + g + '"]').forEach(function (el) {
-        el.textContent = groupTotals[g].d + "/" + groupTotals[g].t;
-      });
-    });
-    Object.keys(bandTotals).forEach(function (b) {
-      document.querySelectorAll('[data-count-band="' + b + '"]').forEach(function (el) {
-        el.textContent = bandTotals[b].d + "/" + bandTotals[b].t;
-      });
-    });
+    paintCounts("group", groupTotals);
+    paintCounts("band", bandTotals);
+    paintCounts("sect", sectTotals);
     var gp = document.getElementById("global-progress");
-    if (gp) gp.textContent = done + " / " + total + " practiced";
+    if (gp) gp.textContent = done + " / " + total + " pages · " + patDone + " / " + patTotal + " patterns";
   }
 
   boxes.forEach(function (cb) {

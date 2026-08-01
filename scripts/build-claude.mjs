@@ -39,11 +39,27 @@ const up = (dir) => "../".repeat(dir.split("/").length + 1);
 
 function forPatternFolder(dir, list) {
   const b = bandOf(list[0].band);
-  const group = list[0].group;
-  const gLabel = groupLabel(group);
+  /* A folder usually holds one group, but not always: a group carrying a `dir` alias in
+   * BANDS shares a directory with the group it was split from. Enumerate rather than
+   * reading list[0] — that picked whichever page happened to sort first and then told the
+   * reader, in a briefing they would act on, that it was the only group here. */
+  const groups = [...new Set(list.map((n) => n.group))].sort();
+  const labels = groups.map(groupLabel).filter(Boolean);
   const heading = b.kind === "elevation"
-    ? `${b.numeral} · ${b.label}${gLabel ? ` → ${gLabel}` : ""}`
+    ? `${b.numeral} · ${b.label}${labels.length ? ` → ${labels.join(" + ")}` : ""}`
     : `${b.label} (lens)`;
+
+  const groupRule = groups.length === 1
+    ? `Every page in this folder declares \`data-kb-band="${list[0].band}"\` and
+\`data-kb-group="${groups[0]}"\`. The path is checked against them — \`make check\` fails if a
+page is filed anywhere else, so moving a page means changing its band or group, not just
+its location.`
+    : `Every page in this folder declares \`data-kb-band="${list[0].band}"\`, and one of
+${groups.map((g) => `\`data-kb-group="${g}"\``).join(" or ")} — these groups render as separate
+subsections on the hub but SHARE this one directory, via the \`dir\` alias in \`BANDS\`
+(\`${up(dir)}scripts/lib/model.mjs\`). The path is checked against the band and group —
+\`make check\` fails if a page is filed anywhere else. Changing which of these groups a page
+belongs to is an attribute edit and no file move; changing its band is both.`;
 
   return `# ${dir}
 
@@ -52,10 +68,7 @@ ${b.desc ?? `A lens: it reshapes how you build at any elevation, rather than bei
 
 Pages here: ${list.map((n) => n.id).sort().join(", ")}
 
-Every page in this folder declares \`data-kb-band="${list[0].band}"\` and
-\`data-kb-group="${group}"\`. The path is checked against them — \`make check\` fails if a
-page is filed anywhere else, so moving a page means changing its band or group, not just
-its location.
+${groupRule}
 
 Read a page with \`node ${up(dir)}scripts/kb.mjs get <id>\` — never open the .html to read it
 (that costs ~3.6k tokens of markup for ~1.2k of prose).
@@ -260,7 +273,9 @@ for (const [dir, list] of Object.entries(byDir)) {
 for (const b of BANDS) {
   if (b.groups.length === 1 && b.groups[0].label === null) continue;
   const dir = `patterns/${b.id}`;
-  const subs = b.groups.map((g) => g.id.replace(`${b.id}-`, ""));
+  /* Folders, not groups: two groups sharing a `dir` alias are one directory, and naming
+   * the group would send a reader to a path that does not exist. */
+  const subs = [...new Set(b.groups.map((g) => g.dir ?? g.id.replace(`${b.id}-`, "")))];
   const body = `# ${dir}
 
 **${b.numeral} · ${b.label}** — ${b.desc}
@@ -268,8 +283,11 @@ for (const b of BANDS) {
 This band is subdivided; the pages live one level down, in ${subs.map((s) => `\`${s}/\``).join(", ")}.
 Each subfolder has its own CLAUDE.md.
 
-A page belongs to exactly one subfolder, decided by its \`data-kb-group\`, and \`make check\`
-fails if the two disagree. See the root CLAUDE.md for the data contract.
+A page belongs to exactly one subfolder, resolved from its \`data-kb-group\` by
+\`folderFor()\`, and \`make check\` fails if the two disagree. The mapping is not always
+one-to-one: a group carrying a \`dir\` alias in \`BANDS\` renders as its own hub subsection
+while sharing another group's directory, so a subfolder here may hold two groups. See the
+root CLAUDE.md for the data contract.
 `;
   const file = join(SITE, dir, "CLAUDE.md");
   const cur = existsSync(file) ? readFileSync(file, "utf8") : "";
