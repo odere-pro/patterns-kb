@@ -38,6 +38,23 @@ const N = graph.nodes;
 const DASH = "—";
 const SERVICE_COLS = 4; // AWS, Azure, Google Cloud, Open source
 
+/* Bands where a dash is the CORRECT answer for every row, not an unwritten mapping. These
+ * patterns live inside one process — there is no product to rent, and there never will be —
+ * so a reader scrolling 29 dashed GoF rows would otherwise read the section as a coverage
+ * failure. Generator prose, deliberately not a BANDS field: model.mjs's `desc` is read by
+ * three artifacts, and this sentence only makes sense on this page.
+ *
+ * A band is absent from this table when SOME of it is buyable, however little. Application,
+ * Architecture and Security each hold patterns a platform does sell, so their dashes really
+ * are gaps in the index and the legend's wording already covers them. */
+const UNBUYABLE = {
+  gof: "None of these is a service. They live inside one process, so every dash below is the right answer rather than a missing mapping.",
+  ddd: "These are modelling decisions in your own code. Nothing in this section is purchasable, and nothing should be.",
+  functional: "These are language and composition techniques. There is no product column to fill.",
+  testing: "Test doubles live in your test suite. A managed service cannot stand in for one, so every row is dashed by nature.",
+  frontend: "These structure code that runs in the browser. Hosting is buyable; the structure is not.",
+};
+
 /* Cells of one mapping/matrix row, as inner HTML with lens attributes stripped.
  * Cell 0 is the row's own label (the sub-capability); cells 1..n are the services. */
 const rowCache = new Map();
@@ -158,9 +175,25 @@ ${rows.join("\n")}
         </div>`;
   }).filter(Boolean);
   if (!blocks.length) return "";
+  /* The note claims nothing in the band is purchasable, so one implements edge falsifies it.
+   * Adding a capability edge is exactly how the claim goes stale — messaging implements
+   * Scheduling, a concurrency pattern, which is what took that band off the list — and a
+   * confidently wrong "no cloud sells these" is worse than the dashes it was meant to explain. */
+  if (UNBUYABLE[band.id]) {
+    const sold = band.groups.flatMap((g) => patterns.filter((p) => (p.group || p.band) === g.id))
+      .filter((p) => (sources.get(p.id) || []).some((e) => e.src.kind === "capability"));
+    if (sold.length) {
+      console.error(`build-stack-page: band "${band.id}" is listed as unbuyable but a capability ` +
+        `implements ${sold.map((p) => p.id).join(", ")} — drop it from UNBUYABLE or retype that edge.`);
+      process.exit(1);
+    }
+  }
+  const unbuyable = UNBUYABLE[band.id]
+    ? `\n        <p class="doc-note"><strong>No cloud sells these.</strong> ${esc(UNBUYABLE[band.id])}</p>`
+    : "";
   return `      <section class="doc-section">
         <h2 class="doc-h" id="stack-${band.id}">${esc(band.label)}</h2>
-        <p class="doc-note">${esc(band.desc || "")}</p>
+        <p class="doc-note">${esc(band.desc || "")}</p>${unbuyable}
 ${blocks.join("\n")}
       </section>`;
 }
