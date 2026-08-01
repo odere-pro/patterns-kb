@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web-Queue-Worker · Patterns</title>
+  <meta name="description" content="Web-Queue-Worker — A web front end, a queue, and a worker that does the slow half">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <script src="../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#web-queue-worker",
+  "identifier": "web-queue-worker",
+  "name": "Web-Queue-Worker",
+  "description": "A web front end, a queue, and a worker that does the slow half",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "architecture",
+  "kb:group": "architecture",
+  "kb:combines-with": [
+    {
+      "@id": "../distributed/resilience/load-leveling.html#load-leveling",
+      "name": "Queue-Based Load Leveling",
+      "kb:note": "The queue is not just a hand-off; it absorbs bursts so the worker keeps a steady rate under a spiky front end."
+    },
+    {
+      "@id": "../distributed/coordination/outbox.html#outbox",
+      "name": "Outbox",
+      "kb:note": "Closes the gap where the front end commits to the database and then fails before enqueuing, leaving work nobody will do."
+    },
+    {
+      "@id": "../messaging/competing-consumers.html#competing-consumers",
+      "name": "Competing Consumers",
+      "kb:note": "Scaling the worker means several instances pulling from one queue, each message handled once."
+    },
+    {
+      "@id": "../distributed/routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "Both halves keep no per-client state, so either can be scaled or replaced without draining anything first."
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "./microservices.html#microservices",
+      "name": "Microservices",
+      "kb:note": "When the domain outgrows two components and teams need to ship on their own schedule, this is the next step."
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../themes/architecture-styles.html#architecture-styles",
+      "name": "Architecture Styles",
+      "kb:role": "Put the slow work behind a queue"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="web-queue-worker" data-kb-kind="pattern" data-kb-band="architecture" data-kb-group="architecture" data-kb-essence="A web front end, a queue, and a worker that does the slow half" data-kb-order="47" data-kb-tags="[&quot;asynchrony&quot;,&quot;decoupling&quot;,&quot;scalability&quot;,&quot;messaging&quot;]" data-kb-solves="[&quot;generating the report ties up the web request until the browser times out&quot;,&quot;our upload endpoint holds a thread for two minutes while it transcodes&quot;,&quot;page loads get slow whenever a big background job is running&quot;,&quot;adding more web servers does nothing for the long jobs&quot;,&quot;we need somewhere sensible to run nightly batch work&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#band-arch-h">Architecture</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Web-Queue-Worker</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Architecture</p>
+      <h1 class="doc-title">Web-Queue-Worker</h1>
+      <p class="doc-essence">Puts a queue between a stateless web front end and a back-end worker, so a request that starts a long job answers immediately and the slow work runs on machines you can scale on its own.</p>
+      <div class="doc-metarow">
+        <span class="badge">Architecture</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="web-queue-worker">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1">Split the application in two along the axis of time. A web front end handles requests and answers them quickly. A worker does the resource-intensive, long-running and batch work. Between them sits a queue: the front end writes a job onto it and returns, and the worker picks the job up whenever it has a free slot.</p>
+        <p id="description-p-2" data-kb-level="advanced">The force it resolves is one process doing two jobs with opposite shapes. A request that has to render a video, rebuild a report or call three slow third parties holds a web thread for minutes, and while it does, requests that would have taken 20 ms queue behind it. Adding web servers does not help, because the expensive work is not what most requests need. The queue lets each half have the machines and the scaling rule it actually wants.</p>
+        <p id="description-p-3" data-kb-level="advanced">Both halves are stateless, which is what makes them replaceable: session state lives in a shared cache rather than in one front-end instance's memory, so any instance can serve any request and a restart costs nothing. The worker is optional. An application with no long-running operations is this style minus one component, and adding the worker later is not a rewrite.</p>
+        <p id="description-p-4" data-kb-level="advanced">The queue is the one architectural commitment; everything around it is conventional — a database, a cache in front of it, a <a href="../distributed/routing/cdn.html">CDN</a> for static assets, an identity provider. That is what makes this the natural step up from a single process and the natural step below <a href="./microservices.html">Microservices</a>: you buy asynchrony and independent scaling for one moving part, and you do not yet buy service discovery, per-service data, or a distributed transaction problem.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>Someone clicks Export and the page sits there for four minutes while the server builds the file. That one click holds a connection the whole time, and if twenty people click it, everybody else's pages slow down too — including the people who only wanted to log in. So stop doing the work inside the reply. Write the job down on a list, answer straight away with "started, check back here", and let a second set of machines work through the list. The site stays quick because it never does anything slow, and you can add or remove the slow machines without touching the site.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>That list is a queue, and it is the only thing the two halves share. The front end enqueues and returns, so its capacity is set by request rate; the worker pulls one message when it has a free slot, so its capacity is set by backlog — and each half autoscales on its own number. Keep both halves stateless, with session state in a shared cache and job state in the database, and any instance can be replaced mid-flight. Two properties come from the queue rather than from your code. Arrivals above what the workers can process turn into waiting instead of failure. A worker that dies part-way through returns its message for somebody else to take. The second property is also the catch: a returned message is a second delivery of a job that already ran once, so every handler has to check whether it has done this work before.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it when the split you need is fast work against slow work inside one domain, and choose a split by capability instead when the thing blocking you is teams colliding at release time — that buys autonomy at several times the operational cost. The bill here is short and each line has a move. The row and the message are two writes, so commit the message to a table in the same transaction and let a relay publish it. At-least-once delivery means duplicates, so key each job by its id and make a repeat a no-op, which is cheaper and more honest than any exactly-once claim. A long job whose lease expires mid-run is handed to a second worker, so either renew the lease while working or split the job into checkpointed steps. One heavy job class starving the others is answered by a separate queue and separate workers, not by a priority field — a priority field still shares the slots. The cost with no cheap counter-move is drift: nothing in this shape stops the front end and the worker growing until they are as tangled as the single process they replaced, and only refusing to share modules and schemas holds that back. Then run the loop — alert on backlog and the age of the oldest message rather than on CPU, expect the retention window to be the first thing that breaks, and gate the launch on a dead-letter queue somebody is paged for.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Client["Browser or app"]
+    subgraph FEU["Front-end scaling unit"]
+        Web["Web tier — stateless"]
+    end
+    Cache[("Session + hot data cache")]
+    Q[("Queue")]
+    subgraph BEU["Worker scaling unit"]
+        Worker["Worker — stateless"]
+    end
+    DB[("Database")]
+    Client --&gt;|"1 request"| Web
+    Web --&gt;|"2 session state, kept out of memory"| Cache
+    Web --&gt;|"3 short reads and writes"| DB
+    Web --&gt;|"4 enqueue the slow job"| Q
+    Web --&gt;|"5 accepted, here is a status link"| Client
+    Q --&gt;|"6 dequeue when a slot is free"| Worker
+    Worker --&gt;|"7 write the result"| DB
+        </pre>
+        <figcaption>What does the browser wait for? Step 5 only — the queue accepting the job. Steps 6 and 7 run on the worker's own clock and its own machines, so a ten-minute render never occupies a web thread.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant W as Web tier
+    participant DB as Database
+    participant Q as Queue
+    participant K as Worker
+    C-&gt;&gt;W: POST /reports
+    W-&gt;&gt;DB: insert report row, state = queued
+    alt enqueue succeeds
+        W-&gt;&gt;Q: enqueue job
+        W--&gt;&gt;C: 202 Accepted + status URL
+        Q-&gt;&gt;K: deliver when a slot frees
+        K-&gt;&gt;DB: write result, state = done
+    else crash after the row, before the enqueue
+        W--xQ: message never sent
+        Note over DB,K: the row stays queued forever, and nothing is retrying it
+    end
+        </pre>
+        <figcaption>The row and the message are two writes, and a crash between them leaves a job nobody will ever run. Committing them together is what closes that window.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Queue as a shock absorber</dt>
+        <dd>Size the worker pool for the average rate rather than the peak and let the queue hold the difference — <a href="../distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a>. A spike then costs a longer wait instead of a wall of errors, provided the backlog drains before anyone gives up.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced"><a href="../messaging/competing-consumers.html">Competing Consumers</a> on one queue</dt>
+        <dd data-kb-level="advanced">Run many identical workers against the same queue and let each take the next free message. Throughput scales by adding workers, and no dispatcher has to decide who gets what.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced">Timer-driven worker</dt>
+        <dd data-kb-level="advanced">Trigger the worker on a schedule instead of on a message when the work is a nightly rebuild or an hourly reconciliation. See <a href="../concurrency/scheduling.html">Scheduling</a> for the trigger side; the rest of the shape is unchanged.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Telling the client the answer</dt>
+        <dd data-kb-level="advanced">Return a status URL the client polls, or push a notification when the job finishes — <a href="../distributed/routing/async-request-reply.html">Asynchronous Request-Reply</a>. Polling is trivial to build and wastes requests; a push needs a connection you keep open and a fallback for when it drops.</dd>
+        <dt id="variations-item-5" data-kb-level="advanced">Separate lanes per job class</dt>
+        <dd data-kb-level="advanced">Give the nightly export its own queue and its own workers rather than sharing with interactive jobs. One eight-hour job on a shared queue occupies slots that password-reset emails were waiting for, and the symptom looks like an email outage.</dd>
+        <dt id="variations-item-6" data-kb-level="expert">Enqueue inside the transaction</dt>
+        <dd data-kb-level="expert">Write the outgoing message to a table in the same transaction as the state change and let a relay publish it — the <a href="../distributed/coordination/outbox.html">Outbox</a>. It costs a relay and a table, and it removes the one failure that leaves a row waiting on a job that was never queued.</dd>
+        <dt id="variations-item-7" data-kb-level="expert">Front end with no worker</dt>
+        <dd data-kb-level="expert">Not every application has long-running work, and not every write needs the queue. Let the front end read and write directly on the fast paths and reserve the queue for work that is genuinely resource-intensive; routing everything through it adds a hop and a consistency window for nothing.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">Two components and one queue — a new engineer can hold the whole architecture in their head on the first day.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Front end and worker scale on separate signals, so request rate and job backlog stop competing for the same machines.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">A slow or failing job no longer holds a web thread, so page latency stays flat while the backlog drains.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">The queue absorbs spikes: arrivals above what the worker pool can process become a longer wait rather than a wall of errors.</li>
+            <li id="tradeoffs-pro-5" data-kb-polarity="pro" data-kb-level="advanced">A worker crash loses no work when the message returns to the queue, which is a retry you get without writing one.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">Both halves grow into monoliths unless someone keeps pruning them. This is the defining risk of the style, and nothing in the shape prevents it.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">Shared code modules and a shared schema between front end and worker recreate exactly the coupling the queue was there to remove.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="advanced">The answer is no longer immediate, so every long job needs a state for "still running" and a way for the client to find out how it went.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Writing the row and sending the message are two operations. A crash between them leaves work that will never run, and only committing them together closes the gap.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="advanced">Delivery is at-least-once in practice, so a worker that charges a card or sends an email has to recognise a job it has already run.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">The queue is a component with its own failure modes and its own bill. A backlog that outgrows the retention window drops work silently, which is worse than the synchronous timeout it replaced.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">Some requests trigger work measured in seconds or minutes — encoding, rendering, report generation, a call to a slow third party.</li>
+            <li id="usage-when-2" data-kb-polarity="when" data-kb-level="advanced">The domain is simple enough that one team owns all of it, and you want the smallest architecture that survives real traffic.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You run batch or scheduled work and have nowhere sensible to put it.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">Load arrives in spikes, and you would rather queue the peak than provision for it.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Every operation is fast, and the queue would add a hop and a consistency window for nothing.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">The caller genuinely needs the result in the same response and cannot be given a status link.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Several teams already block each other at release time — the split you need is by capability, which is <a href="./microservices.html">Microservices</a>, not by fast and slow.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid" data-kb-level="advanced">The work is a continuous stream that has to be handled as it arrives rather than as discrete jobs; that is <a href="./eda.html">Event-Driven Architecture</a> territory.</li>
+          </ul>
+        </div>
+      </div>
+      <p class="smell">Answers the <a href="../../hazards/busy-front-end.html">Busy Front End</a> smell — background work stuffed into request threads, where it competes with the users who are waiting.</p>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — the endpoint returns in milliseconds; the worker takes the minutes</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// FRONT END — accept, record, enqueue, answer. No rendering happens here.
+app.post("/reports", async (req, res) =&gt; {
+  const jobId = crypto.randomUUID();
+  await db.insert("reports", { id: jobId, state: "queued", spec: req.body });
+  await queue.send({ jobId });                 // the only slow-ish call on this path
+  res.status(202)
+     .location(`/reports/${jobId}`)            // where the client checks back
+     .json({ jobId, state: "queued" });
+});
+
+// The client polls this; it is a cheap read, not a wait.
+app.get("/reports/:id", async (req, res) =&gt; {
+  const row = await db.find("reports", req.params.id);
+  res.json({ jobId: row.id, state: row.state, url: row.resultUrl ?? null });
+});
+
+// WORKER — a separate process on separate machines, scaled on backlog.
+for await (const msg of queue.receive({ concurrency: 4 })) {
+  const row = await db.find("reports", msg.jobId);
+  if (row.state === "done") { await msg.ack(); continue; }  // redelivery is a no-op
+
+  try {
+    const url = await renderReport(row.spec);   // minutes, and nobody is holding a socket
+    await db.update("reports", row.id, { state: "done", resultUrl: url });
+    await msg.ack();
+  } catch (err) {
+    await db.update("reports", row.id, { state: "failed", error: String(err) });
+    await msg.nack();                           // back to the queue, then to the dead-letter queue
+  }
+}</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="celery" id="wild-celery"><strong>Celery</strong><span>The Python task queue: decorate a function as a task, call it with <code>.delay()</code>, and the message goes to a broker such as RabbitMQ or Redis while separate worker processes execute it. <code>celery beat</code> covers the scheduled half of the style, firing periodic tasks onto the same queues.</span></div>
+        <div class="wild-item" data-kb-example="sidekiq" id="wild-sidekiq" data-kb-level="advanced"><strong>Sidekiq</strong><span>Ruby background job processing on Redis. <code>perform_async</code> enqueues from the web process, worker processes run jobs with a configurable concurrency, and a job that keeps raising is retried on a backoff schedule before it is parked in the dead set for a human to look at.</span></div>
+        <div class="wild-item" data-kb-example="bullmq" data-kb-level="advanced" id="wild-bullmq"><strong>BullMQ</strong><span>A Node job queue on Redis: a <code>Queue</code> produces jobs and a <code>Worker</code> consumes them at a set concurrency, with delayed jobs, repeatable jobs on a cron expression, and a failed set for the ones that exhausted their attempts.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Worker concurrency</strong> — How many jobs one worker instance runs at once. Raise it until the machine's bottleneck resource — CPU, memory, or a connection pool — is the thing saturating rather than the slot count.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Message lease (visibility timeout)</strong> — How long a message stays invisible after a worker takes it. Shorter than the job's p99 duration and a second worker starts the same job while the first is still running.</li>
+            <li data-kb-level="advanced" id="production-knob-3" data-kb-polarity="knob"><strong>Autoscaling target on backlog</strong> — Scale workers on queue depth or backlog per worker, not on CPU. A worker blocked on a slow third party shows almost no CPU while the backlog is growing.</li>
+            <li data-kb-level="advanced" id="production-knob-4" data-kb-polarity="knob"><strong>Max delivery attempts and dead-letter destination</strong> — How many times a failing message is retried and where it goes afterwards. Without a terminus, one bad message recirculates forever and consumes a slot each time.</li>
+            <li data-kb-level="expert" id="production-knob-5" data-kb-polarity="knob"><strong>Prefetch or batch size</strong> — How many messages a worker holds at once. A large prefetch smooths throughput and makes a crash return a larger clump of work for redelivery.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Queue depth and age of the oldest message</strong> — Depth tells you the backlog; age tells you how long the unluckiest job has waited. Age is the one that maps to a promise you made a user.</li>
+            <li data-kb-level="advanced" id="production-signal-2" data-kb-polarity="signal"><strong>Front-end p99 latency</strong> — It should stay flat while the backlog grows. The moment it tracks the backlog, work has leaked back into the request path.</li>
+            <li data-kb-level="advanced" id="production-signal-3" data-kb-polarity="signal"><strong>Job duration distribution</strong> — The p50 and p99 of processing time, which is what the lease and the autoscaling target both have to be sized from.</li>
+            <li data-kb-level="advanced" id="production-signal-4" data-kb-polarity="signal"><strong>Workers busy versus idle</strong> — The share of slots occupied. Consistently full slots with a growing backlog means the pool is undersized; consistently idle means you are paying for capacity the queue never uses.</li>
+            <li data-kb-level="advanced" id="production-signal-5" data-kb-polarity="signal"><strong>Dead-letter count</strong> — Messages that exhausted their attempts. A rising count is work silently not happening, and nobody upstream gets an error about it.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Backlog outgrows the drain rate</strong> — Arrivals exceed processing for long enough that the wait crosses what users tolerate — and if it crosses the retention window, messages are dropped with no error anywhere.</li>
+            <li data-kb-level="advanced" id="production-failure-2" data-kb-polarity="failure"><strong>Duplicate execution after a lease expiry</strong> — A job runs longer than its lease, the message becomes visible again, and a second worker starts it while the first is still going. The user sees two emails or two charges.</li>
+            <li data-kb-level="advanced" id="production-failure-3" data-kb-polarity="failure"><strong>Poison message</strong> — One message fails on every attempt and cycles through retries, occupying a slot each pass until something sends it to the dead-letter queue.</li>
+            <li data-kb-level="advanced" id="production-failure-4" data-kb-polarity="failure"><strong>Starvation by a heavy job class</strong> — A long batch export fills every worker slot, and the two-second jobs sharing that queue wait behind it. The symptom looks like an outage in the small jobs.</li>
+            <li data-kb-level="expert" id="production-failure-5" data-kb-polarity="failure"><strong>Orphaned rows from the split write</strong> — The front end committed the row and crashed before the enqueue, so a job sits in the queued state with nothing scheduled to run it. It surfaces as work that quietly never happened.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Handlers are idempotent — a repeat delivery of the same job id changes nothing</li>
+            <li id="production-check-2" data-kb-polarity="check">Every queue has a dead-letter destination and an alert on its depth</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">The message lease exceeds the p99 job duration, or the worker renews it while running</li>
+            <li data-kb-level="advanced" id="production-check-4" data-kb-polarity="check">Workers autoscale on backlog rather than on CPU</li>
+            <li data-kb-level="advanced" id="production-check-5" data-kb-polarity="check">Session state and job state live outside the process, so any instance can be replaced mid-flight</li>
+            <li data-kb-level="advanced" id="production-check-6" data-kb-polarity="check">Jobs longer than the lease are checkpointed or split, so a restart does not repeat an hour of work</li>
+            <li data-kb-level="expert" id="production-check-7" data-kb-polarity="check">The front end and the worker share no code module and no schema they both write</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="architecture-styles" id="fluency-architecture-styles"><a href="../../themes/architecture-styles.html">Architecture Styles</a><span>Put the slow work behind a queue</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="load-leveling"><a href="../distributed/resilience/load-leveling.html">Queue-Based Load Leveling</a><span class="rel-note">The queue is not just a hand-off; it absorbs bursts so the worker keeps a steady rate under a spiky front end.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="outbox"><a href="../distributed/coordination/outbox.html">Outbox</a><span class="rel-note">Closes the gap where the front end commits to the database and then fails before enqueuing, leaving work nobody will do.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="competing-consumers"><a href="../messaging/competing-consumers.html">Competing Consumers</a><span class="rel-note">Scaling the worker means several instances pulling from one queue, each message handled once.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="stateless-service"><a href="../distributed/routing/stateless-service.html">Stateless Service</a><span class="rel-note">Both halves keep no per-client state, so either can be scaled or replaced without draining anything first.</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="microservices"><a href="./microservices.html">Microservices</a><span class="rel-note">When the domain outgrows two components and teams need to ship on their own schedule, this is the next step.</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#band-arch-h">← Architecture</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="../../index.html#band-arch-h">Architecture →</a>
+    </nav>
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

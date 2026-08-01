@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Container Orchestration · Patterns</title>
+  <meta name="description" content="Container Orchestration — Declare the cluster you want; a control loop keeps it that way">
+  <link rel="stylesheet" href="../../../assets/tokens.css">
+  <link rel="stylesheet" href="../../../assets/pattern.css">
+  <script src="../../../assets/theme.js"></script>
+  <script src="../../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#container-orchestration",
+  "identifier": "container-orchestration",
+  "name": "Container Orchestration",
+  "description": "Declare the cluster you want; a control loop keeps it that way",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "distributed",
+  "kb:group": "distributed-coordination",
+  "kb:combines-with": [
+    {
+      "@id": "../resilience/health-endpoint.html#health-endpoint",
+      "name": "Health Endpoint Monitoring",
+      "kb:note": "The probe is the signal the control loop reads — a wrong one makes the orchestrator the cause of the outage."
+    },
+    {
+      "@id": "../routing/stateless-service.html#stateless-service",
+      "name": "Stateless Service",
+      "kb:note": "Reconciliation assumes any instance can be destroyed and replaced, which only holds if it carries no per-client state."
+    },
+    {
+      "@id": "../routing/autoscaling.html#autoscaling",
+      "name": "Autoscaling",
+      "kb:note": "Scaling is the same control loop with load as its input rather than instance health."
+    },
+    {
+      "@id": "../routing/sidecar.html#sidecar",
+      "name": "Sidecar",
+      "kb:note": "Co-scheduling the helper with the service, on one lifecycle, is what makes the sidecar shape practical."
+    },
+    {
+      "@id": "../../architecture/microservices.html#microservices",
+      "name": "Microservices",
+      "kb:note": "The orchestrator earns its complexity at many services and many nodes, which is where this style puts you."
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "./workflow-orchestration.html#workflow-orchestration",
+      "name": "Workflow Orchestration",
+      "kb:note": "Same word, two jobs: this one reconciles infrastructure state, that one drives business steps through a long-running process."
+    }
+  ],
+  "kb:in-theme": [
+    {
+      "@id": "../../../themes/continuous-delivery.html#continuous-delivery",
+      "name": "Continuous Delivery",
+      "kb:role": "Roll out by changing declared state"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc">
+  <main class="doc-wrap" data-kb-id="container-orchestration" data-kb-kind="pattern" data-kb-band="distributed" data-kb-group="distributed-coordination" data-kb-essence="Declare the cluster you want; a control loop keeps it that way" data-kb-order="87" data-kb-aliases="[&quot;container scheduling&quot;,&quot;cluster orchestrator&quot;]" data-kb-tags="[&quot;coordination&quot;,&quot;lifecycle&quot;,&quot;resource-management&quot;,&quot;availability&quot;]" data-kb-solves="[&quot;a machine reboots overnight and the services that were on it never come back&quot;,&quot;deploying a new version means logging into each machine in turn and hoping I did not skip one&quot;,&quot;traffic doubled and somebody had to start more copies of the service by hand&quot;,&quot;every instance gets a new address when it restarts, so callers keep talking to something that is gone&quot;,&quot;two teams put their services on the same machine and one of them ate all the memory&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../../index.html#band-dist-h">Network</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Container Orchestration</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Network</p>
+      <h1 class="doc-title">Container Orchestration</h1>
+      <p class="doc-essence">You declare how many instances of each service should run and how much each may consume; a control loop compares that declaration against what is actually running, and creates, restarts or removes containers until the two agree.</p>
+      <div class="doc-metarow">
+        <span class="badge">Distributed</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="container-orchestration">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1">Declare the cluster you want, and let a control loop make it true. Instead of starting processes on named machines, you write down a target — three instances of the checkout service, this image, this much memory each — and an orchestration engine takes responsibility for the difference between that target and reality.</p>
+        <p id="description-p-2">The force is coordination at a scale where hands do not reach. One container on one laptop needs no orchestrator. A hundred containers over twenty machines needs someone to place each one, spread requests across the copies, give callers an address that survives a restart, and notice within seconds when a machine dies. Done by hand that work never finishes, and it grows with the fleet. Done by a loop, declaring ten containers and declaring ten thousand are the same act.</p>
+        <p id="description-p-3" data-kb-level="advanced">The loop is level-triggered, which is the property everything else rests on. It does not process events — "a node failed", "a deploy started" — it repeatedly compares two numbers and acts on the gap. A first deployment, a crashed machine, a scale-up and a rollback are therefore one code path, and a missed event cannot leave the cluster permanently wrong. Kubernetes is the ubiquitous open-source implementation, and its vocabulary — desired state, reconciliation, controllers — is now how the pattern gets discussed.</p>
+        <p id="description-p-4" data-kb-level="advanced"><strong>Orchestration</strong> means something different here than it does in <a href="./workflow-orchestration.html">Workflow Orchestration</a>, and the shared word costs people hours. This pattern orchestrates <strong>infrastructure state</strong>: how many processes exist and where they run. That one orchestrates <strong>business steps</strong>: which action of a long-running process happens next, and what to undo when a later step fails. A cluster orchestrator has no idea an order exists; a workflow engine has no idea a machine died. Systems commonly run both, one inside the other.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>A machine dies at 3am and the four copies of your service that were living on it are simply gone. Somebody has to notice, pick another machine, start them there, and tell everything that was calling them where they went now. Do that by hand and the outage lasts as long as the person takes. Instead, write down what should be running — three copies of this service, this much memory each — and hand the note to a program whose only job is to keep reality matching it. It checks, it acts, it checks again, and it never gets tired.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>The note is the desired state and the program is a control loop that closes the gap between it and what is observed. The loop is level-triggered rather than event-driven: it compares two numbers instead of reacting to notifications, so a message lost in transit costs one cycle rather than leaving the cluster permanently wrong. Everything the platform advertises falls out of that comparison. A scheduler places each new instance on a machine with room for the resources the declaration requested. Readiness reports flow back into the comparison, which is how a rolling update knows it may retire an old instance and how automatic scaling moves the target number under load. A stable service name resolves to the ready set, so no caller ever learns an instance address.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it when placement, replacement and rollout have become recurring human work across more than a handful of machines. Below that line the control plane costs more to operate than it removes, and a small fleet with a boring deploy script is the honest answer. The bill opens with a wrong declaration being enforced perfectly and fast; pay it by keeping the declaration in version control and reconciling from there, so every change is reviewed and revertible. It continues with the health checks that steer the loop: keep the signal that gates traffic separate from the signal that triggers a restart, and let neither depend on a downstream you do not control, or the platform will restart a fleet that was only busy. Resource requests are the money dial and the eviction dial at once, so measure them from real load and revisit them as the service changes. Stateful workloads pay the most — grant them stable identity and attached storage explicitly, or accept that an instance the loop may relocate at any moment is the wrong home for them.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Op["Operator"]
+    subgraph CP["Control plane"]
+        Store[("Desired + observed state")]
+        Ctrl["Controller"]
+        Sched["Scheduler"]
+    end
+    Agent["Node agent"]
+    App["Service instance"]
+    Op --&gt;|"1 declare 3 replicas"| Store
+    Ctrl --&gt;|"2 compare desired to observed"| Store
+    Ctrl --&gt;|"3 one short, place it"| Sched
+    Sched --&gt;|"4 pick a node with room"| Agent
+    Agent --&gt;|"5 start container"| App
+    Agent --&gt;|"6 report what is running"| Store
+        </pre>
+        <figcaption>How does a written-down number become running processes? Step 2 is the only decision, and it comes out the same whether you asked for more or a machine died — which is why one loop covers deploy, scale and recovery.</figcaption>
+      </figure>
+      <div class="prose">
+        <p id="structure-p-1" data-kb-level="advanced">Steps 2 and 6 are the loop. The controller never learns why the numbers differ, and the node agent never learns what the target is; each does one job on a timer, and the cluster converges because both keep running. Nothing in the picture holds an event queue, so an agent unreachable for a minute rejoins by reporting what it has, not by replaying what it missed.</p>
+        <p id="structure-p-2" data-kb-level="advanced">Step 4 is bin-packing under constraints. The scheduler places each instance on a machine whose free capacity covers what the declaration <strong>requested</strong>, subject to whatever else the declaration insisted on: keep these three apart, keep this one near that one, only these machines are eligible. Placement is the moment your requests turn into money, because a request that overstates real usage reserves capacity nobody consumes.</p>
+        <p id="structure-p-3" data-kb-level="advanced">The service abstraction hangs off step 6. Because the control plane knows which instances exist and which are ready, it can publish a stable name that resolves to the healthy set and spread requests across it, exactly as a <a href="../routing/load-balancer.html">load balancer</a> does — so callers address the service and never the instance. That is what makes an instance disposable, and disposability is what lets the loop restart, move and replace instances without asking anyone.</p>
+      </div>
+      <figure class="diagram" data-kb-level="advanced" id="structure-fig-2">
+        <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Op as Operator
+    participant St as State store
+    participant Ct as Controller
+    participant Nd as Node agent
+    participant Ap as New instance
+    Op-&gt;&gt;St: set image = v2, replicas = 3
+    Ct-&gt;&gt;St: read desired vs observed
+    Ct-&gt;&gt;Nd: start one v2 instance
+    Nd-&gt;&gt;Ap: run container
+    alt readiness check passes
+        Ap--&gt;&gt;Nd: ready
+        Nd--&gt;&gt;St: observed: one v2 ready
+        Ct-&gt;&gt;Nd: retire one v1 instance
+        Note over Ct,Nd: repeat until no v1 remains
+    else readiness check never passes
+        Nd--&gt;&gt;St: observed: zero v2 ready
+        Note over Ct,St: rollout stalls, v1 keeps serving
+    end
+    Note over Ct,Nd: node lost — observed drops, the same loop places a replacement
+        </pre>
+        <figcaption>A rolling update is the loop with a new target. Readiness gates every step, so a version that cannot serve stalls the rollout instead of completing it — and that branch is the one worth designing, because it is the branch that keeps you up.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Rolling update</dt>
+        <dd>Raise new instances a few at a time and retire old ones only once the new are ready. It needs no spare cluster. It costs you a window in which both versions serve and any request may hit either, so the change has to be compatible in both directions.</dd>
+        <dt id="variations-item-2" data-kb-level="advanced"><a href="../routing/blue-green-deployment.html">Blue-Green Deployment</a> over two sets</dt>
+        <dd data-kb-level="advanced">Run the full new version beside the full old one, prove it, then move the stable name across in one step. Rollback is moving the name back, which is the fastest recovery any of these strategies offers. You pay double capacity for that service while both sets exist.</dd>
+        <dt id="variations-item-3" data-kb-level="advanced"><a href="../routing/canary-release.html">Canary Release</a> by replica share</dt>
+        <dd data-kb-level="advanced">Point a fraction of live traffic at the new version and widen only if the numbers hold. Splitting by replica count is free but coarse — with four replicas the finest slice is 25% — so a smaller share needs weighting at the proxy layer instead.</dd>
+        <dt id="variations-item-4" data-kb-level="advanced">Pull-based reconciliation</dt>
+        <dd data-kb-level="advanced">Keep the declaration in version control and run an agent inside the cluster that reconciles the cluster to the repository, rather than pushing changes in from a build job. Every change is then reviewed, attributable and revertible like code, and no build system needs cluster credentials. The cost is a second loop to understand: a change applied by hand is silently undone.</dd>
+        <dt id="variations-item-5" data-kb-level="expert">Run-to-completion workloads</dt>
+        <dd data-kb-level="expert">The same loop with a target of "run this once and finish" instead of "keep three alive": batch jobs, migrations, scheduled work. Reconciliation now means retrying a failure up to a bound and knowing when to stop, so the parameters that matter are the retry limit and the deadline rather than the replica count.</dd>
+        <dt id="variations-item-6" data-kb-level="expert"><a href="../routing/sidecar.html">Sidecar</a> injection</dt>
+        <dd data-kb-level="expert">The control plane rewrites each declaration on the way in, adding a helper container beside every application container — a proxy, a log shipper, a credential agent. Teams get the capability without editing anything, which is also the hazard: a mutation nobody wrote is hard to debug, and the injected container's own limits are now part of your capacity arithmetic.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">An instance that dies is replaced in seconds with nobody paged, because replacing it is the same act as creating it.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Callers reach a stable service name rather than an address, so instances can move, restart and change in number without a caller changing.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">Releases become an edit to the declaration: roll forward, roll back, or run two versions side by side, through the mechanism you already use to deploy.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Instance count can follow load automatically, which is where <a href="../routing/autoscaling.html">Autoscaling</a> plugs in — it moves the declared number and the same loop does the rest.</li>
+            <li id="tradeoffs-pro-5" data-kb-polarity="pro" data-kb-level="advanced">Many services share machines under enforced limits, so utilization rises and several teams deploy onto the same capacity without negotiating for it.</li>
+            <li id="tradeoffs-pro-6" data-kb-polarity="pro" data-kb-level="expert">Operating ten containers and ten thousand is the same work, because the effort is in writing the declaration rather than in carrying it out.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The loop enforces a wrong declaration as faithfully as a right one, and just as fast: a bad configuration reaches every machine in the time a good one would.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con" data-kb-level="advanced">It is a large piece of infrastructure with its own failure modes, upgrade cadence and expertise bill. Three services on two machines will never repay it.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Health checks steer the loop, so a wrong one makes the orchestrator the cause of the outage — restarting healthy instances, or leaving broken ones in rotation.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">Resource requests wrong in either direction cost real money or real reliability: too high strands capacity you paid for, too low gets processes evicted under pressure.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con" data-kb-level="expert">The declaration becomes a second source of truth, and it drifts from what the team believes is running the first time somebody fixes production by hand.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con" data-kb-level="expert">Stateful services fight the model, because an instance the loop may move at any moment is awkward when identity and attached storage matter.</li>
+            <li id="tradeoffs-con-7" data-kb-polarity="con" data-kb-level="expert">Debugging crosses a new layer: an application symptom now has a scheduling, networking or eviction explanation too, and telling them apart needs someone who knows the platform.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">You run many instances across more than a handful of machines, and deciding where each one goes has quietly become someone's job.</li>
+            <li id="usage-when-2" data-kb-polarity="when">You want a dead instance replaced in seconds without a human deciding anything.</li>
+            <li id="usage-when-3" data-kb-polarity="when" data-kb-level="advanced">You deploy often enough that rollout and rollback should be a change to a declaration rather than a runbook someone follows at 2am.</li>
+            <li id="usage-when-4" data-kb-polarity="when" data-kb-level="advanced">Your load varies enough that instance count should track it instead of being sized for the peak all day.</li>
+            <li id="usage-when-5" data-kb-polarity="when" data-kb-level="expert">Several teams deploy independently onto shared machines and you need enforced resource limits between them.</li>
+            <li id="usage-when-6" data-kb-polarity="when" data-kb-level="advanced">You are running <a href="../../architecture/microservices.html">Microservices</a> and every service needs the same handful of operational capabilities — placement, health, rollout, a stable address.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">You run one or two services on a couple of machines. The control plane costs more to operate than the work it removes.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid" data-kb-level="advanced">Nobody owns the platform. An orchestrator no one upgrades or debugs adds failure modes without adding anyone who can read them.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid" data-kb-level="advanced">Your workload is a single long-lived process whose identity and local disk cannot move, and no amount of declaration makes it disposable.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid" data-kb-level="expert">The platform you deploy to already runs containers this way without exposing the loop. You are using the pattern; implementing a second one underneath buys nothing.</li>
+            <li id="usage-avoid-5" data-kb-polarity="avoid" data-kb-level="advanced">What you need is to sequence business steps that take hours and must be compensated on failure — that is <a href="./saga.html">Saga</a> and workflow territory, and no scheduler will do it for you.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — the reconciliation loop, minus the cluster</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">type Desired = { service: string; replicas: number; image: string };
+type Running = { id: string; service: string; image: string; ready: boolean };
+
+// Nothing here knows WHY the numbers differ — a first deploy, a crashed
+// node and a scale-up look identical, so there is one path and no event
+// to miss.
+function reconcile(want: Desired, have: Running[], engine: Engine): void {
+  const ready = have.filter((i) =&gt; i.service === want.service &amp;&amp; i.ready);
+  const current = ready.filter((i) =&gt; i.image === want.image);
+  const stale = ready.filter((i) =&gt; i.image !== want.image);
+
+  // Add before removing, so capacity never dips below what was declared.
+  if (current.length &lt; want.replicas) return engine.start(want.service, want.image);
+  if (stale.length &gt; 0) return engine.stop(stale[0].id);
+  if (current.length &gt; want.replicas) engine.stop(current[0].id);
+}
+
+// One change per pass, forever. Convergence is the loop's job.
+setInterval(() =&gt; reconcile(readDeclaration(), observeCluster(), engine), 5_000);</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="kubernetes" id="wild-kubernetes"><strong>Kubernetes</strong><span>The reference implementation, and the reason the vocabulary is what it is. Controllers watch declared objects in the API server and act until observed matches desired; a scheduler places each new instance on a node with room for its requests.</span></div>
+        <div class="wild-item" data-kb-example="nomad" id="wild-nomad" data-kb-level="advanced"><strong>Nomad</strong><span>A single-binary scheduler driven by declarative job files. It orchestrates containers and plain executables under the same loop, which suits a fleet that has not containerized everything.</span></div>
+        <div class="wild-item" data-kb-example="docker-swarm" id="wild-docker-swarm" data-kb-level="advanced"><strong>Docker Swarm mode</strong><span>Built into the Docker engine: <code>docker service create --replicas 3</code> declares a count, and the manager nodes keep three tasks running across the swarm.</span></div>
+        <div class="wild-item" data-kb-example="argo-cd" id="wild-argo-cd" data-kb-level="expert"><strong>Argo CD</strong><span>Pull-based reconciliation on top of an orchestrator. An in-cluster controller compares the live cluster against manifests in a Git repository and converges the cluster to the repository, so no build job needs cluster credentials.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>Replica count</strong> — The declared number of instances per service, and the first dial for both capacity and redundancy. At one replica, every restart, node drain and rollout step is an outage of that service.</li>
+            <li id="production-knob-2" data-kb-polarity="knob" data-kb-level="advanced"><strong>Resource requests and limits</strong> — The request is what the scheduler reserves when it places the container; the limit is what the runtime enforces once it runs. Requests too high strand capacity you paid for, and too low puts the instance on a machine that cannot feed it.</li>
+            <li data-kb-level="advanced" id="production-knob-3" data-kb-polarity="knob"><strong>Readiness and liveness thresholds</strong> — Readiness gates traffic, liveness triggers a restart. Their period, timeout and failure count decide how long a sick instance keeps serving and how quickly a merely slow one is killed for being slow.</li>
+            <li data-kb-level="advanced" id="production-knob-4" data-kb-polarity="knob"><strong>Rolling update surge and unavailability</strong> — How many instances may exist above the declared count during a rollout, and how many may be missing below it. Surge buys rollout speed with temporary capacity; unavailability buys the same speed out of your headroom.</li>
+            <li data-kb-level="advanced" id="production-knob-5" data-kb-polarity="knob"><strong>Spread and placement constraints</strong> — Rules that force instances of one service apart across machines, racks or zones, and rules that restrict a workload to eligible machines. Without them the scheduler is free to pack all three replicas onto one machine.</li>
+            <li data-kb-level="expert" id="production-knob-6" data-kb-polarity="knob"><strong>Disruption budget</strong> — The minimum instances that must stay available while the platform does voluntary work such as draining a machine for an upgrade, so maintenance cannot take a service below its own floor.</li>
+            <li data-kb-level="expert" id="production-knob-7" data-kb-polarity="knob"><strong>Termination grace period</strong> — How long a container has between the stop signal and being killed. Too short cuts in-flight requests; too long makes every rollout and every machine drain crawl.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>Declared replicas against ready replicas</strong> — Per service, the gap the loop is trying to close. It is the single number that says a rollout is stuck.</li>
+            <li data-kb-level="advanced" id="production-signal-2" data-kb-polarity="signal"><strong>Container restart count</strong> — Per instance. A restart loop is the liveness check and the application disagreeing about what healthy means.</li>
+            <li data-kb-level="advanced" id="production-signal-3" data-kb-polarity="signal"><strong>Instances pending placement</strong> — The scheduler telling you no machine has room for the requests you declared. It stays pending indefinitely rather than failing, so nothing alerts unless you watch it.</li>
+            <li data-kb-level="advanced" id="production-signal-4" data-kb-polarity="signal"><strong>Node resource pressure and eviction events</strong> — What requests set below real consumption look like from the outside: the machine runs out before the declaration says it should.</li>
+            <li data-kb-level="expert" id="production-signal-5" data-kb-polarity="signal"><strong>Rollout age</strong> — How long a service has been part-old and part-new. A rollout that never finishes is the most common silent failure of this pattern.</li>
+            <li data-kb-level="expert" id="production-signal-6" data-kb-polarity="signal"><strong>Control-plane latency and error rate</strong> — A slow state store or an overloaded control plane makes reconciliation lag, and from above that looks exactly like an application problem.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>Requests set below real usage</strong> — The scheduler packs machines it believes have room, memory runs out, and the runtime kills whichever container is furthest over its request — usually not the one that caused the pressure.</li>
+            <li data-kb-level="advanced" id="production-failure-2" data-kb-polarity="failure"><strong>Liveness check served by the request thread pool</strong> — Under load the check times out, the platform restarts an instance that was healthy but busy, and its load moves to peers that are also busy. The restart wave then spreads on its own.</li>
+            <li data-kb-level="advanced" id="production-failure-3" data-kb-polarity="failure"><strong>Readiness that passes before dependencies are reachable</strong> — The rollout retires old instances against a new one that cannot serve, and the errors start at the moment the last old instance goes away.</li>
+            <li data-kb-level="advanced" id="production-failure-4" data-kb-polarity="failure"><strong>All replicas on one machine</strong> — Nothing asked for spread, so the scheduler packed them together. The declared count reads three, and one machine failure takes all three.</li>
+            <li data-kb-level="expert" id="production-failure-5" data-kb-polarity="failure"><strong>A rollout stalled half-finished</strong> — Two versions serve indefinitely because nobody noticed the stall, and an incompatibility that was tolerable for ten minutes is now load-bearing for a week.</li>
+            <li data-kb-level="expert" id="production-failure-6" data-kb-polarity="failure"><strong>Control plane under-provisioned</strong> — Reconciliation lag grows, replacement and scaling fall behind the load that caused them, and every dashboard blames the application instead.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Every service declares resource requests measured from real load rather than guessed</li>
+            <li id="production-check-2" data-kb-polarity="check">Readiness and liveness are separate checks with different meanings, and neither depends on a downstream service you do not control</li>
+            <li id="production-check-3" data-kb-polarity="check" data-kb-level="advanced">Replicas of the same service are spread across failure domains by an explicit rule, not by luck of scheduling</li>
+            <li id="production-check-4" data-kb-polarity="check" data-kb-level="advanced">Rollback has been rehearsed under time pressure, so somebody knows what to run without reading a wiki</li>
+            <li id="production-check-5" data-kb-polarity="check" data-kb-level="advanced">The declaration lives in version control, and a change made directly to the cluster can be detected</li>
+            <li id="production-check-6" data-kb-polarity="check" data-kb-level="expert">Anything that must not lose all its instances at once during maintenance carries a disruption budget</li>
+            <li id="production-check-7" data-kb-polarity="check" data-kb-level="expert">Someone owns the platform: upgrades are scheduled, and at least two people can read its failure modes</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="fluency" aria-labelledby="h-flu" data-kb-block="fluency">
+      <h2 class="doc-h" id="h-flu">Where it shows up</h2>
+      <div class="fluency-list">
+        <div class="fluency-item" data-kb-theme="continuous-delivery" id="fluency-continuous-delivery"><a href="../../../themes/continuous-delivery.html">Continuous Delivery</a><span>Roll out by changing declared state</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="health-endpoint"><a href="../resilience/health-endpoint.html">Health Endpoint Monitoring</a><span class="rel-note">The probe is the signal the control loop reads — a wrong one makes the orchestrator the cause of the outage.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="stateless-service"><a href="../routing/stateless-service.html">Stateless Service</a><span class="rel-note">Reconciliation assumes any instance can be destroyed and replaced, which only holds if it carries no per-client state.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="autoscaling"><a href="../routing/autoscaling.html">Autoscaling</a><span class="rel-note">Scaling is the same control loop with load as its input rather than instance health.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="sidecar"><a href="../routing/sidecar.html">Sidecar</a><span class="rel-note">Co-scheduling the helper with the service, on one lifecycle, is what makes the sidecar shape practical.</span></div>
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="microservices"><a href="../../architecture/microservices.html">Microservices</a><span class="rel-note">The orchestrator earns its complexity at many services and many nodes, which is where this style puts you.</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="workflow-orchestration"><a href="./workflow-orchestration.html">Workflow Orchestration</a><span class="rel-note">Same word, two jobs: this one reconciles infrastructure state, that one drives business steps through a long-running process.</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <!-- kb:generated — mentions; derived from other pages' prose links, edit the prose, not this -->
+    <aside class="mentions" id="mentioned-by" aria-labelledby="h-mentions">
+      <h2 class="mentions-h" id="h-mentions">Mentioned by</h2>
+      <p class="mentions-lead">These pages link here from their prose without declaring a typed relationship.</p>
+      <ul class="mention-list">
+        <li class="mention-item"><a href="../../../capabilities/compute.html">Compute</a><span class="mention-kind">capability</span></li>
+      </ul>
+    </aside>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../../index.html#band-dist-h">← Network</a>
+      <a class="up" href="../../../index.html">↑ The Map</a>
+      <a class="next" href="../../../index.html#band-dist-h">Network →</a>
+    </nav>
+  </main>
+
+  <script src="../../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../../assets/diagram.js"></script>
+  <script src="../../../assets/progress.js"></script>
+  <script src="../../../assets/vendor/highlight.min.js"></script>
+  <script src="../../../assets/sketch.js"></script>
+</body>
+</html>
