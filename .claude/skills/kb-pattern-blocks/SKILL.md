@@ -1,6 +1,6 @@
 ---
 name: kb-pattern-blocks
-description: Write or review any block of a patterns-kb pattern page — description, structure, variations, tradeoffs, usage, sketch, wild, production, fluency. Use when someone asks to "write the description block", "add variations", "write the pros and cons", "when should you reach for this", "add a code sketch", "add a real-world example", "write the production block", "add the Where it shows up block", or says a pattern page's block is thin, wrong-shaped, or reads like marketing.
+description: Write or review any block of a patterns-kb pattern page — description, structure, variations, tradeoffs, usage, sketch, wild, production, fluency. Use when someone asks to "write the description block", "add variations", "write the pros and cons", "when should you reach for this", "add a code sketch", "add a real-world example", "write the production block", "add the Where it shows up block", or says a pattern page's block is thin, wrong-shaped, or reads like marketing. Also use to review, evaluate, critique, audit or grade an existing block of a pattern page, including when the ask names it by file path or URL fragment (`…/<pattern>.html#tradeoffs`, `#variations`, `#usage`).
 ---
 
 # The blocks of a pattern page

@@ -1,6 +1,6 @@
 ---
 name: kb-design-sizing
-description: Write or review the sizing block ("Right-sizing") of a patterns-kb design page — pick the interaction shape, derive the core technology capabilities from the FRs/NFRs, run the numbers, and adopt, reject or defer each candidate with a reason. Use when someone asks to "write the sizing block", "right-size this design", "do the back-of-envelope", "estimate capacity", "which core technologies do we need", or "is one node enough".
+description: Write or review the sizing block ("Right-sizing") of a patterns-kb design page — pick the interaction shape, derive the core technology capabilities from the FRs/NFRs, run the numbers, and adopt, reject or defer each candidate with a reason. Use when someone asks to "write the sizing block", "right-size this design", "do the back-of-envelope", "estimate capacity", "which core technologies do we need", or "is one node enough". Also use to review, evaluate, critique, audit or grade an existing sizing block, including when the ask names it by file path or URL fragment (`…/<page>.html#sizing`).
 ---
 
 # Writing the Right-sizing block

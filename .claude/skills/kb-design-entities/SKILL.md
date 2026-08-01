@@ -1,6 +1,6 @@
 ---
 name: kb-design-entities
-description: Write or review the entities block ("Core entities & data design") of a patterns-kb design page — a short observations lead, then entities grouped by domain role, each with a name, a one-line description, and a trimmed-DDL schema expanded by default. Use when someone asks to "write the entities block", "format core entities", "restructure the data design", "group the entities", "show the schema per entity", or says the data design is unreadable or hidden behind a click.
+description: Write or review the entities block ("Core entities & data design") of a patterns-kb design page — a short observations lead, then entities grouped by domain role, each with a name, a one-line description, and a trimmed-DDL schema expanded by default. Use when someone asks to "write the entities block", "format core entities", "restructure the data design", "group the entities", "show the schema per entity", or says the data design is unreadable or hidden behind a click. Also use to review, evaluate, critique, audit or grade an existing entities block, including when the ask names it by file path or URL fragment (`…/<page>.html#entities`).
 ---
 
 # Writing the Core entities & data design block

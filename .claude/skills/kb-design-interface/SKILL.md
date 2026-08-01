@@ -1,6 +1,6 @@
 ---
 name: kb-design-interface
-description: Write or review the interface block ("The interface — API design") of a patterns-kb design page — a short observations lead, then endpoints grouped by caller/audience, each with a method+path, a one-line description, and an HTTP contract expanded by default. Use when someone asks to "write the interface block", "design the API", "format the endpoints", "group the API by caller", "show request/response per endpoint", or says the API design is hidden in collapsed sketches or missing part of its surface.
+description: Write or review the interface block ("The interface — API design") of a patterns-kb design page — a short observations lead, then endpoints grouped by caller/audience, each with a method+path, a one-line description, and an HTTP contract expanded by default. Use when someone asks to "write the interface block", "design the API", "format the endpoints", "group the API by caller", "show request/response per endpoint", or says the API design is hidden in collapsed sketches or missing part of its surface. Also use to review, evaluate, critique, audit or grade an existing interface block, including when the ask names it by file path or URL fragment (`…/<page>.html#interface`).
 ---
 
 # Writing the interface block ("The interface — API design")

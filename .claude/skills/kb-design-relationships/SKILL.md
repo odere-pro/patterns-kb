@@ -1,6 +1,6 @@
 ---
 name: kb-design-relationships
-description: Write, group and maintain the relationships block ("Patterns it demonstrates") of a patterns-kb design page — the rows are written by kb.mjs link/unlink, and once a page carries more than about ten of them the flat list is regrouped by concern. Use when someone asks to "group the patterns it demonstrates", "the demonstrates list is too long", "add a pattern to this design", "why did kb.mjs link put the row at the bottom", "reorder the relationship groups", or says a design's pattern list reads as an undifferentiated wall.
+description: Write, group and maintain the relationships block ("Patterns it demonstrates") of a patterns-kb design page — the rows are written by kb.mjs link/unlink, and once a page carries more than about ten of them the flat list is regrouped by concern. Use when someone asks to "group the patterns it demonstrates", "the demonstrates list is too long", "add a pattern to this design", "why did kb.mjs link put the row at the bottom", "reorder the relationship groups", or says a design's pattern list reads as an undifferentiated wall. Also use to review, evaluate, critique, audit or grade an existing relationships block, including when the ask names it by file path or URL fragment (`…/<page>.html#relationships`).
 ---
 
 # Grouping the Patterns it demonstrates block

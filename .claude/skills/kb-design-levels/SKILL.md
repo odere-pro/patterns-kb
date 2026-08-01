@@ -1,6 +1,6 @@
 ---
 name: kb-design-levels
-description: Write or review the levels block ("What's expected at each level") of a patterns-kb design page — one section per seniority level, each a short list of demonstrable behaviours drawn from the page itself. Use when someone asks to "write the levels block", "what's expected at each level", "split the levels into sections", "turn the level bullets into a list", "add a staff-level bar", or says a design's levels block reads as a paragraph instead of a rubric.
+description: Write or review the levels block ("What's expected at each level") of a patterns-kb design page — one section per seniority level, each a short list of demonstrable behaviours drawn from the page itself. Use when someone asks to "write the levels block", "what's expected at each level", "split the levels into sections", "turn the level bullets into a list", "add a staff-level bar", or says a design's levels block reads as a paragraph instead of a rubric. Also use to review, evaluate, critique, audit or grade an existing levels block, including when the ask names it by file path or URL fragment (`…/<page>.html#levels`).
 ---
 
 # Writing the What's expected at each level block

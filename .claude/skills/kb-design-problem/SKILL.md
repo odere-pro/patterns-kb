@@ -1,6 +1,6 @@
 ---
 name: kb-design-problem
-description: Write or review the "Understanding the problem" block of a patterns-kb design page — the interview that turns an underspecified task statement into requirements. Use when someone asks to "write the problem section", "frame the problem", "do the requirements interview", "add clarifying questions to a design", or says a design's problem block rambles or doesn't connect to its requirements.
+description: Write or review the "Understanding the problem" block of a patterns-kb design page — the interview that turns an underspecified task statement into requirements. Use when someone asks to "write the problem section", "frame the problem", "do the requirements interview", "add clarifying questions to a design", or says a design's problem block rambles or doesn't connect to its requirements. Also use to review, evaluate, critique, audit or grade an existing problem block, including when the ask names it by file path or URL fragment (`…/<page>.html#description`).
 ---
 
 # Writing "Understanding the problem"

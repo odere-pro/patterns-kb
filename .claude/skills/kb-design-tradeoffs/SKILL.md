@@ -1,6 +1,6 @@
 ---
 name: kb-design-tradeoffs
-description: Write or review the tradeoffs block ("Limitations & trade-offs") of a patterns-kb design page — a one-two sentence lead naming the biggest flaw, then a Strengths column and a Risks column, each a flat list of at most 7 items with 3–4 bold-led main points first. Use when someone asks to "write the tradeoffs block", "list the pros and cons", "rewrite strengths and risks", "name the biggest flaw", or says the tradeoffs read as over-explained essays instead of a scannable ledger.
+description: Write or review the tradeoffs block ("Limitations & trade-offs") of a patterns-kb design page — a one-two sentence lead naming the biggest flaw, then a Strengths column and a Risks column, each a flat list of at most 7 items with 3–4 bold-led main points first. Use when someone asks to "write the tradeoffs block", "list the pros and cons", "rewrite strengths and risks", "name the biggest flaw", or says the tradeoffs read as over-explained essays instead of a scannable ledger. Also use to review, evaluate, critique, audit or grade an existing tradeoffs block, including when the ask names it by file path or URL fragment (`…/<page>.html#tradeoffs`).
 ---
 
 # Writing the Limitations & trade-offs block

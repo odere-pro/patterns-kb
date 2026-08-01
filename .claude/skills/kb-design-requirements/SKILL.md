@@ -1,6 +1,6 @@
 ---
 name: kb-design-requirements
-description: Write or review the requirements block (functional and non-functional requirements) of a patterns-kb design page. Use when someone asks to "write the requirements block", "add FRs/NFRs", "list the functional and non-functional requirements", "review my requirements", "restructure the NFRs into sublists", asks where deduplication or idempotency belongs, or says a design page's requirements are hard to read, too long, or too implementation-flavoured.
+description: Write or review the requirements block (functional and non-functional requirements) of a patterns-kb design page. Use when someone asks to "write the requirements block", "add FRs/NFRs", "list the functional and non-functional requirements", "review my requirements", "restructure the NFRs into sublists", asks where deduplication or idempotency belongs, or says a design page's requirements are hard to read, too long, or too implementation-flavoured. Also use to review, evaluate, critique, audit or grade an existing requirements block, including when the ask names it by file path or URL fragment (`…/<page>.html#requirements`).
 ---
 
 # Writing the requirements block

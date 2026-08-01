@@ -85,6 +85,26 @@ Which skill owns what, for the parts that are not a page's prose:
 | tokens, `hub.css`, `pattern.css` | **kb-styles** |
 | the client scripts and their stores | **kb-site-ui** |
 | the interactive graph | **kb-graph** |
+| reviewing or evaluating an existing page | **kb-design-review** |
+| a full system design, or an architectural kata | **sys-design** |
+| designing or hardening one bounded component | **kb-compose** |
+
+### Routing precedence
+
+Three rules, because the defaults point elsewhere:
+
+- **A `file://` URL or a `site/**.html` path in a request is a page reference, not a file to
+  open.** Resolve it to its id (basename minus `.html`; a `#fragment` names the block) and
+  read it with `kb.mjs`. Never `Read` or `WebFetch` a page under `site/` — the corpus is
+  ~490k tokens.
+- **In this repo the skills replace the generic agents**, including where
+  `~/.claude/rules/common/agents.md` says to reach for one without asking: **sys-design**
+  over `architect` / `planner`, **kb-compose** over `code-architect`, **kb-design-review**
+  over `code-reviewer`. Those agents answer from memory; these cite the corpus.
+- **The KB is the prior art for design work**, so `kb.mjs find` / `kb.mjs brief` satisfy
+  step 0 of `~/.claude/rules/common/development-workflow.md` for pattern and design
+  questions. GitHub and vendor-doc search still applies to library and implementation
+  choices.
 
 Merging a pattern found on the web — improve the existing page, skip, or create a new
 one — is the **kb-intake** skill; discovering those candidates from vendor architecture
@@ -92,9 +112,10 @@ portals and GitHub repos (including awesome-list link hubs) is the **kb-harvest*
 Running a full KB-grounded system design — interview → requirements → entities/API →
 HLD → component zoom-ups → critique → stack — is the **sys-design** skill, which uses
 **grill-me** for the interview and the kb-scout / component-designer / design-critic
-agents so the KB reading never bloats the main context. Prefer it here over the generic
-`architect` / `planner` / `code-architect` agents: those answer from memory, this one
-cites the corpus. Scouting agents open with `kb.mjs brief <query>` — find hits, the
+agents so the KB reading never bloats the main context (see Routing precedence above —
+it replaces the generic agents rather than competing with them). Reviewing a page that
+already exists is **kb-design-review**, which reports findings and hands the fix to
+**kb-edit**. Scouting agents open with `kb.mjs brief <query>` — find hits, the
 governing theme's decide table and the top hits' neighbours in one call.
 Full contract, including how to add a page: **[.claude/rules/html5-authoring.md](.claude/rules/html5-authoring.md)**.
 How the prose must read: **[.claude/rules/tone.md](.claude/rules/tone.md)** — the house
