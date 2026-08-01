@@ -10,6 +10,8 @@
  *                                 search names, essences, aliases, tags and symptoms
  *   kb.mjs get <id> [--block B] [--level L]   one page, or one block of it;
  *                                 --level basic|advanced|expert scopes to a reading level
+ *                                 --json on the wild/production blocks also dumps `items`
+ *                                 in the writers' own shape — edit one, hand the lot back
  *   kb.mjs related <id>           what it combines with, replaces, is confused for
  *   kb.mjs backlinks <id>         what points here — typed inbound edges + prose mentions
  *   kb.mjs refs [<id> | --file <path>]   what this page points AT, read live off the page:
@@ -21,6 +23,10 @@
  *   kb.mjs set <id> --aliases '["breaker","CB"]' --tags '[…]' --solves '[…]' [--favourite true|false]
  *   kb.mjs wild <id> --items '[{"id":"envoy","name":"Envoy","note":"…"}]'
  *   kb.mjs production <id> --knobs '[{"label":…,"note":…}]' --signals '[…]' --failures '[…]' --checklist '["…"]'
+ *                                 both replace the whole block — dump it with
+ *                                 `get --block wild|production --json` and hand back every
+ *                                 item. Each takes an optional "level", and text may carry
+ *                                 <code>; all other markup is escaped. Round trips clean.
  *   kb.mjs explain <id> --basic "…" --advanced "…" --expert "…"   the three-level ladder
  *                                 (cumulative: the rungs stack; all three empty removes the block)
  *   kb.mjs level <id> <element-id> <basic|advanced|expert|none>      THE mechanism —
@@ -80,6 +86,8 @@ if (LEVEL && !LEVELS.includes(LEVEL)) {
  * prose, so indexing it would score a page against words it never wrote. */
 const NOISE = "script, style, link, .crumb, .docnav, .doc-metarow, .practice, .mentions";
 const inline = (el) => el.text.replace(/\s+/g, " ").trim();
+/* Markup as authored, whitespace-normalised — the form the writers below round-trip. */
+const richOf = (el) => (el ? el.innerHTML.replace(/\s+/g, " ").trim() : "");
 
 /* STOP lives in lib/expansions.mjs now, shared with the vocabulary extractor; the hub
  * keeps an inline copy in search.js (plain file:// script) pinned by the parity test. */
@@ -210,6 +218,61 @@ function relationsOf(root) {
   }));
 }
 
+/* --- writer-owned blocks, read back in the writer's own --items shape ---
+ * `wild` and `production` are replace-the-whole-block writers, so fixing one entry means
+ * re-supplying its neighbours — and the rendered prose is a lossy source to re-type them
+ * from. Two things vanish in it: the data-kb-level tag (310 wild items and 1,616
+ * production items across the corpus carry one) and the inline <code> some notes use.
+ * These projections return exactly what the writers accept, so an edit is a round trip.
+ *
+ * Read off the UNPRUNED root on purpose. A --level-scoped dump fed back to the writer
+ * would delete every item above that lens — the loss this exists to prevent. */
+const itemLevel = (el) => {
+  const level = el.getAttribute("data-kb-level");
+  return level ? { level } : {};
+};
+
+function wildItems(root) {
+  const sec = root.querySelector('[data-kb-block="wild"]');
+  if (!sec) return null;
+  return sec.querySelectorAll(".wild-item").map((el) => {
+    const head = el.querySelector("strong");
+    const link = head?.querySelector("a");
+    const spans = el.querySelectorAll("span");
+    return {
+      id: el.getAttribute("data-kb-example"),
+      name: richOf(link ?? head),
+      note: spans.length ? richOf(spans[spans.length - 1]) : "",
+      ...(link ? { href: link.getAttribute("href") } : {}),
+      ...itemLevel(el),
+    };
+  });
+}
+
+const PROD_GROUPS = [
+  ["knobs", "prod-knobs"], ["signals", "prod-signals"],
+  ["failures", "prod-failures"], ["checklist", "prod-checklist"],
+];
+
+function productionItems(root) {
+  const sec = root.querySelector('[data-kb-block="production"]');
+  if (!sec) return null;
+  const out = {};
+  for (const [key, cls] of PROD_GROUPS) {
+    out[key] = sec.querySelectorAll(`.${cls} li`).map((li) => {
+      if (key === "checklist") return { text: richOf(li), ...itemLevel(li) };
+      /* Every labelled item is "<strong>label</strong> — note"; peel the label back off
+       * rather than splitting on the dash, which also occurs inside notes. */
+      const label = richOf(li.querySelector("strong"));
+      const full = richOf(li);
+      const head = `<strong>${label}</strong>`;
+      const note = full.startsWith(head) ? full.slice(head.length).replace(/^\s*—\s*/, "") : full;
+      return { label, note, ...itemLevel(li) };
+    });
+  }
+  return out;
+}
+
 function readPage(id) {
   const graph = load("graph.json");
   const node = graph.nodes[id];
@@ -242,6 +305,13 @@ if (cmd === "get") {
   }
   const picked = only ? { [only]: blocks[only] } : blocks;
 
+  /* Writer-owned blocks come back structured alongside their prose, so `get --json`
+   * feeds straight into `wild --items` / `production --knobs …` without a re-type. */
+  const items = {
+    ...("wild" in picked ? { wild: wildItems(root) } : {}),
+    ...("production" in picked ? { production: productionItems(root) } : {}),
+  };
+
   if (AS_JSON) {
     console.log(JSON.stringify({
       id: node.id, name: node.name, kind: node.kind, band: node.band, group: node.group,
@@ -249,6 +319,7 @@ if (cmd === "get") {
       ...(LEVEL ? { level: LEVEL } : {}),
       ...(node.levels ? { levels: node.levels } : {}),
       blocks: picked,
+      ...(Object.keys(items).length ? { items } : {}),
       relations: relationsOf(root), themes: node.themes,
     }, null, 2));
   } else {
@@ -388,6 +459,21 @@ if (cmd === "get") {
     !Array.isArray(v) ? "must be a JSON array"
     : v.some((x) => typeof x !== "string") ? "every item must be a string"
     : v.some((x) => !x.trim()) ? "no empty strings" : null;
+  /* An optional per-item lens tag, so a round trip through the dump keeps the tagging
+   * `kb.mjs level` applied. Same closed vocabulary; `none` is simply omitting the key. */
+  const levels = (v) => v.some((x) => x && x.level && !LEVELS.includes(x.level))
+    ? `level must be one of ${LEVELS.join(", ")}` : null;
+
+  /* Writer input is plain text plus ONE permitted inline tag. Everything is escaped, so a
+   * hand-passed <a> or <script> still cannot reach the page — the no-links rule for these
+   * blocks holds. <code> is the exception because the corpus genuinely uses it for
+   * parameter and API names, and the structured dump hands it back. Existing character
+   * references pass through so a round trip never turns &amp; into &amp;amp;. */
+  const richText = (s) =>
+    String(s)
+      .replace(/&(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#[xX][0-9a-fA-F]+);)/g, "&amp;")
+      .replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/&lt;(\/?)code&gt;/g, "<$1code>");
 
   if (cmd === "set") {
     let touched = [];
@@ -423,8 +509,9 @@ if (cmd === "get") {
     const items = parseList("items", (v) =>
       !Array.isArray(v) ? "must be a JSON array"
       : v.some((x) => !x || typeof x !== "object") ? "every item must be an object"
-      : v.some((x) => !x.id || !x.name || !x.note) ? "every item needs id, name and note" : null);
-    if (items === null) { console.error("pass --items '[{\"id\":…,\"name\":…,\"note\":…}]'"); process.exit(1); }
+      : v.some((x) => !x.id || !x.name || !x.note) ? "every item needs id, name and note"
+      : levels(v));
+    if (items === null) { console.error("pass --items '[{\"id\":…,\"name\":…,\"note\":…}]' — kb.mjs get <id> --block wild --json dumps the current ones"); process.exit(1); }
 
     const existing = root.querySelector('[data-kb-block="wild"]');
     if (!items.length) {
@@ -434,9 +521,9 @@ if (cmd === "get") {
       /* Optional href: a reference implementation or canonical write-up. The link
        * must be to the thing itself (repo, docs page) — never invented. */
       const rows = items.map((i) =>
-        `        <div class="wild-item" data-kb-example="${i.id}">${
-          i.href ? `<strong><a href="${esc(i.href)}">${esc(i.name)}</a></strong>` : `<strong>${esc(i.name)}</strong>`
-        }<span>${esc(i.note)}</span></div>`).join("\n");
+        `        <div class="wild-item" data-kb-example="${i.id}"${i.level ? ` data-kb-level="${i.level}"` : ""}>${
+          i.href ? `<strong><a href="${esc(i.href)}">${richText(i.name)}</a></strong>` : `<strong>${richText(i.name)}</strong>`
+        }<span>${richText(i.note)}</span></div>`).join("\n");
       const block = `    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
       <h2 class="doc-h" id="h-wild">In the wild</h2>
       <div class="wild-list">
@@ -461,16 +548,26 @@ ${rows}
     const labeled = (v) =>
       !Array.isArray(v) ? "must be a JSON array"
       : v.some((x) => !x || typeof x !== "object") ? "every item must be an object"
-      : v.some((x) => !x.label || !x.note) ? "every item needs label and note" : null;
+      : v.some((x) => !x.label || !x.note) ? "every item needs label and note"
+      : levels(v);
+    /* A checklist gate is bare text, so a plain string stays the everyday form; the
+     * object form exists to carry a lens tag back through a round trip. */
+    const gates = (v) =>
+      !Array.isArray(v) ? "must be a JSON array"
+      : v.some((x) => typeof x === "string" ? !x.trim() : !x || typeof x !== "object" || !x.text)
+        ? "every item must be a non-empty string, or an object with text"
+      : levels(v.filter((x) => typeof x === "object"));
     if (["knobs", "signals", "failures", "checklist"].every((k) => opt(k) == null)) {
-      console.error("pass --knobs / --signals / --failures ('[{\"label\":…,\"note\":…}]') and/or --checklist ('[\"…\"]')");
+      console.error("pass --knobs / --signals / --failures ('[{\"label\":…,\"note\":…}]') and/or --checklist ('[\"…\"]')"
+        + " — kb.mjs get <id> --block production --json dumps the current ones");
       process.exit(1);
     }
     const groups = [
       ["prod-knobs", "Tuning knobs", parseList("knobs", labeled) ?? []],
       ["prod-signals", "Signals to watch", parseList("signals", labeled) ?? []],
       ["prod-failures", "Failure modes under load", parseList("failures", labeled) ?? []],
-      ["prod-checklist", "Readiness checklist", (parseList("checklist", strings) ?? []).map((s) => ({ text: s }))],
+      ["prod-checklist", "Readiness checklist",
+        (parseList("checklist", gates) ?? []).map((s) => (typeof s === "string" ? { text: s } : s))],
     ];
 
     const existing = root.querySelector('[data-kb-block="production"]');
@@ -483,7 +580,9 @@ ${rows}
         .filter(([, , items]) => items.length)
         .map(([cls, title, items]) => {
           const lis = items.map((i) =>
-            `            <li>${i.text != null ? esc(i.text) : `<strong>${esc(i.label)}</strong> — ${esc(i.note)}`}</li>`).join("\n");
+            `            <li${i.level ? ` data-kb-level="${i.level}"` : ""}>${
+              i.text != null ? richText(i.text) : `<strong>${richText(i.label)}</strong> — ${richText(i.note)}`
+            }</li>`).join("\n");
           return `        <div class="prod-group ${cls}">
           <h3>${title}</h3>
           <ul>
