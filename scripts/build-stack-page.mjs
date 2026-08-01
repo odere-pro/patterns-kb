@@ -69,10 +69,23 @@ for (const list of sources.values()) {
 }
 
 /* A comparison page argues the product choice rather than naming one service per cloud, so
- * it never earns a row of its own — it rides along as a chip on the pattern's first row. */
+ * it never earns a row of its own — it rides along as a chip on the pattern's first row.
+ *
+ * Its matrix is keyed by CRITERION down the side and PRODUCT across the top — Kafka,
+ * RabbitMQ, NATS — so a pinned matrix row can never fill the four cloud columns the way a
+ * capability's mapping row does. Copying its cells here would file "Deleted on
+ * acknowledgement" under AWS. What a pin CAN do is land the reader on the one criterion that
+ * decides this pattern, so `data-kb-maps` on a comparison edge deep-links the chip and names
+ * the criterion in its tooltip. Unannotated chips still open the whole argument. */
 function compareChips(list) {
   return list.filter((e) => e.src.kind === "comparison")
-    .map((e) => `<a class="row-cmp" href="../${e.src.path}">Compare ${esc(e.src.name)}</a>`)
+    .map((e) => {
+      const cells = e.maps ? rowCells(e.src, e.maps) : null;
+      const criterion = cells && cells.length ? cells[0].replace(/<[^>]*>/g, "").trim() : "";
+      const frag = criterion ? `#${e.maps}` : "";
+      const why = criterion ? ` title="${esc(criterion)}"` : "";
+      return `<a class="row-cmp" href="../${e.src.path}${frag}"${why}>Compare ${esc(e.src.name)}</a>`;
+    })
     .join("");
 }
 
