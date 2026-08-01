@@ -580,6 +580,11 @@ test("audit-vocab.mjs fails when a relation verb has no fragment on vocab.html",
   }
 });
 
+/* The other half of the polarity rule — that build-pages' ITEMS table and POLARITIES name
+ * the same eight values — is asserted inside build-pages.mjs itself rather than here. Only
+ * the corpus is redirectable by KB_ROOT, so a test cannot hand the builder a divergent
+ * model.mjs to fail against; every `make all` and every builder test above runs the guard. */
+
 test("audit-vocab.mjs fails when a page's JSON-LD emits an undefined kb: term", () => {
   const root = vocabReady();
   try {

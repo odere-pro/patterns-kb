@@ -19,7 +19,7 @@ import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { VOCAB_NS, KB_NAME, BLOCK_LEVELS, esc } from "./lib/model.mjs";
+import { VOCAB_NS, KB_NAME, BLOCK_LEVELS, POLARITIES, esc } from "./lib/model.mjs";
 import { blockProblems, lensProblems } from "./lib/validate.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
@@ -85,6 +85,19 @@ const ITEMS = [
   { block: "requirements", sel: ".functional ol > li", idOf: (_el, i) => `requirements-fr-${i + 1}` },
   { block: "requirements", sel: ".nonfunctional > ul > li", idOf: (_el, i) => `requirements-nfr-${i + 1}` },
 ];
+/* This table is the ONLY writer of data-kb-polarity — the attribute is projected from the
+ * column an item sits in, not hand-written — so these eight literals and the POLARITIES
+ * vocabulary published on vocab.html are the same closed set said twice. Held together
+ * here rather than in a checker, because the failure is a value the ontology has never
+ * heard of appearing on 600 pages in one build. */
+{
+  const stamped = [...new Set(ITEMS.map((i) => i.polarity).filter(Boolean))].sort();
+  const declared = POLARITIES.map((p) => p.name).sort();
+  if (JSON.stringify(stamped) !== JSON.stringify(declared)) {
+    console.error(`polarity drift: build-pages stamps [${stamped}] but POLARITIES declares [${declared}] — reconcile scripts/lib/model.mjs and the ITEMS table above.`);
+    process.exit(1);
+  }
+}
 const keyed = (block, key) => (key ? `${block}-${key}` : null);
 /* Prose paragraphs in ANY block: <block>-p-N. Applied generically after ITEMS. */
 const PROSE_P = ".prose > p";

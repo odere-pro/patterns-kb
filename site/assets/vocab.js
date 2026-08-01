@@ -252,10 +252,13 @@
       var holders = document.querySelectorAll(".vocab-section, .vocab-letter-group");
       for (var b = 0; b < holders.length; b++) {
         var kids = holders[b].querySelectorAll(".vocab-item");
-        if (!kids.length) continue;                 // #how carries prose and no terms
         var any = false;
         for (var c = 0; c < kids.length; c++) if (!kids[c].hidden) { any = true; break; }
-        holders[b].hidden = !any;
+        /* A holder with no terms at all counts as empty too. #how is the case that
+           matters: it carries four paragraphs of prose and no rows, so leaving it
+           standing puts the whole introduction between the corpus results and the terms
+           that actually matched. It is the page's opening, not a result. */
+        holders[b].hidden = q ? !any : false;
       }
       document.body.classList.toggle("vocab-filtering", !!q);
       if (status) status.textContent = q ? shown + (shown === 1 ? " term" : " terms") : "";
@@ -312,9 +315,22 @@
       }
     });
 
-    // A live filter would otherwise print as a page with most of its vocabulary missing.
+    /* A live filter would otherwise print as a page with most of its vocabulary missing.
+       Clear it for the paper and hand it back afterwards: without the restore, printing
+       silently discards the query the reader was in the middle of. The MODE is left alone
+       — an alphabetical printout is a legitimate thing to want. */
+    var printFilter = null;
     window.addEventListener("beforeprint", function () {
-      if (input.value) { input.value = ""; applyFilter(); }
+      if (!input.value) return;
+      printFilter = input.value;
+      input.value = "";
+      applyFilter();
+    });
+    window.addEventListener("afterprint", function () {
+      if (printFilter == null) return;
+      input.value = printFilter;
+      printFilter = null;
+      applyFilter();
     });
     // The catalog lands after this script; re-run so the corpus results appear.
     window.addEventListener("load", function () { if (input.value) renderCorpus(input.value.trim().toLowerCase()); });

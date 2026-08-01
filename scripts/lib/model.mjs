@@ -142,10 +142,19 @@ export const BLOCK_DESC = {
 
 /* ---- the closed polarity vocabulary ----
  * Which side of a multi-sided block an item argues. Three families, one per block that has
- * sides, in BLOCKS.pattern order. CLOSED as of this change: the shape was declared "closed"
- * in ATTRIBUTES from the start, but nothing enforced membership, so a typo would have
- * shipped as a silently unstyled item. validate.mjs rejects a value outside this set,
- * audit-vocab.mjs mirrors that at corpus scale, and build-vocab.mjs renders it. */
+ * sides, in BLOCKS.pattern order.
+ *
+ * PROJECTED, not authored. build-pages.mjs stamps the attribute from the column an item
+ * sits in (`.col.cons li` → `con`, `.prod-knobs li` → `knob`), which is the one place a
+ * class legitimately implies data, because that projection IS the derivation. So this list
+ * and the ITEMS table there are the same closed set said twice, and build-pages.mjs exits
+ * rather than run if they disagree — a value the ontology has never heard of would
+ * otherwise land on 600 pages in a single build.
+ *
+ * The per-page and corpus checks still earn their place: every consumer reads the
+ * attribute rather than the class, and a hand-edited page carries whatever was typed until
+ * the next `make all`. validate.mjs closes that window on the page, audit-vocab.mjs (V4)
+ * across the corpus, and build-vocab.mjs renders the set. */
 export const POLARITIES = [
   { name: "pro", block: "tradeoffs", desc: "An argument for adopting the page's subject — what it buys you." },
   { name: "con", block: "tradeoffs", desc: "An argument against — what it costs, stated as a fact rather than hedged." },
