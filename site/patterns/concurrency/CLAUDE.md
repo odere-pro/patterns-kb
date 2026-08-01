@@ -1,9 +1,9 @@
 # patterns/concurrency
 
-**Concurrency (lens)** — 12 patterns.
+**Concurrency (lens)** — 14 patterns.
 A lens: it reshapes how you build at any elevation, rather than being a rung on the ladder.
 
-Pages here: actor-model, backpressure, batching, future-promise, monitor-object, producer-consumer, reactor, rw-lock, scheduling, semaphore, thread-confinement, thread-pool
+Pages here: actor-model, backpressure, batching, copy-on-write, future-promise, lock-free, monitor-object, producer-consumer, reactor, rw-lock, scheduling, semaphore, thread-confinement, thread-pool
 
 Every page in this folder declares `data-kb-band="concurrency"` and
 `data-kb-group="concurrency"`. The path is checked against them — `make check` fails if a

@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lock-Free · Patterns</title>
+  <meta name="description" content="Lock-Free — Update shared memory with an atomic retry loop instead of a lock">
+  <link rel="stylesheet" href="../../assets/tokens.css">
+  <link rel="stylesheet" href="../../assets/pattern.css">
+  <script src="../../assets/theme.js"></script>
+  <script src="../../assets/lens.js"></script>
+  <!-- kb:generated — derived from data-kb-*; edit the page, not this -->
+  <script type="application/ld+json">
+{
+  "@context": {
+    "@vocab": "https://schema.org/",
+    "kb": "https://odere-pro.github.io/patterns-kb/vocab.html#"
+  },
+  "@type": "DefinedTerm",
+  "@id": "#lock-free",
+  "identifier": "lock-free",
+  "name": "Lock-Free",
+  "description": "Update shared memory with an atomic retry loop instead of a lock",
+  "inDefinedTermSet": {
+    "@type": "DefinedTermSet",
+    "name": "Patterns KB",
+    "@id": "../../vocab.html"
+  },
+  "kb:kind": "pattern",
+  "kb:band": "concurrency",
+  "kb:group": "concurrency",
+  "kb:combines-with": [
+    {
+      "@id": "./copy-on-write.html#copy-on-write",
+      "name": "Copy-on-Write",
+      "kb:note": "The pointer swap that publishes a new copy is a single atomic compare-and-swap"
+    }
+  ],
+  "kb:alternative-to": [
+    {
+      "@id": "./monitor-object.html#monitor-object",
+      "name": "Monitor Object",
+      "kb:note": "One lock across the critical section, or no lock and a retry loop"
+    }
+  ],
+  "kb:often-confused-with": [
+    {
+      "@id": "../distributed/coordination/conditional-write.html#conditional-write",
+      "name": "Conditional Write",
+      "kb:note": "Same compare-and-swap idea at a different scope: a word in memory, not a row in a store"
+    },
+    {
+      "@id": "../distributed/coordination/optimistic-concurrency-control.html#optimistic-concurrency-control",
+      "name": "Optimistic Concurrency Control",
+      "kb:note": "The same read-verify-retry shape, but within one process and over a single word"
+    }
+  ],
+  "kb:prevents-hazard": [
+    {
+      "@id": "../../hazards/deadlock.html#deadlock",
+      "name": "Deadlock",
+      "kb:note": "No locks are held, so no cycle of waiters can form"
+    }
+  ]
+}
+  </script>
+</head>
+<body class="doc lens">
+  <main class="doc-wrap" data-kb-id="lock-free" data-kb-kind="pattern" data-kb-band="concurrency" data-kb-group="concurrency" data-kb-essence="Update shared memory with an atomic retry loop instead of a lock" data-kb-order="103" data-kb-aliases="[&quot;non-blocking&quot;,&quot;non-blocking algorithm&quot;]" data-kb-tags="[&quot;concurrency&quot;,&quot;coordination&quot;,&quot;throughput&quot;,&quot;performance&quot;]" data-kb-solves="[&quot;a hot counter is contended by every thread and the mutex is the bottleneck&quot;,&quot;my worker threads spend more time waiting for the lock than doing work&quot;,&quot;one thread being descheduled while holding the lock stalls everything behind it&quot;,&quot;I need a queue several threads can push to without any of them blocking&quot;,&quot;profiling shows almost all the time in lock acquisition, not in the critical section&quot;]">
+
+    <nav class="crumb" aria-label="Breadcrumb">
+      <a href="../../index.html">Map</a>
+      <span class="sep">▸</span>
+      <a href="../../index.html#lens-conc-h">Concurrency</a>
+      <span class="sep">▸</span>
+      <span aria-current="page">Lock-Free</span>
+    </nav>
+
+    <header class="doc-head">
+      <p class="doc-kicker">Lens · Concurrency</p>
+      <h1 class="doc-title">Lock-Free</h1>
+      <p class="doc-essence">Many threads update the same word of memory by reading it, computing a new value, and committing with one atomic instruction that lands only if nobody else wrote first.</p>
+      <div class="doc-metarow">
+        <span class="badge">Concurrency</span>
+        <label class="practice" title="Mark as practiced (saved in your browser)">
+          <input type="checkbox" class="practice-box" data-id="lock-free">
+          Practiced
+        </label>
+      </div>
+    </header>
+
+    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
+      <h2 class="doc-h" id="h-desc">What it is</h2>
+      <div class="prose">
+        <p id="description-p-1">A lock-free algorithm lets several threads update the same shared memory without any of them taking a lock. A thread reads the shared word, computes the new value from what it read, then commits with a single atomic compare-and-swap instruction that writes only if the word still holds the value it read. If another thread committed in between, the instruction reports failure and changes nothing, so the loser re-reads the current value and computes again from that.</p>
+        <p id="description-p-2">The force it resolves is that a lock makes progress the property of whoever holds it. If the operating system deschedules the holder mid-critical-section — a page fault, an expired time slice, a higher-priority thread — every other thread queues behind a lock that nobody is currently working on, and the machine does no useful work at all. On a hot counter, the failure is quieter and just as expensive: the acquire and release around a one-instruction update cost more than the update, so throughput stops rising as you add threads. Lock-free code has neither problem, because the commit is one instruction and there is no interval in which a stalled thread owns anything.</p>
+        <p id="description-p-3">The same read-verify-retry shape appears one layer out, and keeping the two apart is what makes each usable. <a href="../distributed/coordination/conditional-write.html">Conditional Write</a> guards a row in a store, where the compare is a <code>WHERE</code> clause the database evaluates and a lost round costs a network round-trip; this pattern guards a word in one process's address space, where the compare is a CPU instruction and a lost round costs nanoseconds. <a href="../distributed/coordination/optimistic-concurrency-control.html">Optimistic Concurrency Control</a> wraps that store-level check around a whole read-modify-write transaction. The shape is shared, the bill is not: losing a memory swap thousands of times a second is ordinary, while losing a database write thousands of times a second is an incident.</p>
+      </div>
+    </section>
+
+    <section class="doc-section" id="explain" aria-labelledby="h-explain" data-kb-block="explain">
+      <h2 class="doc-h" id="h-explain">Explained at three levels</h2>
+      <div class="explain">
+        <div class="explain-item" id="explain-basic" data-kb-level="basic">
+          <h3>Basic</h3>
+          <p>Ten workers share one tally, and they take turns with a key so that no two of them write over each other. Then the machine pauses whoever is holding the key — bad luck, nothing more — and the other nine sit waiting on a worker that is not even running. So stop handing out a key. Each worker notes the tally, works out the new figure, and writes it back only if the tally has not moved since they looked; if it has moved, they look again and redo the sum. Nobody waits for anybody, because nobody is holding anything.</p>
+        </div>
+        <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
+          <h3>Advanced</h3>
+          <p>That commit is one hardware instruction. Compare-and-swap takes an address, the value you read and the value you want, and writes only if the address still holds what you read, reporting back which happened. Wrap it in a loop and you have the general form; for plain arithmetic you can do better still, since fetch-and-add applies unconditionally and never retries. Point the same instruction at a link pointer and you get the Treiber stack and the Michael-Scott queue, where a thread that finds an insert half-finished completes it on the stalled owner's behalf. Three progress guarantees rank what you end up with: obstruction-free means a thread finishes once it runs without interference, lock-free means some thread always finishes, and wait-free means every thread finishes within a bounded number of its own steps.</p>
+        </div>
+        <div class="explain-item" id="explain-expert" data-kb-level="expert">
+          <h3>Expert</h3>
+          <p>Choose it where one thread must never be blocked by another that is merely descheduled — an audio callback, a signal handler, a queue between real-time stages — and take a tested library's structure rather than writing the algorithm. The bill arrives in four parts, each with its counter-move. A word that leaves a value and returns to it reads as unchanged, so tag the pointer with a counter that only increments, or guard it with a hazard pointer. Freeing a node another thread may still be reading is the genuinely hard part, and it costs you epoch-based reclamation, hazard pointers, or a garbage collector doing the work for you. Every retry drags the cache line to another core, so under heavy write contention the loop can lose outright to a mutex that parks its losers — measure both on the real hardware before you commit. And read the guarantee literally: it says the system advances, not that your thread is quick and not that it beats a lock. For most shared state, the lock is still the right answer.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="structure" aria-labelledby="h-structure" data-kb-block="structure">
+      <h2 class="doc-h" id="h-structure">How it works</h2>
+      <figure class="diagram" id="structure-fig-1">
+        <pre class="mermaid">
+flowchart LR
+    Read["Read the shared word"]
+    Compute["Compute the new value from it"]
+    subgraph Atomic["One atomic instruction"]
+        CAS{"Word still holds what you read?"}
+        Word[("Shared word")]
+    end
+    Done["Committed — your value is visible"]
+    Word --&gt;|"1 load current value"| Read
+    Read --&gt;|"2 old value in hand"| Compute
+    Compute --&gt;|"3 offer old and new"| CAS
+    CAS --&gt;|"4 compare, write if unchanged"| Word
+    Word --&gt;|"5 applied"| Done
+    CAS --&gt;|"6 changed: nothing written"| Read
+        </pre>
+        <figcaption>How do many threads update one word without any of them holding a lock? Steps 2 and 3 run with nothing held, and step 4 is the only moment that can change the word — one instruction that either applies whole or does nothing at all.</figcaption>
+      </figure>
+      <figure class="diagram" id="structure-fig-2" data-kb-level="advanced">
+        <pre class="mermaid">
+sequenceDiagram
+    participant A as Thread A
+    participant W as Shared word, starts at 7
+    participant B as Thread B
+    A-&gt;&gt;W: read 7
+    B-&gt;&gt;W: read 7
+    A-&gt;&gt;W: swap 7 for 8
+    W--&gt;&gt;A: applied, word is 8
+    B-&gt;&gt;W: swap 7 for 8
+    W--&gt;&gt;B: rejected, word is 8
+    B-&gt;&gt;W: read 8
+    B-&gt;&gt;W: swap 8 for 9
+    W--&gt;&gt;B: applied, word is 9
+        </pre>
+        <figcaption>What happens to the loser of a race? B's swap is rejected because the word no longer holds what B read, so B recomputes from 8 and commits 9 — no update is lost, and neither thread ever waits for the other.</figcaption>
+      </figure>
+    </section>
+
+    <section class="doc-section" id="variations" aria-labelledby="h-var" data-kb-block="variations">
+      <h2 class="doc-h" id="h-var">Variations</h2>
+      <dl class="variations">
+        <dt id="variations-item-1">Compare-and-swap retry loop</dt>
+        <dd>The general shape: load the current value, compute a replacement from it, swap it in only if the load is still current, and start over on rejection. It closes the read-modify-write <a href="../../hazards/race-condition.html">race condition</a> without a lock, and it is the form every other variation here is built out of.</dd>
+        <dt id="variations-item-2">Atomic counters and fetch-and-add</dt>
+        <dd>When the new value depends only on the old one by a fixed amount, the hardware does the whole read-modify-write in one instruction and there is no loop to retry. An atomic increment cannot fail, so contention costs you waiting for the cache line and never recomputation you throw away — reach for it before the general loop whenever the update is plain arithmetic, a bit set, or a bit clear.</dd>
+        <dt id="variations-item-3">Lock-free queues and stacks</dt>
+        <dd>The same swap applied to a link pointer builds whole containers: the Treiber stack points a new node at the current head and swaps the head to it, and the Michael–Scott queue does the equivalent at both ends with a two-step append that any thread can finish on the owner's behalf. That helping step is what keeps the structure moving when a producer stalls mid-insert.</dd>
+        <dt id="variations-item-4">Wait-free, lock-free, obstruction-free</dt>
+        <dd>Three progress guarantees, strongest first. Wait-free means every thread completes in a bounded number of its own steps, so no thread can be starved. Lock-free means some thread always completes, which permits an unlucky thread to retry forever while others make progress. Obstruction-free means only that a thread completes if it eventually runs without interference. Most published algorithms, and most of what a library gives you, are lock-free rather than wait-free — check which one you were sold before you promise a latency bound.</dd>
+        <dt id="variations-item-5">Publish by pointer swap</dt>
+        <dd>Build the new version of a structure off to one side where no other thread can see it, then swap one pointer to make the whole thing visible at once — <a href="./copy-on-write.html">Copy-on-Write</a> published atomically. Readers need no synchronization, because they only ever see a complete version, old or new, and writers serialize on that single swap. The unsolved half is when the old version becomes safe to free.</dd>
+      </dl>
+    </section>
+
+    <section class="doc-section" id="tradeoffs" aria-labelledby="h-trade" data-kb-block="tradeoffs">
+      <h2 class="doc-h" id="h-trade">Trade-offs</h2>
+      <div class="tradeoffs">
+        <div class="col pros">
+          <h3>Pros</h3>
+          <ul>
+            <li id="tradeoffs-pro-1" data-kb-polarity="pro">No thread can stall another by being descheduled — the system keeps advancing even when the scheduler stops a thread mid-operation.</li>
+            <li id="tradeoffs-pro-2" data-kb-polarity="pro">Nothing is acquired, so there is no acquisition order to get wrong and no <a href="../../hazards/deadlock.html">deadlock</a> to design against.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro">On a lightly contended word, one atomic instruction replaces an acquire-and-release pair that costs more than the update it guards.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Usable where blocking is forbidden — an audio callback or a signal handler cannot wait on a mutex, but it can complete an atomic operation.</li>
+          </ul>
+        </div>
+        <div class="col cons">
+          <h3>Cons</h3>
+          <ul>
+            <li id="tradeoffs-con-1" data-kb-polarity="con">The ABA problem: a word that changes to something else and back reads as untouched, so the swap succeeds on a value whose meaning has moved. Tag the pointer with a counter that only increments, or protect it with a hazard pointer.</li>
+            <li id="tradeoffs-con-2" data-kb-polarity="con">Memory reclamation is the hard part. You cannot free a node while another thread may still be reading it, so a lock-free container needs epoch-based reclamation, hazard pointers, or a garbage collector that solves it for you.</li>
+            <li id="tradeoffs-con-3" data-kb-polarity="con">Under heavy write contention the retry loop can be slower than a mutex: every attempt drags the cache line to another core, and losers burn CPU retrying instead of parking.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con">Lock-free is a progress guarantee, not a speed guarantee. It promises the system as a whole advances; it promises nothing about any individual thread's latency, and nothing about being faster than a lock.</li>
+            <li id="tradeoffs-con-5" data-kb-polarity="con">Correctness depends on memory ordering. Compiler and CPU both reorder around ordinary loads and stores, so each operation needs the right acquire, release or sequentially-consistent annotation — and the bugs appear only on some hardware, under some load.</li>
+            <li id="tradeoffs-con-6" data-kb-polarity="con">The atomicity covers one word — two adjacent ones where the hardware offers a double-width swap, and no more. An invariant spanning independent locations still needs a lock, or a whole new version published behind a single pointer.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="usage" aria-labelledby="h-usage" data-kb-block="usage">
+      <h2 class="doc-h" id="h-usage">When to use it</h2>
+      <div class="usage">
+        <div class="when">
+          <h3>Reach for it when</h3>
+          <ul>
+            <li id="usage-when-1" data-kb-polarity="when">A small piece of shared state — a counter, a flag, a queue head — is touched by many threads, and profiling puts the time in lock acquisition rather than in the critical section.</li>
+            <li id="usage-when-2" data-kb-polarity="when">No participant may block: an audio or control loop with a deadline, a signal handler, an interrupt path, or any code that must not call into the scheduler.</li>
+            <li id="usage-when-3" data-kb-polarity="when">One slow thread must not be able to freeze the rest — a pipeline stage that stalls should cost its own work, not everybody's.</li>
+            <li id="usage-when-4" data-kb-polarity="when">A tested library already offers the structure you need — a concurrent queue, an atomic counter, an atomic reference. Using one is the normal way to adopt this pattern.</li>
+          </ul>
+        </div>
+        <div class="avoid">
+          <h3>Avoid when</h3>
+          <ul>
+            <li id="usage-avoid-1" data-kb-polarity="avoid">Most of the time. A <a href="./monitor-object.html">Monitor Object</a> is correct by inspection, reviewable by anyone on the team, and frequently faster — take it unless you can name the reason it fails you.</li>
+            <li id="usage-avoid-2" data-kb-polarity="avoid">The update spans more than one location, or the critical section calls anything that can block or allocate. Neither fits in a single atomic instruction.</li>
+            <li id="usage-avoid-3" data-kb-polarity="avoid">Contention is heavy and nearly every operation writes: the losers spin and the cache line ping-pongs between cores, where a lock would have parked them cheaply.</li>
+            <li id="usage-avoid-4" data-kb-polarity="avoid">You would be writing the algorithm yourself for anything past a counter or a flag, without a memory model in your head and a stress test on real hardware. Take the library's version.</li>
+            <li id="usage-avoid-5" data-kb-polarity="avoid">The state can be partitioned instead — <a href="./thread-confinement.html">Thread Confinement</a> removes the sharing rather than making it cheaper, and unshared state needs no atomics at all.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sketch" aria-labelledby="h-sketch" data-kb-block="sketch">
+      <h2 class="doc-h" id="h-sketch">Code sketch</h2>
+      <details class="sketch" id="sketch-variant-1">
+        <summary>TypeScript — a retry loop over one word of shared memory</summary>
+<pre><code class="language-typescript" data-kb-lang="typescript">// Atomics work on a SharedArrayBuffer, which every worker maps at the same
+// address — this is the one place JavaScript has genuinely shared mutable
+// memory. Ordinary objects have no compare-and-swap and never will.
+const view = new Int32Array(sharedBuffer);
+const SLOT = 0;
+
+// Read, compute, commit-if-unchanged. Nothing is held between the steps, so a
+// worker descheduled here blocks nobody: it just loses the next swap.
+function applyAtomically(update: (seen: number) =&gt; number): number {
+  for (;;) {
+    const seen = Atomics.load(view, SLOT);
+    const next = update(seen);
+    // compareExchange writes `next` only if the slot still holds `seen`, and
+    // returns whatever was actually there. Equal means our write landed.
+    if (Atomics.compareExchange(view, SLOT, seen, next) === seen) return next;
+    // Otherwise someone committed first. Our `next` was computed from a value
+    // that no longer exists, so we discard it and read the new one.
+  }
+}
+
+// The loop is the general shape. For plain arithmetic, skip it: the hardware
+// does the whole read-modify-write in one instruction that cannot fail.
+const increment = () =&gt; Atomics.add(view, SLOT, 1);
+</code></pre>
+      </details>
+    </section>
+
+    <section class="doc-section" id="wild" aria-labelledby="h-wild" data-kb-block="wild">
+      <h2 class="doc-h" id="h-wild">In the wild</h2>
+      <div class="wild-list">
+        <div class="wild-item" data-kb-example="jdk-atomic" id="wild-jdk-atomic"><strong>java.util.concurrent.atomic</strong><span><code>AtomicInteger</code>, <code>AtomicLong</code> and <code>AtomicReference</code> expose the hardware directly: <code>compareAndSet(expect, update)</code> is the swap, and <code>getAndIncrement()</code> is the unconditional fetch-and-add that needs no retry loop. The package also ships <code>AtomicStampedReference</code>, which carries an integer stamp alongside the reference precisely so an equality check cannot be fooled by a value that leaves and comes back.</span></div>
+        <div class="wild-item" data-kb-example="jdk-concurrent-linked-queue" id="wild-jdk-concurrent-linked-queue"><strong>Java ConcurrentLinkedQueue</strong><span>An unbounded thread-safe queue whose documentation names its source algorithm: the non-blocking concurrent queue of Michael and Scott. Producers and consumers advance the head and tail pointers with atomic swaps, so no operation blocks another, and the garbage collector handles the node reclamation a manual implementation would have to solve for itself.</span></div>
+        <div class="wild-item" data-kb-example="cpp-std-atomic" id="wild-cpp-std-atomic"><strong>C++ std::atomic</strong><span><code>compare_exchange_strong</code> and <code>compare_exchange_weak</code> are the swap, each taking a memory ordering as an argument so the barrier is stated rather than assumed; the weak form may fail spuriously and is meant to sit inside a retry loop. <code>is_lock_free()</code> answers the question the type alone cannot: whether the target CPU handles this width atomically, or the library falls back to a hidden lock.</span></div>
+        <div class="wild-item" data-kb-example="lmax-disruptor" id="wild-lmax-disruptor"><strong>LMAX Disruptor</strong><span>A ring buffer for handing events between threads in which a producer claims a slot by advancing a shared sequence counter with an atomic swap instead of taking a lock. Its sequence fields are padded so that two counters never share a cache line, which is the concern that dominates once the swap itself is cheap.</span></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="production" aria-labelledby="h-production" data-kb-block="production">
+      <h2 class="doc-h" id="h-production">In production</h2>
+      <div class="production">
+        <div class="prod-group prod-knobs">
+          <h3>Tuning knobs</h3>
+          <ul>
+            <li id="production-knob-1" data-kb-polarity="knob"><strong>memory ordering per operation</strong> — Each atomic read, write and swap carries the ordering it needs — relaxed, acquire/release, or sequentially consistent (<code>std::memory_order</code> in C++, the access mode of a <code>VarHandle</code> in Java). Weaker orderings let the compiler and CPU reorder more and cost less; they are also where the bugs live, so weaken one only when you can say what it still guarantees.</li>
+            <li id="production-knob-2" data-kb-polarity="knob"><strong>backoff between failed attempts</strong> — Whether a losing thread retries immediately, issues a spin-wait hint first (<code>Thread.onSpinWait()</code>), or backs off for a growing interval. Immediate retry is fastest when contention is light and is exactly what collapses throughput when it is not.</li>
+            <li id="production-knob-3" data-kb-polarity="knob"><strong>padding and alignment of the contended word</strong> — Two counters that land on one cache line are contended as if they were one variable, whatever the code says. Padding each to its own line trades memory for the coherence traffic it removes.</li>
+            <li id="production-knob-4" data-kb-polarity="knob"><strong>the reclamation scheme</strong> — For any structure that frees nodes: hazard pointers, epoch-based reclamation, or a garbage collector. This decides more about the implementation than the swap does, so choose it before writing the algorithm rather than after.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-signals">
+          <h3>Signals to watch</h3>
+          <ul>
+            <li id="production-signal-1" data-kb-polarity="signal"><strong>retries per successful operation</strong> — Count failed swaps against completed ones. Near zero means the optimistic bet is paying; a rising ratio means threads are now spending their time recomputing values they will throw away.</li>
+            <li id="production-signal-2" data-kb-polarity="signal"><strong>throughput against thread count</strong> — Plot completed operations as you add threads. A curve that flattens and then falls is the contention signature, and it is the measurement that decides between this and a lock.</li>
+            <li id="production-signal-3" data-kb-polarity="signal"><strong>cache misses on the contended line</strong> — CPU performance counters attribute coherence traffic to the hot address. Misses climbing while the retry count stays flat points at false sharing rather than at real contention.</li>
+            <li id="production-signal-4" data-kb-polarity="signal"><strong>retired-but-not-yet-freed nodes</strong> — In a hazard-pointer or epoch scheme, the depth of the pending-reclamation list. It should oscillate around a bound; a monotonic climb means some thread is not letting the epoch advance.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-failures">
+          <h3>Failure modes under load</h3>
+          <ul>
+            <li id="production-failure-1" data-kb-polarity="failure"><strong>retry collapse under write contention</strong> — Every attempt pulls the cache line to a different core, so more threads produce more failed swaps rather than more work. Goodput falls as offered concurrency rises, and the profile shows the CPUs busy at full utilisation with nothing completing.</li>
+            <li id="production-failure-2" data-kb-polarity="failure"><strong>false sharing</strong> — An unrelated variable sharing the cache line makes an uncontended word behave like a contended one. It looks like inexplicable contention on a value only one thread writes.</li>
+            <li id="production-failure-3" data-kb-polarity="failure"><strong>reclamation stall</strong> — One thread parked inside a read section pins the epoch or holds a hazard pointer, so nothing behind it can be freed. Memory grows steadily under load and the process is killed for its footprint, not for anything the algorithm did wrong.</li>
+            <li id="production-failure-4" data-kb-polarity="failure"><strong>starvation of one thread</strong> — Lock-free guarantees that some thread completes, not that yours does. Under sustained load a slow or unlucky thread can lose every race, which an aggregate throughput number hides completely — watch the tail latency, not the mean.</li>
+          </ul>
+        </div>
+        <div class="prod-group prod-checklist">
+          <h3>Readiness checklist</h3>
+          <ul>
+            <li id="production-check-1" data-kb-polarity="check">Use a library structure wherever one exists, and hand-roll only past a counter or a flag — with a stress test on the hardware you ship on.</li>
+            <li id="production-check-2" data-kb-polarity="check">Benchmark against a plain mutex at the real thread count before adopting; the lock wins often enough that skipping this step is how the slower option gets shipped.</li>
+            <li id="production-check-3" data-kb-polarity="check">Choose the reclamation scheme before writing the algorithm, and know which thread is allowed to free a node.</li>
+            <li id="production-check-4" data-kb-polarity="check">Prove the ABA case impossible, or carry a monotonic tag or a hazard pointer that makes it so.</li>
+            <li id="production-check-5" data-kb-polarity="check">State the ordering on every atomic operation and justify any that is weaker than sequentially consistent where it is written.</li>
+            <li id="production-check-6" data-kb-polarity="check">Bound the retry loop with a backoff, so contention degrades throughput smoothly instead of collapsing it.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="relationships" aria-labelledby="h-rel" data-kb-block="relationships">
+      <h2 class="doc-h" id="h-rel">How it relates</h2>
+                <div class="rel-group">
+        <p class="rel-type">Combines with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="combines-with" data-kb-to="copy-on-write"><a href="./copy-on-write.html">Copy-on-Write</a><span class="rel-note">The pointer swap that publishes a new copy is a single atomic compare-and-swap</span></div>
+        </div>
+      </div>
+
+<div class="rel-group">
+        <p class="rel-type">Alternative to</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="alternative-to" data-kb-to="monitor-object"><a href="./monitor-object.html">Monitor Object</a><span class="rel-note">One lock across the critical section, or no lock and a retry loop</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Often confused with</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="conditional-write"><a href="../distributed/coordination/conditional-write.html">Conditional Write</a><span class="rel-note">Same compare-and-swap idea at a different scope: a word in memory, not a row in a store</span></div>
+          <div class="rel-item" data-kb-rel="often-confused-with" data-kb-to="optimistic-concurrency-control"><a href="../distributed/coordination/optimistic-concurrency-control.html">Optimistic Concurrency Control</a><span class="rel-note">The same read-verify-retry shape, but within one process and over a single word</span></div>
+        </div>
+      </div>
+
+      <div class="rel-group">
+        <p class="rel-type">Prevents</p>
+        <div class="rel-list">
+          <div class="rel-item" data-kb-rel="prevents-hazard" data-kb-to="deadlock"><a href="../../hazards/deadlock.html">Deadlock</a><span class="rel-note">No locks are held, so no cycle of waiters can form</span></div>
+        </div>
+      </div>
+
+</section>
+
+    <nav class="docnav" aria-label="Pattern navigation">
+      <a class="prev" href="../../index.html#lens-conc-h">← Concurrency</a>
+      <a class="up" href="../../index.html">↑ The Map</a>
+      <a class="next" href="../../index.html#lens-conc-h">Concurrency →</a>
+    </nav>
+  </main>
+
+  <script src="../../assets/vendor/mermaid.min.js"></script>
+  <script src="../../assets/diagram.js"></script>
+  <script src="../../assets/progress.js"></script>
+  <script src="../../assets/vendor/highlight.min.js"></script>
+  <script src="../../assets/sketch.js"></script>
+</body>
+</html>

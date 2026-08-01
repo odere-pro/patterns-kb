@@ -1,9 +1,9 @@
 # site/hazards
 
-**Anti-patterns** — 32 of them. Not to practise, only to recognise on sight.
+**Anti-patterns** — 33 of them. Not to practise, only to recognise on sight.
 Every one is what the patterns elsewhere exist to prevent.
 
-Pages here: anemic-domain-model, big-ball-of-mud, boat-anchor, busy-database, busy-front-end, cache-stampede, cascading-failure, chatty-io, connection-pool-exhaustion, deadlock, distributed-monolith, dual-write-inconsistency, extraneous-fetching, god-object, golden-hammer, host-header-rewriting, hot-key, hot-partition, improper-instantiation, monolithic-persistence, n-plus-1-query, no-caching, noisy-neighbour, race-condition, resource-leak, retry-storm, spaghetti-code, split-brain, stale-cache, synchronous-io, thundering-herd, unbounded-queue
+Pages here: anemic-domain-model, big-ball-of-mud, boat-anchor, busy-database, busy-front-end, cache-stampede, cascading-failure, chatty-io, connection-pool-exhaustion, deadlock, distributed-monolith, dual-write-inconsistency, extraneous-fetching, god-object, golden-hammer, host-header-rewriting, hot-key, hot-partition, improper-instantiation, monolithic-persistence, n-plus-1-query, no-caching, noisy-neighbour, race-condition, resource-leak, retry-storm, spaghetti-code, split-brain, stale-cache, starvation, synchronous-io, thundering-herd, unbounded-queue
 
 Blocks, in order: `description` → `explain` → `causes` → `cost` → `mitigation` → `relationships`.
 Hazards carry `data-kb-solves`, but pointing the other way: the phrases are what the

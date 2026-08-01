@@ -498,7 +498,7 @@ export const HAZARD_ORDER = [
   "golden-hammer", "boat-anchor",
   "cache-stampede", "hot-key", "stale-cache", "no-caching", "hot-partition",
   "split-brain", "dual-write-inconsistency",
-  "race-condition", "deadlock", "unbounded-queue", "resource-leak", "improper-instantiation",
+  "race-condition", "deadlock", "starvation", "unbounded-queue", "resource-leak", "improper-instantiation",
   "n-plus-1-query", "chatty-io", "extraneous-fetching",
   "busy-database", "monolithic-persistence",
   "synchronous-io", "busy-front-end", "connection-pool-exhaustion",

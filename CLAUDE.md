@@ -1,6 +1,6 @@
 # patterns-kb
 
-A knowledge base of <!-- kb:counts -->198 software design patterns, 40 design case studies, 37 themes, 32 hazards, 25 principles, 9 cloud capabilities — 341 pages in all<!-- /kb:counts -->.
+A knowledge base of <!-- kb:counts -->202 software design patterns, 40 design case studies, 37 themes, 33 hazards, 25 principles, 9 cloud capabilities and 8 product comparisons — 354 pages in all<!-- /kb:counts -->.
 **It is data that happens to render**, not a site that happens to hold data.
 
 ## The one thing to understand
@@ -29,7 +29,7 @@ node scripts/kb.mjs ls --band caching
 ```
 
 Add `--json` for structured output. A grounded answer costs ~600 tokens this way, against
-~3,600 for one raw page. `find` searches the full prose of all <!-- kb:page-count -->341<!-- /kb:page-count --> pages — that costs disk,
+~3,600 for one raw page. `find` searches the full prose of all <!-- kb:page-count -->354<!-- /kb:page-count --> pages — that costs disk,
 not context — and prints the line that matched.
 
 Cite precisely: every claim has a stable id (`…/circuit-breaker.html#tradeoffs-con-2`).
@@ -76,6 +76,10 @@ attributes and will be overwritten.
 Merging a pattern found on the web — improve the existing page, skip, or create a new
 one — is the **kb-intake** skill; discovering those candidates from vendor architecture
 portals and GitHub repos (including awesome-list link hubs) is the **kb-harvest** skill.
+Running a full KB-grounded system design — interview → requirements → entities/API →
+HLD → component zoom-ups → critique → stack — is the **sys-design** skill, which uses
+**grill-me** for the interview and the kb-scout / component-designer / design-critic
+agents so the KB reading never bloats the main context.
 Full contract, including how to add a page: **[.claude/rules/html5-authoring.md](.claude/rules/html5-authoring.md)**.
 How the prose must read: **[.claude/rules/tone.md](.claude/rules/tone.md)** — the house
 register, distilled from AWS Prescriptive Guidance, Azure Architecture Center and the
