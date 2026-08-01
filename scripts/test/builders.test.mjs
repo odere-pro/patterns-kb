@@ -377,3 +377,42 @@ test("kb.mjs refs reports each carrier separately", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/* Theme membership is declared on the theme's tour step; the pattern's own "Where it
+ * shows up" block restates it by hand, so the two can drift apart in either direction. */
+const GAMMA = join("site", "themes", "gamma.html");
+
+test("audit-relations.mjs passes the clean fixture's tour/fluency pair", () => {
+  const root = built();
+  try {
+    const r = run("audit-relations.mjs", root);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /1 tour steps against 1 fluency items/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("audit-relations.mjs fails when a toured pattern has no fluency item", () => {
+  const root = built((r) => edit(r, ALPHA, 'data-kb-theme="gamma"', 'data-kb-theme="delta"'));
+  try {
+    const r = run("audit-relations.mjs", root);
+    assert.equal(r.status, 1, "a tour step with no matching fluency item must fail");
+    assert.match(r.stderr, /TOUR WITHOUT FLUENCY/);
+    assert.match(r.stderr, /alpha/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("audit-relations.mjs fails when a fluency item names a theme that never tours it", () => {
+  const root = built((r) => edit(r, GAMMA, 'data-kb-member="alpha"', 'data-kb-member="beta"'));
+  try {
+    const r = run("audit-relations.mjs", root);
+    assert.equal(r.status, 1, "a fluency item with no matching tour step must fail");
+    assert.match(r.stderr, /FLUENCY WITHOUT TOUR/);
+    assert.match(r.stderr, /gamma/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

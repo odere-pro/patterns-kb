@@ -73,6 +73,10 @@ Each folder under `site/` has its own CLAUDE.md with local rules.
 ## Invariants `make check` enforces
 
 - Relations are **bidirectional** — every relationship is declared on both pages it joins.
+- **Theme membership is bidirectional too.** A theme's `tour` step and the pattern's own
+  `fluency` item must both exist — the tour is the source of truth, but the pattern's
+  "Where it shows up" block is hand-written and can drift from it. Wording may differ;
+  presence may not.
 - The relation vocabulary (15 verbs), the **tag vocabulary** and the **level vocabulary**
   (`basic`/`advanced`/`expert`) are **closed**. Adding a tag means adding it to `TAGS` in
   `scripts/lib/model.mjs` first, and only if it will honestly apply to 3+ pages.

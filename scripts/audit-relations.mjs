@@ -13,18 +13,30 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
  * the kb:generated markers (and any comment an author writes). */
 const PARSE_OPTS = { comment: true };
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* KB_ROOT lets the smoke tests point the auditor at a fixture corpus; normal runs
+ * resolve the repo from this file's own location. */
+const ROOT = process.env.KB_ROOT
+  ? resolve(process.env.KB_ROOT)
+  : join(dirname(fileURLToPath(import.meta.url)), "..");
 const graph = JSON.parse(readFileSync(join(ROOT, "site", "assets", "graph.json"), "utf8"));
 
 const problems = [];
 let pages = 0;
+
+/* Theme membership is declared once, on the theme's tour step, and the pattern's own
+ * "Where it shows up" block restates it by hand — the build projects membership into
+ * graph.json and the JSON-LD, but never writes that block. So the two can drift, and a
+ * pattern can quietly omit a theme that claims it. Collected here and compared after the
+ * walk, because each half lives on a different page. */
+const tourSteps = new Map(); // "pattern|theme" -> theme page path
+const fluencyItems = new Map(); // "pattern|theme" -> pattern page path
 
 for (const node of Object.values(graph.nodes)) {
   const rel = node.path;
@@ -42,9 +54,28 @@ for (const node of Object.values(graph.nodes)) {
 
   for (const e of expected) if (!rendered.has(e)) problems.push(`MISSING on ${rel}: ${e}`);
   for (const r of rendered) if (!expected.has(r)) problems.push(`UNEXPECTED on ${rel}: ${r}`);
+
+  for (const step of root.querySelectorAll("[data-kb-member]"))
+    tourSteps.set(`${step.getAttribute("data-kb-member")}|${node.id}`, rel);
+  for (const item of root.querySelectorAll("[data-kb-theme]"))
+    fluencyItems.set(`${node.id}|${item.getAttribute("data-kb-theme")}`, rel);
+}
+
+/* Presence must agree in both directions; wording need not. A tour role is terse by
+ * design ("Keep the GPU busy") and the pattern's own line often extends it. */
+for (const [key, themePath] of tourSteps) {
+  const [pattern, theme] = key.split("|");
+  if (!fluencyItems.has(key))
+    problems.push(`TOUR WITHOUT FLUENCY: ${themePath} tours ${pattern}, but ${pattern} has no "${theme}" fluency item`);
+}
+for (const [key, patternPath] of fluencyItems) {
+  const [pattern, theme] = key.split("|");
+  if (!tourSteps.has(key))
+    problems.push(`FLUENCY WITHOUT TOUR: ${patternPath} claims theme ${theme}, but that theme's tour does not list ${pattern}`);
 }
 
 console.log(`Checked ${pages} pages' relationship sections against graph.json.`);
+console.log(`Checked ${tourSteps.size} tour steps against ${fluencyItems.size} fluency items.`);
 if (problems.length) {
   console.error(`\n${problems.length} discrepancy(ies) found.`);
   for (const p of problems.slice(0, 25)) console.error("  " + p);

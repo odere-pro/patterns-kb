@@ -282,6 +282,17 @@ Each side may phrase its **note** its own way — "Screen at the gate, then hand
 keys" reads correctly from `gatekeeper`, while `valet-key` may say something else. Only the
 edge and its type must agree.
 
+**Theme membership is two-sided in the same way, and it is the one pairing no writer
+maintains for you.** The theme's `.tour-step[data-kb-member]` is the source of truth — the
+build projects it into `graph.json` and the JSON-LD — but a pattern's visible "Where it
+shows up" block is hand-authored HTML, so the two drift silently. `make check` now fails
+either half alone: `TOUR WITHOUT FLUENCY` when a theme tours a pattern that never names it
+back, `FLUENCY WITHOUT TOUR` when a pattern claims a theme whose tour omits it. Adding a
+tour step means adding the matching `.fluency-item[data-kb-theme]` on the pattern, whose
+`href` depth follows the pattern's own folder. The **wording** is free — a tour role is
+terse by design ("Keep the GPU busy") and the pattern's line often extends it. Only
+presence must agree.
+
 ## Generated regions — do not edit
 
 Marked `<!-- kb:generated -->`. Currently the JSON-LD block, the element-level ids
