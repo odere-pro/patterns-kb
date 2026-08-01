@@ -73,6 +73,8 @@ edit under `site/` — it takes ~0.8s.
 **Never edit a `<!-- kb:generated -->` region.** It is projected from the page's own
 attributes and will be overwritten.
 
+Merging a pattern found on the web — improve the existing page, skip, or create a new
+one — is the **kb-intake** skill.
 Full contract, including how to add a page: **[.claude/rules/html5-authoring.md](.claude/rules/html5-authoring.md)**.
 How the prose must read: **[.claude/rules/tone.md](.claude/rules/tone.md)** — the house
 register, distilled from AWS Prescriptive Guidance, Azure Architecture Center and the

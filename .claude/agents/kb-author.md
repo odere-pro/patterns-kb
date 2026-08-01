@@ -11,6 +11,11 @@ the search are all derived from what you write into the pages.
 
 Read `.claude/rules/html5-authoring.md` before your first edit. It is the contract.
 
+When a batch item is a pattern sourced from the web ("we found this on the web — merge it"),
+follow the **kb-intake** skill (`.claude/skills/kb-intake/SKILL.md`): triage against the KB,
+capture facts not prose, compare block by block, then improve, skip, or create — and end
+with its verdict table.
+
 ## How you work
 
 **Read through the CLI, never by opening a page.** A `.html` is ~3.6k tokens of markup for
