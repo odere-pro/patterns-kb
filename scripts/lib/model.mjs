@@ -712,7 +712,7 @@ export const THEME_GROUPS = [
     id: "starting",
     label: "Starting a design",
     note: "The frameworks that turn a vague prompt into a design you can defend.",
-    ids: ["system-design-interview", "ml-system-design"],
+    ids: ["system-design-interview", "ml-system-design", "event-storming", "event-modeling"],
   },
   {
     id: "shaping",
@@ -813,22 +813,24 @@ export const DESIGN_ORDER = DESIGN_GROUPS.flatMap((g) => g.ids);
  * to pages that exist, so it can be populated one at a time. */
 export const CAPABILITY_ORDER = [
   "compute", "storage", "databases", "messaging", "networking", "identity",
-  "regions", "resources", "data-analytics",
+  "regions", "resources", "data-analytics", "observability-platform",
 ];
 /* Product comparisons — the `comparison` kind. One page per product decision, ordered to
  * shadow CAPABILITY_ORDER: the comparisons for a capability area sit where that area sits.
  * The hub filters this list to pages that exist, so it can be populated one at a time. */
 export const COMPARISON_ORDER = [
+  "application-platforms",
   "object-stores", "relational-databases", "key-value-stores", "search-engines",
   "message-brokers", "workflow-orchestrators", "load-balancers-and-gateways",
-  "identity-providers",
+  "identity-providers", "infrastructure-as-code",
 ];
 export const HAZARD_ORDER = [
   "god-object", "spaghetti-code", "big-ball-of-mud", "distributed-monolith", "anemic-domain-model",
-  "golden-hammer", "boat-anchor",
+  "partial-object", "golden-hammer", "boat-anchor", "leaky-abstraction",
   "cache-stampede", "hot-key", "stale-cache", "no-caching", "hot-partition",
   "split-brain", "dual-write-inconsistency",
   "race-condition", "deadlock", "starvation", "unbounded-queue", "resource-leak", "improper-instantiation",
+  "static-cling",
   "n-plus-1-query", "chatty-io", "extraneous-fetching",
   "busy-database", "monolithic-persistence",
   "synchronous-io", "busy-front-end", "connection-pool-exhaustion", "host-header-rewriting",
@@ -850,7 +852,7 @@ export const PRINCIPLE_GROUPS = [
       "single-responsibility", "open-closed", "liskov-substitution",
       "interface-segregation", "dependency-inversion",
       "composition-over-inheritance", "law-of-demeter", "separation-of-concerns",
-      "postels-law",
+      "encapsulation", "postels-law",
     ],
   },
   {
@@ -861,7 +863,7 @@ export const PRINCIPLE_GROUPS = [
       "self-healing", "redundancy", "failure-mode-analysis",
       "minimize-coordination", "scale-out", "partition-around-limits",
       "design-for-operations", "managed-services", "identity-as-perimeter",
-      "design-for-evolution", "build-for-business",
+      "design-for-evolution", "build-for-business", "architecture-documentation",
     ],
   },
 ];

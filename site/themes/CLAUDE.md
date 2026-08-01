@@ -1,9 +1,9 @@
 # site/themes
 
-**Themes** — 37 guided tours. Not a rung and not a lens: each one answers a single
+**Themes** — 39 guided tours. Not a rung and not a lens: each one answers a single
 systems question by walking through the patterns that combine to address it.
 
-Pages here: api-design, architecture-styles, auth-and-access, bot-detection, caching, cap-theorem, consistency-and-replication, continuous-delivery, continuous-validation, data-platform, dealing-with-contention, frontend-architecture, genai-scale, global-traffic-and-ingress, harmful-content, health-modeling, long-running-tasks, microservices-design, ml-system-design, multi-step-processes, observability, operating-a-live-system, performance, proximity-search, realtime-updates, resilience, scalability, scale-units-and-stamps, scaling-reads, scaling-writes, securing-availability, service-boundaries, spike-handling, streaming, system-design-interview, video-recommendations, workload-composition
+Pages here: api-design, architecture-styles, auth-and-access, bot-detection, caching, cap-theorem, consistency-and-replication, continuous-delivery, continuous-validation, data-platform, dealing-with-contention, event-modeling, event-storming, frontend-architecture, genai-scale, global-traffic-and-ingress, harmful-content, health-modeling, long-running-tasks, microservices-design, ml-system-design, multi-step-processes, observability, operating-a-live-system, performance, proximity-search, realtime-updates, resilience, scalability, scale-units-and-stamps, scaling-reads, scaling-writes, securing-availability, service-boundaries, spike-handling, streaming, system-design-interview, video-recommendations, workload-composition
 
 Blocks, in order: `description` → `explain` → `architecture` → `tradespace` → `tour` → `decide` → `siblings` → `relationships`.
 

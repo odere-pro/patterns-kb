@@ -1,9 +1,9 @@
 # patterns/ml
 
-**Machine Learning (lens)** — 4 patterns.
+**Machine Learning (lens)** — 5 patterns.
 Serving and training models as a system problem: throughput, freshness and cost, rather than the modelling itself.
 
-Pages here: embeddings, evaluation, feature-engineering, generalization
+Pages here: embeddings, evaluation, feature-engineering, generalization, rag
 
 Every page in this folder declares `data-kb-band="ml"` and
 `data-kb-group="ml"`. The path is checked against them — `make check` fails if a

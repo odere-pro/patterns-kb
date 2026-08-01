@@ -1,9 +1,9 @@
 # patterns/testing
 
-**Testing (lens)** — 9 patterns.
+**Testing (lens)** — 10 patterns.
 Making a system provable in pieces, which is a property you design in at every elevation rather than add at the end.
 
-Pages here: arrange-act-assert, dummy-object, fake-object, golden-master, mock-object, page-object, test-data-builder, test-spy, test-stub
+Pages here: arrange-act-assert, contract-testing, dummy-object, fake-object, golden-master, mock-object, page-object, test-data-builder, test-spy, test-stub
 
 Every page in this folder declares `data-kb-band="testing"` and
 `data-kb-group="testing"`. The path is checked against them — `make check` fails if a
