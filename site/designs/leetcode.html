@@ -61,14 +61,14 @@
       "kb:note": "the sandbox is stripped to a read-only filesystem, no network, capped CPU/memory, and a seccomp syscall whitelist"
     },
     {
-      "@id": "../patterns/distributed/resilience/timeout-deadline.html#timeout-deadline",
-      "name": "Timeout / Deadline",
-      "kb:note": "a hard execution timeout kills a runaway or infinite-loop submission and enforces the 5-second result SLA"
-    },
-    {
       "@id": "../patterns/distributed/resilience/bulkhead.html#bulkhead",
       "name": "Bulkhead",
       "kb:note": "each submission runs in its own disposable container so a crash or hang can't take the API server or other jobs down"
+    },
+    {
+      "@id": "../patterns/distributed/resilience/timeout-deadline.html#timeout-deadline",
+      "name": "Timeout / Deadline",
+      "kb:note": "a hard per-test-case timeout kills a runaway or infinite-loop submission and keeps grading inside the ~5-second result target"
     }
   ]
 }
@@ -152,7 +152,7 @@
       <h2 class="doc-h" id="h-sizing">Right-sizing</h2>
       <div class="prose">
         <p id="sizing-p-1"><strong>Storage is a rounding error.</strong> ~4,000 problems, each a statement plus test cases and per-language stubs — kilobytes apiece. The whole corpus is a few tens of megabytes; it caches entirely in memory and the read path for browsing needs nothing clever.</p>
-        <p id="sizing-p-2" data-kb-level="advanced"><strong>The real load is CPU, and it only appears during contests.</strong> Take a contest of 100k users and a peak of ~10,000 simultaneous submissions. Each solution is graded against ~100 test cases at roughly 100&nbsp;ms of compute each — up to ~10&nbsp;s of CPU per submission in the worst case. That is 10,000 × 100 = <strong>1,000,000 test-case runs ≈ 100,000 CPU-seconds</strong> of work arriving in a burst. To clear it inside a minute you need on the order of <strong>~1,667 cores</strong> — far past any single machine.</p>
+        <p id="sizing-p-2" data-kb-level="advanced"><strong>The real load is CPU, and it only appears during contests.</strong> Take a contest of 100k users and a peak of ~10,000 simultaneous submissions. Each solution is graded against ~100 test cases at roughly 100&nbsp;ms of compute each — up to ~10&nbsp;s of CPU per submission in the worst case. That is CPU time, not wall-clock: the harness runs a submission's cases across the container's cores, so even the worst case lands inside the ~5-second result target, and a typical submission — a handful of cheap cases — is nowhere near either bound. That is 10,000 × 100 = <strong>1,000,000 test-case runs ≈ 100,000 CPU-seconds</strong> of work arriving in a burst. To clear it inside a minute you need on the order of <strong>~1,667 cores</strong> — far past any single machine.</p>
         <p id="sizing-p-3">The architecture's entire scaling story is the execution fleet, not the database. Everything else is small; the code runner is what has to be elastic.</p>
       </div>
     </section>
@@ -230,7 +230,7 @@ flowchart TB
         <ul>
           <li id="deepdives-li-1"><strong>In the API process (never).</strong> Writing the code to a file and executing it in-process is a disaster on three axes at once. <em>Security:</em> the code can delete or exfiltrate data, mine crypto, or launch attacks from your infrastructure. <em>Performance:</em> a tight loop or memory leak pins the box. <em>Isolation:</em> a crash takes the whole server down and blocks every other request — there is no failure containment at all, which is exactly what a <a href="../patterns/distributed/resilience/bulkhead.html">bulkhead</a> exists to provide.</li>
           <li id="deepdives-li-2" data-kb-level="advanced"><strong>Virtual machine.</strong> Run each submission in a VM: a hypervisor gives each a full OS and strong isolation, and you can reset it if something goes wrong. Safe, but VMs are heavy and slow to start — expensive lifecycle management for a job that lasts seconds.</li>
-          <li id="deepdives-li-3"><strong>Container — this design's answer.</strong> Containers share the host kernel and isolate at the process level, so they start fast and cost little — one image per runtime (Python, JavaScript, Java…), each carrying its dependencies. Because cold-starting a container per submission is still wasteful, keep a set of warm containers and reuse them across jobs, an <a href="../patterns/gof/extra/object-pool.html">object pool</a> of ready runtimes. Sharing the kernel means the sandbox has to be hardened deliberately: a read-only filesystem, CPU and memory caps that kill an over-budget container, an execution <a href="../patterns/distributed/resilience/timeout-deadline.html">timeout</a> that kills a runaway loop (and conveniently enforces the 5-second SLA), no network access, and a seccomp profile whitelisting syscalls. Together that is the <a href="../patterns/security/least-privilege.html">least privilege</a> principle made concrete — strip the process down to only what grading needs.</li>
+          <li id="deepdives-li-3"><strong>Container — this design's answer.</strong> Containers share the host kernel and isolate at the process level, so they start fast and cost little — one image per runtime (Python, JavaScript, Java…), each carrying its dependencies. Because cold-starting a container per submission is still wasteful, keep a set of warm containers and reuse them across jobs, an <a href="../patterns/gof/extra/object-pool.html">object pool</a> of ready runtimes. Sharing the kernel means the sandbox has to be hardened deliberately: a read-only filesystem, CPU and memory caps that kill an over-budget container, a per-test-case execution <a href="../patterns/distributed/resilience/timeout-deadline.html">timeout</a> that kills a runaway loop before it can spend the submission's whole latency budget, no network access, and a seccomp profile whitelisting syscalls. Together that is the <a href="../patterns/security/least-privilege.html">least privilege</a> principle made concrete — strip the process down to only what grading needs.</li>
           <li id="deepdives-li-4" data-kb-level="advanced"><strong>Serverless functions.</strong> One function per runtime, auto-scaled by the platform. Tempting, but cold-start latency on the first invocation eats into a tight time budget and per-invocation resource caps constrain heavier submissions. With steady, predictable submission volume, containers win.</li>
         </ul>
 
@@ -325,8 +325,8 @@ sequenceDiagram
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="autoscaling"><a href="../patterns/distributed/routing/autoscaling.html">Autoscaling</a><span class="rel-note">each language-specific container pool grows and shrinks on CPU utilization to track contest load</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="materialized-view"><a href="../patterns/distributed/coordination/materialized-view.html">Materialized View</a><span class="rel-note">the live leaderboard is a Redis sorted set updated on each accepted submission, not recomputed per poll</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="least-privilege"><a href="../patterns/security/least-privilege.html">Least Privilege</a><span class="rel-note">the sandbox is stripped to a read-only filesystem, no network, capped CPU/memory, and a seccomp syscall whitelist</span></div>
-          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="timeout-deadline"><a href="../patterns/distributed/resilience/timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">a hard execution timeout kills a runaway or infinite-loop submission and enforces the 5-second result SLA</span></div>
           <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="bulkhead"><a href="../patterns/distributed/resilience/bulkhead.html">Bulkhead</a><span class="rel-note">each submission runs in its own disposable container so a crash or hang can't take the API server or other jobs down</span></div>
+          <div class="rel-item" data-kb-rel="demonstrates" data-kb-to="timeout-deadline"><a href="../patterns/distributed/resilience/timeout-deadline.html">Timeout / Deadline</a><span class="rel-note">a hard per-test-case timeout kills a runaway or infinite-loop submission and keeps grading inside the ~5-second result target</span></div>
         </div>
       </div>
 

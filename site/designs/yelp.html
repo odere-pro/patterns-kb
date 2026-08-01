@@ -147,7 +147,7 @@
       <div class="prose">
         <p id="sizing-p-1"><strong>Reads.</strong> 100M daily users issuing searches and page views dominate the load — this is the number the architecture has to survive, and it is why a purpose-built search index earns its place.</p>
         <p id="sizing-p-2"><strong>Writes.</strong> Reviews are rare next to reads: at a ~1000:1 ratio, 100M users produce on the order of <strong>~100k reviews/day ≈ 1 write/sec</strong>. Even a large surge stays trivial for a single database. This one figure quietly rules out a message queue and a separate write pipeline later on.</p>
-        <p id="sizing-p-3"><strong>Storage.</strong> 10M businesses × ~1&nbsp;KB ≈ <strong>10&nbsp;GB</strong> of business data. Reviews are larger: 10M businesses × ~100 reviews × ~1&nbsp;KB ≈ <strong>1&nbsp;TB</strong> — still comfortably inside one modern instance. Nothing here forces sharding; the read <em>shape</em>, not the data volume, is the real problem to solve.</p>
+        <p id="sizing-p-3" data-kb-level="advanced"><strong>Storage.</strong> 10M businesses × ~1&nbsp;KB ≈ <strong>10&nbsp;GB</strong> of business data. Reviews are larger: 10M businesses × ~100 reviews × ~1&nbsp;KB ≈ <strong>1&nbsp;TB</strong> — still comfortably inside one modern instance. Nothing here forces sharding; the read <em>shape</em>, not the data volume, is the real problem to solve.</p>
       </div>
     </section>
 
@@ -160,7 +160,7 @@
           <li id="entities-li-2"><strong>User</strong> — the person who searches and reviews; present mainly to attribute reviews and enforce the one-per-business rule.</li>
           <li id="entities-li-3"><strong>Review</strong> — a <code>rating</code> (1–5) with optional <code>text</code>, joined to one user and one business.</li>
         </ul>
-        <p id="entities-p-2">The <code>average_rating</code> and <code>num_reviews</code> columns on Business are the quiet centre of the design: search results must show a rating, so it has to be a stored value, not something recomputed per query.</p>
+        <p id="entities-p-2" data-kb-level="advanced">The <code>average_rating</code> and <code>num_reviews</code> columns on Business are the quiet centre of the design: search results must show a rating, so it has to be a stored value, not something recomputed per query.</p>
       </div>
     </section>
 
@@ -186,7 +186,7 @@ POST /businesses/{businessId}/reviews
   (409 Conflict if this user already reviewed this business)</code></pre>
       </details>
       <div class="prose">
-        <p id="interface-p-2">Business details and reviews are split into two calls rather than one combined response. A popular business can have thousands of reviews; splitting them lets the review list paginate on its own without bloating every business fetch. The <strong>409</strong> on a duplicate review is the client-visible face of the store-level rule enforced in the second deep dive.</p>
+        <p id="interface-p-2" data-kb-level="advanced">Business details and reviews are split into two calls rather than one combined response. A popular business can have thousands of reviews; splitting them lets the review list paginate on its own without bloating every business fetch. The <strong>409</strong> on a duplicate review is the client-visible face of the store-level rule enforced in the second deep dive.</p>
       </div>
     </section>
 
@@ -224,15 +224,15 @@ flowchart TB
       <div class="prose">
         <h3 id="deepdives-dive-1">1 · Keeping the average rating fresh and cheap</h3>
         <p id="deepdives-p-1">Search results show a rating, so serving it must be cheap. The naïve option — a <code>JOIN</code> and <code>AVG</code> over the reviews table on every query — gets more expensive as popular businesses accumulate reviews, recomputes work that has not changed, and competes with real reads. A periodic cron that writes an <code>average_rating</code> column fixes the cost but introduces staleness: a fresh five-star review on a struggling café would not show up for hours. The right move is to update the rating <em>synchronously</em> as each review is written, incrementally: keep <code>num_reviews</code> alongside the average and compute <code>new_avg = (old_avg × n + new_rating) / (n + 1)</code> — a few CPU cycles, cheap enough to do inline. This is a maintained <a href="../patterns/distributed/coordination/materialized-view.html">materialized view</a> of the reviews, one column that turns an aggregate query into a single column read.</p>
-        <p id="deepdives-p-2">The incremental update opens a race: two reviews for the same business read <code>n = 100, avg = 4.0</code> at once, each computes a new average from that stale pair, and the second write silently overwrites the first — one review vanishes from the maths. The fix is <a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">optimistic concurrency control</a>: read the current <code>num_reviews</code>, attempt the update conditioned on it being unchanged, and if the count moved, re-read and retry. Because writes run at about one per second, contention is essentially nil and a retry practically never fires — which is also why a message queue and a separate consumer, a defensible answer at high write volume, is unneeded complexity here.</p>
+        <p id="deepdives-p-2" data-kb-level="advanced">The incremental update opens a race: two reviews for the same business read <code>n = 100, avg = 4.0</code> at once, each computes a new average from that stale pair, and the second write silently overwrites the first — one review vanishes from the maths. The fix is <a href="../patterns/distributed/coordination/optimistic-concurrency-control.html">optimistic concurrency control</a>: read the current <code>num_reviews</code>, attempt the update conditioned on it being unchanged, and if the count moved, re-read and retry. Because writes run at about one per second, contention is essentially nil and a retry practically never fires — which is also why a message queue and a separate consumer, a defensible answer at high write volume, is unneeded complexity here.</p>
 
-        <h3 id="deepdives-dive-2">2 · One review per user, enforced where it can't be bypassed</h3>
-        <p id="deepdives-p-3">Checking in application code for an existing review before inserting looks fine and is quietly broken two ways. It is fragile — any other write path (a new service, a data backfill) that does not know the rule can violate it — and it races: two submissions from the same user can both pass the check before either insert lands, producing two reviews. Push the rule down to the store as a unique constraint on <code>(user_id, business_id)</code> and both problems dissolve. A duplicate insert now fails deterministically with a database error, surfaced to the client as the 409 from the interface. This is a <a href="../patterns/distributed/coordination/conditional-write.html">conditional write</a> — the engine, not the application, is the arbiter — and it reflects a general rule of thumb: enforce data constraints as close to persistence as possible so no code path can drift around them.</p>
+        <h3 id="deepdives-dive-2" data-kb-level="advanced">2 · One review per user, enforced where it can't be bypassed</h3>
+        <p id="deepdives-p-3" data-kb-level="advanced">Checking in application code for an existing review before inserting looks fine and is quietly broken two ways. It is fragile — any other write path (a new service, a data backfill) that does not know the rule can violate it — and it races: two submissions from the same user can both pass the check before either insert lands, producing two reviews. Push the rule down to the store as a unique constraint on <code>(user_id, business_id)</code> and both problems dissolve. A duplicate insert now fails deterministically with a database error, surfaced to the client as the 409 from the interface. This is a <a href="../patterns/distributed/coordination/conditional-write.html">conditional write</a> — the engine, not the application, is the arbiter — and it reflects a general rule of thumb: enforce data constraints as close to persistence as possible so no code path can drift around them.</p>
 
-        <h3 id="deepdives-dive-3">3 · Search that understands geography, text, and category at once</h3>
-        <p id="deepdives-p-4">The query is the crux. A latitude/longitude bounding box combined with a wildcard name match is a full table scan without the right index, and a plain B-tree composite index on <code>(latitude, longitude)</code> does not help — B-trees model single-dimension ranges and are blind to two-dimensional spatial relationships. Each filter wants its own kind of index: location needs a spatial index built on a <a href="../patterns/distributed/routing/geohash.html">geohash</a>, quadtree, or R-tree; name needs a full-text inverted index; category needs a simple B-tree. A search engine like Elasticsearch supports all three natively and answers the combined query in one shot.</p>
+        <h3 id="deepdives-dive-3" data-kb-level="advanced">3 · Search that understands geography, text, and category at once</h3>
+        <p id="deepdives-p-4" data-kb-level="advanced">The query is the crux. A latitude/longitude bounding box combined with a wildcard name match is a full table scan without the right index, and a plain B-tree composite index on <code>(latitude, longitude)</code> does not help — B-trees model single-dimension ranges and are blind to two-dimensional spatial relationships. Each filter wants its own kind of index: location needs a spatial index built on a <a href="../patterns/distributed/routing/geohash.html">geohash</a>, quadtree, or R-tree; name needs a full-text inverted index; category needs a simple B-tree. A search engine like Elasticsearch supports all three natively and answers the combined query in one shot.</p>
       </div>
-      <details class="sketch" id="deepdives-sketch-1">
+      <details class="sketch" id="deepdives-sketch-1" data-kb-level="advanced">
         <summary>Search query — three filters, three index types</summary>
 <pre><code class="language-json" data-kb-lang="json">{
   "query": {
@@ -248,12 +248,12 @@ flowchart TB
 }</code></pre>
       </details>
       <div class="prose">
-        <p id="deepdives-p-5">The engine must not be the system of record — it is not built for transactional integrity, and losing an index node should never lose data. So the primary database stays authoritative and CDC feeds changes into the index; the index is a read model, and consistency with the store is eventual. There is a simpler alternative worth naming: since the dataset is only ~10&nbsp;GB of businesses, Postgres with its PostGIS (geospatial) and <code>pg_trgm</code> (trigram full-text) extensions can serve all three filters from the primary store itself — no second system, no sync pipeline, no consistency gap. It trades some full-text performance at extreme scale for a much simpler operation, and at this data volume that is usually the better bet. When forced to reason about the geospatial index directly, a quadtree suits businesses well — they cluster densely in cities, and updates are infrequent — followed by a precise second pass with the Haversine great-circle distance, applying the most selective filter (distance) first to shrink the candidate set before the rest.</p>
+        <p id="deepdives-p-5" data-kb-level="expert">The engine must not be the system of record — it is not built for transactional integrity, and losing an index node should never lose data. So the primary database stays authoritative and CDC feeds changes into the index; the index is a read model, and consistency with the store is eventual. There is a simpler alternative worth naming: since the dataset is only ~10&nbsp;GB of businesses, Postgres with its PostGIS (geospatial) and <code>pg_trgm</code> (trigram full-text) extensions can serve all three filters from the primary store itself — no second system, no sync pipeline, no consistency gap. It trades some full-text performance at extreme scale for a much simpler operation, and at this data volume that is usually the better bet. When forced to reason about the geospatial index directly, a quadtree suits businesses well — they cluster densely in cities, and updates are infrequent — followed by a precise second pass with the Haversine great-circle distance, applying the most selective filter (distance) first to shrink the candidate set before the rest.</p>
 
-        <h3 id="deepdives-dive-4">4 · Searching by neighbourhood, not just a radius</h3>
-        <p id="deepdives-p-6">People search by place name — "pizza in NYC", "bars in The Mission" — and neighbourhoods are irregular shapes a radius-from-a-point cannot describe. Model each named place as a <strong>polygon</strong>. A <code>locations</code> table holds <code>name</code>, <code>type</code> (city, neighbourhood), and a <code>polygon</code> (GeoJSON, sourced from public datasets), indexed by name for a fast text lookup. Both PostGIS and Elasticsearch can test whether a point falls inside a polygon, but computing that membership on every request is wasteful. Instead, precompute it once: when a business is created, resolve which named areas contain it and store the list — <code>location_names: ["bay_area", "san_francisco", "mission_district"]</code> — as keyword terms on the record. A neighbourhood search then becomes an inverted-index lookup on <code>location_names</code>, the expensive geometry paid once at write time rather than on every query.</p>
+        <h3 id="deepdives-dive-4" data-kb-level="expert">4 · Searching by neighbourhood, not just a radius</h3>
+        <p id="deepdives-p-6" data-kb-level="expert">People search by place name — "pizza in NYC", "bars in The Mission" — and neighbourhoods are irregular shapes a radius-from-a-point cannot describe. Model each named place as a <strong>polygon</strong>. A <code>locations</code> table holds <code>name</code>, <code>type</code> (city, neighbourhood), and a <code>polygon</code> (GeoJSON, sourced from public datasets), indexed by name for a fast text lookup. Both PostGIS and Elasticsearch can test whether a point falls inside a polygon, but computing that membership on every request is wasteful. Instead, precompute it once: when a business is created, resolve which named areas contain it and store the list — <code>location_names: ["bay_area", "san_francisco", "mission_district"]</code> — as keyword terms on the record. A neighbourhood search then becomes an inverted-index lookup on <code>location_names</code>, the expensive geometry paid once at write time rather than on every query.</p>
       </div>
-      <figure class="diagram" id="deepdives-fig-1">
+      <figure class="diagram" id="deepdives-fig-1" data-kb-level="expert">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -287,7 +287,7 @@ sequenceDiagram
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">Multi-filter search — geography, text, and category — answered in one query under 500&nbsp;ms.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro" data-kb-level="advanced">Ratings served as a single column read, updated incrementally and safely under concurrent writes.</li>
             <li id="tradeoffs-pro-3" data-kb-polarity="pro">The one-review rule cannot be bypassed by any write path, because the store enforces it.</li>
-            <li id="tradeoffs-pro-4" data-kb-polarity="pro">Tiny write volume keeps the design simple — no queue, no sharding, no separate rating pipeline.</li>
+            <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Tiny write volume keeps the design simple — no queue, no sharding, no separate rating pipeline.</li>
           </ul>
         </div>
         <div class="col cons">
@@ -296,7 +296,7 @@ sequenceDiagram
             <li id="tradeoffs-con-1" data-kb-polarity="con">A separate search index adds a CDC pipeline and an eventual-consistency gap between store and index.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Choosing Postgres extensions instead keeps it simple but caps full-text performance at very large scale.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Precomputed <code>location_names</code> must be recomputed if a business moves or a neighbourhood boundary changes.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">The whole design leans on writes staying rare; a sudden review flood would reopen the queue-versus-inline question.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">The whole design leans on writes staying rare; a sudden review flood would reopen the queue-versus-inline question.</li>
           </ul>
         </div>
       </div>
@@ -307,8 +307,8 @@ sequenceDiagram
       <div class="prose">
         <ul>
           <li id="levels-li-1"><strong>Mid-level</strong> — a working end-to-end design (search → view → review), a sensible answer on average ratings, and, when nudged, the instinct to move the one-review rule toward the store and to reach for the right category of index rather than a plain B-tree.</li>
-          <li id="levels-li-2"><strong>Senior</strong> — nails most deep dives, weighs the index types and picks the right technology with reasons, and is watched for over-engineering: every added component needs a clear justification.</li>
-          <li id="levels-li-3"><strong>Staff+</strong> — spots the simplifying insights and states the conditions under which the complex version would be warranted: Postgres extensions to dodge the search-engine consistency gap, ~1 write/sec meaning no message queue, and ~1&nbsp;TB meaning a read replica or cache instead of sharding.</li>
+          <li id="levels-li-2" data-kb-level="advanced"><strong>Senior</strong> — nails most deep dives, weighs the index types and picks the right technology with reasons, and is watched for over-engineering: every added component needs a clear justification.</li>
+          <li id="levels-li-3" data-kb-level="expert"><strong>Staff+</strong> — spots the simplifying insights and states the conditions under which the complex version would be warranted: Postgres extensions to dodge the search-engine consistency gap, ~1 write/sec meaning no message queue, and ~1&nbsp;TB meaning a read replica or cache instead of sharding.</li>
         </ul>
       </div>
     </section>

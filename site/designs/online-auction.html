@@ -115,7 +115,7 @@
       <div class="explain">
         <div class="explain-item" id="explain-basic" data-kb-level="basic">
           <h3>Basic</h3>
-          <p>Build a site where people list something for sale and others compete to offer more for it. The whole design lives on one number — the current highest offer. Thousands watch it at once and many try to beat it in the same second, so it must never be wrong, never be lost once accepted, and must change on everybody's screen the moment it moves.</p>
+          <p>Picture an auctioneer with one number chalked on a board. A bid counts only if it beats what is chalked up right now, and the new number has to reach the board before the next bid is heard — otherwise two people walk away believing they are winning. So write every bid down the instant it arrives, before anyone is told it was accepted, and a crash cannot lose it. Then compare it against the board and rub the number out only if it has not already moved. Everyone watching is told the new high as it happens, instead of asking again every few seconds.</p>
         </div>
         <div class="explain-item" id="explain-advanced" data-kb-level="advanced">
           <h3>Advanced</h3>
@@ -156,8 +156,8 @@
       <h2 class="doc-h" id="h-sizing">Right-sizing</h2>
       <div class="prose">
         <p id="sizing-p-1"><strong>Bid throughput.</strong> Say each of 10M live auctions draws ~100 bids over a ~1-week life. That is 10M × 100 ÷ 7 days ≈ 140M bids/day ≈ <strong>~1,400 bids/sec</strong> on average. Bidding is bursty — auctions cluster their action into the final minutes and the evening — so design for a peak roughly 10× the mean, call it <strong>~15k bids/sec</strong>. That write rate, on a single hot scalar per auction, is the number the architecture has to survive.</p>
-        <p id="sizing-p-2"><strong>Storage.</strong> An auction row is ~1&nbsp;KB; a bid is ~500 bytes. At 10M × 52 weeks ≈ 520M auctions/year, storage is ≈ 520M × (1&nbsp;KB + 100 × 500&nbsp;B) ≈ <strong>~25&nbsp;TB/year</strong>. Real, but not the pressing constraint — modern SSDs swallow it and replication covers durability. Write throughput, not disk, is what forces the interesting choices.</p>
-        <p id="sizing-p-3"><strong>Fan-out.</strong> With up to 100M users each potentially watching an auction, live connections could total on the order of 100M. No single box holds that, so the real-time layer has to spread across many servers and still deliver one bid to every watcher of that item.</p>
+        <p id="sizing-p-2" data-kb-level="advanced"><strong>Storage.</strong> An auction row is ~1&nbsp;KB; a bid is ~500 bytes. At 10M × 52 weeks ≈ 520M auctions/year, storage is ≈ 520M × (1&nbsp;KB + 100 × 500&nbsp;B) ≈ <strong>~25&nbsp;TB/year</strong>. Real, but not the pressing constraint — modern SSDs swallow it and replication covers durability. Write throughput, not disk, is what forces the interesting choices.</p>
+        <p id="sizing-p-3" data-kb-level="advanced"><strong>Fan-out.</strong> With up to 100M users each potentially watching an auction, live connections could total on the order of 100M. No single box holds that, so the real-time layer has to spread across many servers and still deliver one bid to every watcher of that item.</p>
       </div>
     </section>
 
@@ -171,7 +171,7 @@
           <li id="entities-li-3"><strong>Bid</strong> — <code>amount</code>, the bidding user, the auction, a timestamp, and an accepted/rejected status. Every bid is written; none is overwritten.</li>
           <li id="entities-li-4"><strong>User</strong> — starts auctions or bids on them.</li>
         </ul>
-        <p id="entities-p-2">The tempting shortcut — keep only a single <code>max_bid_price</code> field and skip a bids table — is a trap. Overwriting the max on each bid destroys the audit trail: no way to reconstruct the sequence, investigate a dispute, or disprove a bidder's claim that their bid vanished. Keep the full, append-only bid log <em>and</em> the denormalized max; they answer different questions.</p>
+        <p id="entities-p-2" data-kb-level="advanced">The tempting shortcut — keep only a single <code>max_bid_price</code> field and skip a bids table — is a trap. Overwriting the max on each bid destroys the audit trail: no way to reconstruct the sequence, investigate a dispute, or disprove a bidder's claim that their bid vanished. Keep the full, append-only bid log <em>and</em> the denormalized max; they answer different questions.</p>
       </div>
     </section>
 
@@ -197,7 +197,7 @@ GET /auctions/{auctionId}
 GET /auctions/{auctionId}/bid-stream   // SSE: pushes each new maxBid</code></pre>
       </details>
       <div class="prose">
-        <p id="interface-p-2">The bid response is a <strong>202 Accepted</strong>, not a 200: the bid is safely captured, but whether it <em>wins</em> is decided a step later, and the outcome comes back over the live stream. That small honesty — acknowledging receipt separately from adjudication — is what lets the durability and consistency machinery sit behind the endpoint without making the caller wait on it.</p>
+        <p id="interface-p-2" data-kb-level="advanced">The bid response is a <strong>202 Accepted</strong>, not a 200: the bid is safely captured, but whether it <em>wins</em> is decided a step later, and the outcome comes back over the live stream. That small honesty — acknowledging receipt separately from adjudication — is what lets the durability and consistency machinery sit behind the endpoint without making the caller wait on it.</p>
       </div>
     </section>
 
@@ -256,16 +256,16 @@ UPDATE auctions
 -- 0 rows affected: re-read max_bid and retry, or reject if we no longer lead</code></pre>
       </details>
       <div class="prose">
-        <h3 id="deepdives-dive-2">2 · Durability — never drop a bid</h3>
-        <p id="deepdives-p-4">Adjudicating on the request path couples acceptance to the Bid Service being up and un-overloaded, and a popular auction's final minute can produce thousands of bids per second — more than the service can take head-on. Rather than drop bids, crash, or massively over-provision, get every bid into a durable <a href="../patterns/messaging/message-queue.html">message queue</a> the moment it arrives, acknowledge from there, and let the consumer judge at its own pace. This is <a href="../patterns/distributed/resilience/load-leveling.html">load leveling</a>: the queue absorbs the surge so the service sees a smooth rate. It is also a <a href="../patterns/concurrency/producer-consumer.html">producer-consumer</a> split — the API-side producer only appends; the Bid Service consumes. Kafka fits: high throughput, on-disk durability with replication, and — by partitioning the topic on <code>auctionId</code> — a total order of bids <em>within</em> an auction, which decides ties fairly, while different auctions process in parallel. The trade is a few milliseconds of queue latency for the guarantee that an acknowledged bid outlives any single crash; if the consumer dies mid-bid, the message is still there to reprocess.</p>
-        <h3 id="deepdives-dive-3">3 · Showing the high bid in real time</h3>
-        <p id="deepdives-p-5">Polling every few seconds is both too slow for a hot auction and wasteful — nearly every poll re-reads a number that has not moved, straight off the database. The fix is to push. Long polling works (hold the request open until the max changes) but ties up a connection per watcher and invites a thundering herd on reconnect. Cleaner is <strong>Server-Sent Events</strong>: one long-lived, unidirectional server-to-client stream opened when a user views the auction, over which the server pushes each accepted high. It is unidirectional traffic, so SSE is a lighter fit than full WebSockets. The catch is coordination across servers — if the watcher is on server B and the winning bid was consumed on server A, B's stream never hears about it on its own.</p>
-        <h3 id="deepdives-dive-4">4 · Scaling the fan-out and the writes</h3>
-        <p id="deepdives-p-6">That coordination gap is closed with <a href="../patterns/messaging/pubsub.html">pub/sub</a>. When the consumer accepts a new high it publishes it to a channel keyed by auction; every SSE server subscribes, and each <a href="../patterns/messaging/fan-out.html">fans the update out</a> to its own connected watchers of that item. Now a bid landing anywhere reaches everyone, across up to ~100M connections spread over many boxes. The compute tier is easy: the Bid and Auction services are <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>, so they scale horizontally under an autoscaler tracking CPU and memory. The database is the pinch — ~15k writes/sec exceeds one Postgres instance — so <a href="../patterns/distributed/routing/sharding.html">shard by <code>auctionId</code></a>. Because a bid touches only its own auction's row and log, every read and write for an item stays on one shard: no scatter-gather, and the optimistic single-row update from deep dive&nbsp;1 keeps working unchanged. Left to right, each tier scales on its own axis — queue on partitions, services on instances, storage on shards.</p>
-        <h3 id="deepdives-dive-5">5 · Ending the auction</h3>
-        <p id="deepdives-p-7">A fixed end date is trivial. "End an hour after the last bid" is not — it is a scheduling problem. The cheap version stores a running <code>end_time</code> on the auction row and lets a periodic sweep close whatever has expired. The precise version uses a delayed-task <a href="../patterns/concurrency/scheduling.html">scheduler</a> — a Redis sorted set keyed by fire time, or a durable job queue — that on each bid schedules a check for one hour later; when it fires, it closes the auction only if that bid is still the latest. Doing it well pulls in clock drift and concurrent termination attempts, which is exactly the kind of adjacent complexity a staff answer surfaces unprompted.</p>
+        <h3 id="deepdives-dive-2" data-kb-level="advanced">2 · Durability — never drop a bid</h3>
+        <p id="deepdives-p-4" data-kb-level="advanced">Adjudicating on the request path couples acceptance to the Bid Service being up and un-overloaded, and a popular auction's final minute can produce thousands of bids per second — more than the service can take head-on. Rather than drop bids, crash, or massively over-provision, get every bid into a durable <a href="../patterns/messaging/message-queue.html">message queue</a> the moment it arrives, acknowledge from there, and let the consumer judge at its own pace. This is <a href="../patterns/distributed/resilience/load-leveling.html">load leveling</a>: the queue absorbs the surge so the service sees a smooth rate. It is also a <a href="../patterns/concurrency/producer-consumer.html">producer-consumer</a> split — the API-side producer only appends; the Bid Service consumes. Kafka fits: high throughput, on-disk durability with replication, and — by partitioning the topic on <code>auctionId</code> — a total order of bids <em>within</em> an auction, which decides ties fairly, while different auctions process in parallel. The trade is a few milliseconds of queue latency for the guarantee that an acknowledged bid outlives any single crash; if the consumer dies mid-bid, the message is still there to reprocess.</p>
+        <h3 id="deepdives-dive-3" data-kb-level="advanced">3 · Showing the high bid in real time</h3>
+        <p id="deepdives-p-5" data-kb-level="advanced">Polling every few seconds is both too slow for a hot auction and wasteful — nearly every poll re-reads a number that has not moved, straight off the database. The fix is to push. Long polling works (hold the request open until the max changes) but ties up a connection per watcher and invites a thundering herd on reconnect. Cleaner is <strong>Server-Sent Events</strong>: one long-lived, unidirectional server-to-client stream opened when a user views the auction, over which the server pushes each accepted high. It is unidirectional traffic, so SSE is a lighter fit than full WebSockets. The catch is coordination across servers — if the watcher is on server B and the winning bid was consumed on server A, B's stream never hears about it on its own.</p>
+        <h3 id="deepdives-dive-4" data-kb-level="expert">4 · Scaling the fan-out and the writes</h3>
+        <p id="deepdives-p-6" data-kb-level="expert">That coordination gap is closed with <a href="../patterns/messaging/pubsub.html">pub/sub</a>. When the consumer accepts a new high it publishes it to a channel keyed by auction; every SSE server subscribes, and each <a href="../patterns/messaging/fan-out.html">fans the update out</a> to its own connected watchers of that item. Now a bid landing anywhere reaches everyone, across up to ~100M connections spread over many boxes. The compute tier is easy: the Bid and Auction services are <a href="../patterns/distributed/routing/stateless-service.html">stateless</a>, so they scale horizontally under an autoscaler tracking CPU and memory. The database is the pinch — ~15k writes/sec exceeds one Postgres instance — so <a href="../patterns/distributed/routing/sharding.html">shard by <code>auctionId</code></a>. Because a bid touches only its own auction's row and log, every read and write for an item stays on one shard: no scatter-gather, and the optimistic single-row update from deep dive&nbsp;1 keeps working unchanged. Left to right, each tier scales on its own axis — queue on partitions, services on instances, storage on shards.</p>
+        <h3 id="deepdives-dive-5" data-kb-level="expert">5 · Ending the auction</h3>
+        <p id="deepdives-p-7" data-kb-level="expert">A fixed end date is trivial. "End an hour after the last bid" is not — it is a scheduling problem. The cheap version stores a running <code>end_time</code> on the auction row and lets a periodic sweep close whatever has expired. The precise version uses a delayed-task <a href="../patterns/concurrency/scheduling.html">scheduler</a> — a Redis sorted set keyed by fire time, or a durable job queue — that on each bid schedules a check for one hour later; when it fires, it closes the auction only if that bid is still the latest. Doing it well pulls in clock drift and concurrent termination attempts, which is exactly the kind of adjacent complexity a staff answer surfaces unprompted.</p>
       </div>
-      <figure class="diagram" id="deepdives-fig-1">
+      <figure class="diagram" id="deepdives-fig-1" data-kb-level="expert">
         <pre class="mermaid">
 sequenceDiagram
     autonumber
@@ -296,7 +296,7 @@ sequenceDiagram
           <ul>
             <li id="tradeoffs-pro-1" data-kb-polarity="pro">One true high per auction, enforced by a single-row conditional update with no held locks.</li>
             <li id="tradeoffs-pro-2" data-kb-polarity="pro">No bid is ever lost: it is durable in the queue before it is acknowledged or judged.</li>
-            <li id="tradeoffs-pro-3" data-kb-polarity="pro">The surge in an auction's final minutes is absorbed by the queue, not by over-provisioned servers.</li>
+            <li id="tradeoffs-pro-3" data-kb-polarity="pro" data-kb-level="advanced">The surge in an auction's final minutes is absorbed by the queue, not by over-provisioned servers.</li>
             <li id="tradeoffs-pro-4" data-kb-polarity="pro" data-kb-level="advanced">Sharding by auction and per-auction partition ordering scale writes and fairness together.</li>
           </ul>
         </div>
@@ -306,7 +306,7 @@ sequenceDiagram
             <li id="tradeoffs-con-1" data-kb-polarity="con">Asynchronous adjudication means a bidder learns win-or-lose a beat after submitting, not synchronously.</li>
             <li id="tradeoffs-con-2" data-kb-polarity="con">Queue and pub/sub add a few milliseconds of latency and real operational surface — partitions, consumer lag, replication.</li>
             <li id="tradeoffs-con-3" data-kb-polarity="con" data-kb-level="expert">Optimistic concurrency degrades on a genuinely white-hot single auction, where retries pile up under contention.</li>
-            <li id="tradeoffs-con-4" data-kb-polarity="con">The live layer coordinates through pub/sub, so a stream can briefly miss an update if a broadcaster drops a message.</li>
+            <li id="tradeoffs-con-4" data-kb-polarity="con" data-kb-level="advanced">The live layer coordinates through pub/sub, so a stream can briefly miss an update if a broadcaster drops a message.</li>
           </ul>
         </div>
       </div>
@@ -317,8 +317,8 @@ sequenceDiagram
       <div class="prose">
         <ul>
           <li id="levels-li-1"><strong>Mid-level</strong> — a working end-to-end flow (list → bid → view), a bids table rather than an overwritten scalar, and, when prompted, a sensible stab at the consistency and scaling questions.</li>
-          <li id="levels-li-2"><strong>Senior</strong> — recognizes bid consistency and live broadcast as the heart of the problem and drives toward them: names the race condition, lands on a single-row optimistic update, and explains how the client stays current.</li>
-          <li id="levels-li-3"><strong>Staff+</strong> — demonstrates mastery of consistency and real-time, then volunteers the adjacent hard parts unprompted — durable ingestion under surge, cross-server fan-out via pub/sub, sharding by auction, and auction-ending as its own distributed-systems problem with clock drift and concurrent termination.</li>
+          <li id="levels-li-2" data-kb-level="advanced"><strong>Senior</strong> — recognizes bid consistency and live broadcast as the heart of the problem and drives toward them: names the race condition, lands on a single-row optimistic update, and explains how the client stays current.</li>
+          <li id="levels-li-3" data-kb-level="expert"><strong>Staff+</strong> — demonstrates mastery of consistency and real-time, then volunteers the adjacent hard parts unprompted — durable ingestion under surge, cross-server fan-out via pub/sub, sharding by auction, and auction-ending as its own distributed-systems problem with clock drift and concurrent termination.</li>
         </ul>
       </div>
     </section>
