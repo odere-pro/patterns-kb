@@ -104,9 +104,17 @@ const ITEMS = [
    * .prose, so the generic list rule below never reaches them and every FR and NFR was
    * unaddressable — the one block a lens could not move. Top-level rows only: an NFR's
    * nested sub-list travels with the row that owns it, and pages that want a sub-item
-   * addressed give it a keyed id by hand (youtube's requirements-nfr-scale-2). */
-  { block: "requirements", sel: ".functional ol > li", idOf: (_el, i) => `requirements-fr-${i + 1}` },
-  { block: "requirements", sel: ".nonfunctional > ul > li", idOf: (_el, i) => `requirements-nfr-${i + 1}` },
+   * addressed give it a keyed id by hand (youtube's requirements-nfr-scale-2).
+   *
+   * Each selector carries TWO shapes, because the corpus holds both and neither is wrong.
+   * FRs are a numbered <ol> on most pages and a <ul> where the page does not cite its own
+   * requirements by number. An NFR is a <li> with a bold lead on most pages, and on the
+   * persona pair a `.nfr` section — a rank-4 title over its points — which is why the
+   * legacy selector stays anchored at `.nonfunctional > ul > li`: inside a `.nfr` the
+   * points sit one level deeper, so a section's bullets can never be mistaken for rows.
+   * A page mixing the two numbers in document order, which is the only sane reading. */
+  { block: "requirements", sel: ".functional ol > li, .functional ul > li", idOf: (_el, i) => `requirements-fr-${i + 1}` },
+  { block: "requirements", sel: ".nonfunctional > ul > li, .nonfunctional > .nfr > h4", idOf: (_el, i) => `requirements-nfr-${i + 1}` },
 ];
 /* This table is the ONLY writer of data-kb-polarity — the attribute is projected from the
  * column an item sits in, not hand-written — so these eight literals and the POLARITIES
