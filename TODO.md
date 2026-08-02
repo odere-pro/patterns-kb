@@ -9,6 +9,10 @@ value-to-effort.
 - create skill be able to use case studies as referencies to successfull designes
 - think how improve, the graph page, so it became agnostic and became useful
 
+## KB pages
+
+- groom better /Users/aleksandrderechei/Git/patterns/site/designs/persona-identification.html
+
 ## Questions
 
 - how to scale Queues, with different topics, partitions, how to make it durable?

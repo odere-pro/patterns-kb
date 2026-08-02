@@ -45,21 +45,24 @@ that each answer lands in a requirement below. Then one `<p>` per question:
 
 ```html
 <p><strong>Q1 — How many flows a week?</strong><br>
+<span class="q-route">→ NFR: scale.</span><br>
 Assumed, not given: ~100 a week, with headroom designed to 10k.
-Confirm this first: every capacity decision below is priced against it.
-→ NFR: scale.</p>
+Confirm this first: every capacity decision below is priced against it.</p>
 ```
 
 - **Question stem** in `<strong>`, numbered `Qn — …?`, followed by `<br>`.
-- **Answer in 1–2 sentences.** A question whose answer needs more is two questions.
-  When the answer is genuinely a list (what data is held, what is deliberately not
-  built), a short `<ul>` may follow the question `<p>`, with the routing tag in its own
-  closing `<p>`.
+- **Exactly one routing tag, on its own line under the stem**, wrapped in
+  `<span class="q-route">`: `→ FR: label.`, `→ NFR: label.`, or `→ Out of scope.`
+  (combinations join with `;`). The label is informal but must match a requirement the
+  reader can find. The line reads in the stem's colour a notch down the type scale, so the
+  eye takes question → where it lands → answer; trailing the answer with it made the tag
+  the last thing on a four-line paragraph and the easiest thing to skip.
+- **Answer in 1–2 sentences**, after the tag. A question whose answer needs more is two
+  questions. When the answer is genuinely a list (what data is held, what is deliberately
+  not built), the question `<p>` holds the stem and its tag alone and a short `<ul>`
+  follows — nothing closes the entry after the list.
 - **Mark invented numbers** with `Assumed, not given:` — an assumption stated
   as fact is a lie the reader can't audit.
-- **End with exactly one routing tag**: `→ FR: label.`, `→ NFR: label.`, or
-  `→ Out of scope.` (combinations join with `;`).
-  The label is informal but must match a requirement the reader can find.
 - **Mark unresolved questions** with `(open)` in the stem and say who owes the
   answer. An honest open question beats a fabricated answer.
 - **No italics.** The arrow and the colon carry the routing tag; `<em>` on top of them is
@@ -89,7 +92,8 @@ together when writing a page.
 ## Self-check
 
 1. Does the framing paragraph say what the task omits and promise where answers land?
-2. Is every answer 1–2 sentences (or a short list) with exactly one routing tag?
+2. Is every answer 1–2 sentences (or a short list), with exactly one routing tag on its
+   own `q-route` line between the stem and the answer — and none left trailing an answer?
 3. Is every invented number marked "Assumed, not given", every unresolved question
    "(open)" — and is all of it plain text, with no `<em>` anywhere in the block?
 4. Walk the trace both ways — every tag resolves to a requirement, every requirement has
