@@ -61,15 +61,32 @@
     btn.type = "button";
     btn.className = "sketch-toggle";
 
+    /* TWO stacked triangles, not one chevron. A single ▾ is the glyph `.section-nav-btn`
+       already wears for "next section", and two controls with the same glyph are one
+       control as far as the reader is concerned. Stacked, the pair says which way the
+       page is about to move:
+
+         expand   ▲ over ▼  — apexes point OUT, a diamond opening
+         collapse ▼ over ▲  — apexes point IN, an hourglass closing
+
+       Both spans exist from the start; only their text changes, so the box never reflows. */
+    var top = document.createElement("span");
+    var bottom = document.createElement("span");
+    top.className = "sketch-tri";
+    bottom.className = "sketch-tri";
+    btn.appendChild(top);
+    btn.appendChild(bottom);
+
     /* Glyph and tooltip both name the ACTION, not the state: anything still closed means
-       there is something left to expand. ▾ unfolds, ▴ folds back. */
+       there is something left to expand. */
     var anyClosed = function () {
       return Array.prototype.some.call(sketches, function (d) { return !d.open; });
     };
     var label = function () {
       var expand = anyClosed();
       var what = (expand ? "Expand" : "Collapse") + " all " + sketches.length + " code sketches";
-      btn.textContent = expand ? "▾" : "▴";
+      top.textContent = expand ? "▲" : "▼";
+      bottom.textContent = expand ? "▼" : "▲";
       btn.title = what;
       btn.setAttribute("aria-label", what);
       /* aria-expanded is the state, not the action — it is what paints the control. */

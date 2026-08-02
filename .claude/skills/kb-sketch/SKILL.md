@@ -88,9 +88,11 @@ screen, and the reader scrolls past the prose to reach the next one. Collapsed, 
 reads as an index — which is what makes the `<summary>` rule above load-bearing.
 
 The clicking cost is paid by a control, not by the markup. `site/assets/sketch.js` **injects**
-one page-level `▾` / `▴` toggle on any page carrying two or more sketches — `.sketch-toggle`,
-the same fixed box as the theme and favourite toggles, but on the **left** edge, and the only
-thing there. Nothing is authored for it on any page: the alternative was a markup sweep across
+one page-level toggle on any page carrying two or more sketches — `.sketch-toggle`, the same
+fixed box as the theme and favourite toggles, but on the **left** edge, and the only thing
+there. Its glyph is two stacked triangles rather than a chevron, because a lone `▾` is what
+`.section-nav-btn` already means: `▲`over`▼` fuses into a **diamond** that opens, `▼`over`▲`
+into an **hourglass** that closes. Nothing is authored for it on any page: the alternative was a markup sweep across
 every pattern and design page for a control that is pure presentation.
 
 Its position is the whole lesson. It shipped first as a chip inside the block, right-aligned
