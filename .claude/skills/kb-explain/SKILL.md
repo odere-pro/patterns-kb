@@ -72,6 +72,28 @@ sees the basic rung too, so a restated premise reads as padding.
 **Rewrites are all-or-nothing.** `kb.mjs explain` replaces the whole block and requires all
 three flags — read the current ladder first (`get <id> --block explain`), then rewrite.
 
+## The one kind that may carry no ladder
+
+`explain` is mandatory on every kind except **design**, where `OPTIONAL_BLOCKS.design`
+makes it skippable. The exemption exists because a case study is already a three-depth
+argument in its own right: the interview frames it in plain words, `sizing` argues the
+numbers, the deep dives carry the expert material one NFR at a time, and `levels` states
+what each seniority is expected to say. A ladder on top of that restates the page in
+miniature, and the reader meets the miniature before the thing it summarises.
+
+Drop the block when all three rungs only compress blocks the page already has. Keep it when
+the design turns on one counter-intuitive idea the reader needs *before* the interview makes
+sense — a ladder that says something no other block says is doing work.
+
+Removing it is deleting the `<section>`; `validate.mjs` accepts the page without it and no
+other block moves. Two knock-ons: `report-lens` loses the rungs from its basic count, so a
+design near the floor of its band drops 120–250 words and reads as thin when it is not — judge
+the narrative, not the number. And `kb.mjs new --kind design` still scaffolds the block, so
+delete it deliberately rather than leaving an empty one behind.
+
+No other kind may skip it. On a pattern, hazard, principle, theme, capability or comparison
+the ladder is the only place the page speaks at all three depths in one voice.
+
 **Rungs are plain text, and the corpus has no italics anyway.** `kb.mjs explain` escapes
 what you pass it, so an `<em>` you type arrives on the page as visible `&lt;em&gt;`. The
 same rule binds the elements you tag with `level`/`register` elsewhere on the page: no
@@ -90,7 +112,7 @@ word counts and the verdict against this table.
 | hazard | 400–650w | |
 | principle | 350–550w | |
 | theme | framing lead + tour step names + decide table core | |
-| design | 900–1,500w — problem, shape of the answer, L1 board, each block's lead | advanced adds numbers/mechanics; expert adds full dives + rubric |
+| design | 900–1,500w — problem, shape of the answer, L1 board, each block's lead | advanced adds numbers/mechanics; expert adds full dives + rubric; band assumes a ladder, so subtract its rungs on a page that skips one |
 
 **The operational tax.** A `production` block cannot be tagged out of basic: every one of
 its four cards must render non-empty at every lens, so one knob, one signal, one failure

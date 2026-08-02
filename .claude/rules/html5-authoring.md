@@ -186,7 +186,7 @@ kind-flavoured ("The question", "Understanding the problem") — so
 | hazard | `description` `explain` `causes` `cost` `mitigation` `relationships` |
 | theme | `description` `explain` `architecture`* `tradespace` `tour` `decide` `siblings` `relationships`* |
 | principle | `description` `explain` `rationale` `applying` `overreach` `relationships` |
-| design | `description` `explain` `requirements` `sizing`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
+| design | `description` `explain`* `requirements` `sizing`* `entities` `interface`* `architecture` `deepdives` `tradeoffs` `levels`* `relationships` |
 | capability | `description` `explain` `capabilities` `mapping` `choosing` `portability` `relationships` |
 | comparison | `description` `explain` `contenders` `matrix` `choosing` `relationships` |
 
@@ -375,7 +375,7 @@ emptiness. Figures take these attributes too — the primary topology
 diagram stays untagged, the sequence diagram carries `data-kb-level="advanced"` — and
 lens.js re-renders mermaid on lens change.
 
-**`explain`** (mandatory, all kinds) — the three-rung ladder, and the canonical use of
+**`explain`** (mandatory on every kind but `design`) — the three-rung ladder, and the canonical use of
 `data-kb-level`: one short paragraph per level, **stacked** (at advanced the basic and
 advanced rungs both render; at expert all three), written through the validated writer
 (which replaces the whole block — re-supply all three on edit):
@@ -394,7 +394,10 @@ per-lens audit, tagging heuristics — is the **kb-explain** skill; the house pr
 is [tone.md](./tone.md). `make check` fails an explain block that does not hold exactly one
 `.explain-item` per level in basic → advanced → expert order. The `explain` ladder is a
 different thing from a design's `levels` block (the Mid/Senior/Staff interviewer rubric);
-both may exist on a design page.
+both may exist on a design page. A design may also carry neither: a case study already
+argues at three depths through its interview, its sizing verdicts, its per-NFR deep dives
+and its rubric, so a ladder that only compresses those blocks is dropped rather than
+written. When to keep one is the **kb-explain** skill.
 
 ## Relationships
 

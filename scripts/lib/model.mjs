@@ -77,14 +77,16 @@ export const BLOCKS = Object.fromEntries(
  * a theme's `relationships` is optional because themes join the graph through tour
  * membership, not typed edges. On a design, `sizing` and `interface` lean
  * system-design and a low-level-design page may skip them, and `levels` (the
- * Mid/Senior/Staff rubric) is optional everywhere. `explain` is mandatory on every
- * kind — the ladder is the per-level explanation the lens shows. */
+ * Mid/Senior/Staff rubric) is optional everywhere. `explain` is mandatory on every kind
+ * but `design` — the ladder is the per-level explanation the lens shows, and a case study
+ * already gives one through its interview, its sizing verdicts, its per-NFR deep dives and
+ * its rubric, so a ladder that only compresses those is noise before the requirements. */
 export const OPTIONAL_BLOCKS = {
   pattern:   new Set(["wild", "production", "fluency"]),
   hazard:    new Set([]),
   theme:     new Set(["architecture", "relationships"]),
   principle: new Set([]),
-  design:    new Set(["sizing", "interface", "levels"]),
+  design:    new Set(["explain", "sizing", "interface", "levels"]),
   capability: new Set([]),
   comparison: new Set([]),
 };
