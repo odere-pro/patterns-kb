@@ -117,13 +117,19 @@ skills each carry the register rules they need inline, so loading one is enough.
 not link back here, and this file is not a dependency of theirs — when a rule changes,
 update this file and the skills that state it.
 
-Two block formats deliberately depart from the recipes above, and say so in their own
+Three block formats deliberately depart from the recipes above, and say so in their own
 skills:
 
 - **Tradeoffs limit items** are bold claim + fact. They state rather than argue, so
   "directive + reason" does not apply.
-- **Levels rubric bullets** are verb-first *third* person — they describe a candidate's
+- **Levels rubric bullets** are verb-first third person — they describe a candidate's
   behaviour, not the reader's.
+- **A design's problem-block answers** are **first** person plural — "we turn it away",
+  not "you turn it away". The block is a conversation with a stakeholder, so the answer
+  comes from the team that will build the thing. Rule 4 binds harder here than anywhere:
+  the decision is the first word, one plain sentence of reason follows, and the balancing
+  constructions rule 8 tolerates elsewhere (*X rather than Y*, *not an A but a B*) are the
+  block's characteristic failure. See `kb-design-problem`.
 
 Skill frontmatter `description:` fields are routing triggers, not prose — this file
 does not apply to them.

@@ -44,27 +44,32 @@ Open with one framing paragraph: what the task states, what it omits, and the pr
 that each answer lands in a requirement below. Then one `<p>` per question:
 
 ```html
-<p><strong>Q1 — How many flows a week?</strong><br>
-<span class="q-route">→ NFR: scale.</span><br>
+<p><strong>Q1 — How many flows a week?</strong><span class="subline">→ NFR: scale.</span>
 Assumed, not given: ~100 a week, with headroom designed to 10k.
 Confirm this first: every capacity decision below is priced against it.</p>
 ```
 
-- **Question stem** in `<strong>`, numbered `Qn — …?`, followed by `<br>`.
+- **Question stem** in `<strong>`, numbered `Qn — …?`.
 - **Exactly one routing tag, on its own line under the stem**, wrapped in
-  `<span class="q-route">`: `→ FR: label.`, `→ NFR: label.`, or `→ Out of scope.`
+  `<span class="subline">`: `→ FR: label.`, `→ NFR: label.`, or `→ Out of scope.`
   (combinations join with `;`). The label is informal but must match a requirement the
   reader can find. The line reads in the stem's colour a notch down the type scale, so the
   eye takes question → where it lands → answer; trailing the answer with it made the tag
   the last thing on a four-line paragraph and the easiest thing to skip.
+- **The subline is the page-wide idiom for a title's qualifier**, and it carries no `<br>`
+  of its own: the class is `display: block`, so a break either side of it renders as an
+  empty line. The same span carries the routing tag on a deep-dive heading, the store on
+  an entity group and the scope clause on a requirements tier — see
+  [kb-styles](../kb-styles/SKILL.md) for the five heading ranks it belongs to.
 - **Answer in 1–2 sentences**, after the tag. A question whose answer needs more is two
   questions. When the answer is genuinely a list (what data is held, what is deliberately
   not built), the question `<p>` holds the stem and its tag alone and a short `<ul>`
   follows — nothing closes the entry after the list.
 - **Mark invented numbers** with `Assumed, not given:` — an assumption stated
   as fact is a lie the reader can't audit.
-- **Mark unresolved questions** with `(open)` in the stem and say who owes the
-  answer. An honest open question beats a fabricated answer.
+- **Mark unresolved questions** with `(open)` after the closing `</strong>`, before the
+  subline, and say who owes the answer. An honest open question beats a fabricated answer.
+  Keep it outside the bold — a bolded `(open)` shouts louder than the question does.
 - **No italics.** The arrow and the colon carry the routing tag; `<em>` on top of them is
   noise. `<strong>` on the question stem is fine — the no-formatting rule binds the
   requirements block, not this one.
@@ -77,6 +82,48 @@ Good interview questions probe: volume and growth, one-shot vs ongoing obligatio
 data is held and under which rules, store vs pass through, push vs pull for results,
 residency and failover, and what is deliberately not built. Ask what changes the design's
 shape; skip what doesn't.
+
+## The register — you are answering a stakeholder, not writing an essay
+
+**This block is a conversation, and the other party is not an engineer.** They state a
+worry in their own words; you give them the decision and the one reason behind it. Write
+what you would actually say out loud in that room. Everywhere else on a design page you
+argue; here you answer.
+
+Three rules carry it:
+
+- **The answer is the first word.** "No." "Several, and the verdict waits for the
+  slowest." "Residency yes, failover no." A reader who stops after the first three words
+  should still have the decision. An answer that opens by restating the question, or by
+  setting up the consideration, has buried it.
+- **One plain sentence of reason, then stop.** Say what goes wrong without the decision,
+  in the stakeholder's terms — money, a complaint, an auditor, a person who left. Not
+  the mechanism; the mechanism is the deep dives' job.
+- **No balancing constructions.** *X rather than Y*, *not an A but a B*, an em-dash aside
+  folded into the middle of a clause — each reads as considered and costs the reader a
+  parse. One of them per entry is a flourish, three in a row is a tic. Say the thing
+  flatly and let the flatness do the work.
+
+```html
+<!-- no  --> An honest refusal, not a slower yes. A flow accepted into a backlog the
+             system cannot drain turns a visible failure into an invisible one — the
+             client hears about it from their own customer, not from us — so the
+             published contract states the refusal up front, with a retry hint attached.
+
+<!-- yes --> No. A flow we accept but cannot get to looks fine to the client until their
+             own customer complains. We turn it away, say when to retry, and put that
+             refusal in the contract.
+```
+
+Same decision, same reason, half the parsing. The tell that you are drifting back into
+essay voice: the entry ends on a construction (`… rather than an absence of an event`)
+instead of on a fact.
+
+**The question stem takes the same treatment.** Ask it the way the stakeholder would.
+"When the queue is hours deep, what do we owe the client?" is a rhetorical framing of
+"We are hours behind. Do we still take new requests?" — and only the second one has an
+answer. A stem that cannot be answered yes/no or with a number is usually a stem that is
+performing rather than asking.
 
 ## The bidirectional trace rule
 
@@ -93,10 +140,16 @@ together when writing a page.
 
 1. Does the framing paragraph say what the task omits and promise where answers land?
 2. Is every answer 1–2 sentences (or a short list), with exactly one routing tag on its
-   own `q-route` line between the stem and the answer — and none left trailing an answer?
+   own `subline` span between the stem and the answer — and none left trailing an answer?
+   `grep` the block for `<br>` — expect zero; the subline breaks its own lines.
 3. Is every invented number marked "Assumed, not given", every unresolved question
    "(open)" — and is all of it plain text, with no `<em>` anywhere in the block?
 4. Walk the trace both ways — every tag resolves to a requirement, every requirement has
    a source. This is the check that does the work.
-5. `make all && make check`, then `node scripts/kb.mjs get <id> --block description` — the
+5. Read only the first three words of each answer. Do you have the decision every time?
+   Then scan the entries for *X rather than Y*, *not an A but a B* and mid-clause em-dash
+   asides — more than one or two across the whole block is essay voice creeping back in.
+6. Read each stem aloud as if a stakeholder asked it. A stem that answers nothing when
+   answered ("what do we owe the client?") needs rewriting into one that does.
+7. `make all && make check`, then `node scripts/kb.mjs get <id> --block description` — the
    reader output should read as a crisp Q&A, not an essay.
