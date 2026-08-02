@@ -15,8 +15,8 @@ is the edit step. The full data contract is
 **[.claude/rules/html5-authoring.md](../../rules/html5-authoring.md)**; everything below is
 the procedure plus the rules you need inline.
 
-Read the KB through the CLI, never by opening a `.html` — a page is ~3.6k tokens of markup
-for ~1.2k of prose:
+Read the KB through the CLI, never by opening a `.html` — a page is ~7k tokens, over half
+of it markup:
 
 ```
 node scripts/kb.mjs find "<words>"            # symptom/name search over all pages

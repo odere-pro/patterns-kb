@@ -17,7 +17,7 @@ no unpriced adjectives.
 
 ## Context economy
 
-The corpus is ~490k tokens and the design conversation is long; both facts are
+The corpus is millions of tokens and the design conversation is long; both facts are
 constraints on *you*, the orchestrator:
 
 - Never open a `site/*.html` file. Everything goes through `node scripts/kb.mjs`.

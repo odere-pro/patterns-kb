@@ -34,7 +34,7 @@ export const CLI_COMMANDS = [
     name: "get", args: "<id>", group: "read",
     desc: "One page, cleaned of styles, scripts and navigation chrome — or one block of it.",
     flags: [
-      { flag: "--block <b>", desc: "just that block, about 180 tokens instead of 3,600" },
+      { flag: "--block <b>", desc: "just that block, about 180 tokens instead of ~7k" },
       { flag: "--level <l>", desc: "scope to a reading level" },
       { flag: "--diagrams", desc: "keep the mermaid source, omitted by default as noise" },
     ],

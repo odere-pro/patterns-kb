@@ -1,6 +1,6 @@
 ---
 name: kb-design-review
-description: Review, evaluate, critique, audit or grade an existing patterns-kb page — a whole design or pattern page, or one block of it named by URL fragment. Use when someone asks to "review this design page", "evaluate this design", "critique site/designs/X", "audit this page", "is this design any good", "grade this kata", "what's wrong with this page", or simply hands over a `file://…/site/**.html` path or a `…#tradeoffs`-style fragment with a review verb. It writes findings only — applying them is a separate kb-edit step.
+description: Review, evaluate, critique, audit or grade an existing patterns-kb page — a whole design or pattern page, or one block of it named by URL fragment. Use when someone asks to "review this design page", "evaluate this design", "critique site/designs/X", "audit this page", "is this design any good", "grade this kata", "what's wrong with this page", or simply hands over a `file://…/site/**.html` path or a `…#tradeoffs`-style fragment with a review verb. It writes findings only — applying them is a separate kb-edit step. Talking a page through as a peer, rather than reporting its faults, is kb-discuss.
 ---
 
 # Reviewing an existing page
@@ -11,7 +11,7 @@ after the user approves. Never edit `site/` from here.
 
 ## 1. Resolve the reference — never open the `.html`
 
-The corpus is ~490k tokens and half of any page is markup. A `file://` URL, an absolute
+The corpus is millions of tokens and over half of any page is markup. A `file://` URL, an absolute
 path and a bare id are all the same thing: **an id plus an optional block**.
 
 ```
@@ -115,6 +115,11 @@ prose in the report — that is the fix step, and it needs approval first.
 
 Close with the verdict and the handoff: **"N findings — approve and I'll apply them with
 kb-edit."** Never apply unasked.
+
+When the review turns into an argument about whether the design is *right* — not whether the
+block obeys its contract — stop producing findings and offer **kb-discuss**. A disagreement
+about the architecture is a conversation, and filing it as a finding gives an opinion the
+authority of a contract violation.
 
 ## Self-check
 

@@ -7,7 +7,7 @@ description: Change something in patterns-kb — fix or rewrite a block's prose,
 
 The pages are the data, so an edit can break the graph, a link, the hub or a closed
 vocabulary — none of which shows up in the diff you just made. That is why `make check`
-runs after every edit (a hook does it automatically, ~0.8s).
+runs after every edit (a hook does it automatically, ~5s).
 
 ## Read the block first — not the file
 

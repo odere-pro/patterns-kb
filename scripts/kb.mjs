@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /* kb.mjs — read the knowledge base without reading the HTML.
  *
- * A page is ~11KB of which about half is markup, and the whole corpus is ~490k tokens —
- * more than fits in a context window. This is the way in: it strips styles, scripts,
+ * A page averages ~28KB of which over half is markup (~7k tokens), and the whole corpus is
+ * millions of tokens — far more than fits in a context window. This is the way in: it strips styles, scripts,
  * diagrams and navigation chrome and returns the metadata and the prose, so a question
  * costs a couple of thousand tokens instead of hundreds of thousands.
  *
@@ -24,7 +24,7 @@ import { usageText } from "./lib/cli-spec.mjs";
 
 const USAGE_HEADER = `kb.mjs — read the knowledge base without reading the HTML.
 
-The whole corpus is ~490k tokens, more than fits in a context window. This is the way in:
+The whole corpus is millions of tokens, far more than fits in a context window. This is the way in:
 it strips styles, scripts, diagrams and navigation chrome and returns the metadata and the
 prose. Every term it prints is defined on site/vocab.html.`;
 

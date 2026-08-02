@@ -17,8 +17,8 @@ hand-maintains a copy of what the pages already say.
 
 ## Reading it — do not open the .html
 
-The corpus is ~490k tokens and will not fit in a context window; half of any page is markup.
-Use the reader:
+The corpus is <!-- kb:corpus-tokens -->~2.5M<!-- /kb:corpus-tokens --> tokens and will not fit in a context window; over half of any
+page is markup. Use the reader:
 
 ```
 node scripts/kb.mjs find "one slow dependency blocks my threads"   # symptom → pattern
@@ -29,8 +29,8 @@ node scripts/kb.mjs ls --band caching
 ```
 
 Add `--json` for structured output. A grounded answer costs ~600 tokens this way, against
-~3,600 for one raw page. `find` searches the full prose of all <!-- kb:page-count -->382<!-- /kb:page-count --> pages — that costs disk,
-not context — and prints the line that matched.
+<!-- kb:page-tokens -->~7k<!-- /kb:page-tokens --> for one raw page. `find` searches the full prose of all <!-- kb:page-count -->382<!-- /kb:page-count --> pages — that costs
+disk, not context — and prints the line that matched.
 
 Cite precisely: every claim has a stable id (`…/circuit-breaker.html#tradeoffs-con-2`).
 
@@ -67,17 +67,22 @@ Sections never carry a lens attribute — blocks show at every lens, and `make c
 fails any block that renders empty at one. The sizing bands per kind, the stacking rule
 and the per-lens audit procedure live in the **kb-explain** skill.
 
-Then `make all` to regenerate, and `make check` to verify. A hook runs `make check` after any
-edit under `site/` — it takes ~0.8s.
+Then `make all` to regenerate, and `make check` to verify. A hook does it for you, routed by
+what you touched: a `site/**.html` edit gets `kb.mjs validate` then `make check` (~5s), a
+`site/assets/*.js` edit gets `node --check` alone, and a `.claude/**` edit gets
+`lint-claude.mjs`. Editing anything else under `site/assets/` cannot break KB validity, so
+nothing runs.
 
 **Never edit a `<!-- kb:generated -->` region.** It is projected from the page's own
 attributes and will be overwritten. The same goes for `site/index.html`, which is generated
 in full and compared byte for byte.
 
-Which skill owns what, for the parts that are not a page's prose:
+Which skill owns what. **Changing the KB:**
 
 | Job | Skill |
 |---|---|
+| adding a page of any kind | **kb-add** |
+| fixing prose, metadata or a relationship on a page that exists | **kb-edit** |
 | the hub, and where a page appears on it | **kb-hub** |
 | re-filing a page into another band or group | **kb-move** |
 | any block of a pattern page | **kb-pattern-blocks** |
@@ -86,14 +91,32 @@ Which skill owns what, for the parts that are not a page's prose:
 | any block of a principle page | **kb-principle-blocks** |
 | any block of a capability page | **kb-capability-blocks** |
 | any block of a comparison page | **kb-comparison-blocks** |
+| any block of a design case study | **kb-design-problem**, **kb-design-requirements**, **kb-design-sizing**, **kb-design-entities**, **kb-design-interface**, **kb-design-architecture**, **kb-design-tradeoffs**, **kb-design-levels**, **kb-design-relationships** |
+| the three reading lenses and the `explain` ladder | **kb-explain** |
 | a code sketch — its language, its highlighting, open vs collapsed | **kb-sketch** |
+| the closed vocabularies, `vocab.html` and the search synonyms | **kb-vocab** |
 | `make all` / `make check` / the worklists | **kb-verify** |
 | tokens, `hub.css`, `pattern.css`, the `kb-*.css` aggregators | **kb-styles** |
 | the client scripts, `kb.js`'s manifest and their stores | **kb-site-ui** |
 | the interactive graph | **kb-graph** |
-| reviewing or evaluating an existing page | **kb-design-review** |
+| merging a pattern found on the web | **kb-intake**, fed by **kb-harvest** |
+| capturing a docs or course site into raw local data | `site-extract` |
+| checking pages against outside sources | **kb-fact-check** |
+
+**Using the KB** — these read it and change nothing:
+
+| Job | Skill |
+|---|---|
+| a symptom, and which pattern answers it | **kb-find** |
+| talking a page through as a peer — arguing with it, replaying it under a changed requirement | **kb-discuss** |
+| reviewing, auditing or grading an existing page | **kb-design-review** |
+| being tested on a case study / on any other kind of page | **kb-grill-design** / **kb-grill-page** |
+| interrogating a proposal that does not exist yet into requirements | **grill-me** |
 | a full system design, or an architectural kata | **sys-design** |
 | designing or hardening one bounded component | **kb-compose** |
+| a mermaid diagram, at the right altitude | `diagram-draw` |
+| picking a stack, an alternative to a named product, or the tech behind one pattern | `stack-pick`, `alt-pick`, `pattern-tech-map` |
+| the register a piece of prose should be written in | **style-pattern-doc**, **style-simple**, **style-technical**, **style-system-design** |
 
 ### Routing precedence
 
@@ -101,8 +124,8 @@ Three rules, because the defaults point elsewhere:
 
 - **A `file://` URL or a `site/**.html` path in a request is a page reference, not a file to
   open.** Resolve it to its id (basename minus `.html`; a `#fragment` names the block) and
-  read it with `kb.mjs`. Never `Read` or `WebFetch` a page under `site/` — the corpus is
-  ~490k tokens.
+  read it with `kb.mjs`. Never `Read` or `WebFetch` a page under `site/` — one page is
+  <!-- kb:page-tokens -->~7k<!-- /kb:page-tokens --> tokens and the corpus is <!-- kb:corpus-tokens -->~2.5M<!-- /kb:corpus-tokens -->.
 - **In this repo the skills replace the generic agents**, including where
   `~/.claude/rules/common/agents.md` says to reach for one without asking: **sys-design**
   over `architect` / `planner`, **kb-compose** over `code-architect`, **kb-design-review**
@@ -112,22 +135,30 @@ Three rules, because the defaults point elsewhere:
   questions. GitHub and vendor-doc search still applies to library and implementation
   choices.
 
-Merging a pattern found on the web — improve the existing page, skip, or create a new
-one — is the **kb-intake** skill; discovering those candidates from vendor architecture
-portals and GitHub repos (including awesome-list link hubs) is the **kb-harvest** skill.
-Running a full KB-grounded system design — interview → requirements → entities/API →
-HLD → component zoom-ups → critique → stack — is the **sys-design** skill, which uses
-**grill-me** for the interview and the kb-scout / component-designer / design-critic
-agents so the KB reading never bloats the main context (see Routing precedence above —
-it replaces the generic agents rather than competing with them). Reviewing a page that
-already exists is **kb-design-review**, which reports findings and hands the fix to
-**kb-edit**. Scouting agents open with `kb.mjs brief <query>` — find hits, the
-governing theme's decide table and the top hits' neighbours in one call.
+**Four things a page can be to you, and they route differently.** **kb-design-review** finds
+the *page's* faults and reports them as findings for an approved **kb-edit** pass.
+**kb-grill-design** and **kb-grill-page** find the *reader's*, and forbid teaching while they
+do it. **grill-me** interrogates a proposal that does not exist yet. **kb-discuss** talks a
+page through as a peer — it argues, teaches, cites element ids, edits nothing, and names the
+handoff when the conversation concludes somewhere else.
+
+**Five read-only agents keep the corpus out of the main context**, because a page is
+<!-- kb:page-tokens -->~7k<!-- /kb:page-tokens --> tokens and a conversation holds several:
+`kb-scout` (one question → a cited brief), `kb-page-analyst` (one page → a discussion pack),
+`component-designer` (one bounded component → a **kb-compose** brief), `design-critic` (a
+draft → adversarial findings), and the write-capable `kb-author` for batch page authoring.
+Scouting agents open with `kb.mjs brief <query>`, which returns find hits, the governing
+theme's decide table and the top hits' neighbours in one call. **sys-design** is the
+conductor that drives the first four through a full design — interview → requirements →
+entities/API → HLD → component zoom-ups → critique → stack (see Routing precedence above: in
+this repo these replace the generic agents rather than competing with them).
+
 Full contract, including how to add a page: **[.claude/rules/html5-authoring.md](.claude/rules/html5-authoring.md)**.
 How the prose must read: **[.claude/rules/tone.md](.claude/rules/tone.md)** — the house
 register, distilled from AWS Prescriptive Guidance, Azure Architecture Center and the
 Google Cloud Architecture Framework.
-Each folder under `site/` has its own CLAUDE.md with local rules.
+Every folder under `site/` that holds pages has its own CLAUDE.md with local rules, as does
+`site/assets/`. Only `site/map/` and the intermediate `site/patterns/` have none.
 
 ## Invariants `make check` enforces
 
@@ -159,10 +190,13 @@ site/patterns/<band>/[<group>/]<id>.html   the source of truth
 site/hazards/<id>.html · site/themes/<id>.html · site/principles/<id>.html
 site/designs/<id>.html                     worked case studies (system-design & LLD katas)
 site/capabilities/<id>.html                cloud service categories, mapped across providers
+site/comparisons/<id>.html                 one product decision each, contenders side by side
 site/assets/graph.json · catalog.json · graphdata.js   DERIVED
-site/index.html · vocab.html · map/graph.html   DERIVED (graph.html = interactive graph explorer shell;
-                                                its runtime is hand-authored assets/graph-view.js + graph.css,
-                                                over the unit-tested assets/graph-core.js)
+site/index.html · vocab.html · map/graph.html · map/stack.html   DERIVED (graph.html = interactive graph
+                                                explorer shell; its runtime is hand-authored
+                                                assets/graph-view.js + graph.css, over the unit-tested
+                                                assets/graph-core.js. stack.html is the pattern → product
+                                                map, built from the capability pages' mapping tables)
 scripts/kb.mjs        the reader/writer — your interface to all of it
 scripts/lib/model.mjs the taxonomy, every closed vocabulary, and the ontology's own prose
 scripts/report-vocab.mjs  the vocabulary worklist (drift, unbridged pages, tag audit)

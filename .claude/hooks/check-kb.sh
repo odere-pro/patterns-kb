@@ -3,7 +3,7 @@
 #
 #   site/**/*.html         → per-page structural lint (kb.mjs validate --file, ~50ms,
 #                            names the exact page and problem), then the whole-graph
-#                            safety net (make check, ~0.8s)
+#                            safety net (make check, ~5s)
 #   scripts/** or Makefile → make check (a model/build edit can invalidate every page)
 #   site/assets/**/*.js    → node --check (hand-authored runtime — syntax only;
 #                            presentation cannot break KB validity)

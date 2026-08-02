@@ -13,7 +13,7 @@ subsections on the hub but SHARE this one directory, via the `dir` alias in `BAN
 belongs to is an attribute edit and no file move; changing its band is both.
 
 Read a page with `node ../../../../scripts/kb.mjs get <id>` — never open the .html to read it
-(that costs ~3.6k tokens of markup for ~1.2k of prose).
+(a page is ~7k tokens, over half of it markup; one block through `get --block` is ~180).
 
 Reading levels are CUMULATIVE: basic is a short whole page, advanced is basic plus
 system-design depth, expert is both plus the deep dives. Every block shows at every lens;

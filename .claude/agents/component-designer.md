@@ -10,7 +10,7 @@ You design one component of a larger system, grounded in `patterns-kb`.
 Read `.claude/skills/kb-compose/SKILL.md` before you start. **It is the binding
 discipline** — the frame → find → theme decide → related → judge → guard loop, the
 three verdicts (adopted / rejected / deferred), the routing tags, and the brief shape
-are all defined there and are not restated here. The corpus is ~490k tokens: never
+are all defined there and are not restated here. The corpus is millions of tokens: never
 open a `site/*.html` file; everything goes through `node scripts/kb.mjs`, and a full
 component brief should cost about 2–3k tokens of reading.
 

@@ -22,6 +22,11 @@
  *       having no skill at all
  *   W1  (WARN) a block skill's description carries no review verb, or any description is
  *       shorter than the routing threshold — short descriptions are how routing misses
+ *   W2  (WARN) a skill no CLAUDE.md names. X1 is one-directional — it catches a doc naming
+ *       a skill that does not exist, never a skill no doc points at — and that asymmetry is
+ *       how 23 of 45 skills, the whole kb-design-* family among them, went unrouted while
+ *       every check stayed green. Warns rather than fails: a skill routed by its frontmatter
+ *       description alone still works, it is just invisible to anyone reading the docs.
  *
  * The .claude/ directory is repo config, not corpus: the KB_ROOT fixture does not carry
  * one, and the staged-tree pre-commit runs from a bare checkout that might not either —
@@ -135,6 +140,25 @@ for (const f of refSources) {
       problems.push(`X1 DANGLING REFERENCE: ${f.slice(ROOT.length + 1)} names **${m[1]}**, which is no skill or agent`);
   }
 }
+
+/* ---- W2: every skill some CLAUDE.md points at ----
+ * The docs are the routing surface a human reads; the frontmatter is the one the harness
+ * reads. A skill present in only the second works, but nobody discovers it on purpose. The
+ * name may appear bolded, in backticks or bare — this asks whether the docs mention it at
+ * all, not how. */
+const claudeDocs = [];
+(function collect(dir) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) {
+      if (e.name === "node_modules" || e.name === "worktrees" || e.name.startsWith(".git")) continue;
+      collect(join(dir, e.name));
+    } else if (e.name === "CLAUDE.md") claudeDocs.push(join(dir, e.name));
+  }
+})(ROOT);
+const docText = claudeDocs.map((f) => readFileSync(f, "utf8")).join("\n");
+for (const name of skillNames.keys())
+  if (!docText.includes(name))
+    warnings.push(`W2 UNROUTED SKILL: ${name} is named in no CLAUDE.md — it routes by its description alone`);
 
 /* ---- K1: every page kind has an owning block skill ----
  * pattern → kb-pattern-blocks and so on; design is the one kind split across a family,

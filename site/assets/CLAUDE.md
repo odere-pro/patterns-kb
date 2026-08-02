@@ -13,7 +13,8 @@ Regenerate with `make all`; `make check` fails when any is stale.
 ## Hand-authored
 
 Everything else — `kb.js`, `theme.js`, `lens.js`, `search.js`, `favourites.js`,
-`progress.js`, `sketch.js`, `diagram.js`, `vocab.js`, `graph-core.js`, `graph-view.js`, the
+`progress.js`, `sketch.js`, `diagram.js`, `diagram-zoom.js`, `palette.js`, `collapse.js`,
+`section-nav.js`, `vocab.js`, `graph-core.js`, `graph-view.js`, the
 CSS (including `kb-page.css`, `kb-hub.css`, `kb-graph.css`), the vendored libraries. Edits
 here cannot break KB validity, so the post-edit hook only syntax-checks `.js` files
 (`node --check`). Vendored libraries (`vendor/`) are third-party — update by replacing the
@@ -140,7 +141,7 @@ scoped to `.diagram svg[…]` and stops matching once the `<pre>` is relocated, 
 `diagram-zoom.css` restates it under `.dz-stage` — drop that and the schema goes white-on-white
 in the viewer in dark mode.
 
-## The interactive graph (`map/graph.html`) is three layers
+## The interactive graph (`map/graph.html`) is four layers
 
 | layer | file | owner |
 |---|---|---|

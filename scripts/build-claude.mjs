@@ -13,7 +13,7 @@
  *
  * Run:  node scripts/build-claude.mjs   (add --check to fail if any is stale)
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -33,6 +33,27 @@ const graph = JSON.parse(readFileSync(join(SITE, "assets", "graph.json"), "utf8"
 const nodes = Object.values(graph.nodes);
 const byDir = {};
 for (const n of nodes) (byDir[n.dir] ||= []).push(n);
+
+/* ---------------- corpus size, derived ----------------
+ * "Never open the .html" is the single most repeated instruction in this repo, and it is
+ * only persuasive with a number attached. Hand-typed, that number rots: the docs claimed a
+ * ~490k-token corpus and ~3.6k-token pages long after the corpus had grown five-fold, and
+ * the stale page figure was replicated into all 18 generated leaf files. So measure it.
+ *
+ * Tokens are estimated at 4 bytes each — right to within the precision anyone acts on, and
+ * the rounding below is deliberately coarser than the estimate's error. Coarse rounding is
+ * also what keeps the generated files byte-stable: a page edit moves the mean by a few
+ * bytes, and the emitted figure only changes when it crosses a whole 1k boundary. */
+const BYTES_PER_TOKEN = 4;
+const corpusBytes = nodes.reduce(
+  (sum, n) => sum + statSync(join(SITE, n.dir, `${n.id}.html`)).size,
+  0,
+);
+const corpusTokens = corpusBytes / BYTES_PER_TOKEN;
+/* ~2.7M — one decimal, because the leading digit alone would swing 50% either way. */
+const corpusText = `~${(Math.round(corpusTokens / 1e5) / 10).toFixed(1)}M`;
+/* ~7k — the mean page, to the nearest thousand. */
+const pageText = `~${Math.round(corpusTokens / nodes.length / 1000)}k`;
 
 /** How deep this folder sits, for the relative hop back to the repo root. */
 const up = (dir) => "../".repeat(dir.split("/").length + 1);
@@ -71,7 +92,7 @@ Pages here: ${list.map((n) => n.id).sort().join(", ")}
 ${groupRule}
 
 Read a page with \`node ${up(dir)}scripts/kb.mjs get <id>\` — never open the .html to read it
-(that costs ~3.6k tokens of markup for ~1.2k of prose).
+(a page is ${pageText} tokens, over half of it markup; one block through \`get --block\` is ~180).
 
 Reading levels are CUMULATIVE: basic is a short whole page, advanced is basic plus
 system-design depth, expert is both plus the deep dives. Every block shows at every lens;
@@ -312,27 +333,40 @@ root CLAUDE.md for the data contract.
   else { writeAtomic(file, body); written++; }
 }
 
-/* ---------------- root count regions ----------------
- * Two inline marker regions keep the hand-written root docs' numbers derived:
- *   <!-- kb:counts -->…<!-- /kb:counts -->          the full breakdown by kind
- *   <!-- kb:page-count -->N<!-- /kb:page-count -->  the bare page total
- * Everything outside the markers is untouched. */
+/* ---------------- root marker regions ----------------
+ * Inline marker regions keep the hand-written root docs' numbers derived:
+ *   <!-- kb:counts -->…<!-- /kb:counts -->              the full breakdown by kind
+ *   <!-- kb:page-count -->N<!-- /kb:page-count -->      the bare page total
+ *   <!-- kb:corpus-tokens -->~2.7M<!-- /… -->           why you must not read the corpus
+ *   <!-- kb:page-tokens -->~7k<!-- /… -->               why you must not read one page
+ * Everything outside the markers is untouched.
+ *
+ * The list is per-file rather than global: README.md is a reader's introduction and states
+ * no token costs, so demanding the size regions there would fail the build over a region
+ * that has no business existing. A file takes the regions it uses and no others. */
 const kindCount = (k) => nodes.filter((n) => n.kind === k).length;
 const countsText =
   `${kindCount("pattern")} software design patterns, ${kindCount("design")} design case studies, ` +
   `${kindCount("theme")} themes, ${kindCount("hazard")} hazards, ${kindCount("principle")} principles, ` +
   `${kindCount("capability")} cloud capabilities` +
   `${kindCount("comparison") ? ` and ${kindCount("comparison")} product comparisons` : ""} — ${nodes.length} pages in all`;
-const REGIONS = [
-  { tag: "kb:counts", text: countsText },
-  { tag: "kb:page-count", text: String(nodes.length) },
-];
+const REGION_TEXT = {
+  "kb:counts": countsText,
+  "kb:page-count": String(nodes.length),
+  "kb:corpus-tokens": corpusText,
+  "kb:page-tokens": pageText,
+};
+const ROOT_DOCS = {
+  "CLAUDE.md": ["kb:counts", "kb:page-count", "kb:corpus-tokens", "kb:page-tokens"],
+  "README.md": ["kb:counts", "kb:page-count"],
+};
 
-for (const name of ["CLAUDE.md", "README.md"]) {
+for (const [name, tags] of Object.entries(ROOT_DOCS)) {
   const file = join(ROOT, name);
   const cur = readFileSync(file, "utf8");
   let next = cur;
-  for (const { tag, text } of REGIONS) {
+  for (const tag of tags) {
+    const text = REGION_TEXT[tag];
     const open = `<!-- ${tag} -->`;
     if (!next.includes(open)) {
       console.error(`${name}: missing ${open} region`);

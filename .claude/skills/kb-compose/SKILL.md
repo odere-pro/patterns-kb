@@ -8,7 +8,7 @@ description: Compose a component-level solution from patterns-kb — take the FR
 **The deliverable is a component brief: one bounded piece of a larger system, solved by
 the smallest pattern set that satisfies the stated FRs, NFRs and CAP stance.** Every
 adoption traces to a requirement; every rejection cites the con that killed it; and the
-brief ends with the conditions under which the answer changes. The corpus is ~490k
+brief ends with the conditions under which the answer changes. The corpus is millions of
 tokens — never open a `.html` file. Everything goes through `scripts/kb.mjs`, and a full
 brief costs about 2–3k tokens of reading. The brief is technology-agnostic end to end:
 pattern names and capability-level language ("a durable log", "a coordination service"),

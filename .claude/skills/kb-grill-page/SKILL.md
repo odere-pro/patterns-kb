@@ -1,6 +1,6 @@
 ---
 name: kb-grill-page
-description: Interview the reader on one patterns-kb pattern, hazard, theme, principle, capability or comparison page until they can use it unprompted — batched rounds of questions (via the question UI, up to 4 per round) following that kind's own block skeleton, graded against the page, ending in a gap list of cited element ids. Use when someone says "grill me on circuit breaker", "quiz me on this pattern", "test me on CAP theorem", "drill me on the SOLID principles", "do I actually understand bulkhead", "test me on three caching patterns", "help me learn this page", or hands over a site/**.html path with a learning verb rather than an editing one. Grilling a case study under site/designs/ goes to kb-grill-design instead; interrogating a NEW proposal into requirements is grill-me.
+description: Interview the reader on one patterns-kb pattern, hazard, theme, principle, capability or comparison page until they can use it unprompted — batched rounds of questions (via the question UI, up to 4 per round) following that kind's own block skeleton, graded against the page, ending in a gap list of cited element ids. Use when someone says "grill me on circuit breaker", "quiz me on this pattern", "test me on CAP theorem", "drill me on the SOLID principles", "do I actually understand bulkhead", "test me on three caching patterns", "help me learn this page", or hands over a site/**.html path with a learning verb rather than an editing one. Grilling a case study under site/designs/ goes to kb-grill-design instead; interrogating a NEW proposal into requirements is grill-me; and when the user is the one asking the questions about the page, that is kb-discuss.
 ---
 
 # Grilling a reader on a KB page
@@ -9,7 +9,7 @@ description: Interview the reader on one patterns-kb pattern, hazard, theme, pri
 against the page and cite where the answer lives. Explaining mid-grill is the failure
 mode — the page already explains, at three lenses, better than an interruption can.
 
-The corpus is ~490k tokens. **Never open a `site/**.html`.** Everything comes through
+The corpus is millions of tokens. **Never open a `site/**.html`.** Everything comes through
 `node scripts/kb.mjs`.
 
 ## 1. Resolve the page and pick the ladder
@@ -23,7 +23,7 @@ and confirm the set before starting.
 node scripts/kb.mjs ls --band caching                    # pick a set
 node scripts/kb.mjs find "my thread pool is exhausted"   # topic → page
 node scripts/kb.mjs get circuit-breaker --json           # kind, tags, solves
-node scripts/kb.mjs get circuit-breaker --block usage    # ~180 tokens, not 3,600
+node scripts/kb.mjs get circuit-breaker --block usage    # ~180 tokens, not ~7k
 ```
 
 The page's `data-kb-kind` chooses the ladder. Read blocks one round at a time — you only
@@ -122,6 +122,8 @@ Offer to mark the page practiced only after a grill with no gaps.
   `site/designs/`, on a longer ladder and against the page's own seniority rubric.
 - **Not [kb-find](../kb-find/SKILL.md).** That answers a question from the corpus. This
   one refuses to answer and asks instead.
+- **Not [kb-discuss](../kb-discuss/SKILL.md).** There the user asks and you may teach.
+  Here you ask and must not.
 - **Not a tutor.** If the reader wants to be taught, send them to the page at the right
   lens and offer to grill afterwards.
 

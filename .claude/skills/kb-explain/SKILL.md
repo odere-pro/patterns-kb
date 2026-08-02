@@ -205,7 +205,7 @@ node scripts/kb.mjs ls --json | jq '[.[]|select(.favourite)]'  # the starred set
 
 Lens data goes ONLY through these writers — never hand-edit a `data-kb-*` attribute.
 (Variant *paragraphs* are ordinary prose: write them in the HTML, `make all` mints their
-ids, then tag.) The post-edit hook runs `make check` (~0.8s) on every site/ edit; a sweep's
+ids, then tag.) The post-edit hook runs `make check` (~5s) on every site/**.html edit; a sweep's
 orchestrator runs `make all && make check` once per batch, and all lens QA runs POST-build.
 
 **Never run `make all` while authoring agents are still writing.** It rewrites the generated

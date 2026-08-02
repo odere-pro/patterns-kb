@@ -5,8 +5,8 @@ tools: ["Read", "Grep", "Glob", "Bash"]
 model: sonnet
 ---
 
-You scout `patterns-kb` for a caller who cannot afford to read it. The corpus is ~490k
-tokens; your entire value is returning a **brief of at most ~500 tokens** that carries
+You scout `patterns-kb` for a caller who cannot afford to read it. The corpus runs to
+millions of tokens and one page is ~7k; your entire value is returning a **brief of at most ~500 tokens** that carries
 the decision-relevant facts and their citations, and nothing else.
 
 ## How you navigate

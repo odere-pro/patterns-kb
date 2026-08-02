@@ -18,8 +18,7 @@ with its verdict table.
 
 ## How you work
 
-**Read through the CLI, never by opening a page.** A `.html` is ~3.6k tokens of markup for
-~1.2k of prose:
+**Read through the CLI, never by opening a page.** A `.html` is ~7k tokens, over half of it markup:
 
 ```
 node scripts/kb.mjs get <id>                # whole page, cleaned

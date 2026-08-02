@@ -11,7 +11,7 @@ page is filed anywhere else, so moving a page means changing its band or group, 
 its location.
 
 Read a page with `node ../../../scripts/kb.mjs get <id>` — never open the .html to read it
-(that costs ~3.6k tokens of markup for ~1.2k of prose).
+(a page is ~7k tokens, over half of it markup; one block through `get --block` is ~180).
 
 Reading levels are CUMULATIVE: basic is a short whole page, advanced is basic plus
 system-design depth, expert is both plus the deep dives. Every block shows at every lens;

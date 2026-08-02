@@ -5,7 +5,7 @@ description: Find the right software design pattern for a problem, and answer wi
 
 # Finding a pattern for a problem
 
-The corpus is ~490k tokens. Never read the `.html` files. Everything below goes through
+The corpus is millions of tokens. Never read the `.html` files. Everything below goes through
 `scripts/kb.mjs`, which strips markup and returns prose — a full grounded answer costs
 about 600 tokens.
 

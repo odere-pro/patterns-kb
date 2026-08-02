@@ -118,6 +118,8 @@ into a KB design page or the sys-design pipeline without rework.
   live interview.
 - **Not a form.** The taxonomy is a quarry, not a checklist — asking all ten areas of
   every proposal is interrogation theatre, and the cap exists to prevent it.
+- **Not [kb-discuss](../kb-discuss/SKILL.md).** That argues about a page that already
+  exists. Here the subject does not exist yet, and the user defines it.
 - **Not a quiz.** This skill interrogates a *proposal*, and the user is the authority on
   every answer. To interrogate the *reader* against a page that already has the answers,
   use [kb-grill-design](../kb-grill-design/SKILL.md) for a case study under

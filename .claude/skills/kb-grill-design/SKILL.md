@@ -1,6 +1,6 @@
 ---
 name: kb-grill-design
-description: Interview the reader on a patterns-kb case study until they can defend it — batched rounds of questions (via the question UI, up to 4 per round) walking a design page's own blocks, graded against the page and scored on its Mid/Senior/Staff+ rubric, ending in a gap list of cited element ids. Use when someone says "grill me on bitly", "quiz me on this case study", "test me on this design", "interview me on the URL shortener", "am I ready to be asked this in an interview", "help me learn this kata", "drill me until I can answer it", or hands over a site/designs/*.html path with a learning verb rather than an editing one. Grilling a pattern, hazard, theme, principle, capability or comparison page goes to kb-grill-page instead; interrogating a NEW proposal into requirements is grill-me.
+description: Interview the reader on a patterns-kb case study until they can defend it — batched rounds of questions (via the question UI, up to 4 per round) walking a design page's own blocks, graded against the page and scored on its Mid/Senior/Staff+ rubric, ending in a gap list of cited element ids. Use when someone says "grill me on bitly", "quiz me on this case study", "test me on this design", "interview me on the URL shortener", "am I ready to be asked this in an interview", "help me learn this kata", "drill me until I can answer it", or hands over a site/designs/*.html path with a learning verb rather than an editing one. Grilling a pattern, hazard, theme, principle, capability or comparison page goes to kb-grill-page instead; interrogating a NEW proposal into requirements is grill-me; and when the user is the one asking the questions about the page, that is kb-discuss.
 ---
 
 # Grilling a reader on a case study
@@ -10,7 +10,7 @@ against the page and cite where the answer lives. The failure mode this skill ex
 prevent is teaching instead of testing — the moment you explain the design, the reader
 stops retrieving and starts reading, and retrieval is the whole point.
 
-The corpus is ~490k tokens. **Never open a `site/**.html`.** Everything comes through
+The corpus is millions of tokens. **Never open a `site/**.html`.** Everything comes through
 `node scripts/kb.mjs`.
 
 ## 1. Resolve the page and load the answer key
@@ -24,7 +24,7 @@ before round 1. You only need a block to grade the round that covers it.
 
 ```
 node scripts/kb.mjs ls --kind design                    # when no page was named
-node scripts/kb.mjs get bitly --block requirements      # ~180 tokens, not 3,600
+node scripts/kb.mjs get bitly --block requirements      # ~180 tokens, not ~7k
 node scripts/kb.mjs get bitly --block deepdives         # the heaviest round's key
 node scripts/kb.mjs get bitly --block levels            # the grading rubric
 ```
@@ -115,6 +115,8 @@ tell.
   theme, principle, capability or comparison page. Same mechanic, different ladder.
 - **Not [kb-design-review](../kb-design-review/SKILL.md).** That reviews the page and
   finds *its* faults. This one takes the page as correct and finds the reader's.
+- **Not [kb-discuss](../kb-discuss/SKILL.md).** There the user asks the questions and you
+  may teach. Here you ask them and must not.
 - **Not a tutor.** Explaining is what the page does, and it does it at three lenses. If
   the reader wants to be taught, send them to the page and offer to grill afterwards.
 
