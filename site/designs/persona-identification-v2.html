@@ -1338,6 +1338,104 @@ sequenceDiagram
         <figcaption>The same path in time, with the three failures that actually happen drawn in: a worker dying mid-call, a vendor duplicating its callback, and a client endpoint refusing a delivery. None of them changes what the client eventually holds.</figcaption>
       </figure>
 
+      <figure class="diagram wide" id="architecture-fig-3" data-kb-level="expert">
+        <pre class="mermaid">
+flowchart TB
+    Client["Client — API keys · webhook consumer"]:::ext
+    Person["Onboardee — magic link"]:::ext
+    EmailV["Email provider"]:::ext
+    IDV["ID-verification vendor"]:::ext
+    IDVB["Fallback IDV vendor"]:::ext
+    Lists["Sanction-list vendors, one per list"]:::ext
+
+    subgraph Sec["Security edge — one door"]
+        API["Identification API — per-caller auth · rate limiter · admission 429 + Retry-After"]
+    end
+
+    subgraph PG["Postgres primary — one commit per ingress"]
+        Inbox[("inbox — dedup on the sender's own key")]
+        Log[("flow_event log — the record IS the outbox")]
+        Proj[("projections — flow · screening_round · person_relationship")]
+        Tasks[("task queue — SKIP LOCKED · lease_until · max_attempts")]
+        DLQ[("dead-letter park — alerted · re-runnable")]
+        Cursor[("delivery_cursor — one ordered lane per flow")]
+    end
+    Standby[("sync standby — CP failover")]
+
+    subgraph PIIP["PII plane — separate credentials"]
+        Vault[("encrypted PII vault")]
+        KeyMgr["key manager — envelope keys · erasure by key destruction"]
+        Docs[("object store — presigned documents")]
+    end
+
+    subgraph Coord["Coordination plane"]
+        Cache[("cache — breaker state · provider weights · rate counters · scheduler leases")]
+        Config[("config store — list roster · criticality · cadences · quotas")]
+    end
+
+    subgraph Fleet["Worker fleet — one bulkhead pool per vendor"]
+        MailPool["email pool"]
+        IDVPool["IDV pool — ACL translator stamps provider + policy_version"]
+        SanPool["sanctions pools — ACL · batch 500 per call"]
+        Collector["round collector — concludes on all legs TERMINAL"]
+    end
+
+    subgraph Sched["Schedulers — leased singletons"]
+        Sweeper["sweeper — enforces every deadline · stamps unavailable · escalates"]
+        Clocks["recheck + ID-expiry clocks"]
+    end
+
+    Relay["delivery relay — walks the log behind the cursor"]
+
+    subgraph Obs["Observability — ids only, never PII"]
+        Metrics["metrics + alarms — oldest-task age · deadline breaches · dead &gt; 0 · lanes in backoff"]
+        WCtl["weight controller — vendor error rate moves fallback weights · operator pin wins"]
+    end
+
+    Client -->|"1 create — Idempotency-Key"| API
+    API -->|"2 ingress row"| Inbox
+    Inbox -->|"3 append the fact"| Log
+    Log -->|"4 fold state"| Proj
+    Proj -->|"5 spawn work"| Tasks
+    Tasks -->|"6 lease invite task"| MailPool
+    MailPool -->|"7 send single-use link"| EmailV
+    EmailV -->|"8 invite"| Person
+    Person -->|"9 submit PII + document — link spent by rowcount"| API
+    API -->|"10 envelope key"| KeyMgr
+    API -->|"11 encrypted PII"| Vault
+    API -->|"12 presigned upload"| Docs
+    API -->|"13 record submission — re-enters 2 to 5"| Inbox
+    Tasks -->|"14 lease verify task — deadline_at"| IDVPool
+    IDVPool -->|"15 breaker + weight gate"| Cache
+    IDVPool -->|"16 verify call under deadline"| IDV
+    IDVPool -->|"17 weighted fallback when the breaker opens"| IDVB
+    IDV -->|"18 signed callback — dedups at 2"| API
+    Tasks -->|"19 lease screening legs — one per list"| SanPool
+    SanPool -->|"20 screen — batched on recheck"| Lists
+    Lists -->|"21 signed callbacks — three-valued verdicts"| API
+    Proj -->|"22 all legs terminal this round"| Collector
+    Collector -->|"23 append concluded"| Log
+    Log -->|"24 next seq this flow owes"| Relay
+    Relay -->|"25 signed webhook — eventId + seq"| Client
+    Client -->|"26 2xx ack"| Relay
+    Relay -->|"27 advance the lane"| Cursor
+    Sweeper -->|"28 requeue expired leases"| Tasks
+    Tasks -->|"29 attempts exhausted"| DLQ
+    Sweeper -->|"30 stamp unavailable — criticality decides hold or caveat"| Proj
+    Sched -->|"31 hold leases"| Cache
+    Clocks -->|"32 enqueue re-screen rounds"| Tasks
+    Config -->|"33 roster · criticality · cadence · quotas"| Sched
+    Fleet -->|"34 error rate · latencies"| Metrics
+    Metrics -->|"35 degrade a failing vendor"| WCtl
+    WCtl -->|"36 write weights"| Cache
+    Log -->|"37 sync replicate"| Standby
+    Client -->|"38 relationship close / erasure"| API
+    API -->|"39 destroy envelope key — crypto-shred"| KeyMgr
+    classDef ext stroke-dasharray:4 4;
+        </pre>
+        <figcaption>The whole machine on one board, connections numbered in flow order: 1–13 intake and submission, 14–21 the vendor legs, 22–27 conclusion and ordered delivery, 28–33 recovery and the clocks, 34–36 the health-to-weights control loop, 37–39 replication and erasure. Every box is argued somewhere above; this board exists to track a flow across all of them at once.</figcaption>
+      </figure>
+
       <div class="prose">
         <h3 id="architecture-h-components" data-kb-level="advanced">Components &amp; communication</h3>
         <ul>
