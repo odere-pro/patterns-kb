@@ -27,7 +27,7 @@ builder (**kb-hub**); a change to how it *behaves* lives here.
 | `collapse.js` | hub section/subsection disclosure: seeds from the rendered `open`, stores **overrides only**, exposes `window.KB_COLLAPSE.hold(reason, on)`, opens the `<details>` chain for `location.hash`, forces open for print | `kb-collapse-v1` |
 | `diagram.js` | mermaid init + re-render on `kb-theme-change`, `kb-lens-change`, OS scheme change; fires `kb-diagram-render` at the end of every pass | — |
 | `diagram-zoom.js` | per-figure zoom strip (− / + / % / ⤢), drag-pan, and the full-screen `<dialog class="dzoom">`; exposes `window.KB_DIAGRAM_ZOOM` | — |
-| `sketch.js` | lazy highlight.js on `details.sketch` open (never throwing — an unknown language downgrades that one sketch, not the loop); injects the per-section **Expand all / Collapse all**; opens every sketch for print and restores after. Sketches are collapsed in the markup and their state does **not** persist — the language set, the vendored grammars and the `hljs-*` colours are the **kb-sketch** skill | — |
+| `sketch.js` | lazy highlight.js on `details.sketch` open (never throwing — an unknown language downgrades that one sketch, not the loop); injects the floating `.sketch-toggle` (**left** edge — see the cluster below); opens every sketch for print and restores after. Sketches are collapsed in the markup and their state does **not** persist — the language set, the vendored grammars and the `hljs-*` colours are the **kb-sketch** skill | — |
 | `hub.css` / `tokens.css` / `pattern.css` | all styling; `tokens.css` holds the control cluster and the lens visibility rules | — |
 | `kb.js` | the loader every page's `<head>` carries — see below | — |
 
@@ -67,8 +67,8 @@ impossible now.
 
 ## The fixed control cluster
 
-Five floating controls, all `position: fixed`, all injected at runtime, all on the RIGHT
-edge. **Sizes and offsets are tokens, not constants** — `--control-size` (2.8rem, the
+Six floating controls, all `position: fixed`, all injected at runtime, five on the RIGHT
+edge and one on the LEFT. **Sizes and offsets are tokens, not constants** — `--control-size` (2.8rem, the
 smallest square that clears the 44px touch-target minimum), `--control-edge` (0.9rem
 from the viewport edge), `--control-gap` and `--control-step` (one whole slot). They
 were hand-typed as `0.9 / 3.4 / 5.9rem` and every one had to be re-derived by hand
@@ -88,13 +88,20 @@ whenever the box changed, so the stack now counts slots:
   same `toggle(id)` and are repainted together. Gold `#e0a800`.
 - `.section-nav` — vertically centred, below the stack: a flex column of at most two
   `.section-nav-btn` arrows (section-nav.js, content pages over two viewports tall).
+- `.sketch-toggle` — the **left** edge, top slot, and the only thing there (sketch.js
+  injects it iff the page carries 2+ `details.sketch`). `▾` expands every sketch, `▴`
+  collapses them; the glyph names the action, `aria-expanded` carries the state and paints
+  it `--accent`. **Why the left**: as a chip inside the entities block, right-aligned under
+  the heading, it landed directly beneath `.lens-group` at the same edge and read as more
+  chrome — reported missing twice while sitting in the DOM. A control that shares a corner
+  with other chrome is invisible.
 
-The four square controls share one box rule in `tokens.css`; only position, glyph and
+The five square controls share one box rule in `tokens.css`; only position, glyph and
 pressed colour differ. A new control joins that selector list rather than copying the
-box a fifth time.
+box a sixth time.
 
-**`.doc-wrap` reserves the column** with a `padding-right` that subtracts the page's own
-gutter, so no control ever renders over prose. The page keeps no guaranteed gutter —
+**`.doc-wrap` reserves BOTH columns** with a `padding-right`/`padding-left` pair that
+subtracts the page's own gutter, so no control ever renders over prose. The page keeps no guaranteed gutter —
 `--content-width` is `clamp(66rem, 57rem + 14vw, 81rem)` — so below about 1230px the
 wrap runs edge to edge and without the reservation the arrows sit on the last characters
 of every line. Changing `--control-size` means checking that reservation still clears it.

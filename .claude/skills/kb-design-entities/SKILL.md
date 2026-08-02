@@ -47,7 +47,8 @@ the whole block, so `schema` alone costs the reader a click to find out which ta
 `<code>` carries **both** `class="language-sql"` and `data-kb-lang="sql"` — the class is what
 highlight.js reads and the attribute is what `make check` reads, and dropping either one
 renders the schema in flat ink. `sketch.js` highlights each sketch when it opens and injects
-one **Expand all** control per block, so nothing is authored for the sixteen-click problem.
+the page's floating **expand-all** control on the left edge, so nothing is authored for the
+sixteen-click problem.
 Full sketch contract, including the closed language set: the **kb-sketch** skill.
 
 ## The two-part shape

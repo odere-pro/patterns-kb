@@ -45,8 +45,8 @@ presentation-only classes (styled in `site/assets/pattern.css`, shared with the 
 cards); meaning lives in the element structure. The `<code>` carries **both**
 `class="language-http"` and `data-kb-lang="http"` — the class is what highlight.js reads and
 the attribute is what `make check` reads, and dropping either one renders the contract in
-flat ink. `sketch.js` highlights each contract when it opens and injects one **Expand all**
-control per block. Full sketch contract: the **kb-sketch** skill.
+flat ink. `sketch.js` highlights each contract when it opens and injects the page's floating
+**expand-all** control on the left edge. Full sketch contract: the **kb-sketch** skill.
 
 ## The two-part shape
 

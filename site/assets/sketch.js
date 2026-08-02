@@ -46,49 +46,46 @@
     if (details.open) lazy();
   });
 
-  /* ---- the per-section Expand all / Collapse all ---- */
+  /* ---- the floating Expand all / Collapse all ---- */
 
-  /* Injected AFTER the section's h2, never inside it: section-nav.js finds a section's
-     heading with `querySelector('h2')`, and progress.js and lens.js key off their own
-     attributes, so a sibling div is invisible to all three. */
-  function mount(section) {
-    var own = section.querySelectorAll("details.sketch");
-    if (own.length < 2) return;
-    var heading = section.querySelector("h2.doc-h");
-    if (!heading) return;
+  /* ONE page-level control in the fixed cluster, on the LEFT edge — the same box as the
+     theme, practiced and favourite toggles, mirrored across the page. It was a chip inside
+     the block first, right-aligned under the heading, which put it directly beneath the
+     lens group at the same edge: present in the DOM and invisible to the reader, twice
+     over. The left edge carries nothing else, so there is nothing for it to hide behind.
 
-    var wrap = document.createElement("div");
-    wrap.className = "sketch-controls";
+     Injected rather than authored, like every other floating control — the alternative is
+     a markup sweep across every pattern and design page for pure presentation. */
+  if (sketches.length > 1) {
     var btn = document.createElement("button");
     btn.type = "button";
     btn.className = "sketch-toggle";
-    wrap.appendChild(btn);
-    heading.insertAdjacentElement("afterend", wrap);
 
-    /* The label answers "what happens if I press this", so it names the action rather than
-       the state: anything still closed means there is something left to expand. The count
-       and the chevron are what make it read as a control over the cards below rather than
-       as a stray chip — the chevron is the one the summaries already carry. */
+    /* Glyph and tooltip both name the ACTION, not the state: anything still closed means
+       there is something left to expand. ▾ unfolds, ▴ folds back. */
     var anyClosed = function () {
-      return Array.prototype.some.call(own, function (d) { return !d.open; });
+      return Array.prototype.some.call(sketches, function (d) { return !d.open; });
     };
     var label = function () {
       var expand = anyClosed();
-      btn.textContent = (expand ? "▸ Expand all " : "▾ Collapse all ") + own.length;
+      var what = (expand ? "Expand" : "Collapse") + " all " + sketches.length + " code sketches";
+      btn.textContent = expand ? "▾" : "▴";
+      btn.title = what;
+      btn.setAttribute("aria-label", what);
+      /* aria-expanded is the state, not the action — it is what paints the control. */
       btn.setAttribute("aria-expanded", expand ? "false" : "true");
     };
     btn.addEventListener("click", function () {
       var open = anyClosed();
-      Array.prototype.forEach.call(own, function (d) { d.open = open; });
+      Array.prototype.forEach.call(sketches, function (d) { d.open = open; });
       label();
     });
     /* A sketch opened on its own keeps the button honest. `toggle` fires asynchronously,
        so this cannot be folded into the click handler above. */
-    Array.prototype.forEach.call(own, function (d) { d.addEventListener("toggle", label); });
+    Array.prototype.forEach.call(sketches, function (d) { d.addEventListener("toggle", label); });
     label();
+    document.body.appendChild(btn);
   }
-
-  Array.prototype.forEach.call(document.querySelectorAll("section.doc-section"), mount);
 
   /* Print opens everything and puts it back. A reader printing a design page wants the
      schemas, and there is no click on paper. Restoring from a snapshot rather than closing

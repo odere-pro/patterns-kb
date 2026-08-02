@@ -88,9 +88,17 @@ screen, and the reader scrolls past the prose to reach the next one. Collapsed, 
 reads as an index — which is what makes the `<summary>` rule above load-bearing.
 
 The clicking cost is paid by a control, not by the markup. `site/assets/sketch.js` **injects**
-an `Expand all` / `Collapse all` toggle into any `section.doc-section` holding two or more
-sketches, after its `h2.doc-h`. Nothing is authored for it on any page: the alternative was a
-markup sweep across every pattern and design page for a control that is pure presentation.
+one page-level `▾` / `▴` toggle on any page carrying two or more sketches — `.sketch-toggle`,
+the same fixed box as the theme and favourite toggles, but on the **left** edge, and the only
+thing there. Nothing is authored for it on any page: the alternative was a markup sweep across
+every pattern and design page for a control that is pure presentation.
+
+Its position is the whole lesson. It shipped first as a chip inside the block, right-aligned
+under the heading — which put it directly beneath the reading-level lens at the same edge,
+where it read as more floating chrome and was reported missing twice while sitting in the DOM
+the whole time. A control that competes with other chrome for the same corner is invisible;
+alone on the opposite edge it is not. `.doc-wrap` reserves that column with the same
+`padding-left` expression the right side already uses.
 
 Two behaviours come with it:
 
