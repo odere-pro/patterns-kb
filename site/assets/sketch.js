@@ -66,8 +66,8 @@
        control as far as the reader is concerned. Stacked, the pair says which way the
        page is about to move:
 
-         expand   ▲ over ▼  — apexes point OUT, a diamond opening
-         collapse ▼ over ▲  — apexes point IN, an hourglass closing
+         expand   ▲ over ▼  — apexes point APART, a diamond opening
+         collapse ▼ over ▲  — apexes point TOGETHER, an hourglass closing
 
        Both spans exist from the start; only their text changes, so the box never reflows. */
     var top = document.createElement("span");

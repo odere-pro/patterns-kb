@@ -90,9 +90,10 @@ whenever the box changed, so the stack now counts slots:
   `.section-nav-btn` arrows (section-nav.js, content pages over two viewports tall).
 - `.sketch-toggle` — the **left** edge, top slot, and the only thing there (sketch.js
   injects it iff the page carries 2+ `details.sketch`). Two stacked triangles, not a
-  chevron — a lone `▾` is what `.section-nav-btn` already means: `▲`over`▼` fuses into a
-  **diamond** (opening, so it expands), `▼`over`▲` into an **hourglass** (closing, so it
-  collapses). The shape names the action; `aria-expanded` carries the state and paints it
+  chevron — a lone `▾` is what `.section-nav-btn` already means. `▲` over `▼` point apart,
+  a **diamond** opening, so it expands; `▼` over `▲` point together, an **hourglass**
+  closing, so it collapses. The shape names the action; `aria-expanded` carries the state
+  and paints it
   `--accent`. **Why the left**: as a chip inside the entities block, right-aligned under
   the heading, it landed directly beneath `.lens-group` at the same edge and read as more
   chrome — reported missing twice while sitting in the DOM. A control that shares a corner

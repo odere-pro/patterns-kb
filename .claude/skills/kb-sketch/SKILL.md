@@ -91,8 +91,8 @@ The clicking cost is paid by a control, not by the markup. `site/assets/sketch.j
 one page-level toggle on any page carrying two or more sketches — `.sketch-toggle`, the same
 fixed box as the theme and favourite toggles, but on the **left** edge, and the only thing
 there. Its glyph is two stacked triangles rather than a chevron, because a lone `▾` is what
-`.section-nav-btn` already means: `▲`over`▼` fuses into a **diamond** that opens, `▼`over`▲`
-into an **hourglass** that closes. Nothing is authored for it on any page: the alternative was a markup sweep across
+`.section-nav-btn` already means. `▲` over `▼` point apart, a **diamond** opening, so it
+expands; `▼` over `▲` point together, an **hourglass** closing, so it collapses. Nothing is authored for it on any page: the alternative was a markup sweep across
 every pattern and design page for a control that is pure presentation.
 
 Its position is the whole lesson. It shipped first as a chip inside the block, right-aligned
