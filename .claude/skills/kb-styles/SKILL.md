@@ -78,6 +78,16 @@ three (`::-webkit-details-marker` too) and draws a rotated-border chevron in
 `.sec-head::after` / `.sub > summary::after`, flipped by `details[open]`. Any new
 `<details>` needs the same treatment or it ships with no affordance at all.
 
+## The `hljs-*` map is closed against what the corpus emits
+
+`pattern.css` maps highlight.js scopes onto the palette tokens, and the set is derived rather
+than copied from an upstream theme: adding a rule for a scope no grammar produces is
+indistinguishable from missing the one that matters. `hljs-attribute` sat unstyled while every
+API contract's headers rendered in flat ink, and `hljs-subst` inherited the string colour so
+`${…}` vanished into the text around it. Before touching those rules, run the corpus tally in
+the **kb-sketch** skill — it highlights all 356 sketches with the shipped bundle and counts
+the scopes.
+
 ## Breakpoints
 
 One per stylesheet, and they are deliberately not identical — each matches where *its* own

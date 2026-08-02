@@ -27,7 +27,7 @@ builder (**kb-hub**); a change to how it *behaves* lives here.
 | `collapse.js` | hub section/subsection disclosure: seeds from the rendered `open`, stores **overrides only**, exposes `window.KB_COLLAPSE.hold(reason, on)`, opens the `<details>` chain for `location.hash`, forces open for print | `kb-collapse-v1` |
 | `diagram.js` | mermaid init + re-render on `kb-theme-change`, `kb-lens-change`, OS scheme change; fires `kb-diagram-render` at the end of every pass | — |
 | `diagram-zoom.js` | per-figure zoom strip (− / + / % / ⤢), drag-pan, and the full-screen `<dialog class="dzoom">`; exposes `window.KB_DIAGRAM_ZOOM` | — |
-| `sketch.js` | lazy highlight.js on `details.sketch` open | — |
+| `sketch.js` | lazy highlight.js on `details.sketch` open (never throwing — an unknown language downgrades that one sketch, not the loop); injects the per-section **Expand all / Collapse all**; opens every sketch for print and restores after. Sketches are collapsed in the markup and their state does **not** persist — the language set, the vendored grammars and the `hljs-*` colours are the **kb-sketch** skill | — |
 | `hub.css` / `tokens.css` / `pattern.css` | all styling; `tokens.css` holds the control cluster and the lens visibility rules | — |
 
 `catalog.js` and `graphdata.js` are **generated** (scripts/build.mjs) — never edit. So is

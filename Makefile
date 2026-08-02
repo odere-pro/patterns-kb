@@ -41,6 +41,7 @@ check: ## Verify generated artifacts are in sync, no dangling links, diagrams pa
 	@node scripts/audit-relations.mjs
 	@node scripts/audit-vocab.mjs
 	@node scripts/audit-products.mjs
+	@node scripts/audit-highlight.mjs
 	@node scripts/lint-claude.mjs
 
 test: ## Smoke-test the builders/checkers against the fixture corpus (scripts/test/)
@@ -51,6 +52,9 @@ relations: ## Cross-check every page's rendered relationships against graph.json
 
 products: ## Re-fetch every vendor documentation URL in the product registry (needs network)
 	@node scripts/audit-products.mjs --online
+
+highlight: ## Re-vendor a highlight.js grammar for every sketch language (needs network)
+	@node scripts/audit-highlight.mjs --online
 
 lint-claude: ## Lint the .claude/ skills and agents — frontmatter, names, references, kind coverage
 	@node scripts/lint-claude.mjs

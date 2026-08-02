@@ -1,6 +1,6 @@
 ---
 name: kb-design-interface
-description: Write or review the interface block ("The interface — API design") of a patterns-kb design page — a short observations lead, then endpoints grouped by caller/audience, each with a method+path, a one-line description, and an HTTP contract expanded by default. Use when someone asks to "write the interface block", "design the API", "format the endpoints", "group the API by caller", "show request/response per endpoint", or says the API design is hidden in collapsed sketches or missing part of its surface. Also use to review, evaluate, critique, audit or grade an existing interface block, including when the ask names it by file path or URL fragment (`…/<page>.html#interface`).
+description: Write or review the interface block ("The interface — API design") of a patterns-kb design page — a short observations lead, then endpoints grouped by caller/audience, each with a method+path, a one-line description, and an HTTP contract in a collapsed sketch. Use when someone asks to "write the interface block", "design the API", "format the endpoints", "group the API by caller", "show request/response per endpoint", or says the API design is missing part of its surface. Also use to review, evaluate, critique, audit or grade an existing interface block, including when the ask names it by file path or URL fragment (`…/<page>.html#interface`).
 ---
 
 # Writing the interface block ("The interface — API design")
@@ -9,9 +9,11 @@ description: Write or review the interface block ("The interface — API design"
 data design must find no surprises here.** Endpoints are grouped by caller/audience,
 because the auth model follows the audience: the tenant's API key, the onboardee's
 magic-link token, the vendor's signed callback, the system's own outbound push. Every
-contract is visible on load — collapsible is fine, collapsed is not: `<details
-class="sketch" open>`, never a closed one. Two sections, in order: a short observations
-lead, then the endpoints in groups.
+contract ships **collapsed** — `<details class="sketch">`, never an `open` one: eleven
+expanded contracts bury the grouping that is the block's actual argument. The surface has to
+be readable without opening anything, which is what the `<h4>` method+path and the one-line
+description are for. Two sections, in order: a short observations lead, then the endpoints in
+groups.
 
 ## The markup
 
@@ -26,7 +28,7 @@ lead, then the endpoints in groups.
     <div class="endpoint">
       <h4><code>POST /flows</code></h4>
       <p>One sentence: what it does and the rule it carries.</p>
-      <details class="sketch" open>
+      <details class="sketch">
         <summary>contract</summary>
 <pre><code class="language-http" data-kb-lang="http">POST /flows …</code></pre>
       </details>
@@ -40,8 +42,11 @@ lead, then the endpoints in groups.
 The heading is **"The interface — API design"**. Hand-edited HTML — no `kb.mjs` writer;
 the PostToolUse hook checks structure, not content. `endpoint-group` / `endpoint` are
 presentation-only classes (styled in `site/assets/pattern.css`, shared with the entity
-cards); meaning lives in the element structure. Keep `data-kb-lang` on the `<code>` —
-`sketch.js` highlights open sketches on load.
+cards); meaning lives in the element structure. The `<code>` carries **both**
+`class="language-http"` and `data-kb-lang="http"` — the class is what highlight.js reads and
+the attribute is what `make check` reads, and dropping either one renders the contract in
+flat ink. `sketch.js` highlights each contract when it opens and injects one **Expand all**
+control per block. Full sketch contract: the **kb-sketch** skill.
 
 ## The two-part shape
 
@@ -80,7 +85,7 @@ Every endpoint appears in **exactly one** group, as one `<div class="endpoint">`
 - **One-line description** — what it does and the rule it carries, one sentence, maybe
   two short ones. The rule is the point: "same `eventId`, so the client's dedup absorbs
   it" earns its line; "replays the webhook" does not.
-- **Contract** — a `<details class="sketch" open>` (summary: `contract`) holding
+- **Contract** — a collapsed `<details class="sketch">` (summary: `contract`) holding
   trimmed HTTP.
 
 ### Contract-sketch rules
@@ -137,11 +142,12 @@ reworked on purpose.
 
 ## Self-check
 
-1. Scan test: after 20 seconds, can a reader name the audiences, their auth models, and
-   the status-code policy? If any contract is collapsed on load, it fails.
+1. Scan test: after 20 seconds and **without opening a contract**, can a reader name the
+   audiences, their auth models, and the whole endpoint surface? That is what the group
+   headings, the `<h4>` method+path lines and the one-line descriptions are for.
 2. Is the observations lead ≤4 sentences, every one a claim?
-3. Does every endpoint sit in exactly one group, with method+path + one-line rule +
-   visible contract — and does every group heading name its auth model?
+3. Does every endpoint sit in exactly one group, with method+path + one-line rule + a
+   collapsed contract — and does every group heading name its auth model?
 4. Does every state-changing contract name its duplicate-guard(s), and every cited
    constraint exist by name in the entities block?
 5. Is the whole surface present — including outbound pushes and vendor-only callbacks —

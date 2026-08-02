@@ -1,6 +1,6 @@
 ---
 name: kb-design-entities
-description: Write or review the entities block ("Core entities & data design") of a patterns-kb design page — a short observations lead, then entities grouped by domain role, each with a name, a one-line description, and a trimmed-DDL schema expanded by default. Use when someone asks to "write the entities block", "format core entities", "restructure the data design", "group the entities", "show the schema per entity", or says the data design is unreadable or hidden behind a click. Also use to review, evaluate, critique, audit or grade an existing entities block, including when the ask names it by file path or URL fragment (`…/<page>.html#entities`).
+description: Write or review the entities block ("Core entities & data design") of a patterns-kb design page — a short observations lead, then entities grouped by domain role, each with a name, a one-line description, and a trimmed-DDL schema in a collapsed sketch. Use when someone asks to "write the entities block", "format core entities", "restructure the data design", "group the entities", "show the schema per entity", or says the data design is unreadable. Also use to review, evaluate, critique, audit or grade an existing entities block, including when the ask names it by file path or URL fragment (`…/<page>.html#entities`).
 ---
 
 # Writing the Core entities & data design block
@@ -8,8 +8,10 @@ description: Write or review the entities block ("Core entities & data design") 
 **The entities block *is* the data design, and it is read as the prerequisite for the
 interface block.** A reader who has scanned it must be able to design the API: what the
 resources are, who owns them, which store each lives in, and which constraints carry the
-business rules. Every schema is visible on load — collapsible is fine, collapsed is not:
-`<details class="sketch" open>`, never a closed one. Two sections, in order: a short
+business rules. Every schema ships **collapsed** — `<details class="sketch">`, never an
+`open` one: sixteen expanded schemas push the argument that owns the page off the screen, and
+the reader scrolls past the prose to reach the next one. What makes that readable rather than
+hidden is the `<summary>` line, so it names its table. Two sections, in order: a short
 observations lead, then the entities in groups.
 
 ## The markup
@@ -25,7 +27,7 @@ observations lead, then the entities in groups.
     <div class="entity">
       <h4>EntityName</h4>
       <p>One sentence: what it is and the rule it carries.</p>
-      <details class="sketch" open>
+      <details class="sketch">
         <summary>schema — table_name</summary>
 <pre><code class="language-sql" data-kb-lang="sql">CREATE TABLE …</code></pre>
       </details>
@@ -40,10 +42,13 @@ The heading is **"Core entities & data design"**. The block is hand-edited HTML 
 `kb.mjs` writer exists for it; the PostToolUse hook checks structure, not content.
 `entity-group` / `entity` are presentation-only classes (styled in
 `site/assets/pattern.css`); the meaning lives in the element structure, not the class
-names. Each schema's `<summary>` names its table (`schema — flow`) so the block stays
-scannable when someone collapses it. Always keep `data-kb-lang` on the `<code>` —
-`sketch.js` highlights open sketches on load, and without the attribute they render
-unhighlighted.
+names. Each schema's `<summary>` names its table (`schema — flow`): collapsed, that line is
+the whole block, so `schema` alone costs the reader a click to find out which table. The
+`<code>` carries **both** `class="language-sql"` and `data-kb-lang="sql"` — the class is what
+highlight.js reads and the attribute is what `make check` reads, and dropping either one
+renders the schema in flat ink. `sketch.js` highlights each sketch when it opens and injects
+one **Expand all** control per block, so nothing is authored for the sixteen-click problem.
+Full sketch contract, including the closed language set: the **kb-sketch** skill.
 
 ## The two-part shape
 
@@ -78,8 +83,8 @@ parts:
 - **One-line description** — what it is and the rule it carries, one sentence, maybe two
   short ones. The rule is the point: "written *before* the presigned upload so a failed
   upload leaves a visible stub" earns its line; "stores document metadata" does not.
-- **Schema** — trimmed DDL in a `<details class="sketch" open>` whose `<summary>`
-  names the table; expanded by default, collapsible by the reader.
+- **Schema** — trimmed DDL in a `<details class="sketch">` whose `<summary>` names the
+  table; collapsed by default, opened by the reader one at a time or all at once.
 
 ### Trimmed-DDL rules
 
@@ -130,11 +135,13 @@ its entities block is being reworked on purpose — not as a side effect of a sm
 
 ## Self-check
 
-1. Scan test: after 20 seconds, can a reader name the groups, the stores, and the two or
-   three constraints that carry the rules? If any schema is collapsed on load, it fails.
+1. Scan test: after 20 seconds and **without opening a schema**, can a reader name the
+   groups, the stores, and which entity carries which rule? That is what the group headings,
+   the one-line descriptions and the `<summary>` lines are for. A `<summary>` that says only
+   `schema` fails it.
 2. Is the observations lead ≤4 sentences, every one a claim?
-3. Does every entity appear in exactly one group, with name + one-line rule + visible
-   schema — and does every group heading name its store(s)?
+3. Does every entity appear in exactly one group, with name + one-line rule + a collapsed
+   schema whose summary names its table — and does every group heading name its store(s)?
 4. Do the schemas show every named constraint in full, and elide everything else with a
    comment?
 5. Does every entity trace to an FR, NFR, or sizing verdict — and every store in a

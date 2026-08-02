@@ -86,6 +86,7 @@ Which skill owns what, for the parts that are not a page's prose:
 | any block of a principle page | **kb-principle-blocks** |
 | any block of a capability page | **kb-capability-blocks** |
 | any block of a comparison page | **kb-comparison-blocks** |
+| a code sketch — its language, its highlighting, open vs collapsed | **kb-sketch** |
 | `make all` / `make check` / the worklists | **kb-verify** |
 | tokens, `hub.css`, `pattern.css` | **kb-styles** |
 | the client scripts and their stores | **kb-site-ui** |
