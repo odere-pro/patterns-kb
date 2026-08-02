@@ -5,7 +5,7 @@
  * author replaces the TODOs, wires relationships (kb.mjs link), writes metadata
  * (kb.mjs set), then runs `make all && make check`.
  */
-import { band as bandOf, esc, folderFor } from "./model.mjs";
+import { band as bandOf, esc, folderFor, PAGE_ASSETS } from "./model.mjs";
 
 const PATTERN_BLOCKS = () => `    <section class="doc-section" id="description" aria-labelledby="h-desc" data-kb-block="description">
       <h2 class="doc-h" id="h-desc">What it is</h2>
@@ -307,11 +307,10 @@ export function pageSkeleton({ id, name, kind, band, group, order, tags }) {
   const blocks =
     kind === "pattern" ? PATTERN_BLOCKS() : kind === "hazard" ? HAZARD_BLOCKS() : kind === "principle" ? PRINCIPLE_BLOCKS() : kind === "design" ? DESIGN_BLOCKS() : kind === "capability" ? CAPABILITY_BLOCKS() : kind === "comparison" ? COMPARISON_BLOCKS() : THEME_BLOCKS();
 
-  /* Designs may carry a small code sketch (an API shape, a low-level-design class), so
-   * they load the highlighter too. */
-  const patternScripts = (kind === "pattern" || kind === "design")
-    ? `\n  <script src="${p}assets/vendor/highlight.min.js"></script>\n  <script src="${p}assets/sketch.js"></script>`
-    : "";
+  /* The head asset pair is a `kb:generated` region like the JSON-LD block — build-pages.mjs
+   * owns it from here on, but the scaffold emits the right shape up front so a fresh page
+   * never spends even one build cycle looking wrong. */
+  const assets = PAGE_ASSETS[kind];
 
   return `<!doctype html>
 <html lang="en">
@@ -320,10 +319,8 @@ export function pageSkeleton({ id, name, kind, band, group, order, tags }) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${esc(name)} · Patterns</title>
   <meta name="description" content="${esc(name)} — TODO.">
-  <link rel="stylesheet" href="${p}assets/tokens.css">
-  <link rel="stylesheet" href="${p}assets/pattern.css">
-  <script src="${p}assets/theme.js"></script>
-  <script src="${p}assets/lens.js"></script>
+  <link rel="stylesheet" href="${p}assets/${assets.css}">
+  <script src="${p}assets/kb.js" data-profile="${assets.profile}"></script>
 </head>
 <body class="${bodyClass}">
   <main class="doc-wrap" data-kb-id="${id}" data-kb-kind="${kind}" data-kb-band="${band}" data-kb-group="${group}" data-kb-essence="TODO — the terse one-liner" data-kb-order="${order}"${tags?.length ? `\n        data-kb-tags='${JSON.stringify(tags)}'` : ""}>
@@ -357,10 +354,6 @@ ${blocks}
       <a class="next" href="${p}index.html${crumbAnchor}">${esc(crumbLabel)} →</a>
     </nav>
   </main>
-
-  <script src="${p}assets/vendor/mermaid.min.js"></script>
-  <script src="${p}assets/diagram.js"></script>
-  <script src="${p}assets/progress.js"></script>${patternScripts}
 </body>
 </html>
 `;

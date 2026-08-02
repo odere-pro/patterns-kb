@@ -187,7 +187,13 @@ the same thing. Edit the model, then the generator if the page needs a new secti
 build.
 
 Adding a term to any closed vocabulary without a rendered fragment fails `audit-vocab.mjs`
-(V2). Adding a `data-kb-*` to the toolchain without an `ATTRIBUTES` entry fails V1.
+(V2). Adding a `data-kb-*` to the toolchain without an `ATTRIBUTES` entry fails V1. This is
+why the loader script's `data-profile` attribute (`<script src="…/kb.js" data-profile="pattern">`)
+is deliberately spelled without the `kb-` prefix: it carries no knowledge about the page,
+only which asset list `kb.js` loads, so it has no business in `ATTRIBUTES` or on this page
+— an ontology entry for it would document plumbing, not content. If it is ever renamed to
+`data-kb-profile`, add the `ATTRIBUTES` entry and the vocab.html fragment in the same
+change, or V1 fails the build.
 Emitting a `kb:` term in the JSON-LD with no definition fails V3. A page using a polarity or
 sketch language outside its set fails V4; a set member no page uses fails T4. These exist
 because the page claims every term resolves to a fragment on it, and that claim was false

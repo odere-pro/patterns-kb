@@ -11,20 +11,20 @@
  *     data-kb-level lives on finer elements only and is never touched here.
  *   - a JSON-LD block in <head>, projected from the data-kb-* attributes. It is never
  *     hand-written; that is what keeps it honest.
- *   - the body-end <script src> list, from PAGE_SCRIPTS in lib/model.mjs. Authored tags
- *     drifted into nine different shapes across the corpus and 53 pages had silently
- *     lost favourites.js; deriving the list means a new control is one line of taxonomy
- *     rather than a sweep, and the staleness gate below catches the next drift.
+ *   - the <head> asset pair — one stylesheet link, one loader script — from PAGE_ASSETS
+ *     in lib/model.mjs. Authored tags drifted into nine different shapes across the
+ *     corpus and 53 pages had silently lost favourites.js; deriving the pair means a new
+ *     kind is one line of taxonomy rather than a sweep, and the staleness gate below
+ *     catches the next drift.
  *
- * Everything else on the page is authored — including the <head> scripts, which must run
- * before first paint. Run: node scripts/build-pages.mjs [--check]
+ * Everything else on the page is authored. Run: node scripts/build-pages.mjs [--check]
  */
 import { readFileSync } from "node:fs";
 import { writeAtomic } from "./lib/atomic.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, resolve } from "node:path";
 import { parse } from "./vendor/node-html-parser.mjs";
-import { VOCAB_NS, KB_NAME, BLOCK_LEVELS, POLARITIES, PAGE_SCRIPTS, esc } from "./lib/model.mjs";
+import { VOCAB_NS, KB_NAME, BLOCK_LEVELS, POLARITIES, PAGE_ASSETS, esc } from "./lib/model.mjs";
 import { blockProblems, lensProblems } from "./lib/validate.mjs";
 
 /* The parser drops HTML comments unless told otherwise, which would silently delete
@@ -42,13 +42,24 @@ const graph = JSON.parse(readFileSync(join(SITE, "assets", "graph.json"), "utf8"
 
 const MARK = "kb:generated — derived from data-kb-*; edit the page, not this";
 const MENTIONS_MARK = "kb:generated — mentions; derived from other pages' prose links, edit the prose, not this";
-const SCRIPTS_MARK = "kb:generated — page scripts; edit PAGE_SCRIPTS in scripts/lib/model.mjs, not this";
-/* The whole body-end script run, its leading blank line included, and WITH OR WITHOUT the
- * marker — matching an unmarked run is what let the first build absorb the hand-written
- * tags it replaces, instead of needing a migration to strip them. Anchored on </body>, so
- * the <head> scripts (theme.js, lens.js, which stay authored because they run pre-paint)
- * can never match: nothing in <head> is followed by the closing body tag. */
-const SCRIPTS_RE = /\n(?:[ \t]*<!-- kb:generated — page scripts[^\n]*-->\n)?(?:[ \t]*<script src="[^"]*"><\/script>\n)+(?=[ \t]*<\/body>)/;
+const ASSETS_MARK = "kb:generated — page assets; edit PAGE_ASSETS in scripts/lib/model.mjs, not this";
+/* The <head> asset pair — one stylesheet link, one loader script — matched WITH OR
+ * WITHOUT the marker, so the first build absorbs whatever a page's authored head says
+ * today (tokens.css + pattern.css + theme.js + lens.js, or any earlier shape still lying
+ * around) instead of needing a migration script. Anchored on the JSON-LD comment that
+ * always follows it once the JSON-LD step below has run, so a stylesheet or script
+ * anywhere else on the page can never match — audit-assets.mjs enforces that there is
+ * nowhere else for one to be. */
+const HEAD_ASSETS_RE = new RegExp(
+  "(?:[ \\t]*<!-- kb:generated — page assets[^\\n]*-->\\n)?" +
+  "(?:[ \\t]*(?:<link rel=\"stylesheet\" href=\"[^\"]*\">|<script src=\"[^\"]*\"[^>]*></script>)\\n)+" +
+  "(?=[ \\t]*<!-- kb:generated[^>]*-->\\n[ \\t]*<script type=\"application/ld\\+json\">)",
+);
+/* The run of body-end <script src> tags this region used to occupy. Only STRIPPED now —
+ * the pair above replaces it entirely — so a page migrating from the old shape converges
+ * to the new one in a single `make all` with no separate migration step. Kept only until
+ * every page in the corpus has rebuilt at least once; safe to delete after that. */
+const OLD_BODY_SCRIPTS_RE = /\n(?:[ \t]*<!-- kb:generated — page scripts[^\n]*-->\n)?(?:[ \t]*<script src="[^"]*"><\/script>\n)+(?=[ \t]*<\/body>)/;
 /* The whole region, leading newline included, so stripping it restores the page byte for
  * byte and a rebuild is idempotent. */
 const MENTIONS_RE = /\n[ \t]*<!-- kb:generated — mentions[\s\S]*?<\/aside>\n/;
@@ -189,19 +200,20 @@ ${items}
 `;
 }
 
-/* The body-end script list for one page, at the ../ depth its own path implies — the same
+/* The <head> asset pair for one page, at the ../ depth its own path implies — the same
  * `hop` the JSON-LD writer uses, because a design one level down and a pattern three levels
  * down need different prefixes and the site must work from file:// with no server to
  * resolve an absolute path. An unknown kind throws rather than emitting nothing: a page
  * silently stripped of every control is far worse than a red build. */
-function scriptsFor(node) {
-  const list = PAGE_SCRIPTS[node.kind];
-  if (!list) throw new Error(`${node.id}: kind "${node.kind}" has no PAGE_SCRIPTS entry — add one in scripts/lib/model.mjs`);
-  const tags = list.map((s) => `  <script src="${hop(node.path, `assets/${s}`)}"></script>`).join("\n");
-  return `  <!-- ${SCRIPTS_MARK} -->\n${tags}\n`;
+function headAssetsFor(node) {
+  const a = PAGE_ASSETS[node.kind];
+  if (!a) throw new Error(`${node.id}: kind "${node.kind}" has no PAGE_ASSETS entry — add one in scripts/lib/model.mjs`);
+  const css = `  <link rel="stylesheet" href="${hop(node.path, `assets/${a.css}`)}">\n`;
+  const script = `  <script src="${hop(node.path, "assets/kb.js")}" data-profile="${a.profile}"></script>\n`;
+  return `  <!-- ${ASSETS_MARK} -->\n${css}${script}`;
 }
 
-let changed = 0, stale = [], idsStamped = 0, levelsStamped = 0, mentionsRendered = 0, scriptsRendered = 0;
+let changed = 0, stale = [], idsStamped = 0, levelsStamped = 0, mentionsRendered = 0, assetsRendered = 0;
 const problems = [];
 
 for (const node of Object.values(graph.nodes)) {
@@ -317,6 +329,22 @@ for (const node of Object.values(graph.nodes)) {
     ? out.replace(existing, block)
     : out.replace("</head>", block + "</head>");
 
+  /* ---- <head> asset pair ----
+   * Runs after the JSON-LD step above, which guarantees `out` now carries exactly one
+   * JSON-LD comment+script — the anchor HEAD_ASSETS_RE's lookahead requires. Replace the
+   * run in place, or insert one directly ahead of that anchor on a page that has none. */
+  const assets = headAssetsFor(node);
+  out = HEAD_ASSETS_RE.test(out)
+    ? out.replace(HEAD_ASSETS_RE, assets)
+    : out.replace(/([ \t]*<!-- kb:generated[^>]*-->\n[ \t]*<script type="application\/ld\+json">)/, `${assets}$1`);
+  assetsRendered++;
+
+  /* ---- the old body-end script run: stripped, not replaced ----
+   * The pair above supersedes it entirely, so a page still carrying the old run
+   * (everything in the corpus, until its next rebuild) converges to the new shape in one
+   * `make all` with nothing left dangling at the body end. */
+  out = out.replace(OLD_BODY_SCRIPTS_RE, "\n");
+
   /* ---- "Mentioned by" ----
    * Strip first, then re-insert, so a page that lost its last mention loses the region
    * too. It goes last in <main> but ahead of the prev/next nav, which stays the final
@@ -330,16 +358,6 @@ for (const node of Object.values(graph.nodes)) {
     out = out.replace(anchor, `\n${mentions}$1`);
     mentionsRendered++;
   }
-
-  /* ---- body-end script list ----
-   * Replace the existing run in place, or insert one on a page that has none (a fixture
-   * page, or a newly scaffolded one). Either way the region ends up as the last thing
-   * before </body>, separated from </main> by the one blank line every page already has. */
-  const scripts = scriptsFor(node);
-  out = SCRIPTS_RE.test(out)
-    ? out.replace(SCRIPTS_RE, `\n${scripts}`)
-    : out.replace(/([ \t]*<\/body>)/, `\n${scripts}$1`);
-  scriptsRendered++;
 
   if (out !== src) {
     if (CHECK) stale.push(node.path);
@@ -361,5 +379,5 @@ if (CHECK) {
   console.log("pages are up to date.");
 } else {
   console.log(`pages refreshed: ${changed} written, ${idsStamped} element ids + ${levelsStamped} level stamps, ` +
-              `${mentionsRendered} "Mentioned by" list(s), ${scriptsRendered} script list(s).`);
+              `${mentionsRendered} "Mentioned by" list(s), ${assetsRendered} asset pair(s).`);
 }

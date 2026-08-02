@@ -36,7 +36,9 @@ two ways, and they fail differently:
   the page's **depth**. `patterns/distributed/routing/x.html` →
   `patterns/distributed/coordination/x.html` is the same depth and outbound links survive;
   `patterns/enterprise/x.html` → `patterns/distributed/resilience/x.html` is one level
-  deeper and every `../` in the file is now wrong.
+  deeper and every `../` in the file is now wrong. This used to include four hand-authored
+  `../assets/*` tags in `<head>` — now it is two, and both are `kb:generated`, so
+  `make all` re-derives them from the page's own new path with no manual fix at all.
 - **Inbound** — every link from another page to this one. These break on **any** move.
   Sibling links (`./foo.html`) from pages left behind become `../<newfolder>/foo.html`.
 

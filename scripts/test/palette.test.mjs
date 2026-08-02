@@ -116,25 +116,24 @@ test("every ranked node carries what the row renders", () => {
 test("prefixFromHrefs() derives the way back to site root at every depth the site has", () => {
   const cases = [
     // [what the page's <head> says, the prefix it implies, which page looks like this]
-    ["assets/tokens.css", "", "site/vocab.html — site root"],
-    ["../assets/tokens.css", "../", "site/map/stack.html"],
-    ["../assets/tokens.css", "../", "site/designs/uber.html"],
-    ["../../assets/tokens.css", "../../", "site/patterns/<band>/<id>.html"],
-    ["../../../assets/tokens.css", "../../../", "site/patterns/<band>/<group>/<id>.html"],
+    ["assets/kb-hub.css", "", "site/index.html — site root"],
+    ["assets/kb-page.css", "", "site/vocab.html — site root"],
+    ["../assets/kb-page.css", "../", "site/map/stack.html"],
+    ["../assets/kb-graph.css", "../", "site/map/graph.html"],
+    ["../assets/kb-page.css", "../", "site/designs/uber.html"],
+    ["../../assets/kb-page.css", "../../", "site/patterns/<band>/<id>.html"],
+    ["../../../assets/kb-page.css", "../../../", "site/patterns/<band>/<group>/<id>.html"],
+    // The pre-aggregator head, still honoured for a page that loads palette.js alone.
+    ["../../assets/tokens.css", "../../", "a page linking tokens.css directly"],
   ];
   for (const [href, want, where] of cases) {
     assert.equal(prefixFromHrefs([href]), want, where);
   }
 });
 
-test("prefixFromHrefs() finds tokens.css among the other stylesheets", () => {
-  // Real heads list tokens.css, then pattern.css, then palette.css.
-  assert.equal(
-    prefixFromHrefs(["../../../assets/tokens.css", "../../../assets/pattern.css", "../../../assets/palette.css"]),
-    "../../../",
-  );
-  // And it must not be fooled by a different stylesheet that merely sits alongside it.
-  assert.equal(prefixFromHrefs(["../assets/pattern.css", "../assets/tokens.css"]), "../");
+test("prefixFromHrefs() is not fooled by a stylesheet that merely sits alongside", () => {
+  assert.equal(prefixFromHrefs(["../assets/pattern.css", "../assets/kb-page.css"]), "../");
+  assert.equal(prefixFromHrefs(["../assets/graph.css", "../assets/kb-graph.css"]), "../");
 });
 
 test("prefixFromHrefs() falls back to site root rather than throwing", () => {

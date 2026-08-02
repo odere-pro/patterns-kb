@@ -12,11 +12,40 @@ Regenerate with `make all`; `make check` fails when any is stale.
 
 ## Hand-authored
 
-Everything else — `theme.js`, `lens.js`, `search.js`, `favourites.js`, `progress.js`,
-`sketch.js`, `diagram.js`, `vocab.js`, `graph-core.js`, `graph-view.js`, the CSS, the
-vendored libraries. Edits here cannot break KB validity, so the post-edit hook only syntax-checks
-`.js` files (`node --check`). Vendored libraries (`vendor/`) are third-party — update by
-replacing the file and its LICENSE, never by editing.
+Everything else — `kb.js`, `theme.js`, `lens.js`, `search.js`, `favourites.js`,
+`progress.js`, `sketch.js`, `diagram.js`, `vocab.js`, `graph-core.js`, `graph-view.js`, the
+CSS (including `kb-page.css`, `kb-hub.css`, `kb-graph.css`), the vendored libraries. Edits
+here cannot break KB validity, so the post-edit hook only syntax-checks `.js` files
+(`node --check`). Vendored libraries (`vendor/`) are third-party — update by replacing the
+file and its LICENSE, never by editing.
+
+## `kb.js` — the one script every page loads
+
+A page's entire asset wiring is one stylesheet link and one script tag:
+
+```html
+<link rel="stylesheet" href="../assets/kb-page.css">
+<script src="../assets/kb.js" data-profile="pattern"></script>
+```
+
+`kb.js` is a manifest keyed by `data-profile` (the seven page kinds, plus `hub`, `vocab`,
+`graph`, `stack` for the four generated pages), each naming a `pre` list (parser-blocking,
+no `defer` — `theme.js` and `lens.js` must run before first paint or the reader sees a
+flash of the wrong theme) and a `tail` list (written WITH `defer`, so the browser executes
+them in written order after parsing and before `DOMContentLoaded` — the same guarantee the
+old body-end blocking tags gave, without blocking on 3.5MB of mermaid). `document.write`
+is the mechanism: a parser-inserted script honours `defer`, an appended one does not, which
+is why the fallback branch (reached only if the document has already finished loading)
+appends with `script.async = false` instead. `kb.js` also derives `window.KB_PREFIX` from
+its own `<script src>` attribute — file://-safe, and the one thing `palette.js` now reads
+first (see below) — and exports the whole manifest as `window.KB_ASSETS` for
+`scripts/audit-assets.mjs` and `scripts/test/assets.test.mjs` to check without a DOM.
+
+The `<head>` pair itself is a `kb:generated` region: `PAGE_ASSETS` in `lib/model.mjs` names
+each kind's stylesheet aggregator and profile, and `build-pages.mjs` emits both lines at
+the page's own `../` depth — adding a client script is one array entry in `kb.js`, never a
+382-page sweep. `vocab.html`, `map/stack.html`, `index.html` and `map/graph.html` are not
+built by `build-pages.mjs`, so their own builders carry the pair.
 
 ## The ⌘K palette (`palette.js`)
 
@@ -24,10 +53,8 @@ One keystroke to anywhere, on **every** page. It **scores nothing of its own**: 
 the data, `search.js` exposes `window.KB_MATCHES`, and `palette.js` orders and caps. That is a
 third consumer of the hub scorer, so the ranking is the hub's by construction.
 
-All three are `PAGE_SCRIPTS` entries (`SCRIPTS_BASE` in `lib/model.mjs`), so the 382 KB pages
-get them from the generated body-end region and the order is stated once. `vocab.html`,
-`map/stack.html`, `index.html` and `map/graph.html` are not built by `build-pages.mjs`, so
-their own builders carry the tags.
+All three are `kb.js` tail entries (`BASE` in `assets/kb.js`), so every profile gets them
+from the loader script and the order is stated once.
 
 **Two keys, one rule** — and it is the rule, not a per-page list:
 
@@ -48,18 +75,20 @@ Contracts, each with a test in `scripts/test/palette.test.mjs`:
   at bind time and decides only whether the palette declines `/`. It stays a check on their
   markup rather than a page-name list, because whoever renders those owns the local key.
 - **Depth is derived, not injected.** Catalog paths are site-root-relative and the script runs
-  at four depths with no build-time global, so `prefixFromHrefs()` reads the page's own
-  `assets/tokens.css` href and strips the tail. Get this wrong and every result 404s on 382
-  pages with no build error — `check-links.mjs` cannot see an href computed at runtime, which
-  is why there is a test case per depth.
+  at four depths with no build-time global, so it prefers `window.KB_PREFIX` — set by `kb.js`
+  from its own `<script src>` attribute — and falls back to `prefixFromHrefs()` (which now
+  matches any of the `kb-*.css` aggregators) only if that global is absent. Get this wrong and
+  every result 404s on 382 pages with no build error — `check-links.mjs` cannot see a path
+  computed at runtime, which is why there is a test case per depth.
 - **`window.KB_PALETTE` is the test seam** (`prefixFromHrefs`, `rank`, `limit`), exposed the
   same way `search.js` exposes `KB_MATCHES`. Logic that moves out of it stops being tested.
 
-The overlay is the site's first `<dialog>`. Its rules live in **`palette.css`**, pulled in by an
-`@import` at the top of both `pattern.css` and `hub.css` — the hub links neither `pattern.css`
-nor anything else that carried them, and `<head>` links stay authored on the 382 content pages,
-so importing is what gets one source to both page families without a 382-head sweep. It themes
-purely off `tokens.css` variables and sits at `z-index: 100`, above the fixed control cluster's 50.
+The overlay is the site's first `<dialog>`. Its rules live in **`palette.css`**, `@import`ed
+directly by all three aggregators (`kb-page.css`, `kb-hub.css`, `kb-graph.css`) — flat, not
+nested inside `pattern.css`/`hub.css` as it once was, because a nested `@import` cannot be
+discovered until the importing sheet has been fetched AND parsed, turning one render-blocking
+round trip into two on every page. It themes purely off `tokens.css` variables and sits at
+`z-index: 100`, above the fixed control cluster's 50.
 
 **`.prod` in `pattern.css` is the site's only outbound link class.** It styles the vendor
 documentation links on `map/stack.html` and marks them with a trailing ↗, because everything

@@ -1,6 +1,6 @@
 ---
 name: kb-verify
-description: Run and interpret the patterns-kb build and verification loop — make all, make check's eleven sub-steps, make test, the worklist reports (report-lens, report-links, report-vocab, report-variation-links), and the multi-session lock and staged-tree rules. Use when someone asks "why is make check failing", "what does this build error mean", "regenerate everything", "is the KB green", "why is graph.json stale after make all", "what should I run before committing", or when a build step fails and it is not obvious which skill owns the fix.
+description: Run and interpret the patterns-kb build and verification loop — make all, make check's sub-steps, make test, the worklist reports (report-lens, report-links, report-vocab, report-variation-links), and the multi-session lock and staged-tree rules. Use when someone asks "why is make check failing", "what does this build error mean", "regenerate everything", "is the KB green", "why is graph.json stale after make all", "what should I run before committing", or when a build step fails and it is not obvious which skill owns the fix.
 ---
 
 # The build and verify loop
@@ -48,6 +48,7 @@ Each step has an owner. Match the message, then go to the skill that owns it.
 | `on no hub section` | a non-pattern page is in no ordering array | **kb-hub** |
 | `lives in X but its band/group means Y` | path disagrees with the attributes | **kb-move** |
 | dangling href / mermaid click target | a link resolves to nothing | **kb-move** (if a move caused it), else fix the link |
+| `N asset problem(s)` | a page's `<head>` carries the wrong stylesheet/loader shape, an extra `<script>`, an unknown `data-profile`, or `kb.js`/a CSS aggregator names a file that does not exist | **kb-site-ui** (the script manifest) or **kb-styles** (the CSS chain) |
 | a mermaid diagram fails to parse | syntax the vendored engine rejects | **diagram-draw** |
 | one-way, dangling or contradictory relation | an edge declared on one page only | **kb-edit** |
 | `TOUR WITHOUT FLUENCY` / `FLUENCY WITHOUT TOUR` | theme membership declared on one side | **kb-edit** |

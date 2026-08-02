@@ -557,7 +557,13 @@ test("graph-view.js consumes the core rather than keeping a second copy", () => 
     ["JSON.parse(raw", "settings migration"], ["def.symmetric", "family canonicalization"]]) {
     assert.ok(!view.includes(dup), `graph-view.js has its own ${what} again ("${dup}")`);
   }
+  // The shell no longer lists scripts itself — kb.js's "graph" profile does, in its tail
+  // array, and array order IS load order (kb.js writes each tag with `defer`, so they
+  // execute in the order written). Read the manifest the way the runtime does.
+  const tail = loadScripts("kb.js").KB_ASSETS.profiles.graph.tail;
+  assert.ok(tail.includes("graph-core.js"), "the graph profile must load the core");
+  assert.ok(tail.indexOf("graph-core.js") < tail.indexOf("graph-view.js"), "core loads first");
+
   const shell = readFileSync(join(REPO, "site", "map", "graph.html"), "utf8");
-  assert.ok(shell.indexOf("assets/graph-core.js") > 0, "the shell must load the core");
-  assert.ok(shell.indexOf("assets/graph-core.js") < shell.indexOf("assets/graph-view.js"), "core loads first");
+  assert.match(shell, /data-profile="graph"/, "the shell selects the graph profile");
 });

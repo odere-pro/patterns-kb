@@ -5,7 +5,8 @@ description: Change the patterns-kb site's CSS — the design tokens in tokens.c
 
 # Styling the site
 
-Four stylesheets, and the split is the rule:
+Seven stylesheets — four leaves, plus three aggregators that assemble them for a page's
+one `<link>`:
 
 | File | Scope | Owner |
 |---|---|---|
@@ -13,10 +14,23 @@ Four stylesheets, and the split is the rule:
 | `hub.css` | `site/index.html` only | this skill |
 | `pattern.css` | every content page's blocks | this skill |
 | `graph.css` | the interactive graph canvas | **kb-graph** |
+| `palette.css` / `diagram-zoom.css` | the ⌘K overlay / the diagram viewer, shared across families | this skill |
+| `kb-page.css` | `@import`s `tokens, palette, diagram-zoom, pattern` — the one link every content page, `vocab.html` and `map/stack.html` carry | this skill |
+| `kb-hub.css` / `kb-graph.css` | the same idea for the hub (`tokens, palette, hub`) and the graph (`+ graph.css`) | this skill |
 
-`tokens.css` loads **first**, then exactly one of `hub.css` / `pattern.css`. Nothing else.
-There is no build step, no preprocessor and no CDN — plain CSS, vendored fonts, shipped
-as-is. Keep it that way.
+A page links **exactly one** aggregator; the load order is the `@import` list inside it,
+stated once. There is no build step, no preprocessor and no CDN — plain CSS, vendored
+fonts, shipped as-is. Keep it that way.
+
+**Adding a stylesheet to the content family is one `@import` line in `kb-page.css`** (and
+`kb-graph.css` if the graph needs it too), never a new `<link>` on a page —
+`scripts/audit-assets.mjs` fails any page carrying more than one stylesheet link.
+
+**Keep the aggregators flat.** `palette.css` and `diagram-zoom.css` used to `@import` from
+inside `pattern.css`; both moved up into the aggregators directly, because a nested
+`@import` cannot be discovered until the importing sheet has been fetched AND parsed — one
+render-blocking round trip becomes two, on every page, before first paint. Any new
+`@import` belongs in the aggregator, not nested one level deeper.
 
 ## Never hardcode a colour
 

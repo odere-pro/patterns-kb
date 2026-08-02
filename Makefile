@@ -37,6 +37,7 @@ check: ## Verify generated artifacts are in sync, no dangling links, diagrams pa
 	@node scripts/build-stack-page.mjs --check
 	@node scripts/build-claude.mjs --check
 	@node scripts/check-links.mjs
+	@node scripts/audit-assets.mjs
 	@node scripts/check-mermaid.mjs
 	@node scripts/audit-relations.mjs
 	@node scripts/audit-vocab.mjs

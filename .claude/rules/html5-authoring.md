@@ -412,17 +412,29 @@ presence must agree.
 ## Generated regions — do not edit
 
 Marked `<!-- kb:generated -->`. Currently the JSON-LD block, the element-level ids
-(`tradeoffs-con-1`, `data-kb-polarity`), the **"Mentioned by"** list and the **body-end
-script list**. They are projected from the page's own attributes and `make all` will
+(`tradeoffs-con-1`, `data-kb-polarity`), the **"Mentioned by"** list and the **`<head>`
+asset pair**. They are projected from the page's own attributes and `make all` will
 overwrite anything you write there. `make check` fails if they are stale.
 
-**The body-end script list** comes from `PAGE_SCRIPTS` in
-[`scripts/lib/model.mjs`](../../scripts/lib/model.mjs), keyed by kind, at the `../` depth
-the page's own path implies. Adding a client script means adding it there, not to 354
-pages: the authored tags had drifted into nine different shapes and 53 pages had silently
-lost `favourites.js`, so the favourite control did not exist on them. The `<head>` scripts
-stay **authored** — `theme.js` and `lens.js` must run before first paint or the reader sees
-a flash of the wrong theme.
+**The `<head>` asset pair** is a page's ENTIRE asset wiring — one stylesheet link, one
+loader script — from `PAGE_ASSETS` in [`scripts/lib/model.mjs`](../../scripts/lib/model.mjs),
+keyed by kind, at the `../` depth the page's own path implies:
+
+```html
+<link rel="stylesheet" href="../assets/kb-page.css">
+<script src="../assets/kb.js" data-profile="pattern"></script>
+```
+
+Nothing else lives at the body end any more. `kb.js` is the manifest — which scripts a
+profile loads, in what order, pre-paint or deferred — so adding a client script is one
+array entry there, not a sweep across 382 pages: the authored tags once drifted into nine
+different shapes and 53 pages had silently lost `favourites.js`, so the favourite control
+did not exist on them. `kb.js` writes `theme.js` and `lens.js` WITHOUT `defer` — they must
+run before first paint or the reader sees a flash of the wrong theme — and writes
+everything else WITH `defer`, which is what makes it safe for a single `<script>` tag to
+carry a profile's whole tail. `scripts/audit-assets.mjs` gates the shape: every page
+carries exactly one stylesheet link and one loader script, the loader's `data-profile` is
+a key of `kb.js`'s manifest, and no other `<script>` survives on the page.
 
 **"Mentioned by"** is the one region projected from OTHER pages: the `<aside class="mentions">`
 before the footer nav lists every page that links here in prose without declaring a typed

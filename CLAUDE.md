@@ -88,8 +88,8 @@ Which skill owns what, for the parts that are not a page's prose:
 | any block of a comparison page | **kb-comparison-blocks** |
 | a code sketch — its language, its highlighting, open vs collapsed | **kb-sketch** |
 | `make all` / `make check` / the worklists | **kb-verify** |
-| tokens, `hub.css`, `pattern.css` | **kb-styles** |
-| the client scripts and their stores | **kb-site-ui** |
+| tokens, `hub.css`, `pattern.css`, the `kb-*.css` aggregators | **kb-styles** |
+| the client scripts, `kb.js`'s manifest and their stores | **kb-site-ui** |
 | the interactive graph | **kb-graph** |
 | reviewing or evaluating an existing page | **kb-design-review** |
 | a full system design, or an architectural kata | **sys-design** |

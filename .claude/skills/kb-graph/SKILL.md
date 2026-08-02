@@ -19,6 +19,14 @@ Never edit `graph.html` or `graphdata.js` directly — change the emitting scrip
 the `.js`. Tags and aliases are NOT in graphdata — the runtime joins them at load from
 `window.KB_CATALOG` (catalog.js, also loaded on the page).
 
+The shell carries no script tags of its own — one `<link>` and one
+`<script src="../assets/kb.js" data-profile="graph">` is its entire `<head>`. The load
+order (`catalog.js`, `graphdata.js`, `search.js`, `palette.js`, `vendor/d3.min.js`,
+`graph-core.js`, `graph-view.js` — core before runtime, always) lives in `kb.js`'s
+`graph` profile, not in `build-graph-page.mjs`; that is where a new script for this page
+gets added. No `lens.js` in this profile either: the graph carries no leveled prose, so
+the reading-level toggle would render three dead buttons.
+
 **The core is the tested half.** `graph-core.js` holds everything that is a function of
 its arguments — `familyOf`, `buildGraph` (edge dedupe + canonical orientation),
 `compileQuery`, `computeVisibility` (filters, orphan pass, visible-subgraph signature),

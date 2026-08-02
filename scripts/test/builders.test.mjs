@@ -365,45 +365,58 @@ test('build-pages.mjs renders "Mentioned by" and never feeds it back into the gr
   }
 });
 
-test("build-pages.mjs owns the body-end script list, per kind and at the right depth", () => {
-  /* The list is taxonomy (PAGE_SCRIPTS), so the KIND decides it: a pattern loads the
-   * highlighter for its code sketches, a theme has no sketch to highlight and must not.
-   * The depth comes from the page's own path, which is the half most likely to be wrong
-   * — the site has to work from file:// with no server to resolve an absolute path.
-   * The fixture pages carry NO body-end scripts, so this covers the insert path; the
-   * absorb path (hand-written tags, no marker) is asserted below. */
+test("build-pages.mjs owns the <head> asset pair, per kind and at the right depth", () => {
+  /* The pair is taxonomy (PAGE_ASSETS), so the KIND decides the profile — a pattern's
+   * `data-profile="pattern"` loads the highlighter for its code sketches on the client
+   * side, a theme's `data-profile="theme"` does not. The depth comes from the page's own
+   * path, which is the half most likely to be wrong — the site has to work from file://
+   * with no server to resolve an absolute path. The fixture pages carry NO head assets at
+   * all, so this covers the insert path; the absorb path (hand-written tags, no marker) is
+   * asserted below. */
   const root = built();
-  const mark = /<!-- kb:generated — page scripts/;
+  const mark = /<!-- kb:generated — page assets/;
   try {
     assert.equal(run("build-pages.mjs", root).status, 0);
     const alpha = readFileSync(join(root, ALPHA), "utf8");
     const gamma = readFileSync(join(root, "site", "themes", "gamma.html"), "utf8");
 
     assert.match(alpha, mark, "the region is marked, so the never-edit rule covers it");
-    assert.match(alpha, /<script src="\.\.\/\.\.\/assets\/vendor\/mermaid\.min\.js"><\/script>/,
+    assert.match(alpha, /<link rel="stylesheet" href="\.\.\/\.\.\/assets\/kb-page\.css">/,
       "two folders deep, so two hops up");
-    assert.match(alpha, /<script src="\.\.\/\.\.\/assets\/favourites\.js"><\/script>/,
-      "every kind gets the favourite control — the drift this replaced had lost it on 53 pages");
-    assert.match(alpha, /<script src="\.\.\/\.\.\/assets\/section-nav\.js"><\/script>/);
-    assert.match(alpha, /<script src="\.\.\/\.\.\/assets\/sketch\.js"><\/script>\n<\/body>/,
-      "the list is the last thing before </body>");
-    assert.match(gamma, /<script src="\.\.\/assets\/section-nav\.js"><\/script>/,
+    assert.match(alpha, /<script src="\.\.\/\.\.\/assets\/kb\.js" data-profile="pattern"><\/script>/,
+      "the profile names the kind, so kb.js knows to load the highlighter client-side");
+    assert.match(gamma, /<link rel="stylesheet" href="\.\.\/assets\/kb-page\.css">/,
       "one folder deep, so one hop up");
-    assert.doesNotMatch(gamma, /sketch\.js|highlight/,
-      "a theme carries no details.sketch, so it loads no highlighter");
+    assert.match(gamma, /<script src="\.\.\/assets\/kb\.js" data-profile="theme"><\/script>/);
+
+    assert.equal(alpha.match(/<link rel="stylesheet"/g).length, 1, "exactly one stylesheet link");
+    assert.equal((alpha.match(/<script src="[^"]*assets\/[^"]*\.js"/g) || []).length, 1,
+      "exactly one loader script — nothing left at the body end");
+    assert.doesNotMatch(alpha, /<\/main>\s*<script/, "no script survives past </main>");
 
     assert.equal(run("build-pages.mjs", root, "--check").status, 0, "a second pass is a no-op");
 
     /* The absorb path: a page whose tags were hand-written carries no marker, and the
      * builder has to replace that run rather than emit a second one beside it. That is
-     * what let 354 pages converge with no migration script. Drop the marker line to get
-     * back the shape the corpus had before this region existed. */
+     * what let 354 pages converge with no migration script when the body-end list first
+     * moved here, and what migrates the same 382 pages again now that the head owns it.
+     * Drop the marker line to get back the shape the corpus had before this region
+     * existed — the OLD authored head, tokens.css + pattern.css + theme.js + lens.js. */
     const file = join(root, ALPHA);
-    writeFileSync(file, readFileSync(file, "utf8").replace(/[ \t]*<!-- kb:generated — page scripts[^\n]*-->\n/, ""));
+    const old = readFileSync(file, "utf8").replace(
+      /[ \t]*<!-- kb:generated — page assets[^\n]*-->\n[ \t]*<link rel="stylesheet" href="[^"]*">\n[ \t]*<script src="[^"]*assets\/kb\.js"[^>]*><\/script>\n/,
+      '  <link rel="stylesheet" href="../../assets/tokens.css">\n' +
+      '  <link rel="stylesheet" href="../../assets/pattern.css">\n' +
+      '  <script src="../../assets/theme.js"></script>\n' +
+      '  <script src="../../assets/lens.js"></script>\n',
+    );
+    writeFileSync(file, old);
     assert.equal(run("build-pages.mjs", root).status, 0);
     const absorbed = readFileSync(file, "utf8");
-    assert.equal(absorbed.match(/<script src="[^"]*section-nav\.js"/g).length, 1,
-      "one script list, not two");
+    assert.equal(absorbed.match(/<link rel="stylesheet"/g).length, 1, "one stylesheet link, not two");
+    assert.equal(absorbed.match(/<script src="[^"]*assets\/kb\.js"/g).length, 1, "one loader, not two");
+    assert.doesNotMatch(absorbed, /assets\/theme\.js|assets\/lens\.js/,
+      "the old authored tags are gone, absorbed into the generated pair");
     assert.equal(run("build-pages.mjs", root, "--check").status, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });

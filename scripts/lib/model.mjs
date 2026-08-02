@@ -187,66 +187,27 @@ export const SKETCH_LANGS = [
  * Which client scripts a page loads, in load order. It is taxonomy like BLOCKS above:
  * what a kind of page *is* decides what it needs to run.
  *
- * It lives here because the authored tags drifted. Fifty-three pages had lost
- * favourites.js — every capability and every comparison page among them — so the
- * favourite control silently did not exist on them, and adding one more control meant
- * hand-editing a set that already carried nine different shapes. build-pages.mjs emits
- * this list into a `kb:generated` region at the body end, which puts the whole set under
- * the same "edit the page, not this" rule as the JSON-LD, and makes the next control a
- * one-line change here.
+ * A page's entire asset wiring is one stylesheet link and one script tag:
  *
- * Head scripts stay AUTHORED. theme.js and lens.js must run before first paint or the
- * reader sees a flash of the wrong theme, so they belong in <head> and are none of this
- * builder's business.
+ *   <link rel="stylesheet" href="../assets/kb-page.css">
+ *   <script src="../assets/kb.js" data-profile="pattern"></script>
  *
- * Three pairs are ordered by dependency — mermaid before diagram.js, diagram.js before
- * diagram-zoom.js, highlight before sketch.js. Everything else is independent, so new
- * entries append. */
-const SCRIPTS_BASE = [
-  /* Every kind may carry a diagram: hazards and themes already do, and nothing stops a
-   * principle or a capability page gaining one. Loading the engine where no diagram
-   * happens to exist today costs a cached file; NOT loading it where one appears
-   * tomorrow renders the mermaid source as text. */
-  "vendor/mermaid.min.js",
-  "diagram.js",
-  /* Decorates the same <figure class="diagram"> elements and listens for the
-   * kb-diagram-render event diagram.js fires, so it must load after it. Gives every figure
-   * a fit-by-default zoom, a pan and a full-screen viewer — a board drawn to fit a column
-   * had no way to be read, and a schema drawn at natural size no way to be seen whole. */
-  "diagram-zoom.js",
-  "progress.js",
-  "favourites.js",
-  /* Injects the left-edge next-section control, and suppresses itself on a page short
-   * enough to scroll — which is why this is uniform rather than per kind. Measured at
-   * 1440×900, a 7-block capability page runs to 8.6 viewports and an 8-block pattern to
-   * 4.3, so page length does not follow kind and a per-kind list would guess wrong in
-   * both directions. */
-  "section-nav.js",
-  /* The ⌘K palette, and the two files it reads rather than duplicates: catalog.js is the
-   * data and search.js exposes window.KB_MATCHES, so the palette's ranking IS the hub's.
-   * This trio is order-dependent — the third needs the first two on window — and uniform
-   * rather than per kind, because "jump to any page from any page" does not vary by kind.
-   *
-   * search.js mounts its own hub UI only where it finds `.controls`, so it is inert here.
-   * The hub and the graph load the same trio from their own builders — ⌘K opens the palette
-   * on every page, and only the "/" key is left to a page that renders its own search box. */
-  "catalog.js",
-  "search.js",
-  "palette.js",
-];
-/* Syntax highlighting, only where a collapsed code sketch can appear: a pattern's
- * `sketch` block, and a design's HTTP contracts and deep-dive samples. No page of any
- * other kind carries `details.sketch`, and the loader is inert without one. */
-const SCRIPTS_CODE = ["vendor/highlight.min.js", "sketch.js"];
-
-export const PAGE_SCRIPTS = {
-  pattern:    [...SCRIPTS_BASE, ...SCRIPTS_CODE],
-  hazard:     [...SCRIPTS_BASE],
-  theme:      [...SCRIPTS_BASE],
-  principle:  [...SCRIPTS_BASE],
-  design:     [...SCRIPTS_BASE, ...SCRIPTS_CODE],
-  capability: [...SCRIPTS_BASE],
-  comparison: [...SCRIPTS_BASE],
+ * `kb.js` is the manifest — which scripts a profile loads, in what order, pre-paint or
+ * deferred — so PAGE_ASSETS only has to say which CSS aggregator and which profile a
+ * kind takes, not enumerate every script. It lives here for the reason PAGE_SCRIPTS used
+ * to: authored asset tags had drifted into nine different shapes across the corpus and
+ * 53 pages had silently lost favourites.js. build-pages.mjs emits this pair into a
+ * `kb:generated` region in <head>, the same "edit the page, not this" rule the JSON-LD
+ * carries, so a new kind is one line here instead of a 382-page sweep — and a page that
+ * loses its lens toggle or its palette now fails the build instead of shipping quietly. */
+export const PAGE_ASSETS = {
+  pattern:    { css: "kb-page.css", profile: "pattern" },
+  hazard:     { css: "kb-page.css", profile: "hazard" },
+  theme:      { css: "kb-page.css", profile: "theme" },
+  principle:  { css: "kb-page.css", profile: "principle" },
+  design:     { css: "kb-page.css", profile: "design" },
+  capability: { css: "kb-page.css", profile: "capability" },
+  comparison: { css: "kb-page.css", profile: "comparison" },
 };
 
 /* ---- reading levels ----

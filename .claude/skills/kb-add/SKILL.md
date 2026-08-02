@@ -59,7 +59,10 @@ node scripts/kb.mjs new <id> --kind pattern --band <band> [--group <group>] --na
 `--band`; every other kind is flat (its band/group is just the kind), and lands in
 `site/<kind>s/`. This writes a structurally
 valid skeleton — every mandatory block in order, sketch pre-wired for highlighting on patterns
-— that already passes `kb.mjs validate --file`. Then study an exemplar for what good content
+— that already passes `kb.mjs validate --file`. The `<head>` it emits (one stylesheet link,
+one `<script src="…/kb.js" data-profile="…">`) is a `kb:generated` region like the JSON-LD
+block — never hand-edit it; `make all` re-derives it from `PAGE_ASSETS` in `lib/model.mjs`
+regardless of what the scaffold wrote. Then study an exemplar for what good content
 looks like:
 
 ```

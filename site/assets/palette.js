@@ -38,11 +38,13 @@
   var byId = {};
   for (var i = 0; i < catalog.length; i++) byId[catalog[i].id] = catalog[i];
 
-  /* The page's own tokens.css href, minus the tail, is the path back to site root. Kept pure
-   * and fed the hrefs, so the depth arithmetic is unit-testable without a DOM. */
+  /* The page's own stylesheet href, minus the tail, is the path back to site root. Kept
+   * pure and fed the hrefs, so the depth arithmetic is unit-testable without a DOM.
+   * Every name a page is allowed to link, because a page links exactly one: the three
+   * kb-*.css aggregators, plus tokens.css for a page loading this script on its own. */
   function prefixFromHrefs(hrefs) {
     for (var j = 0; j < hrefs.length; j++) {
-      var m = String(hrefs[j] || "").match(/^(.*)assets\/tokens\.css$/);
+      var m = String(hrefs[j] || "").match(/^(.*)assets\/(?:kb-page|kb-hub|kb-graph|tokens)\.css$/);
       if (m) return m[1];
     }
     return "";
@@ -52,7 +54,11 @@
     for (var j = 0; j < links.length; j++) out.push(links[j].getAttribute("href"));
     return out;
   }
-  var PREFIX = prefixFromHrefs(stylesheetHrefs());
+  /* kb.js already did this arithmetic off its own src attribute and it is the authority.
+   * The href fallback stays because catalog paths are site-root-relative and getting the
+   * depth wrong 404s every result on 382 pages with no build error — check-links.mjs
+   * cannot see a path computed at runtime, which is why there is a test case per depth. */
+  var PREFIX = typeof window.KB_PREFIX === "string" ? window.KB_PREFIX : prefixFromHrefs(stylesheetHrefs());
 
   /* The result list: the hub's scores, ordered, resolved to catalog nodes and capped. Split
    * out from render() so the ranking can be tested apart from the markup. */

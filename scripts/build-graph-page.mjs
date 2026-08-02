@@ -104,12 +104,10 @@ const html = `<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Interactive Graph · Map</title>
   <meta name="description" content="Every ${kindsPhrase} on one live force-directed canvas — filter by kind, band, tag, favourites or what you have practiced, color your own groups, tune the physics, and follow the ${graph.meta.relationships} typed relationships.">
-  <link rel="stylesheet" href="../assets/tokens.css">
-  <link rel="stylesheet" href="../assets/pattern.css">
-  <link rel="stylesheet" href="../assets/graph.css">
-  <script src="../assets/theme.js"></script>
-  <!-- no lens.js: this page carries no leveled prose, so the reading-level toggle would
-       render three dead buttons here -->
+  <link rel="stylesheet" href="../assets/kb-graph.css">
+  <!-- data-profile="graph" loads only theme.js pre-paint, no lens.js: this page carries no
+       leveled prose, so the reading-level toggle would render three dead buttons here -->
+  <script src="../assets/kb.js" data-profile="graph"></script>
 </head>
 <body class="doc theme">
   <main class="doc-wrap graph-page">
@@ -195,16 +193,6 @@ ${rankedHtml}
       <a class="next" href="../themes/cap-theorem.html">Themes →</a>
     </nav>
   </main>
-
-  <script src="../assets/catalog.js"></script>
-  <script src="../assets/graphdata.js"></script>
-  <script src="../assets/search.js"></script>
-  <!-- The ⌘K palette binds on every page, the graph included; graph-view.js keeps "/" for
-       the canvas query. Order-dependent: it reads window.KB_MATCHES from search.js. -->
-  <script src="../assets/palette.js"></script>
-  <script src="../assets/vendor/d3.min.js"></script>
-  <script src="../assets/graph-core.js"></script>
-  <script src="../assets/graph-view.js"></script>
 </body>
 </html>
 `;

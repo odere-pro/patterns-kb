@@ -29,9 +29,41 @@ builder (**kb-hub**); a change to how it *behaves* lives here.
 | `diagram-zoom.js` | per-figure zoom strip (− / + / % / ⤢), drag-pan, and the full-screen `<dialog class="dzoom">`; exposes `window.KB_DIAGRAM_ZOOM` | — |
 | `sketch.js` | lazy highlight.js on `details.sketch` open (never throwing — an unknown language downgrades that one sketch, not the loop); injects the per-section **Expand all / Collapse all**; opens every sketch for print and restores after. Sketches are collapsed in the markup and their state does **not** persist — the language set, the vendored grammars and the `hljs-*` colours are the **kb-sketch** skill | — |
 | `hub.css` / `tokens.css` / `pattern.css` | all styling; `tokens.css` holds the control cluster and the lens visibility rules | — |
+| `kb.js` | the loader every page's `<head>` carries — see below | — |
 
 `catalog.js` and `graphdata.js` are **generated** (scripts/build.mjs) — never edit. So is
-`site/index.html` (scripts/build-hub.mjs), which `make check` compares byte for byte.
+`site/index.html` (scripts/build-hub.mjs), which `make check` compares byte for byte, and
+so is every page's `<head>` asset pair (`scripts/build-pages.mjs`, from `PAGE_ASSETS` in
+`lib/model.mjs`).
+
+## Adding a client script
+
+A page's entire asset wiring is one stylesheet link and one script tag:
+
+```html
+<link rel="stylesheet" href="../assets/kb-page.css">
+<script src="../assets/kb.js" data-profile="pattern"></script>
+```
+
+`kb.js` is the manifest. Adding a control means adding its file to the right list inside
+`assets/kb.js`, not touching a page:
+
+- **`pre`** (per profile) — runs parser-blocking, WITHOUT `defer`, before first paint.
+  Reserve this for `theme.js`/`lens.js`-class scripts: anything that must stamp `<html>`
+  before the reader sees a flash of the wrong state. Adding a second pre-paint script
+  slows every page's first paint — do this rarely.
+- **`tail`** (`BASE`, shared by every content kind, plus `CODE` for `pattern`/`design`) —
+  written WITH `defer`, so the browser fetches every tail script in parallel and executes
+  them in written order after parsing, before `DOMContentLoaded` — exactly what a run of
+  blocking body-end tags used to give, without blocking on 3.5MB of mermaid. Order still
+  matters for the three dependent pairs stated in `kb.js`'s comments: mermaid before
+  `diagram.js`, `diagram.js` before `diagram-zoom.js`, `catalog.js` → `search.js` →
+  `palette.js`. Append after those unless the new script has its own dependency.
+
+`scripts/audit-assets.mjs` (`make check`) fails if `kb.js` names a file that does not
+exist, or if a page carries any `<script>` besides its one loader and the JSON-LD block —
+that second rule is what makes the old drift (53 pages silently missing `favourites.js`)
+impossible now.
 
 ## The fixed control cluster
 
@@ -113,8 +145,10 @@ Injects the up/down pair. Three things about it are load-bearing:
   by the time collapse.js's own events arrive, which is why `paint()` issues one credit per
   self-write and the handler spends it. Do not replace that with a boolean.
 - **Everything must work from `file://`** — no fetch, data ships as scripts.
-- Head scripts (`theme.js`, `lens.js`) run pre-paint — keep them tiny and synchronous;
-  body-end scripts (`progress.js`, `search.js`, …) may touch the DOM directly.
+- **Pre-paint scripts** (`theme.js`, `lens.js`, run without `defer` from `kb.js`'s `pre`
+  list) stay tiny and synchronous; **deferred scripts** (`progress.js`, `search.js`, … —
+  `kb.js`'s `tail` list) may touch the DOM directly, since `defer` guarantees the document
+  has finished parsing before any of them runs.
 
 ## Verifying a change
 
