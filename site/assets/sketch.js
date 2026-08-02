@@ -66,13 +66,15 @@
     heading.insertAdjacentElement("afterend", wrap);
 
     /* The label answers "what happens if I press this", so it names the action rather than
-       the state: anything still closed means there is something left to expand. */
+       the state: anything still closed means there is something left to expand. The count
+       and the chevron are what make it read as a control over the cards below rather than
+       as a stray chip — the chevron is the one the summaries already carry. */
     var anyClosed = function () {
       return Array.prototype.some.call(own, function (d) { return !d.open; });
     };
     var label = function () {
       var expand = anyClosed();
-      btn.textContent = expand ? "Expand all" : "Collapse all";
+      btn.textContent = (expand ? "▸ Expand all " : "▾ Collapse all ") + own.length;
       btn.setAttribute("aria-expanded", expand ? "false" : "true");
     };
     btn.addEventListener("click", function () {
