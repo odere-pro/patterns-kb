@@ -352,11 +352,12 @@
         if (first) first.click();
       }
     });
-    // "/" focuses search, the way every wiki does it; ⌘K (Ctrl+K elsewhere), the way
-    // every app does. ⌘K also works from inside the input, reselecting the query.
+    // "/" focuses THIS box, the way every wiki does it — filtering the tiles in place is what
+    // the hub does better than a modal, so the local key stays local. ⌘K belongs to the
+    // site-wide palette (palette.js) on every page including this one, so it is not bound
+    // here: two handlers on one chord is how the palette stopped opening on the hub.
     document.addEventListener("keydown", function (e) {
-      if (e.key === "/" && document.activeElement !== input) { e.preventDefault(); input.focus(); }
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "k" || e.key === "K")) {
+      if (e.key === "/" && document.activeElement !== input) {
         e.preventDefault();
         input.focus();
         input.select();

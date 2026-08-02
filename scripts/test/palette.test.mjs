@@ -7,6 +7,9 @@
  *   rank()             — is the list really the hub's ranking, descending, capped at the limit?
  *   prefixFromHrefs()  — does a page four levels deep compute its own way back to site root?
  *
+ * Plus the key split, which is not arithmetic but is what actually broke: ⌘K must open the
+ * palette on EVERY page, and "/" must stay with a page that renders a search box of its own.
+ *
  * The second is the one that fails silently in production: get it wrong and every result links
  * to a 404, on 354 pages, with no build error — check-links.mjs cannot see an href a script
  * computes at runtime. Hence a case per depth the site actually has.
@@ -150,31 +153,78 @@ test("prefix + catalog path is a usable relative href", () => {
   );
 });
 
-/* ---------------- the ownership guard ---------------- */
+/* ---------------- which key, on which page ---------------- */
 
-test("palette.js does not install where a ⌘K owner already exists", () => {
-  for (const owner of ["controls", "graph-search"]) {
-    const window = {};
-    const document = {
-      readyState: "complete",
-      // The hub renders .controls; the graph renders #graph-search. Either means "taken".
-      querySelector: (sel) => (sel.includes(owner) ? {} : null),
-      querySelectorAll: () => [],
-      addEventListener: () => {},
-    };
-    const ctx = createContext({ window, document, setTimeout, clearTimeout });
-    /* catalog.js and palette.js only. search.js would try to mount its own box against this
-     * stub host and fall over, and it is irrelevant here: the guard is the first statement in
-     * palette.js, so it returns before anything else is consulted. That is the claim. */
-    for (const f of ["catalog.js", "palette.js"]) {
-      runInContext(readFileSync(join(ASSETS, f), "utf8"), ctx);
+/* A stub element that survives whatever search.js's mount() does to it. Nothing here is
+ * asserted on — it exists so the real search.js can run and register its own "/" handler,
+ * which is the handler the palette has to leave room for. */
+function stubEl() {
+  const node = {
+    className: "", textContent: "", innerHTML: "", type: "", dataset: {}, nextSibling: null,
+    setAttribute() {}, getAttribute() { return null; }, addEventListener() {},
+    appendChild(c) { return c; }, insertBefore() {}, focus() {}, select() {}, blur() {},
+    closest: () => null, querySelector: () => stubEl(), querySelectorAll: () => [],
+  };
+  node.parentNode = { insertBefore() {} };
+  return node;
+}
+
+/* Load the page's script trio against a stub that reports whether the page renders a local
+ * search box, capturing ONLY the keydown handlers palette.js adds — search.js registers one
+ * of its own on the hub, and the question here is which key the palette itself claims. */
+function loadWithOwner(owner) {
+  const window = {};
+  const handlers = [];
+  const document = {
+    readyState: "complete",
+    // The hub renders .controls; the graph renders #graph-search. Either owns "/".
+    querySelector: (sel) => (owner && sel.includes(owner) ? stubEl() : null),
+    querySelectorAll: () => [],
+    addEventListener: (type, fn) => { if (type === "keydown") handlers.push(fn); },
+    createElement: () => stubEl(),
+    body: { appendChild() {} },
+  };
+  const ctx = createContext({ window, document, setTimeout, clearTimeout });
+  for (const f of ["catalog.js", "search.js"]) {
+    runInContext(readFileSync(join(ASSETS, f), "utf8"), ctx);
+  }
+  const theirs = handlers.length;
+  runInContext(readFileSync(join(ASSETS, "palette.js"), "utf8"), ctx);
+  const ours = handlers.slice(theirs);
+
+  /* Did the palette claim the key? preventDefault is the observable — show() needs a real
+   * DOM, so a throw past that point is expected and still means "claimed". */
+  const press = (key, meta) => {
+    let claimed = false;
+    for (const fn of ours) {
+      const e = { key, metaKey: !!meta, ctrlKey: false, altKey: false,
+        preventDefault: () => { claimed = true; } };
+      try { fn(e); } catch { /* show() fell over on the stub DOM — after preventDefault */ }
     }
-    assert.equal(window.KB_PALETTE, undefined, `.${owner} present: palette should stand down`);
+    return claimed;
+  };
+  return { window, press };
+}
+
+test("⌘K opens the palette on every page, local search box or not", () => {
+  for (const owner of [null, "controls", "graph-search"]) {
+    const { window, press } = loadWithOwner(owner);
+    assert.ok(window.KB_PALETTE, `${owner || "content page"}: palette should install`);
+    assert.ok(press("k", true), `${owner || "content page"}: ⌘K should open the palette`);
   }
 });
 
-test("palette.js stands down when search.js never ran, rather than throwing", () => {
-  // A page that wires palette.js but forgets catalog.js/search.js must degrade quietly.
+test('"/" is left to whoever renders a search box of their own', () => {
+  // No local box: the palette takes "/" too, the way every wiki binds it.
+  assert.ok(loadWithOwner(null).press("/", false), "content page: / should open the palette");
+  // The hub filters tiles in place and the graph queries its canvas; both beat a modal, so
+  // the palette declines the key and their own handlers get it.
+  for (const owner of ["controls", "graph-search"]) {
+    assert.equal(loadWithOwner(owner).press("/", false), false, `.${owner}: / stays local`);
+  }
+});
+
+test("palette.js stands down when catalog.js never ran, rather than throwing", () => {
   const window = {};
   const document = {
     readyState: "complete",

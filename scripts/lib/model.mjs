@@ -221,9 +221,9 @@ const SCRIPTS_BASE = [
    * This trio is order-dependent — the third needs the first two on window — and uniform
    * rather than per kind, because "jump to any page from any page" does not vary by kind.
    *
-   * search.js mounts its own hub UI only where it finds `.controls`, so it is inert here;
-   * palette.js stands down entirely where a ⌘K owner already exists, which is why the hub
-   * and the graph are unaffected — neither is built by build-pages.mjs. */
+   * search.js mounts its own hub UI only where it finds `.controls`, so it is inert here.
+   * The hub and the graph load the same trio from their own builders — ⌘K opens the palette
+   * on every page, and only the "/" key is left to a page that renders its own search box. */
   "catalog.js",
   "search.js",
   "palette.js",

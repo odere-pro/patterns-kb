@@ -10,13 +10,16 @@
  * catalog.js then search.js, in that order; search.js's own mount() looks for .controls and
  * early-returns when there is none, so loading it on a content page costs nothing.
  *
- * WHERE IT DOES NOT BIND. The hub (search.js) and the graph (graph-view.js) each already own
- * ⌘K and do something better with it than a modal would — the hub filters tiles in place so
- * you keep seeing where a page sits, and the graph jumps to its own canvas search. Binding
- * here too would mean two handlers fighting over one chord, so the guard below leaves those
- * two pages alone. It is a presence check on their markup rather than a page-name list,
+ * TWO KEYS, ONE RULE. ⌘K opens this palette on EVERY page, so the chord means the same thing
+ * everywhere — that uniformity is the feature. "/" is the local key: where the page renders a
+ * search box of its own (the hub's tile filter, the graph's canvas query) it focuses that box
+ * instead, because filtering in place tells you WHERE a page sits and a modal cannot.
+ *
+ * So the presence check below no longer gates whether the palette installs — only which key
+ * the palette declines to take. It stays a check on their markup rather than a page-name list,
  * because that is the thing that is actually true: whoever renders .controls or #graph-search
- * owns the chord.
+ * owns "/". search.js and graph-view.js each bind that key themselves; neither binds ⌘K any
+ * more, so no two handlers fight over one chord.
  *
  * DEPTH. catalog paths are site-root-relative ("patterns/gof/creational/singleton.html") and
  * this script runs at four different depths, with no build step injecting a global. Every page
@@ -28,9 +31,6 @@
  * theirs as data-kb-aliases, so "kafka" reaches Message brokers & streams through the catalog.
  */
 (function () {
-  /* Whoever renders these owns ⌘K on their page — see WHERE IT DOES NOT BIND above. */
-  if (document.querySelector(".controls, #graph-search")) return;
-
   var catalog = (window.KB_CATALOG && window.KB_CATALOG.nodes) || [];
   if (!catalog.length || typeof window.KB_MATCHES !== "function") return;
 
@@ -174,9 +174,12 @@
     if (dialog && dialog.open) dialog.close();
   }
 
-  /* Same chord as the hub and the graph: ⌘K, Ctrl+K elsewhere, and "/" the way every wiki
-   * does it. altKey is excluded so Alt+K stays available to the browser and to input methods
-   * that use it. */
+  /* ⌘K, Ctrl+K elsewhere, on every page. altKey is excluded so Alt+K stays available to the
+   * browser and to input methods that use it. "/" opens the palette the way every wiki does
+   * it, but only where the page has no search box of its own to focus — see TWO KEYS above.
+   * Read once at bind time rather than per keystroke: search.js and graph-view.js mount their
+   * boxes from markup that is already in the document when this file runs. */
+  var LOCAL_SEARCH = !!document.querySelector(".controls, #graph-search");
   function editing(el) {
     if (!el) return false;
     var tag = (el.tagName || "").toLowerCase();
@@ -186,7 +189,7 @@
     if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
       show();
-    } else if (e.key === "/" && !editing(document.activeElement)) {
+    } else if (e.key === "/" && !LOCAL_SEARCH && !editing(document.activeElement)) {
       e.preventDefault();
       show();
     }

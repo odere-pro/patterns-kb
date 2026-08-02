@@ -626,10 +626,19 @@
   svg.on("click", function (ev) {
     if (ev.target === svgEl && selectedId) { selectedId = null; clearTip(); render(); }
   });
+  /* "/" is a printable character, so it must not steal the key from a field being typed
+   * into — the query box itself, or the palette's input. */
+  function isTyping(el) {
+    if (!el) return false;
+    var tag = (el.tagName || "").toLowerCase();
+    return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+  }
   document.addEventListener("keydown", function (ev) {
     if (ev.key === "Escape" && selectedId) { selectedId = null; clearTip(); render(); }
-    // ⌘K (Ctrl+K elsewhere) jumps to search, reopening its Filters section if closed.
-    if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && (ev.key === "k" || ev.key === "K")) {
+    // "/" jumps to the canvas query, reopening its Filters section if closed. ⌘K belongs to
+    // the site-wide palette (palette.js), which binds on every page including this one — so
+    // the local key is "/" here, and the chord means the same thing everywhere.
+    if (ev.key === "/" && !isTyping(document.activeElement)) {
       var si = document.getElementById("graph-search");
       if (si) {
         ev.preventDefault();

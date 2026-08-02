@@ -20,34 +20,46 @@ replacing the file and its LICENSE, never by editing.
 
 ## The ⌘K palette (`palette.js`)
 
-One keystroke to anywhere, on the 356 pages that are not the hub or the graph. It **scores
-nothing of its own**: `catalog.js` is the data, `search.js` exposes `window.KB_MATCHES`, and
-`palette.js` orders and caps. That is a third consumer of the hub scorer, so the ranking is the
-hub's by construction.
+One keystroke to anywhere, on **every** page. It **scores nothing of its own**: `catalog.js` is
+the data, `search.js` exposes `window.KB_MATCHES`, and `palette.js` orders and caps. That is a
+third consumer of the hub scorer, so the ranking is the hub's by construction.
 
-All three are `PAGE_SCRIPTS` entries (`SCRIPTS_BASE` in `lib/model.mjs`), so the 354 KB pages
-get them from the generated body-end region and the order is stated once. `vocab.html` and
-`map/stack.html` are not built by `build-pages.mjs`, so their own builders carry the tags.
-**Its CSS lives in `pattern.css`, not a stylesheet of its own** — `<head>` links stay authored,
-so a separate file would need adding to 354 heads by hand, which is the sweep `PAGE_SCRIPTS`
-exists to avoid.
+All three are `PAGE_SCRIPTS` entries (`SCRIPTS_BASE` in `lib/model.mjs`), so the 382 KB pages
+get them from the generated body-end region and the order is stated once. `vocab.html`,
+`map/stack.html`, `index.html` and `map/graph.html` are not built by `build-pages.mjs`, so
+their own builders carry the tags.
 
-Three contracts, each with a test in `scripts/test/palette.test.mjs`:
+**Two keys, one rule** — and it is the rule, not a per-page list:
 
-- **It stands down where a ⌘K owner exists.** `if (document.querySelector(".controls, #graph-search")) return;`
-  — the hub filters tiles in place and the graph jumps to its canvas search, both better than a
-  modal. The check is on their markup, not on a page-name list, because whoever renders those
-  owns the chord. Neither page loads `palette.js` at all.
+| key | does |
+|---|---|
+| **⌘K** (Ctrl+K) | opens the palette, on every page without exception |
+| **/** | focuses the page's OWN search box where it has one, else opens the palette |
+
+⌘K meaning the same thing everywhere is the point. `/` stays local because filtering in place
+beats a modal where a page can do it: the hub keeps a match inside its section so you see WHERE
+a page sits, and the graph queries its own canvas. `search.js` and `graph-view.js` each bind
+only `/`; **neither binds ⌘K any more** — two handlers on one chord is exactly how the palette
+stopped opening on those two pages.
+
+Contracts, each with a test in `scripts/test/palette.test.mjs`:
+
+- **`.controls, #graph-search` gates the key, not the install.** The presence check is read once
+  at bind time and decides only whether the palette declines `/`. It stays a check on their
+  markup rather than a page-name list, because whoever renders those owns the local key.
 - **Depth is derived, not injected.** Catalog paths are site-root-relative and the script runs
   at four depths with no build-time global, so `prefixFromHrefs()` reads the page's own
-  `assets/tokens.css` href and strips the tail. Get this wrong and every result 404s on 354
+  `assets/tokens.css` href and strips the tail. Get this wrong and every result 404s on 382
   pages with no build error — `check-links.mjs` cannot see an href computed at runtime, which
   is why there is a test case per depth.
 - **`window.KB_PALETTE` is the test seam** (`prefixFromHrefs`, `rank`, `limit`), exposed the
   same way `search.js` exposes `KB_MATCHES`. Logic that moves out of it stops being tested.
 
-The overlay is the site's first `<dialog>`; its rules at the end of `pattern.css` theme it
-purely off `tokens.css` variables and sit at `z-index: 100`, above the fixed control cluster's 50.
+The overlay is the site's first `<dialog>`. Its rules live in **`palette.css`**, pulled in by an
+`@import` at the top of both `pattern.css` and `hub.css` — the hub links neither `pattern.css`
+nor anything else that carried them, and `<head>` links stay authored on the 382 content pages,
+so importing is what gets one source to both page families without a 382-head sweep. It themes
+purely off `tokens.css` variables and sits at `z-index: 100`, above the fixed control cluster's 50.
 
 **`.prod` in `pattern.css` is the site's only outbound link class.** It styles the vendor
 documentation links on `map/stack.html` and marks them with a trailing ↗, because everything

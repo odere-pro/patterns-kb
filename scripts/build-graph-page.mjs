@@ -199,6 +199,9 @@ ${rankedHtml}
   <script src="../assets/catalog.js"></script>
   <script src="../assets/graphdata.js"></script>
   <script src="../assets/search.js"></script>
+  <!-- The ⌘K palette binds on every page, the graph included; graph-view.js keeps "/" for
+       the canvas query. Order-dependent: it reads window.KB_MATCHES from search.js. -->
+  <script src="../assets/palette.js"></script>
   <script src="../assets/vendor/d3.min.js"></script>
   <script src="../assets/graph-core.js"></script>
   <script src="../assets/graph-view.js"></script>

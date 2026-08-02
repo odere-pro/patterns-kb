@@ -302,6 +302,9 @@ ${SECTIONS.map(section).join("\n\n")}
 <script src="assets/catalog.js"></script>
 <script src="assets/collapse.js"></script>
 <script src="assets/search.js"></script>
+<!-- The ⌘K palette binds on every page, the hub included; search.js keeps "/" for the
+     tile filter. Order-dependent: it reads window.KB_MATCHES from search.js. -->
+<script src="assets/palette.js"></script>
 <script src="assets/progress.js"></script>
 <script src="assets/favourites.js"></script>
 </body>
