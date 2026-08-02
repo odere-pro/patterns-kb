@@ -34,7 +34,10 @@ that are visibly present or visibly absent.
 
 The heading is fixed at **"What's expected at each level"**. One `<div class="prose">` wraps
 all three levels — `<h3>` + `<ul>` is the same shape the `deepdives` block already uses, so
-nothing new is styled. The block is hand-edited HTML; no `kb.mjs` writer exists for it, and
+nothing new is styled: the level names take heading rank 3 (see the five ranks in
+[kb-styles](../kb-styles/SKILL.md)) and read at the same weight as a dive title. A level
+name needs no `<span class="subline">` — it is one word, and there is no qualifier to
+carry. The block is hand-edited HTML; no `kb.mjs` writer exists for it, and
 `make check` validates only that the section is present and in block order
 ([`scripts/lib/validate.mjs`](../../scripts/lib/validate.mjs)) — never its internal
 structure. The discipline below is this skill's job, not the build's.

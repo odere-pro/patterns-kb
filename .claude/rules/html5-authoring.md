@@ -152,6 +152,23 @@ where the sentence already stresses it, or split the sentence in two.
 This is a house rule with no build gate behind it, so it holds only while authors keep it.
 `grep -rn '<em>\|<i>' site --include='*.html'` should always return nothing.
 
+**`<span class="subline">` is the one structural span**, and it is not a fifth inline
+element: it is the second line of a **title**, not markup you reach for in a sentence. A
+title's qualifier — a routing tag (`→ NFR: scale`), the store a group of entities lives in,
+the scope clause of a requirements tier, the verdict opening an answer — goes inside the
+heading (or inside the question paragraph whose `<strong>` stem acts as one):
+
+```html
+<h3 id="deepdives-dive-4">4 · Draining a backlog you did not choose<span class="subline">→ NFR: scale</span></h3>
+```
+
+It sits **inside** the title element rather than beside it because `build-pages.mjs` mints
+ids off child combinators — `.prose > h3`, `.prose > p`, `.nonfunctional > ul > li` — so
+anything inserted between one of those parents and its children freezes the ids, and the
+build reports nothing when it happens. Inside the heading, the qualifier also survives
+`kb.mjs get`, which reads the heading's text. The class is `display: block`, so it carries
+no `<br>` on either side.
+
 ## Blocks
 
 Fixed vocabulary, fixed order, per kind — see `BLOCKS` in `scripts/lib/model.mjs`.
@@ -348,7 +365,13 @@ are minted by `make all`
 paragraph is inserted, so re-run `make all` before tagging. An element with no id cannot be
 moved by a lens and renders at basic forever; where a page needs one the build does not
 mint — a grouped block's `h3`/`h4`, a whole list — hand-mint it in the same shape and tag
-it, and the build will leave it alone. Figures take these attributes too — the primary topology
+it, and the build will leave it alone. `deepdives-dive-N` is the ONLY heading id the build
+mints, so a sizing part's heading, a requirements tier and a labelled step inside a dive all
+carry hand-minted `<block>-h-<slug>` ids (`sizing-h-capabilities`,
+`requirements-h-additional`, `deepdives-h-boundary-1`). Tag such a heading with the same
+`data-kb-level` as the content under it, or a lens leaves it standing over nothing —
+`make check` cannot see that, because it strips `h2` and `h3` before testing a block for
+emptiness. Figures take these attributes too — the primary topology
 diagram stays untagged, the sequence diagram carries `data-kb-level="advanced"` — and
 lens.js re-renders mermaid on lens change.
 

@@ -19,12 +19,21 @@ rules are yours to enforce.
 <section class="doc-section" id="requirements" aria-labelledby="h-req" data-kb-block="requirements">
   <h2 class="doc-h" id="h-req">Requirements</h2>
   <div class="requirements">
-    <div class="functional"><h3>Functional</h3><ol> … </ol></div>
-    <div class="nonfunctional"><h3>Non-functional</h3><ul> … </ul></div>
+    <div class="functional"><h3>Functional</h3><ul> … </ul></div>
+    <div class="nonfunctional">
+      <h3>Non-functional</h3>
+      <div class="nfr"><h4>Label</h4><ul> … </ul></div>
+    </div>
     <div class="outofscope"><h3>Out of scope</h3><ul> … </ul></div>  <!-- optional -->
   </div>
 </section>
 ```
+
+The FR list is a `<ul>`, and the `<ol>` most of the corpus writes is equally valid — the
+build mints `requirements-fr-N` from either. Choose by whether the page cites its own
+requirements: a page whose prose says "FR-13" needs the visible numbers, and a page that
+names them ("the reconstructable-history requirement") reads better without a column of
+digits nobody refers to. Never mix the two on one page.
 
 ## Functional requirements — one sentence, plain, atomic
 
@@ -60,41 +69,56 @@ A long FR list may split into two tiers when the design has a clear minimum prod
 (see `persona-identification`):
 
 ```html
-<h4>Mandatory — the product promise</h4>
+<h4>Mandatory<span class="subline">the product promise</span></h4>
 <ol> … </ol>
-<h4>Additional — ongoing obligations and governance</h4>
+<h4 id="requirements-h-additional">Additional<span class="subline">ongoing obligations and governance</span></h4>
 <ol start="9"> … </ol>
 ```
 
+- **The tier name is the heading; what the tier covers is its subline.** Two words in the
+  `<h4>` and the gloss in a `<span class="subline">` — the same span a deep-dive heading
+  puts its routing tag in. A tier written as one `Mandatory — the product promise` string
+  makes the reader parse a sentence to find a two-word label.
 - **The mandatory tier must stand alone** — a deployment meeting only it is a complete,
   correct product. If striking an item breaks the core promise, it is mandatory.
 - **Additional items must be additive** — recurrence, audit surface, governance — and
   the split earns its keep only when paired with an **Evolvability** NFR stating that
   additional obligations attach without redesigning the core.
-- Numbering continues across the tiers (`start=` on the second `<ol>`), so an item keeps
-  one number for its whole life.
+- On a numbered page, numbering continues across the tiers (`start=` on the second
+  `<ol>`), so an item keeps one number for its whole life. A `<ul>` page needs neither.
 - The sizing block should then trace capabilities per tier: what the mandatory core
   forces vs what the additional tier adds (see
   [kb-design-sizing](../kb-design-sizing/SKILL.md)).
 
 ## Non-functional requirements — labelled constraints with numbers
 
-- Shape: a bold label, then its points as a nested sublist — one point per nested
-  `<li>`, each a single plain sentence:
+- Shape: a labelled section, its points one plain sentence each:
 
   ```html
-  <li><strong>Scale</strong>
+  <div class="nfr">
+    <h4 id="requirements-nfr-1">Scale</h4>
     <ul>
       <li>~100 onboardings a week today; one merchant means several person-flows.</li>
       <li>Headroom to 10k person-flows a day without redesign.</li>
     </ul>
-  </li>
+  </div>
   ```
 
-  A label with a single point may stay inline: `<li><strong>Label</strong> — constraint.</li>`.
-  The bold label is the one place formatting is allowed; every body sentence is plain.
-  **One level of nesting only** — the `kb.mjs` reader renders exactly one sublist level;
-  anything deeper welds into an unreadable line.
+  **An NFR is a section, not a list item.** Its label is a rank-4 title and its points are
+  the content under it, so the column reads as labelled sections rather than as one list
+  whose items each hide a second list. A label with a single point takes a `<p>` instead of
+  the `<ul>`. **One level of content only** — the `kb.mjs` reader renders exactly one
+  sublist level; anything deeper welds into an unreadable line.
+
+  The `.nfr` wrapper is load-bearing, not decoration: `build-pages.mjs` mints
+  `requirements-nfr-N` from `.nonfunctional > ul > li` **or** `.nonfunctional > .nfr > h4`,
+  and it is the wrapper that keeps a section's own bullets — one level deeper — from being
+  read as legacy rows.
+
+  **Legacy shape**, still valid and still what most of the corpus writes: a bold label with
+  a nested sublist, `<li><strong>Scale</strong><ul>…</ul></li>`. `pattern.css` paints that
+  first `<strong>` in `--stress` so it reads as the same title. Migrate a page to the
+  section shape when its requirements block is being reworked, not as a side effect.
 - **Every constraint carries a number where one exists** (~100/week, 10k/day, ~6 hours
   down, 500 ms, 100:1).
 - **Constraint, not mechanism.** "Tenant isolation is enforced by the database itself,
@@ -159,15 +183,17 @@ so a constraint missing its number leaves that block guessing.
 ## Self-check
 
 1. Read each FR aloud — is it one sentence, and does it survive with all markup stripped?
-2. `grep` the functional `<ol>` for `<strong>\|<em>\|<br>\|<code>` — expect zero.
+2. `grep` the functional list for `<strong>\|<em>\|<br>\|<code>` — expect zero.
 3. Scan both lists for solution words — hash, HMAC, queue, outbox, collector, broker,
    cache, shard, RLS, crypto- — expect zero; move any hit to `deepdives`.
-4. Does every NFR open with a bold label from the standard set, with each point a single
-   plain sentence carrying its number where one exists — and no sublist deeper than one
-   level?
+4. Does every NFR carry a label from the standard set — an `<h4>` in a `.nfr` section, or
+   the legacy bold lead — with each point a single plain sentence carrying its number
+   where one exists, and nothing nested deeper than one level?
 5. If the page's `problem` block uses routing tags (`→ FR: …` / `→ NFR: …`), does every
    tag still resolve to an item here, and does every item trace back? (See
    [kb-design-problem](../kb-design-problem/SKILL.md).)
 6. `make all && make check`, then `node scripts/kb.mjs get <id> --block requirements` —
    FRs should scan as a flat list, NFRs as labels with indented points. Check 3 is the
    one that does the work.
+7. If the FR list is tiered, is each `<h4>` a short tier name with its gloss in a
+   `<span class="subline">`, rather than one `Name — gloss` string?

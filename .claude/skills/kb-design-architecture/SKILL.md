@@ -29,22 +29,33 @@ flowchart TB
     <figcaption>The one question the L1 board answers.</figcaption>
   </figure>
   <div class="prose">
-    <h3>Components &amp; communication</h3>
-    <ul>
-      <li><strong>Service</strong> — role in one clause; talks to Store with payload. Requests enter here.</li>
-    </ul>
-    <h3>Where each requirement lands</h3>
-    <ul>
-      <li>Requirement paraphrase — Component → Component path. → FR: label.</li>
-    </ul>
+    <h3 id="architecture-h-components">Components &amp; communication</h3>
+  </div>
+  <div class="table-scroll">
+    <table class="decision">
+      <thead>
+        <tr><th>Component</th><th>Role, and what it talks to</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Service</strong></td><td>Role in one clause; talks to Store with payload. Requests enter here.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <h3 id="architecture-h-trace">Where each requirement lands<span class="subline">one line per functional requirement, in the requirements block's order</span></h3>
+    <h4 id="arch-fr-1">Requirement paraphrase<span class="subline">→ FR: label</span></h4>
+    <p>Component → Component path.</p>
   </div>
 </section>
 
 <section class="doc-section" id="deepdives" aria-labelledby="h-deep" data-kb-block="deepdives">
   <h2 class="doc-h" id="h-deep">Deep dives</h2>
   <div class="prose">
-    <h3>1 · Mechanism title → NFR: label</h3>
+    <h3>1 · Mechanism title<span class="subline">→ NFR: label</span></h3>
     <p><strong>Thesis — why this mechanism satisfies this NFR.</strong> Then the options argument…</p>
+
+    <h4 id="deepdives-h-step-1">Step name<span class="subline">what it covers</span></h4>
+    <p>… only where a labelled step introduces two or more paragraphs …</p>
   </div>
   <figure class="diagram">
     <pre class="mermaid">…L2 zoom (node keeps its L1 name) or iterated board…</pre>
@@ -83,19 +94,32 @@ is scope creep; a name the rest of the page never uses is a second vocabulary.
 
 ### 3. Components & communication
 
-`<h3>Components &amp; communication</h3>` then a `<ul>`, one `<li>` per board node:
-`<strong>Name</strong>` — its role in one clause; who it talks to and with what payload.
-The first bullet names where requests enter. The bullets carry the cross-block contract:
-a store bullet names the entity it holds, a service bullet names the endpoints it
-serves, and the payload wording reuses the interface block's verbs and status codes.
+`<h3 id="architecture-h-components">Components &amp; communication</h3>` then a
+`table.decision` in a `.table-scroll`, **one row per board node**: `Component` names it,
+`Role, and what it talks to` gives its role in one clause plus who it talks to and with
+what payload. The first row names where requests enter.
+
+**A table, not a list, because the roster is a lookup.** A reader arriving from the board
+wants one node's row; a bullet list of ten `<strong>Name</strong> — 40-word clause` items
+makes them scan every entry to find it. The rows carry the cross-block contract unchanged:
+a store row names the entity it holds, a service row names the endpoints it serves, and the
+payload wording reuses the interface block's verbs and status codes.
+
+The table is a **sibling** of the `.prose` div, like a figure — close the prose after the
+heading, emit the table, reopen prose for the trace.
 
 ### 4. Where each requirement lands
 
-`<h3>Where each requirement lands</h3>` then a `<ul>` with **exactly one `<li>` per
-functional requirement, in the requirements block's order**: a requirement paraphrase,
-the component path that satisfies it (Component → Component → Component), and the
-routing tag `→ FR: label.` — the same idiom the problem and sizing blocks use, plain text
-with no `<em>` around it.
+`<h3 id="architecture-h-trace">Where each requirement lands</h3>` then **exactly one
+section per functional requirement, in the requirements block's order**: an `<h4>` carrying
+the requirement paraphrase, its routing tag `→ FR: label` on the subline, and a `<p>` giving
+the component path that satisfies it (Component → Component → Component). Hand-mint
+`arch-fr-N`.
+
+The section shape is the same one `sizing` uses for a capability, and for the same reason:
+the requirement, where it lands and how it is served are three things, and a bullet welds
+them into one sentence the reader has to take apart. A page whose trace is a table keeps
+the table — it separates the same three parts into columns.
 
 The contract: every FR gets a line, and every line names only components that exist on
 the board. An FR that traces to nothing is a missing box; a box no FR or NFR ever claims
@@ -108,12 +132,18 @@ Each `<h3>` in the deepdives block is one NFR argued to completion.
 
 ### One dive per NFR
 
-Heading format: `<h3>N · Mechanism title → NFR: label</h3>` — the numbered
-`N · Title` corpus idiom, extended with a routing tag whose label matches the bold NFR
-label in the requirements block verbatim (Scale, Latency, Availability, …). The
-contract: **every NFR appears in exactly one dive heading.** A dive may carry two tags
-(`;`-joined) only when the two NFRs are genuinely satisfied by one mechanism. Order the
-dives in the requirements block's NFR order unless a dependency argues otherwise.
+Heading format: `<h3>N · Mechanism title<span class="subline">→ NFR: label</span></h3>` —
+the numbered `N · Title` corpus idiom, with the routing tag on its own line beneath the
+title. The label matches the bold NFR label in the requirements block verbatim (Scale,
+Latency, Availability, …). The contract: **every NFR appears in exactly one dive
+heading.** A dive may carry two tags (`;`-joined) only when the two NFRs are genuinely
+satisfied by one mechanism. Order the dives in the requirements block's NFR order unless
+a dependency argues otherwise.
+
+**The tag goes inside the heading, in a span — never in a paragraph of its own.**
+`build-pages.mjs` mints `deepdives-dive-N` from `.prose > h3`, so the heading must stay a
+direct child of its `.prose`, and the tag has to stay inside the heading's text to survive
+`kb.mjs get`. A dive that carries no NFR — a scenario walk — simply has no subline.
 
 ### Anatomy of one dive
 
@@ -126,6 +156,13 @@ Three moves, in order:
    rejected option is a lecture, not a decision.
 3. **Give the dive its own diagram** — zoom or iterate by the rule below; a dive that
    reuses the L1 board unchanged shows nothing the board did not already show.
+
+**A long dive breaks into labelled steps, and a label that runs for two or more paragraphs
+becomes an `<h4>`.** Where a dive argues an enumerated sequence — four idempotency
+boundaries, six rungs of a recovery ladder — each step gets a heading with a hand-minted
+`deepdives-h-*` id, and the clause after its comma rides the subline (`Boundary one` over
+`the client's create`). A bold run-in that opens a *single* paragraph is a thesis sentence
+and stays inline: promoting it would put a heading over every paragraph and rank nothing.
 
 ### Zoom or iterate — the diagram decision
 
@@ -247,3 +284,6 @@ blocks are being reworked on purpose.
 7. `make all && make check`, then `node scripts/kb.mjs get <id> --block architecture`
    and `--block deepdives` (add `--diagrams` to review the boards) — the extraction
    should scan as: lead, walk, trace; then thesis, options, diagram per dive.
+8. Is every dive's routing tag inside a `<span class="subline">` in its `<h3>` rather
+   than trailing the title string — and does every `<h4>` step label two or more
+   paragraphs rather than one?

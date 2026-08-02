@@ -88,6 +88,12 @@ stalls, or costs — and stops. If a risk was taken deliberately, one clause may
   identifier, and that is the whole inline vocabulary — no `<em>`, no `<i>`. The corpus
   carries none and no stylesheet renders italic, so an italic run reads as a second
   emphasis level that does not exist.
+- **The claim's colour is the column's, and it comes from CSS.** `pattern.css` paints the
+  opening `<strong>` of a pros item in `--ok` and of a cons item in `--hazard`, keyed on
+  `.pros li > strong:first-child`. So an item that opens with its claim is coloured for
+  free, and an item that buries the claim mid-sentence is not — which is the point.
+  Never add a class or a colour to chase it, and never bold a second run inside the item:
+  a coloured claim per line only ranks the list while there is exactly one per item.
 - **Mitigations are pointers, not paragraphs.** At most a parenthetical — `(see dive 4)`,
   "named in Right-sizing" — the argument lives where the pointer aims. Verify every
   pointer against the actual dive numbering before writing it.

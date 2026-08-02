@@ -24,7 +24,7 @@ groups.
     <p>… observations: 2–4 claim sentences …</p>
   </div>
   <div class="endpoint-group">
-    <h3>Group name — its auth model</h3>
+    <h3>Group name<span class="subline">its auth model</span></h3>
     <div class="endpoint">
       <h4><code>POST /flows</code></h4>
       <p>One sentence: what it does and the rule it carries.</p>
@@ -70,8 +70,10 @@ narration — the cards do that.
 each audience authenticates differently and can be granted different things. Typical
 groups: the tenant-facing API, the end-user surface, inbound vendor callbacks, the
 outbound push the system makes, governance/compliance calls. 3–6 groups. The `<h3>`
-names the group *and* its auth model or defining property after an em-dash —
-`Onboardee surface — the magic-link token is the identity`.
+names the group and its auth model or defining property rides the
+`<span class="subline">` — `Onboardee surface` over `the magic-link token is the
+identity` — the same title/subline idiom the entities groups and the deep-dive headings
+use.
 
 **Outbound contracts are part of the surface.** The webhook the system sends is a
 contract the client codes against; it gets a card like any endpoint (the `<h4>` is the

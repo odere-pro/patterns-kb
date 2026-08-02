@@ -23,7 +23,7 @@ observations lead, then the entities in groups.
     <p>… observations: 2–4 claim sentences …</p>
   </div>
   <div class="entity-group">
-    <h3>Group name — store(s)</h3>
+    <h3>Group name<span class="subline">store(s)</span></h3>
     <div class="entity">
       <h4>EntityName</h4>
       <p>One sentence: what it is and the rule it carries.</p>
@@ -73,9 +73,12 @@ a claim, delete it.
 **Group by domain role, not by physical store** — groups should map to the resources the
 interface block will expose. Typical groups: tenancy & identity, the core lifecycle,
 evidence, integration & delivery, governance. 3–6 groups; a group of one is fine when the
-entity genuinely stands alone (an audit log usually does). The `<h3>` names the group
-*and* the store(s) it lives in after an em-dash — `Flow lifecycle — operational
-Postgres` — so the sizing block's store count stays visible here.
+entity genuinely stands alone (an audit log usually does). The `<h3>` names the group and
+its store(s) ride the `<span class="subline">` — `Flow lifecycle` over `operational
+Postgres` — so the sizing block's store count stays visible here without the group's own
+name having to share a line with it. That is the page-wide title/subline idiom: the same
+span carries a routing tag on a deep-dive heading and the scope clause on a requirements
+tier.
 
 Every entity appears in **exactly one** group, as one `<div class="entity">` with three
 parts:
@@ -142,7 +145,8 @@ its entities block is being reworked on purpose — not as a side effect of a sm
    `schema` fails it.
 2. Is the observations lead ≤4 sentences, every one a claim?
 3. Does every entity appear in exactly one group, with name + one-line rule + a collapsed
-   schema whose summary names its table — and does every group heading name its store(s)?
+   schema whose summary names its table — and does every group heading name its store(s)
+   in a `<span class="subline">` rather than after an em-dash?
 4. Do the schemas show every named constraint in full, and elide everything else with a
    comment?
 5. Does every entity trace to an FR, NFR, or sizing verdict — and every store in a

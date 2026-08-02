@@ -17,7 +17,17 @@ deciding each candidate on the record, with a reason attached.
 ```html
 <section class="doc-section" id="sizing" aria-labelledby="h-sizing" data-kb-block="sizing">
   <h2 class="doc-h" id="h-sizing">Right-sizing</h2>
-  <div class="prose"> … </div>
+  <div class="prose">
+    <p>Lead — the problem, the shape, the stores.</p>
+
+    <h3 id="sizing-h-capabilities">Required capabilities</h3>
+    <h4 id="sizing-cap-1">Durable transactional store<span class="subline">→ NFR: consistency</span></h4>
+    <p>What forces it, and its tier (mandatory).</p>
+
+    <h3 id="sizing-h-numbers">The numbers<span class="subline">every figure is per region</span></h3>
+    <h4 id="sizing-num-1">Writes<span class="subline">→ NFR: scale</span></h4>
+    <p>The arithmetic, ending in a bold result.</p>
+  </div>
 </section>
 ```
 
@@ -25,6 +35,26 @@ The heading text is always **"Right-sizing"** (a suffix is allowed when it names
 block's verdict: "Right-sizing: how many nodes?"). The block is hand-edited HTML — no
 `kb.mjs` writer exists for it; the PostToolUse hook checks structure, not content. It is
 optional for `low-level-design` katas and expected on every `system-design` page.
+
+**Each part after the lead opens with an `<h3>`, not with a bold run-in paragraph.** The
+four parts are sections of an argument, and a `<p><strong>Required capabilities:</strong></p>`
+standing in for a heading gives the reader no outline, no anchor and no section-nav stop.
+Where the label carried a qualifier after an em-dash, that qualifier becomes a
+`<span class="subline">` inside the heading — the same span the problem block puts a routing
+tag in. **Hand-mint the id** (`sizing-h-capabilities`, `sizing-h-numbers`,
+`sizing-h-verdicts`, `sizing-h-limits`): the build mints ids for `.prose > p` and for a
+deep-dive `h3`, and for nothing else, and a heading with no id can never be moved by a lens.
+
+**And each ITEM inside those parts is a section too, not a bullet.** A capability, a
+numbers axis and a verdict all have the same three parts — a name, the requirement it
+answers, and the argument — so each is an `<h4>` naming the thing, its routing tag on the
+subline, and one `<p>`. That is what a bullet was hiding: `Durable transactional store —
+the ingress dedup row … (mandatory). → NFR: consistency.` makes the reader parse a sentence
+to find all three. Hand-mint `sizing-cap-N`, `sizing-num-N`, `sizing-verdict-N`.
+
+A page whose sizing argues in **tables** — `Capability | Tier | What forces it | Routes to`
+inside a `.table-scroll` — keeps them, and gains only the `<h3>` above each. A table already
+separates the three parts into columns, which is the same job the sections do.
 
 ## The five-part shape
 
@@ -53,13 +83,14 @@ below are the proof.
 
 ### 2. Required capabilities
 
-`<p><strong>Required capabilities:</strong></p>` then a `<ul>`, one line per capability:
-`capability — forcing requirement (tier). → NFR: label.`. Draw from: durable
-transactional store, work queue, object store, coordination cache, read cache, search
-index, stream processor, scheduler, encrypted PII store with key custody, rate limiting,
-private network. **No product or vendor names, ever.** A capability that traces to no
-requirement is speculation — leave it out. When the FR list is tiered (see
-[kb-design-requirements](../kb-design-requirements/SKILL.md)), tag each line
+`<h3 id="sizing-h-capabilities">Required capabilities</h3>` then one section per capability —
+`<h4>` the capability, its routing tag on the subline, and a `<p>` giving the forcing
+requirement and the tier. Draw from: durable transactional store, work queue, object
+store, coordination cache, read cache, search index, stream processor, scheduler,
+encrypted PII store with key custody, rate limiting, private network. **No product or
+vendor names, ever.** A capability that traces to no requirement is speculation — leave it
+out. When the FR list is tiered (see
+[kb-design-requirements](../kb-design-requirements/SKILL.md)), close each paragraph
 `(mandatory)` or `(additional)`.
 
 **Distinguish capabilities that share a name.** A *coordination* cache (shared breaker
@@ -70,9 +101,10 @@ broker: the queue is the capability, the broker is one implementation of it.
 
 ### 3. The numbers
 
-A `<ul>`, one line per axis: `Label: arithmetic ≈ <strong>result</strong>. → NFR:
-label.`. Standard axes: writes, reads, storage — plus whichever of working set,
-fan-out, cardinality, connections, or latency budget actually decides this design.
+One section per axis: `<h4>` the axis (Writes, Reads, Storage), its routing tag on the
+subline, and a `<p>` carrying the arithmetic and ending in a bold result. Standard axes:
+writes, reads, storage — plus whichever of working set, fan-out, cardinality, connections,
+or latency budget actually decides this design.
 
 - **Show where each input came from.** A factor like "25–30 rows per flow" must name
   what it counts (which tables, inserts vs updates); a peak multiplier must name the
@@ -102,13 +134,14 @@ fan-out, cardinality, connections, or latency budget actually decides this desig
 
 ### 4. Verdict per candidate
 
-`<p><strong>Verdict per candidate:</strong></p>` then a `<ul>`, one line per candidate —
+`<h3 id="sizing-h-verdicts">Verdict per candidate</h3>` then one section per candidate —
 including the ones a bigger system would reflexively claim, so each decision is on the
-record. Three verdicts, each with **the reason on the same line**:
+record. The `<h4>` names the candidate, the subline carries its routing tag, and the `<p>`
+opens with the verdict and gives **the reason in the same sentence**:
 
-- `Candidate — <strong>adopted</strong>: what forces it.`
-- `Candidate — <strong>rejected</strong>: the number or fact that removes the need.`
-- `Candidate — <strong>deferred</strong>: not yet; the named trigger that buys it.`
+- `<strong>Adopted</strong>: what forces it.`
+- `<strong>Rejected</strong>: the number or fact that removes the need.`
+- `<strong>Deferred</strong>: not yet; the named trigger that buys it.`
 
 **The shape is a verdict, not just a claim in the lead.** Open the list with the
 interaction style decided both ways — the rejected alternative (synchronous
@@ -131,10 +164,11 @@ replay) is cheaper than resilience bought by infrastructure — prefer it and sa
 
 ### 5. When this stops being right
 
-The closing `<p>`, opening with that exact bold phrase — it does the framing on its
-own (the verdicts hold for today's numbers; this is the tripwire that says they no
-longer do), so no further preamble. Then three things, in order, each in a sentence
-or two:
+`<h3 id="sizing-h-limits">When this stops being right<span class="subline">→ NFR: scale</span></h3>`
+then the closing `<p>`. The heading does the framing on its own (the verdicts hold for
+today's numbers; this is the tripwire that says they no longer do), so the paragraph opens
+straight on the mechanism with no preamble, and its routing tag rides the subline rather
+than trailing the last sentence. Then three things, in order, each in a sentence or two:
 
 1. **What wears out first, in plain language.** Name the component and the mechanism
    that degrades it — cause, then effect. Explain engine-level jargon in the sentence
@@ -151,9 +185,12 @@ exits serve (usually `→ NFR: scale.`).
 
 ## The routing tags
 
-Every list item ends with exactly one routing tag — `→ FR: label.`, `→ NFR: label.`, or
+Every **item** carries exactly one routing tag, on its `<h4>`'s subline (or, in a table, in
+the Routes-to column) — `→ FR: label.`, `→ NFR: label.`, or
 both joined with `;`. Plain text, never wrapped in `<em>`: the arrow and the colon already
-mark it. The same idiom the problem block uses
+mark it. A tag that belongs to a whole part rather than to one item goes on that part's
+heading instead, inside its `<span class="subline">` — which is where "When this stops
+being right" carries `→ NFR: scale`. The same idiom the problem block uses
 (see [kb-design-problem](../kb-design-problem/SKILL.md)). The label is informal
 but must match an item the reader can find in the requirements block. Capabilities and
 verdicts route to what forces them; numbers route to the constraint they price. No
@@ -162,8 +199,8 @@ requirement.
 
 ## Style rules
 
-- **One line per list item.** A second clause is allowed after a semicolon; a second
-  sentence means it is two items.
+- **One paragraph per item.** A second clause is allowed after a semicolon; a second
+  argument means it is two items.
 - **Strike connector words** — "which is why", "that is", "so", "in other words". The
   `label — evidence` juxtaposition does the work.
 - **Results bold, assumptions in parentheses**, jargon only where it is the exact term —
@@ -226,9 +263,12 @@ its sizing block is edited.
 4. Does every candidate get adopted, rejected or deferred **with a reason** — deferred
    ones carrying a named trigger, nothing kept "to be safe"? This is the check that does
    the work.
-5. Does every list item end in a routing tag that resolves to a findable FR or NFR?
+5. Does every item carry a routing tag that resolves to a findable FR or NFR?
 6. Do the verdicts agree with the `architecture` block's technology table?
 7. Does the closing paragraph say what it is for, name the mechanism in plain language,
    and give an observable signal — not just a threshold?
 8. `make all && make check`, then `node scripts/kb.mjs get <id> --block sizing` — the
    output should scan as: problem+shape+stores, capabilities, numbers, verdicts, tripwire.
+9. Does each part after the lead open with an `<h3>` carrying a hand-minted `sizing-h-*`
+   id, rather than with a bold run-in paragraph — and does each heading's `data-kb-level`
+   match the list under it, so a lens never leaves a heading standing over nothing?
