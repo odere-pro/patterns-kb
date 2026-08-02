@@ -199,8 +199,9 @@ export const SKETCH_LANGS = [
  * reader sees a flash of the wrong theme, so they belong in <head> and are none of this
  * builder's business.
  *
- * Two pairs are ordered by dependency — mermaid before diagram.js, highlight before
- * sketch.js. Everything else is independent, so new entries append. */
+ * Three pairs are ordered by dependency — mermaid before diagram.js, diagram.js before
+ * diagram-zoom.js, highlight before sketch.js. Everything else is independent, so new
+ * entries append. */
 const SCRIPTS_BASE = [
   /* Every kind may carry a diagram: hazards and themes already do, and nothing stops a
    * principle or a capability page gaining one. Loading the engine where no diagram
@@ -208,6 +209,11 @@ const SCRIPTS_BASE = [
    * tomorrow renders the mermaid source as text. */
   "vendor/mermaid.min.js",
   "diagram.js",
+  /* Decorates the same <figure class="diagram"> elements and listens for the
+   * kb-diagram-render event diagram.js fires, so it must load after it. Gives every figure
+   * a fit-by-default zoom, a pan and a full-screen viewer — a board drawn to fit a column
+   * had no way to be read, and a schema drawn at natural size no way to be seen whole. */
+  "diagram-zoom.js",
   "progress.js",
   "favourites.js",
   /* Injects the left-edge next-section control, and suppresses itself on a page short

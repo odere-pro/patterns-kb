@@ -25,7 +25,8 @@ builder (**kb-hub**); a change to how it *behaves* lives here.
 | `favourites.js` | favourites everywhere: hub `button.chip-fav`, the injected page `.favourite` + floating `.fav-toggle`, and the ★ filter button (toggles `body.fav-only`, self-hides when nothing is favourited) | `kb-favourites-v1` |
 | `search.js` | hub search + facet rails over `window.KB_CATALOG`; hides non-matching `.chip[data-id]` and the containers they empty via the `hidden` property; holds sections open while a query is live; exposes `window.KB_MATCHES` for the graph | — |
 | `collapse.js` | hub section/subsection disclosure: seeds from the rendered `open`, stores **overrides only**, exposes `window.KB_COLLAPSE.hold(reason, on)`, opens the `<details>` chain for `location.hash`, forces open for print | `kb-collapse-v1` |
-| `diagram.js` | mermaid init + re-render on `kb-theme-change`, `kb-lens-change`, OS scheme change | — |
+| `diagram.js` | mermaid init + re-render on `kb-theme-change`, `kb-lens-change`, OS scheme change; fires `kb-diagram-render` at the end of every pass | — |
+| `diagram-zoom.js` | per-figure zoom strip (− / + / % / ⤢), drag-pan, and the full-screen `<dialog class="dzoom">`; exposes `window.KB_DIAGRAM_ZOOM` | — |
 | `sketch.js` | lazy highlight.js on `details.sketch` open | — |
 | `hub.css` / `tokens.css` / `pattern.css` | all styling; `tokens.css` holds the control cluster and the lens visibility rules | — |
 

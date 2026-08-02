@@ -79,6 +79,38 @@ order, and the page would still render. So the ordering is DOM-free, exported as
 `window.KB_VOCAB_SORT`, and covered by `scripts/test/vocab-sort.test.mjs`; the file guards
 on `typeof document` so the test loads it with no DOM stub at all.
 
+## Diagram zoom (`diagram-zoom.js` + `diagram-zoom.css`)
+
+A diagram fails in one of two directions: a board carrying a whole system fits its column and
+its labels shrink past reading, or a schema renders at natural size and you lose your place
+scrolling inside it. Both are the same missing verb. Every `figure.diagram` now gets a
+`− / + / % / ⤢` strip, drag-pan, and a full-screen `<dialog class="dzoom">`.
+
+Four things are load-bearing:
+
+- **It RELOCATES the `<pre class="mermaid">` into the viewer and back, never clones it** — the
+  same move `vocab.js` makes above, for a sharper reason. A clone duplicates the SVG's id, and
+  mermaid scopes both its injected `<style>` block and its `url(#marker-…)` arrowheads by that
+  id. A `.dz-slot` holds the removed height so nothing behind the dialog reflows.
+- **Everything it injects lives outside the `<pre>`.** `diagram.js`'s `rerender()` restores
+  `el.textContent` from `el.dataset.src` on every theme and lens change; anything parked inside
+  is destroyed by it.
+- **`kb-diagram-render` is the seam**, fired by `diagram.js` at the end of every render pass
+  including the empty one. But an event cannot be caught late, and `diagram.js` starts its first
+  pass one script tag earlier — so `sync()` also runs on load and at `window.load`, and is
+  idempotent precisely so all three are safe.
+- **Inline fit is capped at 1 and bounds the WIDTH only.** That reproduces what mermaid's own
+  `useMaxWidth` already did, so ~600 figures are pixel-identical and nothing inline is ever
+  clipped until the reader zooms. The viewer fits both axes and magnifies, which is what makes
+  an unreadable board readable. `er: { useMaxWidth: false }` was removed from `diagram.js` in
+  the same change: the viewer carries ER detail now.
+
+`window.KB_DIAGRAM_ZOOM` (`fit`, `zoomAt`, `clampPan`, `labelFor`) is the test seam, covered by
+`scripts/test/diagram-zoom.test.mjs`. Note that `pattern.css`'s dark-mode erDiagram row fix is
+scoped to `.diagram svg[…]` and stops matching once the `<pre>` is relocated, so
+`diagram-zoom.css` restates it under `.dz-stage` — drop that and the schema goes white-on-white
+in the viewer in dark mode.
+
 ## The interactive graph (`map/graph.html`) is three layers
 
 | layer | file | owner |

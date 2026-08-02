@@ -22,6 +22,15 @@
     if (window.console) console.warn("mermaid render failed:", e);
   }
 
+  /* diagram-zoom.js sizes its stage from the rendered SVG, which does not exist until
+     mermaid.run resolves — and rerender() below throws every SVG away on a theme or lens
+     change. Announcing the end of a render pass is deterministic; a MutationObserver over 628
+     figures, or polling, is not. Fired on every path including the empty one, so a listener
+     can read it as "the render cycle is over" rather than "something changed". */
+  function announce() {
+    document.dispatchEvent(new CustomEvent("kb-diagram-render"));
+  }
+
   function render() {
     var css = getComputedStyle(document.documentElement);
     var v = function (name, fallback) {
@@ -42,12 +51,11 @@
       securityLevel: "strict",
       theme: "base",
       fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-      /* An entity-relationship schema is wide by nature — a dozen tables with their columns
-         do not compress. Left at the default, mermaid scales the whole thing down to the
-         container and the column text becomes unreadable. Rendering at natural size instead
-         lets `.diagram`'s overflow-x carry it, which is the readable trade. Scoped to `er`
-         on purpose: the corpus's 600 flowcharts are drawn to fit and must keep fitting. */
-      er: { useMaxWidth: false },
+      /* An erDiagram used to render at natural size (`er: { useMaxWidth: false }`) because
+         scaling a dozen tables down to the container made the column text unreadable. That
+         traded one failure for another: the schema became enormous and you lost your place
+         scrolling around inside it. diagram-zoom.js answers both — every diagram now fits its
+         column and zooms on demand — so ER goes back to fitting like every other kind. */
       themeVariables: {
         background: paperRaised,
         primaryColor: accentSoft,
@@ -98,13 +106,15 @@
     });
 
     var pending = Array.prototype.filter.call(blocks, laidOut);
-    if (!pending.length) return;
+    if (!pending.length) { announce(); return; }
 
     try {
       var done = mermaid.run({ nodes: pending });
-      if (done && done.catch) done.catch(warn);
+      if (done && done.then) done.then(announce, function (e) { warn(e); announce(); });
+      else announce();
     } catch (e) {
       warn(e);
+      announce();
     }
   }
 
