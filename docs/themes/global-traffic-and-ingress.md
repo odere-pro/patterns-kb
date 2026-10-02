@@ -14,20 +14,15 @@ How a request finds a healthy part of a system spread across regions, what it pa
 ## The question
 <!--meta block=description-->
 
-Once a system runs in more than one place, a request has to be sent somewhere, and that choice is now a reliability decision rather than a routing detail. Send it to the nearest region and it is fast until that region is the broken one. Send it anywhere and the fast path is wasted. Send it to a region that has just started failing and the user gets an error the system already knew about.
-
-So the entry point has two jobs, and they are separable. It has to know which regions are currently able to serve — which means asking them, continuously, rather than assuming. And it has to be the only way in, so that whatever screening happens there cannot be bypassed by anyone who learns a backend address.
-
-Health-based routing is the part people underestimate. The router probes each region and stops sending traffic to any that answers badly, which turns a regional outage into a routing event nobody has to be paged for. What the probe checks is therefore a design decision with consequences: a probe that reports only that a process is running will keep routing traffic into a region whose database is unreachable, and one that checks every dependency on every probe becomes load in its own right, because a global router probes from every edge location it has.
-
-The second job is why the entry point is a single one. Screening, rate limiting and request validation are only guarantees if no path skips them, so the backends have to reject anything that did not arrive through the front door. Without that check the whole edge is advisory, and anyone who finds a regional address gets an unscreened route to the application.
-
-The uncomfortable consequence is that the entry point becomes the one component whose failure is total. Everything behind it can be redundant across regions, and none of that helps if the thing choosing between them is down or misconfigured. That is the trade the design accepts: concentrate the routing decision, then spend disproportionately on the availability of the place where it is made — and treat its configuration as production code, because a wrong rule there is indistinguishable from an outage.
+Once a system runs in several regions, deciding where a request goes is a reliability decision. The entry point has two separable jobs: know which regions can serve right now by probing them continuously, and be the only way in, so screening cannot be bypassed. The cost is that the entry point becomes the one component whose failure is total, so spend on its availability and treat its configuration as production code.
 
 ## Explained
 <!--meta block=explain-->
 
-Global traffic routing sends each request to a region that is working right now, and makes one entry point the only way in so that checks on requests cannot be skipped. The router asks each region whether it is healthy, continuously, and stops sending traffic to one that answers badly, so a regional outage becomes a routing change rather than an incident. The choice that matters is how fast to react. A strict, frequent check removes a region at its first stumble, but a blip then shifts its load onto the other regions. A forgiving, rare check leaves users on a broken region until the interval runs out. Choose one entry point over several when you need every request screened the same way. Its cost is that its failure is total, so spend on its availability and review its rules like production code. Have each backend reject anything that did not come through the front door, or a leaked address gives an unscreened route. Make the health check test only what a request needs, since a check of every dependency becomes load of its own.
+Global traffic routing sends each request to a region that is working right now, and makes one entry point the only way in so that checks on requests cannot be skipped. The router asks each region whether it is healthy, continuously, and stops sending traffic to one that answers badly, so a regional outage becomes a routing change rather than an incident. The choice that matters is how fast to react. A strict, frequent check removes a region at its first stumble, but a blip then shifts its load onto the other regions. A forgiving, rare check leaves users on a broken region until the interval runs out. Choose one entry point, an [API gateway](../patterns/distributed/routing/api-gateway.md), over several when you need every request screened the same way. Make the health check test only what a request needs, since a check of every dependency becomes load of its own (see [health endpoint](../patterns/distributed/resilience/health-endpoint.md)).
+
+- **Total failure.** The entry point's failure is total, so spend on its availability and review its rules like production code.
+- **Bypass.** A leaked backend address gives an unscreened route, so have each backend reject anything that did not come through the front door.
 
 **Example.** Three regions each take 1,000 requests a second and can hold 1,500. The router checks each every 10 s and removes a region after 3 failures. If region A dies, 30 s pass before removal and about 30,000 requests fail. Then A's 1,000 requests split 500 each to B and C, which now sit at exactly 1,500. Removing after 1 failure cuts the loss to about 10,000 requests. But a one-off blip would then also push the neighbours to their limit. Neither setting is free: you trade failed requests against needless shifts.
 
@@ -71,7 +66,7 @@ Inside each region, one hop terminates connections and forwards to instances, wh
 
 ### [API Routing](../patterns/distributed/routing/api-routing.md) {#tour-api-routing}
 
-What in the request names its destination — path, host, header, version prefix — is what makes it possible to run two API versions at once and route each to its own backends. During a gradual release that is not a convenience; it is the mechanism the release depends on.
+What in the request names its destination — path, host, header, version prefix — is what makes it possible to run two application programming interface (API) versions at once and route each to its own backends. During a gradual release that is not a convenience; it is the mechanism the release depends on.
 
 ### [Sticky Session](../patterns/distributed/routing/sticky-session.md) {#tour-sticky-session}
 

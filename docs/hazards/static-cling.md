@@ -16,20 +16,17 @@ A static member that reads a clock, opens a connection or mutates shared state w
 ## What it is
 <!--meta block=description-->
 
-**Static cling** is a caller stuck to a specific implementation because it reached it through a static call. There is no receiver to substitute, no parameter to pass a different implementation through and no interface to implement, so the binding is fixed at compile time and no test, adapter or configuration can get between the two.
-
-The distinction that matters is **not the keyword but what the member touches**. A pure, deterministic static function of its arguments has none of these problems and should stay static — it is convenient, readable and trivially testable. The hazard starts when the static member reads a clock, opens a connection, reads configuration, calls a service or mutates a static field: things whose behaviour depends on something the caller cannot see or control.
-
-The second half of the problem is **hidden inputs and outputs**. The signature declares neither the state read nor the state written, so learning what a method depends on means reading its implementation rather than its declaration. With static mutable state that becomes temporal coupling: the result depends on what ran before, so calls have to happen in a particular order, and a wrong order fails at run time rather than at compile time.
-
-What makes it spread faster than an ordinary bad dependency is that it costs nothing to add. An injected dependency has to be declared, threaded and wired, and that friction is a review checkpoint; a static accessor is callable from anywhere with no wiring at all. So call sites accumulate quietly, which is why removing it later is a wide change rather than a local one — and why shared static state is also, by default, shared across threads, turning what looked like a local helper into a concurrency problem nobody chose.
+Static cling is a caller stuck to one implementation because it reached it through a static call, leaving no receiver to substitute and no parameter or interface to pass another through. You recognise it when a test cannot control the clock, connection or settings a method reads. The trait is not the keyword but what the member touches: a pure function should stay static, while one with hidden inputs or mutable state is the hazard.
 
 ## Explained
 <!--meta block=explain-->
 
-Static cling is code stuck to one specific implementation because it reached it through a static call, a call on a class rather than on an object you were given. There is no object to swap, no parameter to pass a stand-in through and no interface to implement, so no test or configuration can get between the caller and the thing it calls. The hazard is not the keyword but what the member touches. A pure function, one that returns the same output for the same input and touches nothing else, should stay static. A static member that reads the clock, opens a connection or reads settings has hidden inputs, and learning what a method depends on means reading its body. It spreads because a static call needs no wiring, so the first person who must test around it pays for all of them. Draw the line at purity, not at the keyword. Move anything whose answer depends on the world behind a dependency the caller declares, using dependency injection, which passes collaborators in rather than reaching for them. Wrap a third-party static API in a thin adapter. Do not swap it for a global lookup, which is the same hazard behind an interface. The cost is more constructor parameters.
+Static cling is code stuck to one specific implementation because it reached it through a static call, a call on a class rather than on an object you were given. There is no object to swap, no parameter to pass a stand-in through and no interface to implement, so no test or configuration can get between the caller and the thing it calls. The hazard is not the keyword but what the member touches. A pure function, one that returns the same output for the same input and touches nothing else, should stay static. A static member that reads the clock, opens a connection or reads settings has hidden inputs, and learning what a method depends on means reading its body. It spreads because a static call needs no wiring, so the first person who must test around it pays for all of them. Move anything whose answer depends on the world behind a dependency the caller declares, using [dependency injection](../patterns/gof/extra/dependency-injection.md). Wrap a third-party static API in a thin adapter.
 
-**Example.** A late-fee class calls LocalDate.now() in 5 places. To test a fee at 31 days overdue you must wait 31 days or change the machine's clock, so its 12 tests cover only today. You pass it a Clock in its constructor instead. Production passes the system clock, and a test passes a fixed date, so all 12 cases run in milliseconds on any day. The cost is that every place that builds the class must now supply a clock, and the 3 modules that build it each get one extra line.
+- **More parameters.** Constructors gain collaborators and every builder must supply them; a composition root keeps the wiring in one place.
+- **Service locator trap.** Swapping a static call for a global lookup is the same hazard behind an interface.
+
+**Example.** A late-fee class calls LocalDate.now() in 5 places. To test a fee at 31 days overdue you must wait 31 days or change the machine's clock, so its 12 tests cover only today. You pass it a Clock in its constructor instead. Production passes the system clock, and a test passes a fixed date, so all 12 cases run in milliseconds on any day. The cost is one extra line in each of the 3 modules that build the class.
 
 ## How it happens
 <!--meta block=causes-->
@@ -91,9 +88,15 @@ Two traps on the way out. A global lookup registry is the same hazard wearing an
 **Mitigated by**
 
 - [Dependency Injection](../patterns/gof/extra/dependency-injection.md) — The seam appears the moment the collaborator arrives as a parameter
-- [Adapter](../patterns/gof/structural/adapter.md) — A thin instance-level wrapper is the whole fix for a third-party static API
+- [Adapter](../patterns/gof/structural/adapter.md) — A thin instance-level wrapper is the whole fix for a third-party static application programming interface (API)
 - [Test Stub](../patterns/testing/test-stub.md) — Substituting a canned collaborator is exactly what a static call makes impossible
 - [Dependency Inversion Principle](../principles/dependency-inversion.md) — Depending on an abstraction the caller owns is the general form of the fix
 - [Gateway](../patterns/enterprise/gateway.md) — An injected gateway turns a hidden static call to the outside world into a visible dependency
+
+**Threatens**
+
+- [Singleton](../patterns/gof/creational/singleton.md) — A global accessor is a static call that tests and callers cannot substitute
+- [Service Locator](../patterns/gof/extra/service-locator.md) — A static registry lookup hides dependencies behind a call that cannot be swapped
+- [Factory Method](../patterns/gof/creational/factory-method.md) — A static factory call fixes the concrete type at the call site
 
 <!-- relationships:end -->

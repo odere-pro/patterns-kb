@@ -15,50 +15,19 @@ A client starts a flow by providing an email address; the address's owner is inv
 ## Understanding the problem
 <!--meta block=description-->
 
-The task states a flow and four given components — no volumes, no jurisdictions, no data-protection rules. These questions close those gaps. Where no answer was available the assumption is marked; each answer lands in a requirement below.
-
-**Q1 — What does "delivered" mean, and who is allowed to see a duplicate?** → functional requirement (FR): recognisable repeat; non-functional requirement (NFR): delivery & idempotency. The client sees duplicates and must be able to recognise them. No network delivers exactly once, so the promise is at-least-once transport with a stable identifier on every copy, which the client collapses. We publish that promise and not a stronger one.
-
-**Q2 — What happens to a flow when a vendor never answers?** → FR: terminal or alert, list criticality; NFR: reliability & recovery. It still ends, and somebody still hears about it. An error is easy; a vendor that takes the call and goes quiet strands the flow, because nothing is left in the request path to fail. So every wait carries a deadline, and missing the deadline is the failure.
-
-**Q3 — We are hours behind. Do we still take new requests?** → NFR: reliability & recovery, scale. No. A flow we accept but cannot get to looks fine to the client until their own customer complains. We turn it away, say when to retry, and put that refusal in the contract.
-
-**Q4 — May a result be re-sent, and who asks for it?** → FR: replay; NFR: delivery & idempotency. Yes, and either side may ask. A client whose endpoint was down all day needs a way back that is not a second read API, so replay re-walks the record and re-sends the same identifiers. The identifiers are what make it safe: a replayed result is a duplicate the client already knows how to drop.
-
-**Q5 — How many person-flows a day, and how fast does that grow?** → NFR: scale. Assumed, not given: ~100 merchant onboardings a week, several people behind each — fewer than 75 person-flows a day, designed out to 10k. Confirm it before reading Right-sizing. Every verdict there is priced against this number, and none of them holds if it is wrong by ten times.
-
-**Q6 — How many sanction lists, and may a partial verdict ship?** → FR: fan-in; NFR: consistency. Several per jurisdiction, and no. A round concludes only once every list that jurisdiction requires has answered, which is what makes "cleared" a word a regulator can rely on. Assumed, not given: each vendor returns a match or no match, never a score, so this system carries no human review state.
-
-**Q7 — What must the history prove, and to whom?** → FR: history; NFR: compliance. To an auditor, years later: what was checked, when, on whose authority, under which policy version. The answer comes out of the record the system actually ran on. A history written alongside the decision is a second write, and a second write can disagree with the first exactly when it matters.
-
-**Q8 — What personal data is held, where may it live, and what must we produce on demand?** → FR: separate PII (personally identifiable information) store, access audit, relationship close; NFR: compliance, security & tenancy.
-
-- Name, date of birth and a photograph of a government identity document — personal data about people who never signed up with us.
-- It lives in its client's region, and that region is fixed at client onboarding rather than chosen per request.
-- Producible on demand: a flow's full history, and the record of everyone who read the personal data behind it.
-- Producible on demand: proof that data was destroyed, not an assurance from us that it was.
-- Retention runs per jurisdiction from the end of the relationship, which puts it in permanent tension with the right to erasure.
-- A leak across clients is a reportable incident rather than a bug to prioritise.
-
-**Q9 — When does the screening obligation end?** → FR: relationship close; NFR: scale, compliance. When the client's relationship with the person ends. Only the client knows that, so the contract makes them tell us. Without the signal the recurring book only grows: we keep paying to screen people who left, and keep holding their personal data with no lawful basis for it.
-
-**Q10 — Who is paged, and how fast?** → FR: failure notice; NFR: reliability & recovery, observability. An operator, inside 15 minutes of a flow passing its state deadline; the client's failure event follows within 5 minutes of that page, so nobody outside hears before we do. Assumed, not given: confirm both numbers. A stall is invisible until a clock we own notices it, so a deadline nobody wrote down is a flow nobody is ever told about.
-
-**Q11 — Does residency mean multi-region, and does anything fail over?** (open) → NFR: security & tenancy; out of scope: geo-failover. Residency is in scope; failover is not. Residency means separate regional deployments that share no data, and it costs one copy of everything per region. Failover — a client surviving the loss of a whole region — does not pay for itself at this volume, and only the client can tell us whether a regulator demands it anyway.
-
-**Q12 — What is deliberately not built?** → Out of scope.
-
-- Cancelling a flow in flight.
-- In-flight status polling — replay plus the dashboard is the entire recovery path.
-- Cross-region failover, per Q11.
-- Human review of a possible match, per Q6 — the vendor adjudicates.
+The same identity-and-sanctions flow, argued from its delivery contract. The task gives no volumes, jurisdictions or data-protection rules, so the requirements mark each assumption. A flow mostly waits on vendors and people, so the page walks through exactly-once-in-effect delivery and a deadline on everything that can stall.
 
 ## Explained
 <!--meta block=explain-->
 
-This design is a service that checks one person's identity for a client, screens that person against the sanction lists their country requires, and reports the result to the client's webhook, a web address the client registers to receive calls. You face it when the real work happens at outside vendors you do not control, which can answer twice, answer late or never answer. So no vendor call sits in the request path. Every change is appended to one log in a single Postgres transaction together with its follow-up tasks, so the history and what the client was told are the same rows and cannot disagree. Every wait is a stored task with a deadline, and a sweeper, a scheduled job that looks for overdue work, catches anything that stalls. The result is a flow that always finishes or raises an alert. It costs four things. Delivery is at-least-once, so every copy carries one identifier the client uses to drop repeats. When the service is hours behind it refuses new requests and says when to retry. Residency means one full copy of everything per region, with no failover between regions. A vendor outage makes flows wait rather than fail.
+This design is a service that checks one person's identity for a client, screens that person against the sanction lists their country requires, and reports the result to the client's webhook (a web address the client registers). Use it when the real work happens at outside vendors that can answer twice, late or never, so no vendor call sits in the request path. Every change is appended to one log in a single Postgres transaction together with its follow-up tasks, so the history and what the client was told are the same rows. Every wait is a stored task with a deadline, and a sweeper (a scheduled job that looks for overdue work) catches anything that stalls. A flow therefore always finishes or raises an alert.
 
-**Example.** Fewer than 75 person-flows arrive a day, and the design is sized out to 10,000. An invited person has 48 hours to use the single-use link. The identity vendor is down about 6 hours a week, so a flow that meets the outage waits as a stored task and is not failed. If a flow passes its state deadline, an operator is paged within 15 minutes, and the client's failure event follows within 5 minutes of that page, so nobody outside hears before the team does. The cost is that a client sees a delay of hours instead of an error, and must drop the duplicate results it receives.
+- **Duplicates.** Delivery is at-least-once, so every copy carries one identifier the client uses to drop repeats.
+- **Refusals.** When hours behind, the service rejects new requests and says when to retry.
+- **Regional copies.** Residency means one full stack per region, with no failover between regions.
+- **Waiting.** A vendor outage makes flows wait hours rather than fail.
+
+**Example.** Fewer than 75 person-flows arrive a day, and the design is sized for 10,000. An invited person has 48 hours to use the single-use link. The identity vendor is down about 6 hours a week, so a flow that meets the outage waits as a stored task instead of failing. If a flow passes its state deadline, an operator is paged within 15 minutes, and the client's failure event follows within 5 minutes of that page, so nobody outside hears before the team does. The cost is that a client sees a delay of hours instead of an error, and must drop duplicate results.
 
 ## Requirements
 <!--meta block=requirements-->
@@ -114,16 +83,19 @@ This design is a service that checks one person's identity for a client, screens
   - A crashed worker or a crashed scheduler costs time, never a fact: both hold expiring leases and both are recovered by the same sweep.
   - The system refuses new work rather than accepting work it cannot drain, and a database failover loses no acknowledged fact.
 - **Scale**
-  - ~100 merchant onboardings a week today; one merchant means several person-flows.
+  - ~100 merchant onboardings a week today (assumed, not given; confirm first, since every capacity decision is priced against it); one merchant means several person-flows.
   - Headroom to 10k person-flows a day without redesign.
   - Recurring re-screening grows with the book of open relationships rather than with daily intake, and must never starve live flows.
   - That book is bounded by relationships still open, not by everyone ever checked.
 - **Observability**
   - One flow id correlates every recorded fact, task, vendor call and delivery attempt.
   - Alarms fire on stuck flows, per-class queue age, per-vendor error rates, stalled delivery lanes and dead work.
+  - An operator is paged within 15 minutes of a flow passing its state deadline, and the client's failure event follows within 5 minutes of that page, so nobody outside hears first (both numbers assumed, not given).
   - Every alarm names what it means, how to diagnose it and how to recover, and that text ships with the alarm definition rather than in a wiki beside it.
 - **Compliance**
   - Verified documents are stored as evidence, not proxied.
+  - Name, date of birth and ID photo are personal data about people who are not our customers; a cross-client leak is a reportable incident.
+  - Producible on demand: a flow's full history, the record of everyone who read its personal data, and proof that data was destroyed.
   - Personal data is encrypted at rest; right-to-forget is honoured and provable.
   - Retention is a per-jurisdiction policy counted from the end of the relationship, enforced and evidenced by the system.
   - No identifier kept outside the personal-data store may be used to re-identify an erased person.
@@ -1704,21 +1676,21 @@ The worst flaw, named first: the last boundary of the delivery contract sits in 
 
 **Edge, admission and tenancy**
 
-- [Gatekeeper](../patterns/distributed/routing/gatekeeper.md) — one public edge terminates TLS, authenticates the tenant and enforces both the rate limit and the admission ceiling before anything reaches the API
+- [Gatekeeper](../patterns/distributed/routing/gatekeeper.md) — one public edge terminates transport layer security (TLS), authenticates the tenant and enforces both the rate limit and the admission ceiling before anything reaches the application programming interface (API)
 - [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — an inbound per-client limit at the edge, and an outbound per-vendor quota split by workload class so the recurring batch cannot spend the live class's share
 - [Backpressure](../patterns/concurrency/backpressure.md) — when a class's oldest pending task passes its ceiling the create returns 429 with a Retry-After, because a queue alone only postpones sustained overload
 - [Load Shedding](../patterns/distributed/resilience/load-shedding.md) — the create returns 429 with a Retry-After when the live class's oldest pending task passes its ceiling, because accepting a flow into a backlog it cannot drain hides the failure rather than fixing it
 - [Secure Session Manager](../patterns/security/secure-session-manager.md) — the onboardee has no account: their session is a hashed single-use link, spent when the document lands rather than when the form posts
-- [Deployment Stamp](../patterns/distributed/routing/deployment-stamp.md) — residency is one full stack per region — edge, API, workers, relay, Postgres and standby, vault, key manager, object store — stamped from the same code with only jurisdiction config varying
+- [Deployment Stamp](../patterns/distributed/routing/deployment-stamp.md) — residency is one full stack per region — edge, application programming interface (API), workers, relay, Postgres and standby, vault, key manager, object store — stamped from the same code with only jurisdiction config varying
 
 **Payloads, evidence and restraint**
 
 - [Object Storage](../patterns/distributed/routing/object-storage.md) — identity photos go straight to an object store on a presigned upload, referenced by key from a metadata row written before the URL is signed
-- [Valet Key](../patterns/distributed/routing/valet-key.md) — the photo goes up on a URL scoped to one object for fifteen minutes, re-issuable when a mobile upload fails, so the API decides who may upload and then leaves the data path
+- [Valet Key](../patterns/distributed/routing/valet-key.md) — the photo goes up on a URL scoped to one object for fifteen minutes, re-issuable when a mobile upload fails, so the application programming interface (API) decides who may upload and then leaves the data path
 - [Claim Check](../patterns/messaging/claim-check.md) — workers pass the photo's storage key between steps, never the image bytes
 - [Secure Logger](../patterns/security/secure-logger.md) — log lines carry flow and person ids only, so a log never becomes a second copy of the vault
 - [Correlation Identifier](../patterns/messaging/correlation-identifier.md) — one flow id threads every append, inbox row, task, vendor call and delivery attempt, so a stuck flow is one query rather than an archaeology exercise
-- [Keep It Simple (KISS)](../principles/kiss.md) — one Postgres and stateless workers carry the whole delivery guarantee; every rejected broker, router, tap and polling API is priced against a confirmed hundred onboardings a week
+- [Keep It Simple (KISS)](../principles/kiss.md) — one Postgres and stateless workers carry the whole delivery guarantee; every rejected broker, router, tap and polling application programming interface (API) is priced against a confirmed hundred onboardings a week
 
 **Demonstrates**
 

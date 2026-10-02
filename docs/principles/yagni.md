@@ -16,9 +16,7 @@ Do not build a capability until a real, present requirement asks for it. The fut
 ## What it says
 <!--meta block=description-->
 
-“You Aren't Gonna Need It.” Implement a capability when a real requirement actually demands it — not when you merely foresee that it might, one day, be useful. The phrase comes out of Extreme Programming on the C3 project, where Kent Beck answered a colleague's “we're going to need it” with it; Ron Jeffries is the one who articulated and popularised the reasoning behind it.
-
-The target is speculative generality: the extra parameter no caller passes, the interface with one implementation, the plugin system built for plugins that were never requested. Each is written to serve an imagined future, and the honest observation behind YAGNI is that most of those futures never arrive — and the ones that do rarely match the shape you guessed.
+“You Aren't Gonna Need It.” Implement a capability when a real requirement demands it, not when you foresee it might be useful. It comes from Extreme Programming on the C3 project, where Kent Beck answered “we're going to need it” with it; Ron Jeffries popularised the reasoning. The target is speculative generality: the parameter no caller passes, the interface with one implementation. Most imagined futures never arrive, and the ones that do rarely match the guess.
 
 ## Explained
 <!--meta block=explain-->
@@ -68,18 +66,21 @@ The distinction that matters is cost asymmetry. Choices that are cheap to change
 - [Prefer Managed Services](./managed-services.md) — A platform nobody needed yet is the most expensive thing to build early
 - [Build for the Needs of the Business](./build-for-business.md) — A non-functional target is a present requirement, not a speculative feature
 - [Transaction Script](../patterns/enterprise/transaction-script.md) — Shipping a plain procedure now defers the domain model until the rules actually demand one
+- [Rule of Three](./rule-of-three.md) — Do not build the abstraction until a need shows up, which is when a third copy appears
 
 **Prevents**
 
 - [Boat Anchor](../hazards/boat-anchor.md) — Build only what is needed now and there is no speculative code left to fossilise.
+- [Premature Optimization](../hazards/premature-optimization.md) — Build for the requirement you have, not for a speed need nobody has shown
+- [Lava Flow](../hazards/lava-flow.md) — Does not build for needs that may never come, so less speculative code is left to cool
 
 **Demonstrated by**
 
 - [Parking Lot](../designs/parking-lot.md) — Parking Lot resists a Strategy abstraction while a single flat rate suffices
 - [Elevator](../designs/elevator.md) — abstractions are deliberately deferred until a requirement actually demands them rather than built up front
 - [Amazon Locker](../designs/amazon-locker.md) — at a few dozen doors the plain linear scan and single-phase flow beat the clever machinery that is not yet needed
-- [Connect Four](../designs/connect-four.md) — Declining an extension point for a requirement that will never change is the canonical YAGNI call
+- [Connect Four](../designs/connect-four.md) — Declining an extension point for a requirement that will never change is the canonical you aren't going to need it (YAGNI) call
 - [BookMyShow](../designs/bookmyshow.md) — classes are deferred until a measured hot-screening bottleneck earns them
-- [Rate Limiter](../designs/design-rate-limiter.md) — deferring speculative config-mutation surface until it is needed is YAGNI applied to the API
+- [Rate Limiter](../designs/design-rate-limiter.md) — deferring speculative config-mutation surface until it is needed is you aren't going to need it (YAGNI) applied to the application programming interface (API)
 
 <!-- relationships:end -->

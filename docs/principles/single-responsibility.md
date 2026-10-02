@@ -16,9 +16,7 @@ A module should answer to exactly one actor — one stakeholder group whose chan
 ## What it says
 <!--meta block=description-->
 
-A class should have only one reason to change. It is the “S” in SOLID, sharpened by Robert C. Martin from an older instinct toward cohesion. The word that trips everyone is responsibility: it does not mean “do one small thing,” it means answer to one source of change.
-
-Martin's later gloss is the clearer one — a responsibility is an actor: a single person, or group of people, whose evolving needs are the reason a module gets rewritten. An axis of change. Gather the things those people care about into one place; keep the concerns of different actors apart.
+A class should have only one reason to change. It is the S in SOLID, sharpened by Robert C. Martin from an older instinct toward cohesion. Responsibility does not mean do one small thing; it means answer to one source of change. Martin's later gloss is the clearer one: a responsibility is an actor, a person or group whose evolving needs get the module rewritten. Keep one actor's concerns together and separate the others.
 
 ## Explained
 <!--meta block=explain-->
@@ -46,6 +44,26 @@ Group by reason to change, not by superficial similarity:
 
 The test: describe the class in one sentence without using “and.” If you cannot, it is probably answering to more than one actor.
 
+## In code
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — one class serving two actors, then split by who asks for change"
+// Before: finance changes the pay rule, admins change the report layout; both edit this class.
+class Employee {
+  constructor(public hours: number, public rate: number) {}
+  pay() { return this.hours * this.rate; }              // finance's rule
+  report() { return `Hours: ${this.hours}`; }           // admin's format
+}
+
+// After: each class answers to one actor, so a layout edit cannot touch the pay rule.
+class Payroll {
+  pay(e: { hours: number; rate: number }) { return e.hours * e.rate; }
+}
+class HoursReport {
+  render(e: { hours: number }) { return `Hours: ${e.hours}`; }
+}
+```
+
 ## Taken too far
 <!--meta block=overreach-->
 
@@ -63,7 +81,7 @@ Responsibility is measured in reasons to change, not in lines of code or method 
 **Combines with**
 
 - [Interface Segregation Principle](./interface-segregation.md) — The interface-facing side of one reason to change.
-- [REPR](../patterns/architecture/repr.md) — A class per operation is the maxim applied to a web API's transport layer
+- [REPR](../patterns/architecture/repr.md) — A class per operation is the maxim applied to a web application programming interface (API)'s transport layer
 
 **Specializes**
 

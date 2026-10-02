@@ -16,16 +16,17 @@ Overrides a load balancer's free spreading so that every request from one client
 ## What it is
 <!--meta block=description-->
 
-A **sticky session** — also called session affinity — is a load-balancing policy that ties a client to one specific backend instance and keeps routing that client there for the duration of its session, instead of spreading its requests freely across the pool the way a plain [load balancer](./load-balancer.md) would.
-
-The force it resolves is stateful backends sitting behind a balancer that assumes they are not. A load balancer's whole premise is that any instance can answer any request — which holds only while the instances share no per-client state. The moment a backend keeps something in local memory that a later request needs — a login session, a shopping cart, an in-progress upload, an open websocket — a request that lands on a different instance finds nothing there. There are two ways out: externalize the state to a shared store every instance can read, or make sure the client keeps coming back to the one instance that already has it. Sticky sessions take the second route.
-
-The pin is usually expressed one of two ways. With cookie-based affinity the balancer either inserts its own cookie naming the chosen backend, or hashes an application cookie the backend already sets (a session id), and reads it on each later request to route consistently. With source-address affinity the balancer hashes the client's IP to a backend — needing no cookie, but breaking when many clients share one address behind NAT (network address translation) or a proxy. Either way the balancer stops choosing freshly per request and instead honours an existing assignment.
+A sticky session, or session affinity, is a load-balancing policy that routes every request from one client to the same backend instance for the length of its session. It exists for backends that keep per-client state in local memory, such as a login, cart or upload, which a plain balancer would scatter. The pin is a cookie naming the backend, or a hash of the client IP address.
 
 ## Explained
 <!--meta block=explain-->
 
-A sticky session ties each client to one backend instance, so every request in its session goes to the instance that holds its state in memory. A load balancer assumes any instance can answer any request, which fails the moment a backend keeps something locally that a later request needs, such as a login, a cart, a half-finished upload or an open websocket. Choose it over moving that state into a shared store when the state cannot leave the process yet, so the fleet works behind a balancer with no shared store on the hot path. The bill is evenness. A few long-lived clients can weigh down some instances while the rest idle, so cap session length. A new instance takes only new arrivals, so it relieves its overloaded peers slowly. Retiring an instance means waiting for its pins to expire. A dead instance loses whatever lived only in its memory, so keep anything that matters in a store as well. Pinning by client address puts a whole office behind one NAT, a shared address translator, on a single backend, so pin by cookie instead.
+A sticky session ties each client to one backend instance, so every request in its session goes to the instance that holds its state in memory. A [load balancer](load-balancer.md) assumes any instance can answer any request, which fails the moment a backend keeps something locally that a later request needs, such as a login, a cart, a half-finished upload or an open websocket. Choose it over moving that state into a shared store (see [stateless service](stateless-service.md)) when the state cannot leave the process yet, so the fleet works behind a balancer with no shared store on the hot path.
+
+- **Uneven load.** A few long-lived clients can weigh down some instances while the rest idle, so cap session length.
+- **Slow rebalancing.** A new instance takes only new arrivals, and retiring one means waiting for its pins to expire.
+- **Lost state.** A dead instance loses whatever lived only in its memory, so keep anything that matters in a store as well.
+- **Address pinning.** Pinning by client address puts a whole office behind one NAT (shared address translator) on a single backend, so pin by cookie.
 
 **Example.** Four instances serve 400 users with a cookie pin, 100 each. Ten users run 30-minute uploads that all pinned to instance 2, whose CPU reaches 95% while the others sit at 30%. You add a fifth instance, but the 400 existing users stay where they are, so it takes only new arrivals and the overload eases only as sessions end. If instance 1 crashes, its 100 users lose any cart held only in its memory, so you also save carts to a store.
 

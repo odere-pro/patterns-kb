@@ -16,12 +16,16 @@ A conversational AI serves an LLM's answer to a user's prompt, streaming it toke
 ## Understanding the problem
 <!--meta block=description-->
 
-A user types a natural-language prompt, and an answer streams back a few words at a time; conversations persist so an old chat can be reopened and continued. The large language model is treated as something we call, not something we train or run internally — prompt in, completion out. That framing pushes every hard question into the serving system: how to get the first word onto the screen fast, how to hand a thirty-second generation to a pool of extraordinarily expensive accelerators without wasting them, and how to stop the cost of a long conversation from climbing on every turn. Scope is deliberately narrow: text in, text out, no image or audio, no editing or branching of past messages. The two properties that decide the whole design are that **GPUs are the scarce, costly resource** and that **latency to the first token** matters more than total completion time — a blank screen after hitting enter feels broken.
+A user types a prompt, an answer streams back a few words at a time, and old chats can be reopened and continued. The model is a service we call, so every hard question lands in the serving system. GPUs are the scarce, costly resource, and time to the first token matters more than total time. This page walks through queuing, streaming and context cost.
 
 ## Explained
 <!--meta block=explain-->
 
-This design streams a model's answer to the browser a few words at a time while sharing a small, costly pool of GPUs (the chips that run the model) among millions of users. Two moves make it work. A queue sits in front of the GPUs, so a burst waits briefly instead of crashing a worker, and each GPU advances many answers by one word per pass, so no pass runs half empty. A live stream of words is kept per request, so any server can pick up a dropped connection and replay what the browser missed. Choose it over a plain call-and-wait design when one answer takes seconds and the GPUs, not the web servers, set your bill. If inference is cheap enough to answer inside one request, the queue and the stream are overhead. It trades three things. Cost limits run on an estimate, because answer length is unknown until the end, so let users overshoot slightly and settle the difference afterward. Strict priority for paid users can starve free ones, so reserve a floor of capacity for them. Summarising old turns is lossy, so keep the recent turns word for word.
+This design streams a model's answer to the browser a few words at a time while sharing a small, costly pool of GPUs (the chips that run the model) among millions of users. Two moves make it work. A queue sits in front of the GPUs, so a burst waits briefly instead of crashing a worker, and each GPU advances many answers by one word per pass, so no pass runs half empty. A live stream of words is kept per request, so any server can pick up a dropped connection and replay what the browser missed. Choose it over a plain call-and-wait design when one answer takes seconds and the GPUs, not the web servers, set your bill. If inference is cheap enough to answer inside one request, the queue and the stream are overhead.
+
+- **Estimated limits.** Answer length is unknown until the end, so let users overshoot slightly and settle the difference afterward.
+- **Starved free users.** Strict priority for paid users can starve free ones, so reserve a floor of capacity for them.
+- **Lossy summaries.** Summarising old turns drops detail, so keep the recent turns word for word.
 
 **Example.** At peak, 20k prompts arrive each second and each stream stays open about 6 s, so 20k times 6 is 120k answers in flight at once. A user on turn 51 of a chat has 50 earlier turns of about 500 tokens (a token is a word piece), so replaying them would send 25k tokens. The server instead reuses its saved work on those 25k and processes only the new 500. The cost is that the saved work lives in one server's memory, so a different server redoes it. The user closes the tab at second 3; the answer keeps generating, and reopening it replays the missed words from the stream.
 
@@ -193,14 +197,14 @@ sequenceDiagram
 
 **Demonstrates**
 
-- [Queue-Based Load Leveling](../patterns/distributed/resilience/load-leveling.md) — a request queue sits between bursty prompts (~20k/s) and fixed-rate GPU workers, absorbing spikes as bounded wait instead of dropped requests
-- [Competing Consumers](../patterns/messaging/competing-consumers.md) — a pool of GPU workers pulls generation jobs off one shared queue whenever a worker has free capacity
+- [Queue-Based Load Leveling](../patterns/distributed/resilience/load-leveling.md) — a request queue sits between bursty prompts (~20k/s) and fixed-rate graphics processing unit (GPU) workers, absorbing spikes as bounded wait instead of dropped requests
+- [Competing Consumers](../patterns/messaging/competing-consumers.md) — a pool of graphics processing unit (GPU) workers pulls generation jobs off one shared queue whenever a worker has free capacity
 - [Backpressure](../patterns/concurrency/backpressure.md) — the generation queue is bounded with an admission policy that sheds or defers once too deep, which also bounds an admitted request's wait time
-- [Batching](../patterns/concurrency/batching.md) — continuous batching advances dozens of sequences per GPU forward pass, the single biggest lever on utilization of memory-bandwidth-bound hardware
-- [Publish-Subscribe](../patterns/messaging/pubsub.md) — workers publish token deltas on a per-runId channel that whichever instance holds the client's SSE connection subscribes to and relays
+- [Batching](../patterns/concurrency/batching.md) — continuous batching advances dozens of sequences per graphics processing unit (GPU) forward pass, the single biggest lever on utilization of memory-bandwidth-bound hardware
+- [Publish-Subscribe](../patterns/messaging/pubsub.md) — workers publish token deltas on a per-runId channel that whichever instance holds the client's server-sent events (SSE) connection subscribes to and relays
 - [Correlation Identifier](../patterns/messaging/correlation-identifier.md) — a runId issued at generation start lets a worker and the connection-holding instance rendezvous without direct knowledge, and lets a reconnecting client resume the right stream
-- [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — cost-aware per-user token budgets that refill over time, plus tier-weighted queueing, meter actual GPU scarcity instead of raw request counts
+- [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — cost-aware per-user token budgets that refill over time, plus tier-weighted queueing, meter actual graphics processing unit (GPU) scarcity instead of raw request counts
 - [Stateless Service](../patterns/distributed/routing/stateless-service.md) — the Chat Service holds no per-request state, so any instance can serve, relay, or resume a stream and the tier redeploys and scales freely
-- [Message Queue](../patterns/messaging/message-queue.md) — A durable queue sits between the Chat Service and the GPU workers, so a prompt spike becomes wait time instead of dropped requests
+- [Message Queue](../patterns/messaging/message-queue.md) — A durable queue sits between the Chat Service and the graphics processing unit (GPU) workers, so a prompt spike becomes wait time instead of dropped requests
 
 <!-- relationships:end -->

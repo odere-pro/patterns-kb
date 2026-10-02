@@ -175,6 +175,8 @@ class LineItem {
 - [Encapsulation](../../principles/encapsulation.md) — Applies encapsulation to a cluster of objects rather than to one
 - [Law of Demeter](../../principles/law-of-demeter.md) — An aggregate root is the only object others may call, which keeps the chain of dots short
 - [Specification](../enterprise/specification.md) — Specifications express rules that span or select aggregates.
+- [Context Map](./context-map.md) — An aggregate's visibility to other contexts is a decision made on the context map
+- [Domain Service](./domain-service.md) — Cross-aggregate rules that no root owns live in a domain service
 
 **Alternative to**
 

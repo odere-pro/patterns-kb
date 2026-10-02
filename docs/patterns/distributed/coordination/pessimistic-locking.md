@@ -225,6 +225,10 @@ async function reserveSeat(db: Client, seatId: string, userId: string) {
 
 - [Race Condition](../../../hazards/race-condition.md) — Only the lock holder can touch the row, so check-then-act can't interleave
 
+**Exposed to**
+
+- [Deadlock](../../../hazards/deadlock.md) — Can fall into deadlock when row locks taken in inconsistent order across transactions form a wait cycle
+
 **Demonstrated by**
 
 - [Inventory Management](../../../designs/inventory-management.md) — it assumes conflict and takes the locks before reading, using consistent lock ordering to avoid deadlock

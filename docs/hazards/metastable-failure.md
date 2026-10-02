@@ -16,11 +16,7 @@ A short trigger pushes a system into overload, and the system's own recovery wor
 ## What it is
 <!--meta block=description-->
 
-A **metastable failure** is an outage that keeps itself going. A trigger starts it: a traffic spike, a cache flush, a slow dependency, a deploy. The trigger passes. The system does not recover, because the load it receives per useful answer has risen and is held up by something inside the system: clients retrying, a cache that cannot refill, a queue full of requests whose callers gave up. Bronson and colleagues named the pattern in "Metastable Failures in Distributed Systems" (HotOS, 2021), after a state that is stable but not the state you wanted.
-
-You recognise it in the graphs after the trigger ends. Incoming traffic is back to normal and the error rate is not. CPU is pinned, queues are full, and the throughput of **useful** work, the goodput, is close to zero. Restarting makes it worse or buys a few seconds, because a restarted instance has an empty cache and meets the full backlog at once. The postmortem finds a small trigger that was gone before anyone looked, and no bug in the code.
-
-The defining trait is persistence without spread. A [cascading failure](./cascading-failure.md) is defined by its spread, from one component to the next, and a metastable failure can sit inside one. A plain overload ends when the excess traffic ends. A metastable failure holds the system down at a load it handles easily on a normal day. The system only returns when load is cut well below normal, and that cut has to be made on purpose.
+A metastable failure is an outage that keeps itself going after its trigger, such as a spike, a cache flush or a deploy, has passed. You see traffic back to normal while errors are not: CPU is pinned, queues are full and useful throughput is near zero. Restarting makes it worse. The defining trait is persistence at a load the system handles on a normal day, held up by retries, a cold cache or a stale backlog.
 
 ## Explained
 <!--meta block=explain-->
@@ -97,5 +93,11 @@ Finally, test the recovery, not just the failure. Run a load test that applies a
 - [Timeout / Deadline](../patterns/distributed/resilience/timeout-deadline.md) — A deadline lets the server drop late requests unserved instead of wasting work.
 - [Circuit Breaker](../patterns/distributed/resilience/circuit-breaker.md) — A breaker gives a struggling dependency quiet time to recover.
 - [Request Coalescing](../patterns/distributed/resilience/request-coalescing.md) — Sharing one fetch per key keeps a cold cache from sending every read to the database.
+
+**Threatens**
+
+- [Cache-Aside](../patterns/caching/cache-aside.md) — A cold cache after a flush sends every read to the database, which can then never refill it
+- [Message Queue](../patterns/messaging/message-queue.md) — A backlog of requests whose callers gave up keeps the consumers busy with worthless work
+- [Failover](../patterns/distributed/coordination/failover.md) — The standby meets the full load cold, and the next failover re-triggers the failure
 
 <!-- relationships:end -->

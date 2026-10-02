@@ -159,8 +159,8 @@ console.log("recall",   recall(lazy).toFixed(3));   // 0.000 — catches nothing
 
 - [Harness Engineering](../../themes/harness-engineering.md) — How you know a harness change improved anything {#fluency-harness-engineering}
 - [ML System Design](../../themes/ml-system-design.md) — The inference-and-evaluation phase: offline metrics that predict online, tied to the objective {#fluency-ml-system-design}
-- [Harmful Content](../../themes/harmful-content.md) — PR-AUC and Recall@Precision95, impression-weighted, under rare prevalence {#fluency-harmful-content}
-- [Bot Detection](../../themes/bot-detection.md) — Precision@Recall90, PR-AUC, and importance sampling under rare prevalence {#fluency-bot-detection}
+- [Harmful Content](../../themes/harmful-content.md) — precision-recall (PR)-area under the curve (AUC) and Recall@Precision95, impression-weighted, under rare prevalence {#fluency-harmful-content}
+- [Bot Detection](../../themes/bot-detection.md) — Precision@Recall90, precision-recall (PR)-area under the curve (AUC), and importance sampling under rare prevalence {#fluency-bot-detection}
 - [Video Recommendations](../../themes/video-recommendations.md) — Per-head offline metrics plus NDCG/MAP, and A/B on session watch time {#fluency-video-recommendations}
 
 <!-- fluency:end -->

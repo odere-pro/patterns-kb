@@ -14,9 +14,7 @@ An enterprise application keeps business logic in one process and reaches a data
 ## The question
 <!--meta block=description-->
 
-Every business application meets the same two questions. Where does the business rule live: in a procedure, or on the objects it touches? And how does it reach storage, or an outside system, without the rule growing a dependency on a table or a vendor's wire format?
-
-The vocabulary is small. A **domain object** is an in-memory object that carries business behaviour. A **row** is one record of a database table. A **mapper** converts between the two. A **change-tracker** records which objects were added, changed or removed in a business transaction. A **gateway** is one object that wraps an external system behind an interface shaped around what your application needs.
+Every business application meets two questions. Where does the business rule live: in a procedure, or on the objects it touches? And how does it reach storage or an outside system without depending on a table or a vendor's wire format? A **domain object** carries business behaviour. A **mapper** converts between objects and rows. A **gateway** wraps an external system behind your own interface.
 
 ## Explained
 <!--meta block=explain-->
@@ -54,6 +52,10 @@ A dedicated layer moves data between domain objects and tables, so neither side 
 ### [Repository](../patterns/enterprise/repository.md) {#tour-repository}
 
 Callers ask for objects by identity or criteria and add or remove them as if the whole set lived in memory. It sits on top of a data mapper, with one repository per aggregate root, and the interface is what lets a fake stand in for storage.
+
+### [Query Object](../patterns/enterprise/query-object.md) {#tour-query-object}
+
+The caller builds criteria as an object and the repository or mapper turns it into a query, so callers need no SQL and the storage stays hidden.
 
 ### [Specification](../patterns/enterprise/specification.md) {#tour-specification}
 

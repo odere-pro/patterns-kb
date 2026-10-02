@@ -16,18 +16,17 @@ Every identity, service, and process is granted only the access its current task
 ## What it is
 <!--meta block=description-->
 
-**Least privilege** is a lens, not a single artifact: every identity — a person, a service account, a CI (continuous integration) job, a single API call — should hold only the permissions its current task needs, scoped as narrowly and held for as briefly as possible. It's a rule you apply when shaping any authorization decision, not a component you drop into an architecture diagram.
-
-The force it resolves is **ambient over-provisioning**. Broad roles are the path of least resistance: it's faster to copy an existing "admin" policy than to enumerate exactly which actions a new service needs, so permissions accumulate and rarely get trimmed back. That generosity is invisible until something goes wrong — then every credential, token, or session that was granted more than it needed becomes a lever an attacker can pull once they compromise any one piece of the system.
-
-Least privilege bounds that blast radius. It doesn't stop a component from being compromised; it stops a compromised component from being able to do much once it is. A leaked token that can only read one bucket is a contained incident. A leaked token that inherited an org-wide admin role is a breach.
-
-Saltzer and Schroeder codified it in 1975 as one of the foundational principles of secure system design, alongside fail-safe defaults and defense in depth. It has outlived the mainframe it was written for because the underlying trade — convenience now versus exposure later — never goes away.
+Least privilege is a lens, not a component: every identity, whether a person, a service account, a CI job or a single API call, holds only the permissions its current task needs, scoped narrowly and held briefly. It resolves ambient over-provisioning, where copying an admin policy is quicker than listing needed actions and permissions pile up. It does not stop a compromise; it bounds the blast radius, so a leaked read-one-bucket token is an incident, not a breach.
 
 ## Explained
 <!--meta block=explain-->
 
-Least privilege means every identity, whether a person, a service, a build job or a single call, gets only the permissions its current task needs, on the narrowest target, for the shortest time. It does not stop a component from being compromised. It limits what a compromised one can do. Choose it over a broad shared role when a leaked credential would otherwise reach everything, because copying an admin policy is quick and permissions then pile up and are never trimmed. It costs four things. You find the true minimum by trial, so start with nothing and add what the access logs show was denied. Needs change, so review grants on a schedule or they creep back. Very fine-grained scoping annoys engineers into broad grants, so make narrow scopes easy to request. And many roles must be tested and kept in sync, so generate them from a short template. Give credentials an expiry, so a leaked one stops working by itself.
+Least privilege means every identity, whether a person, a service, a build job or a single call, gets only the permissions its current task needs, on the narrowest target, for the shortest time. It does not stop a component from being compromised. It limits what a compromised one can do. Choose it over a broad shared role when a leaked credential would otherwise reach everything, because copying an admin policy is quick and permissions then pile up and are never trimmed. Give credentials an expiry, so a leaked one stops working by itself.
+
+- **Finding the minimum.** You learn it by trial; start with nothing and add what the access logs show was denied.
+- **Creep.** Needs change, so review grants on a schedule or broad access returns.
+- **Friction.** Very fine scoping pushes engineers to ask for broad grants; make narrow scopes easy to request.
+- **Role sprawl.** Many roles must be tested and kept in sync; generate them from a short template.
 
 **Example.** A build job uploads reports to one storage bucket, and its token leaks in a public build log. A broad admin token can read and delete all 120 buckets, including the backups. A token scoped to write on reports-bucket and expiring after 5 minutes can touch one bucket, and the attacker finds the log 10 minutes later, when the token is already dead. The cost: on its first run the narrow job fails because it also needs to list the bucket. You see the denied list action in the logs, add that one permission, and rerun.
 

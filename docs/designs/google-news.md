@@ -16,12 +16,16 @@ A news aggregator pulls articles from thousands of publishers and presents each 
 ## Understanding the problem
 <!--meta block=description-->
 
-Two jobs sit at opposite ends of the system. On one side, **ingest** content from thousands of independent publishers — each with its own feed format, update cadence and reliability — and normalise it into one shape. On the other, **serve** that content to hundreds of millions of readers who scroll a feed and, when something catches their eye, click through to the publisher's own site. The aggregator hosts none of the articles; it hosts the index of them. The load is wildly lopsided — a trickle of new articles against a flood of feed reads — and that asymmetry, more than anything else, decides the architecture. This is the read-heavy playbook: the interesting engineering is not in collecting articles but in delivering the right slice of them fast, fresh, and at scale.
+A news aggregator ingests content from thousands of publishers, each with its own feed format and cadence, and serves a scrollable feed to hundreds of millions of readers who click through to the publisher's site. It hosts the index, not the articles. A trickle of new articles meets a flood of feed reads, so the page walks through the read-heavy design that delivers each region's feed fast and fresh.
 
 ## Explained
 <!--meta block=explain-->
 
-A news aggregator stores no articles, only an index of them, and keeps each region's newest 2,000 or so as a ready-made list in memory, updated the moment an article is saved, so reading a feed page is one lookup. News reading is regional, so you deploy each region on its own and a spike in one leaves the others at normal load. A region's list is only a few megabytes, so do not split the data across servers; the limit is read throughput, and you meet it with many read-only copies of the one list. Choose this over caching each feed for 30 minutes when you need seconds of freshness: when a hot entry expires, every request misses together and floods the database. It costs a pipeline to run, a change feed, a queue and workers, so keep a way to rebuild a list when a worker or cache dies. Freshness also depends on publishers: a push from a cooperating publisher arrives in seconds, while polling takes minutes, so poll big publishers every 5 to 10 minutes. Filter categories in memory from the regional list instead of caching every category and region pair.
+A news aggregator stores no articles, only an index of them, and keeps each region's newest 2,000 or so as a ready-made list in memory, updated the moment an article is saved, so reading a feed page is one lookup. News reading is regional, so you deploy each region on its own and a spike in one leaves the others at normal load. A region's list is only a few megabytes, so do not split the data across servers; the limit is read throughput, and you meet it with many read-only copies of the one list. Choose this over caching each feed for 30 minutes when you need seconds of freshness: when a hot entry expires, every request misses together and floods the database.
+
+- **Pipeline to run.** A change feed, queue and workers keep lists current, so keep a way to rebuild one when a worker dies.
+- **Publisher-bound freshness.** Pushes arrive in seconds but polling takes minutes, so poll big publishers every 5 to 10 minutes.
+- **Category pairs.** Caching every category and region pair multiplies entries, so filter categories in memory instead.
 
 **Example.** A breaking story puts 10 million readers in one region. One Redis instance serves about 100,000 requests a second, so 10,000,000 / 100,000 = 100 read copies of that region's list. Each copy holds about 2,000 articles, a few megabytes. A publisher posts a new article: a worker adds it to the list and trims it back to 2,000, and a reader's next page of 20 is one lookup under 5 ms. The database sees none of the 10 million reads.
 
@@ -224,13 +228,13 @@ Two common extensions, and in both the tempting answer over-builds:
 
 - [Materialized View](../patterns/distributed/coordination/materialized-view.md) — each region's feed is a Redis sorted set precomputed and maintained incrementally, so a read never assembles it from the store
 - [Change Data Capture](../patterns/distributed/coordination/change-data-capture.md) — every article write emits a change event that workers consume to splice the article into affected regional feeds within seconds
-- [Cache-Aside](../patterns/caching/cache-aside.md) — the baseline serves each regional feed from Redis with misses falling through to the article store before the design upgrades to CDC
-- [CDN](../patterns/distributed/routing/cdn.md) — thumbnails are cached at edge POPs in front of object storage, giving sub-200ms global loads and cutting origin requests by 90%+
+- [Cache-Aside](../patterns/caching/cache-aside.md) — the baseline serves each regional feed from Redis with misses falling through to the article store before the design upgrades to change data capture (CDC)
+- [CDN](../patterns/distributed/routing/cdn.md) — thumbnails are cached at edge point of presences (POPs) in front of object storage, giving sub-200ms global loads and cutting origin requests by 90%+
 - [Object Storage](../patterns/distributed/routing/object-storage.md) — the system downloads its own resized thumbnail copy into S3-style object storage and keeps binary blobs out of the database
 - [API Gateway](../patterns/distributed/routing/api-gateway.md) — a single gateway fronts the Feed Service for routing, auth, rate limiting, and request validation before requests reach it
 - [Stateless Service](../patterns/distributed/routing/stateless-service.md) — Feed Service instances hold no per-request state, so auto-scaling groups add and drop them freely during a breaking-news spike
 - [Replication](../patterns/distributed/coordination/replication.md) — a regional Redis master takes writes while ~100 read replicas absorb the feed reads, with Sentinel promoting on master failure
 - [Load Balancer](../patterns/distributed/routing/load-balancer.md) — Stateless Feed Service instances scale out behind a load balancer to reach 10M connections
-- [Autoscaling](../patterns/distributed/routing/autoscaling.md) — Instance groups spin up on CPU pressure and back down, so the Feed Service tracks the daily load curve
+- [Autoscaling](../patterns/distributed/routing/autoscaling.md) — Instance groups spin up on central processing unit (CPU) pressure and back down, so the Feed Service tracks the daily load curve
 
 <!-- relationships:end -->

@@ -236,6 +236,7 @@ async function idWorker(queue: LevelingQueue, permitsPerSecond: number) {
 - [Asynchronous Request-Reply](../routing/async-request-reply.md) — A 202 with a status resource is how the caller is told its request is buffered rather than done
 - [Web-Queue-Worker](../../architecture/web-queue-worker.md) — The web-queue-worker shape is load levelling promoted to the architecture of the whole application.
 - [Priority Queue](../../messaging/priority-queue.md) — Add priority classes when the buffered work is not all worth the same
+- [Polling Consumer](../../messaging/polling-consumer.md) — The steady drain rate of a polling consumer is what levels the load
 
 **Alternative to**
 
@@ -267,7 +268,7 @@ async function idWorker(queue: LevelingQueue, permitsPerSecond: number) {
 - [Metrics & Monitoring](../../../designs/metrics-monitoring.md) — it is textbook queue-based load leveling shielding a backend from ingest spikes
 - [Facebook Post Search](../../../designs/fb-post-search.md) — the design uses a queue to level a spiky 10k-post/sec write load against finite ingestion capacity
 - [Uber](../../../designs/uber.md) — putting a buffer between a spiky producer and a fixed-capacity consumer is precisely queue-based load leveling
-- [LeetCode](../../../designs/leetcode.md) — a queue between the API and the workers smooths a traffic burst into steady downstream throughput
+- [LeetCode](../../../designs/leetcode.md) — a queue between the application programming interface (API) and the workers smooths a traffic burst into steady downstream throughput
 - [ChatGPT](../../../designs/chatgpt.md) — a spiky producer feeding a scarce, steady-throughput consumer through a buffer is the textbook case for queue-based load leveling
 - [Ticketmaster](../../../designs/ticketmaster.md) — the waiting queue turns a traffic frenzy into a steady trickle the booking path can survive — queue-based load levelling
 - [Online Auction](../../../designs/online-auction.md) — the end-of-sale bidding spike is the canonical burst that load leveling smooths into a flat consumption rate

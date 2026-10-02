@@ -16,16 +16,17 @@ Freezes the system's current output as a trusted snapshot, then fails the instan
 ## What it is
 <!--meta block=description-->
 
-A **golden master** test runs a system over a broad set of real inputs and pins today's output as a trusted "golden" file. Every later run diffs fresh output against it. A match passes silently; any difference, down to one character, fails the test and forces a human verdict — a regression, or an intended change that becomes the new golden file?
-
-It resolves a specific bind: code with little or no test coverage, output too large or opaque to assert field-by-field, or behavior nobody currently understands well enough to say what "correct" should be. Hand-writing precise assertions for every field of a big, structured output doesn't scale and requires already knowing the right answer. Golden master sidesteps that entirely — it doesn't require anyone to know the correct output, only to notice the moment it changes.
-
-The name traces to Michael Feathers' Working Effectively with Legacy Code, where it's called characterization testing: pin down current behavior, warts included, as a safety net before touching code you don't yet trust yourself to refactor. Modern snapshot-testing tools — Jest snapshots, ApprovalTests, visual regression suites — are this same idea with tooling wrapped around the diff-and-approve step.
+A golden master test runs a system over a broad set of real inputs and pins today's output as a trusted file. Later runs diff fresh output against it: a match passes silently, and any difference fails until a person decides whether it is a regression or an intended change. It suits code with little coverage, output too large to assert field by field, or behaviour nobody understands well enough to say what correct is. Feathers calls it characterization testing.
 
 ## Explained
 <!--meta block=explain-->
 
-A golden master test runs a system over a wide set of real inputs, saves today's output as the approved copy, and on every later run compares fresh output with it. A match passes silently, and any difference, even one character, fails the test until a person reviews it. Choose it over hand-written assertions when the code has little test coverage, its output is too large to check field by field, or nobody can yet say what correct looks like, because you can pin down what it does now before you touch it. It costs four things. A failure says something changed, not that it is wrong, so a person reads every difference. Output with timestamps, random ids or unstable ordering fails for no reason, so strip or fix those parts before comparing. Approving many differences at once can wave through a real bug, so approve in small changes and read each diff. And it records current behaviour, bugs included, so add direct assertions for the rules you know to be right.
+A golden master test runs a system over a wide set of real inputs, saves today's output as the approved copy, and on every later run compares fresh output with it. A match passes silently, and any difference, even one character, fails the test until a person reviews it. Choose it over hand-written assertions when the code has little test coverage, its output is too large to check field by field, or nobody can yet say what correct looks like, because you can pin down what it does now before you touch it.
+
+- **Changed is not wrong.** A failure says something changed; a person reads every difference.
+- **Unstable output.** Timestamps, random ids or unstable ordering fail for no reason; strip or fix them before comparing.
+- **Bulk approval.** Approving many differences at once can wave through a real bug; approve in small steps and read each diff.
+- **Pinned bugs.** It records current behaviour, bugs included; add direct assertions for the rules you know are right.
 
 **Example.** A legacy invoice renderer has no tests. You run it over 500 real orders and save 500 outputs of about 4 KB, 2 MB in all. Every file differs on the print-time line, so you replace that line with a fixed value before saving. You then refactor the tax rounding, and 37 of the 500 invoices differ, 7.4 percent, each by one cent. You read three of them, see the rounding change was intended, and approve the new copy. The cost is that the saved copy now also pins every other behaviour, wrong ones included, so you add direct tests for the rules you know, such as tax on a 100.00 order being 8.25.
 
@@ -183,5 +184,9 @@ test("invoice renderer output", () => {
 **Alternative to**
 
 - [Arrange-Act-Assert](./arrange-act-assert.md) — Snapshot the whole output vs. assert specifics
+
+**Prevents**
+
+- [Lava Flow](../../hazards/lava-flow.md) — Records what the system does today, so old code can be removed and a change in output is caught
 
 <!-- relationships:end -->

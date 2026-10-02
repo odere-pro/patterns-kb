@@ -28,6 +28,7 @@ import {
   expectMisuse,
   expectPass,
   makeSandbox,
+  PERMISSIONS_ENFORCED,
   type Captured,
   type Sandbox,
 } from './sandbox.js';
@@ -163,7 +164,8 @@ describe('the write branch', () => {
     expect(fs.readdirSync(path.join(sb.dir, 'docs'))).toEqual(['generated.md']);
   });
 
-  it('cleans its temp file up when the write fails, and the failure still surfaces', async () => {
+  // Root ignores file modes, so the permission failure this test needs cannot be produced.
+  it.skipIf(!PERMISSIONS_ENFORCED)('cleans its temp file up when the write fails, and the failure still surfaces', async () => {
     fs.mkdirSync(path.join(sb.dir, 'locked'));
     fs.chmodSync(path.join(sb.dir, 'locked'), 0o555);
     try {

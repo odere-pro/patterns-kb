@@ -227,7 +227,7 @@ const uploadUrl = `https://blobs.example.com/${resource}?exp=${key.expiresAt}&si
 - [Dropbox](../../../designs/dropbox.md) — presigned upload/download URLs are the valet key that lets the client access storage directly without ever holding the service's real credentials
 - [YouTube](../../../designs/youtube.md) — presigned direct-to-storage upload is exactly the scoped, time-limited access token the pattern grants
 - [Amazon Locker](../../../designs/amazon-locker.md) — the AccessToken is a limited-scope key — direct access to a single resource, time-boxed, conferring no broader authority
-- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a KYC flow hands the onboardee a presigned upload URL for their ID photo — one object, one action, a fifteen-minute window, and the issuing service never touches the bytes
+- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a know your customer (KYC) flow hands the onboardee a presigned upload URL for their ID photo — one object, one action, a fifteen-minute window, and the issuing service never touches the bytes
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — a valet key whose re-issue is bounded by a counter, so the endpoint cannot become a signing oracle
 
 **Implemented by**

@@ -198,6 +198,8 @@ class ShardedStore {
 
 - [Monitor Object](./monitor-object.md) — Don't guard shared state with a lock — remove the sharing so no lock is needed
 - [Immutability](../functional/immutability.md) — Keeps mutable state safe by letting only one thread touch it
+- [Active Object](./active-object.md) — Confinement leaves each thread its own data and needs no queue
+- [Mutex](./mutex.md) — Gives each value to one thread, so no lock is needed
 
 **Generalizes**
 

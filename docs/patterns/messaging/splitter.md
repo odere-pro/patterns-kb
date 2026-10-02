@@ -15,16 +15,16 @@ Breaks one composite message into a sequence of individual messages, each carryi
 ## What it is
 <!--meta block=description-->
 
-A **splitter** takes one message that carries a composite payload — a batch of records, an order with line items, an XML document with repeating elements — and emits one message per element, each carrying just that element's data. It's the messaging-layer sibling of a loop over a collection, made explicit as a channel-to-channel step.
-
-The problem it resolves is a mismatch between the unit a message carries and the unit downstream endpoints know how to handle. Most processing steps, validators, and routers are written against a single logical item; handed a whole batch, they either special-case the loop internally, duplicating that logic everywhere, or treat the batch as one atomic, all-or-nothing unit — one bad line item fails the whole shipment. Splitting up front lets every downstream step stay simple, and lets items advance, retry, and scale independently of one another.
-
-The tricky part is correlation. A splitter that just emits N unrelated messages throws away the fact that they came from one origin — you can no longer tell when all N have finished, or reassemble a response in the original order. A well-built splitter stamps each fragment with a correlation id, usually the parent message's id, plus a sequence number and total count, so an [Aggregator](./aggregator.md) or anything counting completions can recombine or reconcile the pieces later.
+A splitter takes one message that holds many items, such as a file of records or an order with line items, and emits one message per item, each stamped with the parent id, its position and the total. Downstream steps handle one item, so items advance, retry and scale independently instead of failing as one batch.
 
 ## Explained
 <!--meta block=explain-->
 
-A splitter takes one message holding many items, such as a file of records, and sends one message per item, each stamped with the parent id, its position and the total. Downstream steps are written for one item, so they run, scale and fail per item instead of looping over a batch. Choose it when the unit a message carries is not the unit your logic handles, and independence per item matters more than all-or-nothing handling. Keep the batch whole when a rule holds only across the full set, such as a ledger that must balance. It costs three things. You give up all-or-nothing, so some items succeed and some fail; track each item outcome and decide up front whether to undo the successes. Message volume and overhead multiply by the item count, so split only as far as the work needs. And order and grouping are lost unless each fragment carries the parent id, position and total, which lets an aggregator know when all pieces have finished.
+A splitter takes one message holding many items, such as a file of records, and sends one message per item, each stamped with the parent id, its position and the total. Downstream steps are written for one item, so they run, scale and fail per item instead of looping over a batch. Choose it when the unit a message carries is not the unit your logic handles, and independence per item matters more than all-or-nothing handling. Keep the batch whole when a rule holds only across the full set, such as a ledger that must balance.
+
+- **No all-or-nothing.** Some items succeed and some fail. Track each item outcome and decide up front whether to undo the successes.
+- **Volume.** Message count and overhead multiply by the item count, so split only as far as the work needs.
+- **Lost grouping.** Order and grouping vanish unless each fragment carries parent id, position and total, which tells an aggregator when all pieces have finished.
 
 **Example.** A nightly file holds 12,000 records, and validating one takes 40 ms. One consumer working through the file takes 12,000 x 40 ms = 480 s. Split into 12,000 messages and read by 8 consumers, it takes 60 s. Each message carries file id f-7, its position and the total, 12,000. Three records fail validation. The aggregator sees 11,997 successes plus 3 failures, which equals the total, so it reports the file as finished with 3 rejects. Without the total, nothing could tell a finished file from a lost message.
 
@@ -193,6 +193,7 @@ for (const fragment of splitOrder(order)) {
 - [Correlation Identifier](./correlation-identifier.md) — Each fragment carries the parent id, sequence number and total count
 - [Message Router](./message-router.md) — The split feeds a router that sends each fragment to its endpoint
 - [Recipient List](./recipient-list.md) — The split commonly feeds a recipient list or a router
+- [Resequencer](./resequencer.md) — A splitter numbers its parts so a resequencer can rebuild their order
 
 **Alternative to**
 

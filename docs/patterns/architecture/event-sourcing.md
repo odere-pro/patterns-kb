@@ -203,6 +203,21 @@ const state = log.reduce(apply, {} as AccountState);
 
 <!-- fluency:end -->
 
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **Why do long-lived aggregates need snapshots?**
+>
+> Replaying a long stream from the first event is slow, see [con 1](event-sourcing.md#tradeoffs-con-1).
+
+> **Why is evolving an event schema harder than altering a table?**
+>
+> Events are immutable, so their shapes must be versioned or upcast for as long as the log lives, see [con 2](event-sourcing.md#tradeoffs-con-2).
+
+> **When should you not event-source a domain?**
+>
+> When it is plain CRUD with no need for history, audit or temporal queries, see [avoid 1](event-sourcing.md#usage-avoid-1).
+
 ## How it relates
 <!--meta block=relationships-->
 
@@ -218,7 +233,7 @@ const state = log.reduce(apply, {} as AccountState);
 - [Immutability](../functional/immutability.md) — Events are append-only and never mutated
 - [Materialized View](../distributed/coordination/materialized-view.md) — Project events into read views
 - [Domain Event](../ddd/domain-event.md) — Persist the events the domain emits
-- [Flux](../frontend/flux.md) — Flux/Redux is event-sourcing applied to client-side UI state
+- [Flux](../frontend/flux.md) — Flux/Redux is event-sourcing applied to client-side user interface (UI) state
 - [Memento](../gof/behavioral/memento.md) — Snapshot the aggregate so replay need not start from event one
 - [Minimize Coordination](../../principles/minimize-coordination.md) — An append-only log removes the contention a mutable record creates
 
@@ -239,6 +254,11 @@ const state = log.reduce(apply, {} as AccountState);
 **Prevents**
 
 - [Dual-Write Inconsistency](../../hazards/dual-write-inconsistency.md) — Dissolves the dual write by making the log the state
+
+**Exposed to**
+
+- [Golden Hammer](../../hazards/golden-hammer.md) — Can fall into golden hammer when the history log gets used where a plain table would do
+- [Clock Skew](../../hazards/clock-skew.md) — Can fall into clock skew when ordering events from many hosts by wall-clock time scrambles the stream
 
 **Demonstrated by**
 

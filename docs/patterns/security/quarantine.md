@@ -16,20 +16,17 @@ Puts every externally-sourced artifact into an isolated holding store, runs an a
 ## What it is
 <!--meta block=description-->
 
-Your build pulls a base image from a public registry, a handful of packages from a public index, an infrastructure module from someone's repository, and a vendor's installer. Every one of those crossed your trust boundary at the moment a pipeline referenced it, and in most organisations nothing looked at any of them.
-
-Three things can be wrong: the source is not who you think, the artifact carries a known vulnerability, or it is simply unsuitable for your environment. The first two cost you confidentiality and integrity. The third costs you a strange outage six weeks later.
-
-Quarantine makes the trust explicit by giving an artifact two states. It arrives **untrusted** and lands in an isolated store nothing in production may read from. An agreed set of checks runs against that copy — vulnerability scanning, malware detection, bill-of-materials evaluation, signature verification, whatever the artifact type warrants. Pass, and it is republished into the trusted store with an annotation recording what was verified. Fail, and it is deleted so nobody can reach for it by accident.
-
-Two properties keep it honest. The process **does not modify the artifact** — it is a gate, not a build step, so what you ship is bit-for-bit what you inspected. And it is **invoked by the consumer** rather than sitting inside anyone's development cycle, which is what lets one implementation serve teams whose pipelines look nothing alike.
-
-Treat the verdict as perishable. Passing quarantine is a first-opportunity check against what was known on the day, not a permanent certificate: the report should carry an expiry, and the artifact should keep meeting continuous scanning and pipeline checks as last-opportunity validation before anything ships.
+Your build pulls base images, packages, infrastructure modules and vendor installers across your trust boundary, and usually nothing inspects them. Quarantine gives an artifact two states: it arrives untrusted in an isolated store no production system reads, an agreed set of checks runs on that copy, and a pass republishes it to the trusted store with an annotation while a failure deletes it. The process never modifies the artifact, and the consumer invokes it.
 
 ## Explained
 <!--meta block=explain-->
 
-Quarantine is a holding area for outside artifacts, such as base images, packages and infrastructure modules. Each one lands first in an isolated store that nothing in production can read, gets the same agreed checks (vulnerability scan, malware scan, signature, and a review of the list of parts inside it), and is copied to the trusted store only if it passes, otherwise destroyed. What you ship is exactly the bytes you inspected. Choose it over scanning in each team's pipeline when many teams pull from public sources, because a single gate makes the rules the same for everyone and leaves one audit trail. It costs four things. A pass is only true for the day it was given, so stamp the report with an expiry and keep scanning the trusted store. Two stores that share access are one store, so separate them by identity and network. Checks take minutes to hours, so request ahead and notify on finish, or people will switch the gate off. A manual step gets skipped under deadline, so automate every hand-off.
+Quarantine is a holding area for outside artifacts, such as base images, packages and infrastructure modules. Each one lands first in an isolated store that nothing in production can read, gets the same agreed checks (vulnerability scan, malware scan, signature, and a review of the list of parts inside it), and is copied to the trusted store only if it passes, otherwise destroyed. What you ship is exactly the bytes you inspected. Choose it over scanning in each team's pipeline when many teams pull from public sources, because a single gate makes the rules the same for everyone and leaves one audit trail.
+
+- **Perishable verdict.** A pass is true only for the day given; stamp the report with an expiry and keep scanning the trusted store.
+- **Store separation.** Two stores that share access are one store; separate them by identity and network.
+- **Latency.** Checks take minutes to hours; request ahead and notify on finish, or people switch the gate off.
+- **Manual hand-offs.** A manual step gets skipped under deadline; automate every hand-off.
 
 **Example.** On Monday a team requests python:3.12 as a base image. It lands in the untrusted store, and a 20-minute scan finds one critical vulnerability, so the image is rejected and destroyed, and no pipeline can pull it. A later request for a patched build passes and is published to the trusted store with a 30-day report. On day 40 a new vulnerability is published for that image. The day-0 pass says nothing about it, so the expired report forces a rescan and the continuous scanner flags it. The cost is the 20 minutes of waiting, which is why teams request images the day before.
 

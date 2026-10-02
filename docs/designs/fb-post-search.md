@@ -16,12 +16,15 @@ A user types a keyword and gets matching posts back in under half a second, rank
 ## Understanding the problem
 <!--meta block=description-->
 
-Posts are short pieces of text that people write, like, and share; the job here is only the search box over them. The interviewer adds a deliberate constraint: no Elasticsearch, no Postgres full-text index, nothing pre-built. That is not arbitrary — it moves the question off tool trivia and onto the fundamentals of how you lay data out so a keyword lookup is fast at a scale where the corpus is measured in trillions of posts and petabytes of bytes. What makes it unusual for a search system is the shape of the load: writes dwarf reads, so the interesting engineering is on the ingestion side, in keeping a queryable structure fresh while a torrent of posts and likes pours in.
+A search box over short posts that people write, like and share, with no Elasticsearch, no Postgres full-text index and nothing pre-built. The constraint moves the question to how you lay out data so a keyword lookup is fast across trillions of posts. Writes dwarf reads, so the engineering sits on the ingestion side, keeping a queryable structure fresh under a torrent of posts and likes.
 
 ## Explained
 <!--meta block=explain-->
 
-Post search keeps a ready-made dictionary from each keyword to the ids of the posts containing it, held in memory, so a search is one dictionary lookup instead of a scan, and keeps two copies of each entry already ordered, one by time and one by like count. Likes arrive at 100,000 a second against 10,000 searches, so this is a write problem dressed as a search. Copy the shape only where every user gets the same answer to the same query, because then one cached response serves everyone and a cache lifetime under a minute is honest when the contract allows a minute of staleness. It costs precision and completeness, each with a counter-move. Writing a like count only at milestones such as 1, 2, 4, 8 turns 1,000 increments into 10 writes, so fetch twice the results you need and re-sort them against the exact counter. Capping each entry at a few thousand ids and moving rarely searched keywords to object storage shrinks petabytes, but drops the long tail of common keywords and makes cold keywords answer in seconds, not milliseconds.
+Post search keeps a ready-made dictionary from each keyword to the ids of the posts containing it ([inverted index](../patterns/distributed/coordination/inverted-index.md)), held in memory, so a search is one dictionary lookup instead of a scan. Each entry keeps two copies already ordered, one by time and one by like count. Likes arrive at 100,000 a second against 10,000 searches, so this is a write problem dressed as a search. Copy the shape only where every user gets the same answer to the same query, because then one cached response serves everyone and a cache lifetime under a minute is honest when the contract allows a minute of staleness.
+
+- **Approximate likes.** Writing counts only at milestones like 1, 2, 4, 8 saves writes. Fetch twice the results you need and re-sort by exact count.
+- **Lost tail.** Capping entries at a few thousand ids drops the long tail of common keywords. Move rare keywords to object storage, answering in seconds.
 
 **Example.** A post gets 1,000 likes. Writing each one would be 1,000 updates; writing at powers of two, 1 up to 512, is 10 writes, and the stored count is approximate. A user searches taylor sorted by likes and wants 10 results. You read the top 20 from the likes list, ask the like service for each post's exact count, re-sort, and return 10. Storage for ten years is 1 billion posts a day x 365 x 10, about 3.6 trillion posts, which is why entries are capped.
 
@@ -185,7 +188,7 @@ Two economies close the design. On **reads**, the no-personalization decision pa
 **Demonstrates**
 
 - [Materialized View](../patterns/distributed/coordination/materialized-view.md) — the inverted index is a precomputed keyword-to-post-ID view the ingestion tokenizer maintains on every write, so a query is a lookup not a scan
-- [Cache-Aside](../patterns/caching/cache-aside.md) — the search service checks a distributed cache first and populates it on a miss, with a sub-minute TTL matching the freshness SLA
+- [Cache-Aside](../patterns/caching/cache-aside.md) — the search service checks a distributed cache first and populates it on a miss, with a sub-minute time to live (TTL) matching the freshness service level agreement (SLA)
 - [CDN](../patterns/distributed/routing/cdn.md) — hot /search responses are pushed to the edge via cache-control headers, returning in tens of milliseconds
 - [Sharding](../patterns/distributed/routing/sharding.md) — the inverted indexes are partitioned by keyword so appends spread across many Redis instances instead of hot-spotting one
 - [Batching](../patterns/concurrency/batching.md) — like events are aggregated over a short window so hundreds of likes collapse into a single increment
@@ -196,6 +199,7 @@ Two economies close the design. On **reads**, the no-personalization decision pa
 - [API Gateway](../patterns/distributed/routing/api-gateway.md) — The read path enters through a gateway that handles auth and rate limiting before the Search service
 - [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — Search requests are rate limited at the gateway so one caller cannot exhaust the query path
 - [Stateless Service](../patterns/distributed/routing/stateless-service.md) — The Search service holds no state, so instances scale horizontally behind the gateway and read the shared indexes
-- [Distributed Cache](../patterns/caching/distributed-cache.md) — A cache with a TTL under one minute serves repeated identical queries so they never reach the index
+- [Distributed Cache](../patterns/caching/distributed-cache.md) — A cache with a time to live (TTL) under one minute serves repeated identical queries so they never reach the index
+- [Inverted Index](../patterns/distributed/coordination/inverted-index.md) — Keeps keyword-to-post lists in memory so a keyword query reads only its lists, not all posts
 
 <!-- relationships:end -->

@@ -16,18 +16,17 @@ Control flow too tangled to follow — every branch, jump, and shared variable d
 ## What it is
 <!--meta block=description-->
 
-**Spaghetti code** is a codebase where control flow has no discernible shape. Functions call each other in cycles, conditionals nest six deep with no clear boundary between concerns, and state gets mutated from a dozen unrelated places. There is no top-to-bottom story to read — to understand what happens when a button is clicked, you have to trace jumps through the whole call graph, because any part of the program might touch any other part.
-
-You recognize it by the experience of reading it: a single function running hundreds of lines mixing validation, I/O, business rules, and formatting; global or module-level variables read and written from far-apart places with no owner; deeply nested `if`/`else` and early returns that make the exit path unpredictable; copy-pasted logic that's been patched slightly differently in each copy; and a change in one spot causing an unrelated test three modules away to fail for reasons nobody can explain without a debugger.
-
-The name is literal — pull one strand and the whole plate moves. It was coined when a jump could land anywhere in a program and block structure was the cure; the unrestricted jumps are mostly gone, and the tangle outlived them. It's not a single mistake but the compounding of many small ones: no [separation of concerns](../principles/separation-of-concerns.md), no consistent abstraction level, and control flow driven by incidental history (a quick fix here, a flag added there) rather than a deliberate structure.
+Spaghetti code is a codebase where control flow has no discernible shape. Functions call each other in cycles, conditions nest deep, and state is mutated from a dozen unrelated places, so understanding one click means tracing the whole call graph. You recognise it by hundreds-of-lines functions, global variables with no owner, copy-pasted logic patched differently in each copy, and a change that breaks a test three modules away. It is compounding small shortcuts, not one mistake.
 
 ## Explained
 <!--meta block=explain-->
 
-Spaghetti code is a codebase where control flow has no readable shape: functions call each other in cycles, conditions nest six deep, and shared variables are changed from a dozen unrelated places. To learn what one button click does you must trace jumps through the whole program, because any part might have changed the data you are looking at. It grows from small steps: a deadline rewards the fastest local fix, there is no agreed layering, so a new branch goes wherever the cursor is, and copy-and-tweak feels safer than extracting a shared function. The cost lands before any work starts, since understanding comes first, and each patch is then written by someone who cannot see the whole, which adds another strand. Reverse it in order. First pin today's behaviour with tests that record what the code does now, because untangling with no net changes behaviour silently. Then pass the shared variable in and return it out, so the writes show up in function signatures. Fix a direction, such as entry point to rules to storage with calls going down only, and check it in the build. Spend the effort where you already have to edit.
+Spaghetti code is a codebase where control flow has no readable shape: functions call each other in cycles, conditions nest six deep, and shared variables are changed from a dozen unrelated places. To learn what one button click does you must trace jumps through the whole program, because any part might have changed the data you are looking at. It grows from small steps: a deadline rewards the fastest local fix, there is no agreed layering, so a new branch goes wherever the cursor is, and copy-and-tweak feels safer than extracting a shared function. Each patch is then written by someone who cannot see the whole, which adds another strand. Reverse it in order. First pin today's behaviour with tests that record what the code does now, because untangling without them changes behaviour silently. Then pass the shared variable in and return it out, so writes show in signatures. Fix a direction, as a [layered](../patterns/architecture/layered.md) design does, and check it in the build.
 
-**Example.** An order function runs 400 lines and mixes validation, tax, database calls and formatting. A global variable, currentDiscount, is written in 3 places. A typical change touches 11 files. The team first writes 15 tests that record today's outputs. They then make the discount a parameter, so its 3 writers appear in 3 signatures, and split tax out as the lowest tier. A dependency check fails any merge where storage calls the rules. After a quarter a typical change touches 4 files. The cost is the tests and the weeks spent on code that needed no new feature, which is why they only refactor strands they are already editing.
+- **Effort with no feature.** Characterisation tests and refactoring ship nothing new; spend them only on strands you already have to edit.
+- **Tests lock in bugs.** Recorded behaviour includes wrong behaviour; mark suspect outputs and fix them in a separate change.
+
+**Example.** An order function runs 400 lines and mixes validation, tax, database calls and formatting. A global variable, currentDiscount, is written in 3 places. A typical change touches 11 files. The team first writes 15 tests that record today's outputs. They then make the discount a parameter, so its 3 writers appear in 3 signatures, and split tax out as the lowest tier. A dependency check fails any merge where storage calls the rules. After a quarter a typical change touches 4 files.
 
 ## How it happens
 <!--meta block=causes-->
@@ -75,9 +74,14 @@ The direction holds only while something checks it. Make the rule executable as 
 
 <!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
 
+**Combines with**
+
+- [Premature Optimization](./premature-optimization.md) — Hand-tuned shortcuts added "to be safe" tangle control flow further
+
 **Mitigated by**
 
 - [Layered / N-Tier](../patterns/architecture/layered.md) — Clear tiers keep call flow from tangling
 - [Separation of Concerns](../principles/separation-of-concerns.md) — Keep each concern in its own place and control flow stops threading through everything
+- [High Cohesion, Low Coupling](../principles/high-cohesion-low-coupling.md) — Tangled flow between modules is what low cohesion and high coupling produce
 
 <!-- relationships:end -->

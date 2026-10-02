@@ -495,7 +495,7 @@ describe('oracle scenarios', () => {
     expect(none.out.split('\n')).toHaveLength(1);
 
     // The repair run ignores what changed.
-    writeRegistry([gate({ id: 'fixer', local_command: 'touch fixed', fixable: true, scans: ['nothing/**'] })]);
+    writeRegistry([gate({ id: 'fixer', local_command: "sh -c 'touch fixed' --", fixable: true, scans: ['nothing/**'] })]);
     expect((await capture(['--fix'])).status).toBe(0);
     expect(sb.exists('fixed')).toBe(true);
 

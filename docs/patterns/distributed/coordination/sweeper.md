@@ -257,7 +257,7 @@ setInterval(() => withLeaderLock('sweeper', () => sweepOnce(db, notify)), 30_000
 **Combines with**
 
 - [Scheduling](../../concurrency/scheduling.md) — the clock that runs it — interval or cron, with leader election so it fires once across replicas
-- [Distributed Lock](./distributed-lock.md) — a lease with a TTL is what makes an abandoned claim detectable; the sweeper is what acts on the expiry
+- [Distributed Lock](./distributed-lock.md) — a lease with a time to live (TTL) is what makes an abandoned claim detectable; the sweeper is what acts on the expiry
 - [Dead Letter Channel](../../messaging/dead-letter-channel.md) — where work that exhausted its retries is parked — the sweeper is what decides it is exhausted
 - [Timeout / Deadline](../resilience/timeout-deadline.md) — the deadline is the line; the sweeper is what enforces it when the call simply never returns
 - [Leader Election](./leader-election.md) — the sweep is a singleton: elect one runner, or N replicas escalate the same row N times
@@ -276,7 +276,7 @@ setInterval(() => withLeaderLock('sweeper', () => sweepOnce(db, notify)), 30_000
 
 **Demonstrated by**
 
-- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a long-running KYC flow where every failure is silence — a dead worker, an onboardee who never uploaded, a vendor that never called back
+- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a long-running know your customer (KYC) flow where every failure is silence — a dead worker, an onboardee who never uploaded, a vendor that never called back
 - [BookMyShow](../../../designs/bookmyshow.md) — seat holds expire on a clock: the sweep is what makes an abandoned checkout release inventory instead of stranding it
 - [Gopuff](../../../designs/gopuff.md) — reserved inventory in a delivery network is reclaimed by one indexed sweep on held_until rather than by whoever notices
 - [Distributed Cache](../../../designs/design-distributed-cache.md) — a cache fleet needs an active pass as well as read-time checks, or dead entries evict live ones

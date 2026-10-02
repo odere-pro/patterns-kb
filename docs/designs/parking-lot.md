@@ -16,12 +16,16 @@ A parking lot assigns an arriving vehicle a compatible spot, issues a ticket, an
 ## Understanding the problem
 <!--meta block=description-->
 
-On entry, the system finds an available spot matching the vehicle's type and hands back a ticket; on exit, it validates the ticket, charges for the time parked, and frees the spot. There is no distributed scale here — one lot, a few hundred spots — so the whole exercise is object modelling: name the right classes, give each exactly the state and behaviour it needs, and resist the pull to over-build. The interesting decisions are all about where things belong.
+A lot assigns a compatible spot and issues a ticket on entry, then validates the ticket, charges for the time parked and frees the spot on exit. There is no distributed scale, only a few hundred spots, so the exercise is object modelling: which classes exist, what state and behaviour each owns, and how to avoid over-building.
 
 ## Explained
 <!--meta block=explain-->
 
-A parking lot design keeps spots and tickets as plain data and puts every rule in one lot object: it finds a free spot of the right type, issues an immutable ticket, and on exit prices the stay and frees the spot. Occupancy is kept as a set of taken spot ids that the lot maintains, not as a flag on each spot. Choose that set over a flag when occupancy is a relationship the system manages rather than a physical fact; a locker door really holds a parcel whether or not the software agrees, so there a flag fits. The set is computed from the tickets, so update both together, and find-and-claim must run inside one lock or two entrances can claim the same bay. Keep pricing as a method on the lot until a second fee rule exists, since a pricing-strategy interface answers a need nobody has yet and can be added later as one class. First-match allocation ignores how close a spot is and how full each floor is, so add a placement rule when that matters. Store fees as whole cents.
+A parking lot design keeps spots and tickets as plain data and puts every rule in one lot object: it finds a free spot of the right type, issues an immutable ticket, and on exit prices the stay and frees the spot. Occupancy is a set of taken spot ids the lot maintains, not a flag on each spot. Choose the set over a flag when occupancy is a relationship the system manages; a locker door really holds a parcel whether or not the software agrees, so there a flag fits. Keep pricing as a method on the lot until a second fee rule exists, since a pricing-strategy interface answers a need nobody has yet.
+
+- **Two copies of truth.** The set comes from tickets, so update both and claim a spot inside one lock, or two entrances take one bay.
+- **Naive allocation.** First-match ignores walking distance and floor fullness, so add a placement rule when that matters.
+- **Money.** Floating point drifts, so store fees as whole cents.
 
 **Example.** A lot has 200 spots and cars stay about 2 hours, so entries arrive at about 200 / 7,200 = 0.03 a second. One lock around enter(), a scan of 200 entries and two memory writes, takes microseconds, so it is never the bottleneck. At 500 cents an hour, a car that stays 2 hours 10 minutes is rounded up to 3 hours and pays 1,500 cents. Exit removes the spot id from the occupied set and deletes the ticket, so a second exit with the same ticket is rejected as invalid.
 

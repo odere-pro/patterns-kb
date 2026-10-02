@@ -106,8 +106,8 @@ describe('the round trip through the block writers', () => {
         const after = sb.read(p.source);
         const words = (t: string): unknown[] => deriveElements(parseKb(splitFrontmatter(t).body).tree).map((e) => [e.id, e.text]);
         expect(words(after), p.slug).toEqual(words(before));
-        // The writer takes plain text: a code span or a link in a paragraph comes back as its words.
-        const markup = block.nodes.filter((n): n is Paragraph => n.type === 'paragraph').some((n) => n.children.some((c: Nodes) => c.type !== 'text' && c.type !== 'strong'));
+        // The writer takes plain text and `[label](path)` links: a code span in a paragraph comes back as its words.
+        const markup = block.nodes.filter((n): n is Paragraph => n.type === 'paragraph').some((n) => n.children.some((c: Nodes) => c.type !== 'text' && c.type !== 'strong' && !(c.type === 'link' && c.children.every((k: Nodes) => k.type === 'text'))));
         if (markup) marked += 1;
         else {
           expect(after, p.slug).toBe(before);

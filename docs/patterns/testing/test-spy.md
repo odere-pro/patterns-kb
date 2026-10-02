@@ -16,18 +16,17 @@ A test spy stands in for a real collaborator during the exercise phase and recor
 ## What it is
 <!--meta block=description-->
 
-A **test spy** is a test double that replaces a real collaborator and quietly records how it was called — which methods, with what arguments, how many times, in what order. The test exercises the code under test as normal, then reads the spy's recorded history afterward and asserts on it directly: `expect(spy.calls).toHaveLength(1)`, `expect(spy.calls[0].to).toBe(...)`.
-
-The force it resolves is that some behavior leaves no observable trace anywhere the test can look — a notifier that sends an email, a publisher that emits an event, a logger that writes a line. There's no return value to check and no state to inspect; the only evidence the call happened at all is the call itself. A spy turns that invisible interaction into inspectable data.
-
-It differs from a [Test Stub](./test-stub.md), which feeds canned answers back into the code under test but keeps no memory of how it was used, and from a [Mock Object](./mock-object.md), which has expectations programmed into it before the exercise and fails the test itself the moment a call violates them. A spy is deliberately passive during the exercise — it just watches and remembers — and verification is a separate, explicit step the test writes afterward.
-
-That separation is its identity. Both doubles check the collaboration rather than a returned value; what differs is when the failure is raised — the spy records during the exercise and leaves the verdict to the test, the mock passes judgement mid-call. The term comes from Gerard Meszaros's cataloguing of the test double family in xUnit Test Patterns, and most mocking frameworks (Sinon, Jest) blur the line by generating one object that can stub, spy, and mock at once — but the pure spy idea is narrower and simpler than any of them.
+A test spy replaces a real collaborator and quietly records each call it receives: which method, which arguments, how many times and in what order. The test runs the code as normal, then asserts on the recorded history. It makes invisible interactions, such as an email sent or an event published, inspectable. Unlike a mock it never fails mid-call, and unlike a stub it remembers.
 
 ## Explained
 <!--meta block=explain-->
 
-A test spy stands in for a real collaborator and quietly records every call it receives, which method, with which arguments, how many times and in what order. The test runs the code as usual, then reads the record and judges it. Use it when the behaviour leaves no trace the test can read, such as an email sent or an event published. Choose it over a mock when you want the test, not the double, to decide pass or fail, because a mock fails in the middle of the call and a spy leaves the verdict to you. Choose it over a stub, which keeps no record, when the call itself matters. It costs four things. Exact call shapes break on harmless refactors, so assert only the fields that matter. A test that only checks how the code called its helper says nothing about what it achieved, so also check the outcome. Complex arguments need matching logic, so compare one field at a time. And many spies with no outcome checks make the suite a change detector, so cut them.
+A test spy stands in for a real collaborator and quietly records every call it receives, which method, with which arguments, how many times and in what order. The test runs the code as usual, then reads the record and judges it. Use it when the behaviour leaves no trace the test can read, such as an email sent or an event published. Choose it over a [mock](mock-object.md) when you want the test, not the double, to decide pass or fail, because a mock fails in the middle of the call and a spy leaves the verdict to you. Choose it over a [stub](test-stub.md), which keeps no record, when the call itself matters.
+
+- **Brittle call shapes.** Exact call shapes break on harmless refactors, so assert only the fields that matter.
+- **Outcome blindness.** Checking how the code called its helper says nothing about what it achieved, so also check the outcome.
+- **Argument matching.** Complex arguments need matching logic, so compare one field at a time.
+- **Change detector.** Many spies with no outcome checks make the suite fail on every refactor, so cut them.
 
 **Example.** placeOrder should send one confirmation. A retry bug sends it twice for the 3% of orders that retry, 30 duplicate emails a day across 1,000 orders. No return value or stored state shows this. A spy records two send calls, and the test asserts the record holds exactly one. The test then fails with a count of 2. The cost: when the team later sends confirmations in batches, the spy sees one call with many orders and the test breaks although every customer still gets the email, so you rewrite it to check recipients sent, not number of calls.
 

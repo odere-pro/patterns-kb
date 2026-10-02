@@ -232,6 +232,7 @@ res.json(render(customer, req.header("Accept-Version")));
 - [Anti-Corruption Layer](../../ddd/acl.md) — A translation layer per published version keeps the domain model single while the contracts differ
 - [DTO](../../enterprise/dto.md) — The payload shape is what a version actually versions, so the transfer object is where a version lives
 - [Contract Testing](../../testing/contract-testing.md) — Where consumers cannot be enumerated, versioning replaces consumer-driven verification
+- [Hyrum's Law](../../../principles/hyrums-law.md) — A version policy has to count what callers actually depend on, not only what is documented
 
 **Prevents**
 

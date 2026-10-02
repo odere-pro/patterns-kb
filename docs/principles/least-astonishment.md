@@ -16,9 +16,7 @@ Names, signatures, defaults and side effects should match what a reasonable user
 ## What it says
 <!--meta block=description-->
 
-Make a thing behave the way the people using it already expect it to. Where behaviour and expectation disagree, change the behaviour: a warning in the documentation does not help, because the person about to be surprised is exactly the one who did not read it. Eric Raymond states the same rule for interface designers as do the least surprising thing.
-
-“Users” means whoever meets the thing — the caller of your function, the reader of your code, the operator of your service, the person clicking the button. Their expectations come from convention: the language's idioms, the framework's lifecycle, the rest of your codebase. Astonishment is therefore measured against a shared habit rather than your taste, and the principle governs names, signatures, defaults and side effects, not how clever the implementation behind them is.
+Make a thing behave the way the people using it already expect. Where behaviour and expectation disagree, change the behaviour: a documentation warning does not help, because the person about to be surprised did not read it. Eric Raymond states it as do the least surprising thing. Expectations come from convention, such as language idioms and your codebase, so the principle governs names, signatures, defaults and side effects, not implementation cleverness.
 
 ## Explained
 <!--meta block=explain-->
@@ -70,5 +68,6 @@ Used as a veto it also blocks anything genuinely new. A better model astonishes 
 - [Builder](../patterns/gof/creational/builder.md) — Named steps remove the swap-two-arguments surprise
 - [Idempotency](../patterns/messaging/idempotency.md) — Callers assume a retry is safe; make that true
 - [Design for Operations](./design-for-operations.md) — Predictability is what an operator leans on when they cannot read the source
+- [Convention over Configuration](./convention-over-configuration.md) — Defaults that match what users expect surprise nobody
 
 <!-- relationships:end -->

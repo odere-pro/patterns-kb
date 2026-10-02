@@ -231,6 +231,11 @@ class MessageQueue<T> {
 - [Claim Check](./claim-check.md) — Keep large payloads out of the queue
 - [Message Router](./message-router.md) — Queues are the channels a router reads from and writes to
 - [Prefer Managed Services](../../principles/managed-services.md) — A hosted broker is queueing without the operational commitment
+- [Polling Consumer](./polling-consumer.md) — A queue holds messages until a polling consumer asks for them
+
+**Alternative to**
+
+- [Channels](../concurrency/channels.md) — A message queue survives restarts and spans machines
 
 **Has variant**
 
@@ -256,6 +261,8 @@ class MessageQueue<T> {
 **Exposed to**
 
 - [Poison Message](../../hazards/poison-message.md) — A queue needs an attempt limit and a dead letter route to survive one.
+- [Unbounded Queue](../../hazards/unbounded-queue.md) — Can fall into unbounded queue when a broker queue with no depth or age limit keeps accepting work no one will finish
+- [Metastable Failure](../../hazards/metastable-failure.md) — Can fall into metastable failure when a backlog of requests whose callers gave up keeps the consumers busy with worthless work
 
 **Demonstrated by**
 

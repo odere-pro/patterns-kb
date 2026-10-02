@@ -226,11 +226,11 @@ async function sellTicket(db: Db, concertId: string, userId: string) {
 
 **Generalizes**
 
-- [Optimistic Concurrency Control](./optimistic-concurrency-control.md) — OCC is a conditional write on a version column, wrapped in read-then-retry
+- [Optimistic Concurrency Control](./optimistic-concurrency-control.md) — Optimistic concurrency control (OCC) is a conditional write on a version column, wrapped in read-then-retry
 
 **Enables**
 
-- [Distributed Lock](./distributed-lock.md) — SET key NX is a conditional write; a lease lock is one plus a TTL
+- [Distributed Lock](./distributed-lock.md) — SET key NX is a conditional write; a lease lock is one plus a time to live (TTL)
 
 **Often confused with**
 
@@ -239,6 +239,10 @@ async function sellTicket(db: Db, concertId: string, userId: string) {
 **Prevents**
 
 - [Race Condition](../../../hazards/race-condition.md) — Check and write are one atomic store operation — no gap for another writer
+
+**Exposed to**
+
+- [Clock Skew](../../../hazards/clock-skew.md) — Can fall into clock skew when picking the winner by timestamp (last-write-wins) silently drops the newer update
 
 **Demonstrated by**
 

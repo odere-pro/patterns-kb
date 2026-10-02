@@ -16,9 +16,7 @@ Design the system for the people who will run it, not only for the people who wi
 ## What it says
 <!--meta block=description-->
 
-The people who run your system are users of it, and what they need is a requirement rather than a courtesy. A system is operable when someone who has never read its source can answer three questions from its own output: is it healthy, what changed, and what do I do. Anything only its author can answer is a page that ends in a phone call.
-
-This is wider than telemetry. Logs, metrics and traces answer the first question and part of the second, but what a system costs to run is also settled by whether it can be released without downtime and rolled back when the release is wrong, whether its configuration can change without a rebuild and is checked at start-up, and whether two versions can serve traffic at once while a rollout is in flight. Each of those is decided while you write the code, and each is expensive to retrofit once interfaces and schemas have shipped.
+The people who run your system are its users, and what they need is a requirement, not a courtesy. A system is operable when someone who has never read its source can answer three questions from its output: is it healthy, what changed, and what do I do. This is wider than telemetry: it covers zero-downtime release, rollback, start-up-checked configuration and two versions serving at once. Each is cheap to build in and expensive to retrofit.
 
 ## Explained
 <!--meta block=explain-->

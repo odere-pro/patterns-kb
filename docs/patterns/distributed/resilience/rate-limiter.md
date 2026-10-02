@@ -213,6 +213,21 @@ if (!limiterFor(`resend:${flowId}`, 3, 3 / 3600).tryConsume()) {
 
 <!-- fluency:end -->
 
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **Why does a per-instance counter let more traffic through than the limit?**
+>
+> Each replica counts alone, so the real limit multiplies by the replica count, see [con 2](rate-limiter.md#tradeoffs-con-2).
+
+> **Why size the burst allowance from real traffic and not the steady rate?**
+>
+> Otherwise legitimate bursts are rejected along with abusive ones, see [con 1](rate-limiter.md#tradeoffs-con-1).
+
+> **When do you want a bulkhead instead of a limiter?**
+>
+> When the bottleneck is concurrent work in flight rather than request rate, see [avoid 2](rate-limiter.md#usage-avoid-2).
+
 ## How it relates
 <!--meta block=relationships-->
 
@@ -256,7 +271,7 @@ if (!limiterFor(`resend:${flowId}`, 3, 3 / 3600).tryConsume()) {
 - [Web Crawler](../../../designs/web-crawler.md) — per-domain request rate is bounded to keep the crawler a polite guest on every site
 - [ChatGPT](../../../designs/chatgpt.md) — admission control keyed to a per-user budget is a rate limiter deliberately measuring the resource that actually costs money
 - [CamelCamelCamel](../../../designs/camelcamelcamel.md) — respecting the ~1 req/sec/IP ceiling on outbound crawling is the rate limit that shapes the entire system
-- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — capping a client's request rate on a persona-verification API so one client cannot exhaust a shared vendor quota
+- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — capping a client's request rate on a persona-verification application programming interface (API) so one client cannot exhaust a shared vendor quota
 - [Bitly](../../../designs/bitly.md) — A URL shortener limits on the miss path, because a scan of the code space looks exactly like a flood of misses
 - [Gopuff](../../../designs/gopuff.md) — a delivery surge is paid in availability queries first, because browsing is sheddable and ordering is not
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — a limiter that stops calls which would succeed, drawn beside the breaker that stops calls which would fail

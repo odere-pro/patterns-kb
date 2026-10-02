@@ -16,16 +16,16 @@ Splits a class into two hierarchies — an abstraction and its implementation �
 ## What it is
 <!--meta block=description-->
 
-The **Bridge** pattern takes one class that mixes two independent concerns and cleaves it into two separate hierarchies: an abstraction that clients talk to, and an implementation it delegates to. The abstraction holds a reference to an implementation object — that reference is the bridge. Because they meet only across an interface, either side can be extended without touching the other.
-
-The problem it resolves is **subclass explosion**. When a type varies along two orthogonal dimensions — say a shape (circle, square) that must render on two platforms (raster, vector) — a single inheritance tree forces one class per combination: `RasterCircle`, `VectorCircle`, `RasterSquare`, and so on. Add a third shape or a third platform and the count multiplies. Bridge turns that multiplication into addition: m abstractions plus n implementations, wired together at runtime.
-
-The two forces it balances are the desire to extend behaviour freely and the cost of a rigid, combinatorial class tree. It sides with [composition over inheritance](../../../principles/composition-over-inheritance.md): what the object is and how it does its work become two things you can vary separately.
+A bridge splits one class that varies along two independent dimensions into an abstraction that clients use and an implementation it delegates to. The abstraction holds a reference to the implementation, and either side grows without touching the other. It turns a subclass explosion of m times n classes into m plus n.
 
 ## Explained
 <!--meta block=explain-->
 
-A bridge splits one class that varies in two independent ways into two small hierarchies: the abstraction your code uses, and the implementation it hands the work to. The abstraction holds a reference to an implementation, and either side grows without touching the other. Choose it over one subclass per combination when both ways of varying are independent and both will keep growing: 3 shapes on 4 platforms is 12 classes as one tree, but 3 plus 4 as a bridge. The cost is paying for the indirection before the matrix exists. With one implementation it is an extra hop and an extra file for a call that could have been direct, so wait for the second one. If you pick the wrong two axes, things that always change together now change in two places, so check on past changes that they really move apart. Adding a bridge to a class that already fuses both concerns is expensive, so decide early.
+A bridge splits one class that varies in two independent ways into two small hierarchies: the abstraction your code uses, and the implementation it hands the work to. The abstraction holds a reference to an implementation, and either side grows without touching the other. Choose it over one subclass per combination when both ways of varying are independent and both will keep growing: 3 shapes on 4 platforms is 12 classes as one tree, but 3 plus 4 as a bridge.
+
+- **Early indirection.** With one implementation it is an extra hop and file for a call that could be direct, so wait for the second one.
+- **Wrong axes.** Things that always change together now change in two places, so check past changes that the axes really move apart.
+- **Late retrofit.** Adding a bridge to a class that already fuses both concerns is expensive, so decide early.
 
 **Example.** A report class has 3 kinds (sales, stock, audit) and must export to 4 formats (PDF, CSV, HTML, XLSX). As subclasses that is 12 classes, and a fifth format adds 3 more. As a bridge you write 3 report classes and 4 exporters, 7 in all, and the fifth format adds 1. But if each report only ever ships as PDF, the 4 exporters cost you with no return. And if audit reports need a special layout in every format, the axes are not independent, and the exporters fill with checks on report kind.
 

@@ -217,6 +217,25 @@ const tourProfile = first(
 );
 const tourTheme = first(rows, 'the theme page of a tour', (r) => r.slug === tourProfile.id && r.route.startsWith('/themes/'));
 
+/**
+ * The Start-here tracks of the home page, from docs/data/tracks.json and the
+ * tours they name: every track's label and steps, and for the first track one
+ * page its tours walk (a built page with a practiced check of its own) and how
+ * many distinct pages the track counts.
+ */
+const startFile = readJson<{ tracks: { id: string; label: string; themes: string[] }[] }>('docs/data/tracks.json');
+const startProfiles = new Map(
+  readJson<{ profiles: { id: string; label: string; stages: string[] }[] }>('docs/data/learning-paths.json').profiles.map((p) => [p.id, p]),
+);
+const startTracks = startFile.tracks.map((t) => {
+  const tours = t.themes.map((id) => startProfiles.get(id)).filter((p) => p !== undefined);
+  const stages = [...new Set(tours.flatMap((p) => p.stages))];
+  const routes = tours.map((p) => rows.find((r) => r.slug === p.id && r.route.startsWith('/themes/'))?.route as string);
+  return { label: t.label, steps: tours.map((p) => p.label), routes, stages };
+});
+const startTrack = first(startTracks, 'a Start-here track with a page of the tree to practice', (t) => t.stages.some((s) => rowRoutes.has(s) && byRoute.has(s)));
+const startStage = first(startTrack.stages, 'a page the first track walks', (s) => rowRoutes.has(s) && byRoute.has(s));
+
 /** The built hub that lists the most pages: the one a reader scrolls furthest down. */
 const longestHub = hubOf(
   areas.filter((a) => a.nav === undefined && a.pages.length > 0 && byRoute.has(a.pages[0]?.route ?? '')).sort((a, b) => b.pages.length - a.pages.length)[0]?.id as string,
@@ -286,6 +305,13 @@ export const site = {
     label: tourProfile.label,
     stages: tourProfile.stages.slice(0, 2).map(pageAt),
     total: new Set(tourProfile.stages).size,
+  },
+  /** The home page's tracks in order, and for one a page it walks and how many pages it counts. */
+  startHere: {
+    tracks: startTracks.map((t) => ({ label: t.label, steps: t.steps, routes: t.routes })),
+    track: startTrack.label,
+    stage: pageAt(startStage),
+    total: new Set(startTrack.stages.map((s) => (s.split('/').pop() as string).replace(/\.html$/, ''))).size,
   },
   mentioned: pageAt(mentioned.route),
   manyRelated: { page: pageAt(manyRelated.route), count: manyRelated.related.length },

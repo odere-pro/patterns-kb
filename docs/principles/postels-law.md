@@ -16,14 +16,16 @@ Be conservative in what you send and liberal in what you accept — the interope
 ## What it says
 <!--meta block=description-->
 
-Be conservative in what you do, be liberal in what you accept from others. Jon Postel wrote it into the early TCP specifications as advice for implementers who had no way to coordinate with each other: emit only what the specification plainly allows, and do not break on input that deviates in ways you can still understand.
-
-Liberal does not mean credulous. Accepting liberally means ignoring what you do not need — an unknown field, an unused extension, extra whitespace, an optional value you never read — not guessing at the meaning of something you cannot parse. The moment you repair a malformed message you have authored a second specification, one nobody wrote down and you now have to keep supporting.
+Be conservative in what you do, be liberal in what you accept from others. Jon Postel wrote it into the early TCP specifications for implementers who could not coordinate: emit only what the specification plainly allows, and do not break on harmless deviations. Liberal does not mean credulous. Ignore what you do not need, such as an unknown field; do not guess at what you cannot parse, because repairing a malformed message authors a second, unwritten specification.
 
 ## Explained
 <!--meta block=explain-->
 
-Postel's law says be strict in what you send and tolerant of what you receive, so two programs written by people who never talked still work together. Send only the plain form the specification allows, since an unusual but legal encoding still breaks someone's parser. On input, ignore what you do not need, such as an unknown field or an extra header, which lets the other side add features without breaking you. Never guess at what you act on: parse it into a typed value and reject anything ambiguous with a specific error. Choose tolerance over strict rejection when you cannot coordinate with every sender. Its cost is delayed. Each mistake you quietly accept is one the sender never hears about, others copy it, and soon you cannot reject it without breaking traffic that works. The counter-moves are structural: carry unknown fields through when you pass a message on, negotiate an explicit version instead of sniffing, and count every anomaly you tolerate so you can ask the partner to fix it while it is still a bug. The rule that holds is to be strict in what you send, strict in what you act on, and liberal only about what you ignore.
+Postel's law says be strict in what you send and tolerant of what you receive, so two programs written by people who never talked still work together. Send only the plain form the specification allows, since an unusual but legal encoding still breaks someone's parser. On input, ignore what you do not need, such as an unknown field or an extra header, which lets the other side add features without breaking you. Never guess at what you act on: parse it into a typed value and reject anything ambiguous with a specific error. Choose tolerance over strict rejection when you cannot coordinate with every sender. The rule that holds is to be strict in what you send, strict in what you act on, and liberal only about what you ignore.
+
+- **Delayed cost.** A mistake you quietly accept is one the sender never hears about, and soon you cannot reject it. Count every anomaly you tolerate.
+- **Lost fields.** Dropping unknown fields breaks pass-through, so carry them along when you forward a message.
+- **Format sniffing.** Guessing the version from the content breeds a second specification, so negotiate an explicit version instead.
 
 **Example.** A payments partner sends order events with an extra field, loyalty_tier, that your service never reads. You ignore it and keep working, so the partner can add fields freely. Then they start sending dates as 03/04/2025, which can be read two ways. Guessing would have booked 1,200 orders into the wrong month. Instead you reject those events with an error naming the date field, and a counter of rejected events shows 1,200 on the first day. The partner fixes the format in 2 days. The cost is that those 1,200 orders wait 2 days for a corrected resend.
 
@@ -72,5 +74,6 @@ The rule that survives all of this is narrower than the original: be strict in w
 - [Message Translator](../patterns/messaging/message-translator.md) — Accept several shapes at the edge, emit one canonical form
 - [Intercepting Validator](../patterns/security/intercepting-validator.md) — Strict about what you act on, liberal about what you ignore
 - [Design for Evolution](./design-for-evolution.md) — Tolerance at the wire is what makes versioning survivable
+- [Hyrum's Law](./hyrums-law.md) — Accepting loose input creates the very dependencies on quirks that Hyrum's Law predicts
 
 <!-- relationships:end -->

@@ -200,6 +200,21 @@ class WriteBehindCache<K, V> {
 
 <!-- fluency:end -->
 
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **What do you lose if the cache crashes after acknowledging a write?**
+>
+> Writes not yet flushed, unless the queue itself is durable, see [con 1](write-behind.md#tradeoffs-con-1).
+
+> **Which readers see stale data, and until when?**
+>
+> Those that bypass the cache and read the store directly, until the next flush, see [con 2](write-behind.md#tradeoffs-con-2).
+
+> **When is write-through the better choice?**
+>
+> When every write must be durable the moment it is acknowledged, see [avoid 1](write-behind.md#usage-avoid-1).
+
 ## How it relates
 <!--meta block=relationships-->
 

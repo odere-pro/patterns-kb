@@ -125,7 +125,7 @@ Managed does not mean tuned, and the two workloads that prove it are worth rehea
 - [Change Data Capture](../patterns/distributed/coordination/change-data-capture.md) — Change streams and change feeds emit the row-level log as an event source.
 - [Materialized View](../patterns/distributed/coordination/materialized-view.md) — Warehouses and document stores maintain these on your behalf.
 - [Write-Ahead Log](../patterns/distributed/coordination/write-ahead-log.md) — Point-in-time recovery is the write-ahead log kept and replayed for you.
-- [LSM Tree](../patterns/distributed/coordination/lsm-tree.md) — Wide-column stores are LSM engines you rent, with compaction running without you scheduling it.
+- [LSM Tree](../patterns/distributed/coordination/lsm-tree.md) — Wide-column stores are log-structured merge (LSM) engines you rent, with compaction running without you scheduling it.
 - [Quorum & Consensus](../patterns/distributed/coordination/quorum-consensus.md) — A globally consistent relational service commits through a replica majority, and the latency is the bill.
 
 <!-- relationships:end -->

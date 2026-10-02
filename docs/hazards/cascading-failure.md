@@ -17,18 +17,17 @@ One component fails and its share of the work lands on the peers that are still 
 ## What it is
 <!--meta block=description-->
 
-A **cascading failure** is a failure that spreads because of the response to it. One instance dies and its traffic is redistributed to the instances that are still healthy, which is exactly what you asked the [load balancer](../patterns/distributed/routing/load-balancer.md) to do — but the survivors were not carrying enough spare capacity for the extra share, so one of them saturates and dies too. Now the same work is divided among even fewer machines. Each round is bigger than the last, and the interval between rounds gets shorter.
-
-The arithmetic is unforgiving. Run N instances at utilization u and losing one raises each survivor to u&nbsp;×&nbsp;N/(N&nbsp;−&nbsp;1); a ten-node fleet at 90% cannot absorb a single loss, while the same fleet at 70% can lose two. The trigger is often trivial — a deploy, a slow query, one machine rebooting — and it is not what a postmortem should be about, because a system that tips over from a single instance loss was already sitting past the edge.
-
-You recognize it by the direction of the spread. Failures move outward from one component to services that never called it, the drops in the graph come in sequence and accelerate, and restarts do not help: every instance you bring back is immediately handed the full backlog and dies before it can warm up. Retries and reconnect waves ride along on top, so a [retry storm](./retry-storm.md) and a [thundering herd](./thundering-herd.md) are usually part of the same incident.
+A cascading failure spreads because of the response to it. One instance dies, its traffic goes to the survivors, and without spare capacity one of them saturates and dies too, leaving the same work for fewer machines. You recognize it by the direction of spread: failures move to services that never called the first one, drops come in accelerating sequence, and restarts die under the backlog. The trigger is trivial; the missing headroom is the cause.
 
 ## Explained
 <!--meta block=explain-->
 
-A cascading failure is a failure that spreads because of how the system responds to it. One instance dies, the load balancer hands its traffic to the survivors, and if they lack spare capacity one of them overloads and dies too, leaving the same work for even fewer machines. Each round is faster than the last. Losing one of N instances raises each survivor's load by N/(N - 1), so a fleet only survives a loss if utilization stays below (N - 1)/N. Retries and cold restarts, which start with empty caches, add load on top. The overloaded state then sustains itself: full queues and retries in flight keep it going after the trigger is gone, so waiting does not recover it and only dropping traffic does. Choose headroom and compartments over a faster failover, because failover is the thing that moves the load. Keep utilization under that line and rehearse the loss. Split capacity into compartments such as a pool per dependency, so a failure lands on its own slice. Refuse excess work at the edge, and put a circuit breaker, a gate that stops calls to a failing service, in front of the sick part. Bring capacity back with retries off and traffic ramped.
+A cascading failure is a failure that spreads because of how the system responds to it. One instance dies, the load balancer hands its traffic to the survivors, and if they lack spare capacity one of them overloads and dies too, leaving the same work for even fewer machines. Losing one of N instances raises each survivor's load by N/(N - 1), so a fleet survives a loss only if utilization stays below (N - 1)/N. Retries and cold restarts, which start with empty caches, add load on top. The overloaded state then sustains itself, so waiting does not recover it and only dropping traffic does. Choose headroom and compartments over a faster failover, because failover is the thing that moves the load. Keep utilization under that line and rehearse the loss. Split capacity so a failure lands on its own slice ([bulkhead](../patterns/distributed/resilience/bulkhead.md)), refuse excess work at the edge, and put a [circuit breaker](../patterns/distributed/resilience/circuit-breaker.md) in front of the sick part.
 
-**Example.** A fleet of 10 instances each handles 1,000 requests a second and carries 9,000, so 90%. One crashes and the other 9 take 9,000 / 9 = 1,000 each, at the ceiling. Queues grow, a health check evicts one, and 8 now face 1,125 each, so all fail within minutes, and restarts die under the full backlog. At 70%, 7,000 a second, the same loss gives 778 each, two give 875, and three reach 1,000. That time lets you shed traffic or add capacity. The price is carrying 7,000 on 10 instances where 8 would have served it at 87.5%.
+- **Idle capacity.** Headroom means paying for machines that sit partly unused in normal times.
+- **Slow recovery.** Bring capacity back with retries off and traffic ramped, or restarts die under the full backlog.
+
+**Example.** A fleet of 10 instances each handles 1,000 requests a second and carries 9,000, so 90%. One crashes and the other 9 take 1,000 each, at the ceiling. Queues grow, a health check evicts one, and 8 now face 1,125 each, so all fail within minutes. At 70%, 7,000 a second, the same loss gives 778 each, two give 875, and three reach 1,000. That time lets you shed traffic or add capacity. The price is carrying 7,000 on 10 instances where 8 would have served it at 87.5%.
 
 ## How it happens
 <!--meta block=causes-->
@@ -95,5 +94,12 @@ Recovery is a procedure, not a restart. Bring capacity back with traffic turned 
 - [Analyse Failure Modes](../principles/failure-mode-analysis.md) — The cascade is found by walking dependencies before it happens
 - [Fault Injection](../patterns/distributed/resilience/fault-injection.md) — Injecting one component's failure shows whether its load actually sinks the peers
 - [Fallback](../patterns/distributed/resilience/fallback.md) — A fallback gives callers a working answer so they do not fail with the dependency.
+
+**Threatens**
+
+- [Load Balancer](../patterns/distributed/routing/load-balancer.md) — Redistributing a dead node's share overloads the survivors
+- [Autoscaling](../patterns/distributed/routing/autoscaling.md) — New cold instances join under full load and die before warming up
+- [Retry with Backoff](../patterns/distributed/resilience/retry-backoff.md) — Retries add load to an already saturated dependency
+- [Health Endpoint Monitoring](../patterns/distributed/resilience/health-endpoint.md) — Evicting a node for failing a health check shifts its load onto the rest
 
 <!-- relationships:end -->

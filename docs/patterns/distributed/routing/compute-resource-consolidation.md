@@ -217,7 +217,7 @@ function groupIntoUnits(profiles: Profile[]): Profile[][] {
 
 **Combines with**
 
-- [Container Orchestration](../coordination/container-orchestration.md) — Node pools grouped by CPU or memory requirement are how the packing rule gets applied mechanically
+- [Container Orchestration](../coordination/container-orchestration.md) — Node pools grouped by central processing unit (CPU) or memory requirement are how the packing rule gets applied mechanically
 - [Autoscaling](./autoscaling.md) — A unit scales as a unit, which is why only matching scale profiles may share one
 
 **Alternative to**

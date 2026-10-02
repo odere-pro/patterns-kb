@@ -65,6 +65,13 @@
  * the title, headings, tags and body, lists nothing for a sentence, which is
  * never a dense subsequence of anything but itself, and is not used.
  *
+ * A case study never crowds a pattern out of a description's first hits: when
+ * the best-scoring item for a description is not a case study, every case
+ * study's score is multiplied by CASE_STUDY_DAMP. The query's words are the
+ * ones `queryTerms` keeps (stopwords dropped), as for the split into lookup
+ * and description. Over the CLI's solves phrases this takes the designs in the
+ * top five from 1.2% to 0.0% and the hub's from 1.9% to 0.0%, top-1 unchanged.
+ *
  * It keeps the spec's parts that do not compete with the rule: the one-typo
  * retry (search-C10), the area boost (C8), the anchor rule (C9) and the
  * glossary match. The site's search box and kb.mjs find both score through it.
@@ -239,6 +246,18 @@ export const DESIGN_COVER = 0.75;
 export const DESIGN_DAMP = 0.5;
 
 /**
+ * What every case study's score is multiplied by in a description (three query
+ * terms or more, `isLookup` false) whose best item is not a case study. A
+ * symptom is answered by a pattern, a hazard or a principle, and a case study
+ * that merely mentions its words must not sit among the first five hits. When
+ * the best item is itself a case study the query is about a system, and no
+ * case study is damped. The best item is judged after DESIGN_DAMP and the
+ * bonuses and before this damp; a tie between a case study and another item
+ * counts as the other item leading.
+ */
+export const CASE_STUDY_DAMP = 0.3;
+
+/**
  * Six suffix rules, the first that fits wins. Not a stemmer and not trying to
  * be one: it lets "threads" or "blocked" reach a page that says "thread" and
  * "blocks". A bad stem is cheap, because matching is by word and the word
@@ -410,7 +429,8 @@ export interface RankInput<T> {
  * has four letters or more (`wordHit`); a synonym or a stem counts half; prose
  * mentions count up to three, deflated on pages longer than the average; and
  * the sum is raised by the share of words that matched at all: covering more
- * of what was asked beats saying one word a lot.
+ * of what was asked beats saying one word a lot. A description then damps its
+ * case studies by CASE_STUDY_DAMP unless one of them is its best item.
  *
  * A tie goes to the item with fewer declared facts (its joined facts are
  * shorter), then to the smaller id, so the order never depends on the order
@@ -434,7 +454,7 @@ export function rankItems<T>(items: readonly T[], { q, factsOf, syn = {}, bodyOf
   const bodies = bodyOf === undefined ? null : index.map((e) => bodyOf(e.item));
   const Lavg = bodies !== null && bodies.length > 0 ? bodies.reduce((a, b) => a + b.tokens, 0) / bodies.length : 0;
 
-  const out: (Scored<T> & { readonly size: number; readonly id: string })[] = [];
+  const out: { item: T; score: number; why: string | null; readonly size: number; readonly id: string; readonly study: boolean }[] = [];
   index.forEach((e, i) => {
     const body = bodies?.[i] ?? null;
     const norm = body !== null && Lavg > 0 ? Math.max(1, 0.25 + (0.75 * body.tokens) / Lavg) : 1;
@@ -495,11 +515,16 @@ export function rankItems<T>(items: readonly T[], { q, factsOf, syn = {}, bodyOf
       }
       if (phrase !== null && variants.some((v) => wordHit(phrase as string, v) > 0)) covered += 1;
     });
+    const study = e.categories.includes('case study');
     let score = sum * (1 + matched / Math.max(terms.length, 1));
-    if (!lookup && e.categories.includes('case study') && covered < DESIGN_COVER * terms.length) score *= DESIGN_DAMP;
+    if (!lookup && study && covered < DESIGN_COVER * terms.length) score *= DESIGN_DAMP;
     score += bonus;
-    if (score > 0) out.push({ item: e.item, score, why, size: e.size, id: e.id });
+    if (score > 0) out.push({ item: e.item, score, why, size: e.size, id: e.id, study });
   });
+  if (!lookup) {
+    const best = (studies: boolean): number => out.reduce((m, o) => (o.study === studies && o.score > m ? o.score : m), 0);
+    if (best(true) <= best(false)) for (const o of out) if (o.study) o.score *= CASE_STUDY_DAMP;
+  }
   out.sort((a, b) => b.score - a.score || a.size - b.size || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const ranked = out.map(({ item, score, why }) => ({ item, score, why }));
   return limit === undefined ? ranked : ranked.slice(0, limit);

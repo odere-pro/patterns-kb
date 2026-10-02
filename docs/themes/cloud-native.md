@@ -15,16 +15,17 @@ The platform side of the bargain: package a workload as an immutable image, decl
 ## The question
 <!--meta block=description-->
 
-"Cloud native" is used to mean everything and therefore nothing. Read it here as one specific bargain. You package the workload a particular way and give up direct control of where it runs; the platform takes over placement, restart, scaling, service-to-service traffic and the sidecar concerns that used to be libraries in your process.
-
-The question is what that trade is actually worth on your workload. It is worth a great deal when instances are interchangeable, load moves, and the same artifact has to run in four environments. It is worth much less when you run three long-lived services on fixed capacity, where the platform mostly adds a scheduler between you and a process that was doing fine.
-
-This theme is the platform half. What the platform asks of the application in return — configuration from the environment, no local state, a health signal it can act on — is [Twelve-Factor](./twelve-factor.md), and neither half works alone.
+Cloud native is used to mean everything, so read it here as one bargain: you package the workload a set way and give up control of where it runs, and the platform takes over placement, restart, scaling and service-to-service traffic. That is worth a great deal when instances are interchangeable and load moves, and much less for three long-lived services on fixed capacity. The application owes the platform its half, covered in [Twelve-Factor](twelve-factor.md).
 
 ## Explained
 <!--meta block=explain-->
 
-Going cloud native means you package your service as a standard image and let a platform decide where it runs, when it restarts and how many copies exist. In return you stop steering those decisions yourself. Adopt it where copies of your service are interchangeable, load moves during the day, and one artifact must run in several environments. Skip it for three long-lived services on fixed capacity, where all you add is a scheduler (the part that places processes on machines) between you and a process that was running fine. It costs four things. Platform settings behave like application code: a health check that is slightly too strict turns a slow start into a restart loop, so review and roll back those settings as you do code. The platform is itself a system to run, so buy it managed until your workload justifies a team. The image moves between providers but the add-ons, traffic rules and identity bindings do not, so know which layer you would rewrite before you depend on it. And a decision you no longer make is one you cannot see, so record which copy was killed and why the count changed, or an outage has no cause you can find.
+Going cloud native means you package your service as a standard image ([containerization](../patterns/distributed/coordination/containerization.md)) and let a platform ([container orchestration](../patterns/distributed/coordination/container-orchestration.md)) decide where it runs, when it restarts and how many copies exist ([autoscaling](../patterns/distributed/routing/autoscaling.md)). In return you stop steering those decisions yourself. Adopt it where copies of your service are interchangeable, load moves during the day, and one artifact must run in several environments. Skip it for three long-lived services on fixed capacity, where all you add is a scheduler (the part that places processes on machines) between you and a process that was running fine.
+
+- **Settings as code.** A health check too strict turns a slow start into a restart loop, so review and roll back platform settings like code.
+- **A platform to run.** The platform is itself a system, so buy it managed until your workload justifies a team.
+- **Lock-in below the image.** Add-ons, traffic rules and identity bindings do not move between providers, so know what you would rewrite.
+- **Invisible decisions.** Record which copy was killed and why the count changed, or an outage has no cause you can find.
 
 **Example.** A service needs 20 s to warm its cache after each start. The platform checks health every 5 s from second 5 and restarts the copy after 3 failed checks. The checks fail at 5, 10 and 15 s, so the copy is killed at 15 s, 5 s before it is ready, and then starts again: a restart loop that looks like an application outage. Delaying the first check to 30 s ends the loop. The cost is that a copy which freezes during startup goes unnoticed for those 30 s. You only find the cause because the platform logs each kill with its reason.
 

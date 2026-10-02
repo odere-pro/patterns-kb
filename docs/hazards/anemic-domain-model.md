@@ -16,18 +16,17 @@ Data objects with no real behavior of their own — every field has a getter and
 ## What it is
 <!--meta block=description-->
 
-An **anemic domain model** is a set of classes named after real domain concepts — `Order`, `Customer`, `Invoice` — that hold state but carry almost no behavior. Each class is little more than a bag of fields with a getter and a setter for every one of them. All the logic that actually understands what an `Order` is allowed to do lives elsewhere, in an `OrderService`, an `OrderValidator`, or a controller method that reaches into the object and pushes its fields around directly.
-
-You recognize it by counting methods. A domain class with twenty properties and twenty accessor pairs, and not a single method that expresses a business rule, is anemic. So is a `totalAmount` that any caller can set to a negative number, because nothing on the object itself refuses it. The tell is procedural code sitting right next to object-oriented names: the classes look like a domain model, but the code that manipulates them reads like a script — fetch the record, check a few conditions, mutate a few fields, save it back.
-
-Martin Fowler named the smell in 2003 specifically to contrast it with a rich domain model, where behavior and the data it governs live in the same place. An anemic model isn't wrong because it's simple — it's wrong because the object's own boundary no longer protects its own consistency; anything holding a reference and a setter can put it into a state that makes no sense.
+An anemic domain model is a set of classes named after business concepts, such as Order or Invoice, that hold fields but enforce no rules. The logic lives in services that reach in and change the fields. You recognize it by classes with twenty getter-setter pairs and no method that expresses a rule, or a total any caller can set negative. The defining trait is not simplicity: the object no longer protects its own consistency.
 
 ## Explained
 <!--meta block=explain-->
 
-An anemic domain model is a set of classes named after real business things, such as Order or Invoice, that hold fields but enforce no rules. The rules live in separate service classes that reach in and change the fields. Teams fall into it because layered designs put data and logic in separate tiers, code generators make one class per table, and each new rule follows the path the last one took. The cost is that every service writes the same check a little differently, and anything holding the object can put it in a state the business forbids. The way out is to move one rule at a time into a named method on the object it is about, send callers through that method, and then delete the setter it replaced, because a setter left behind is a route around the rule. Choose a rich model where rules are real and keep changing, such as pricing, and keep a plain script for a bulk import, which is honest as a script. The bill lands at the edges: rich objects fight database mapping, so put a mapper between table and model. A rule spanning two objects has no owner, so give it a named service and keep that list short.
+An anemic domain model is a set of classes named after real business things, such as Order or Invoice, that hold fields but enforce no rules. The rules live in separate service classes that reach in and change the fields. Teams fall into it because layered designs put data and logic in separate tiers, code generators make one class per table, and each new rule follows the path the last one took. Every service then writes the same check a little differently, and anything holding the object can put it in a state the business forbids. Choose a rich model where rules are real and keep changing, such as pricing. Keep a plain script for a bulk import, which is honest as a script. The way out is to move one rule at a time into a named method on the object it is about, send callers through that method, then delete the setter it replaced.
 
-**Example.** Four services set an order's discount: checkout, admin, refunds and a nightly import. Each copies the rule "discount at most 30%". Marketing cuts the cap to 25%, and the team edits three services but misses the import. The import loads 200 orders a night averaging 100 euros, and each carries up to 5 euros too much discount, so the company loses up to 1,000 euros a night until someone notices. The fix is one method, \`Order.applyDiscount(percent)\`, that refuses anything over 25. You move the four callers onto it, then delete \`setDiscount\`. The next cap change is one edit, and the price is the mapper you now maintain between the orders table and Order.
+- **Mapping friction.** Rich objects fight database mapping, so put a mapper between table and model and accept maintaining it.
+- **Orphaned cross-object rules.** A rule spanning two objects has no owner, so give it a named service and keep that list short.
+
+**Example.** Four services set an order's discount: checkout, admin, refunds and a nightly import. Each copies the rule "discount at most 30%". Marketing cuts the cap to 25%, and the team edits three services but misses the import. The import loads 200 orders a night averaging 100 euros, each carrying up to 5 euros too much discount, so the company loses up to 1,000 euros a night until someone notices. The fix is one method, \`Order.applyDiscount(percent)\`, that refuses anything over 25. You move the four callers onto it, then delete \`setDiscount\`. The next cap change is one edit.
 
 ## How it happens
 <!--meta block=causes-->
@@ -75,6 +74,10 @@ Decide where a rule that spans two objects lives, before it decides itself. Such
 
 <!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
 
+**Combines with**
+
+- [Primitive Obsession](./primitive-obsession.md) — Entities made of bare primitives and no behaviour are the usual shape of an anemic model
+
 **Often confused with**
 
 - [Transaction Script](../patterns/enterprise/transaction-script.md) — Same procedures over data-only classes, but chosen on purpose because the logic is simple
@@ -84,5 +87,12 @@ Decide where a rule that spans two objects lives, before it decides itself. Such
 - [Aggregate](../patterns/ddd/aggregate.md) — Behavior on the aggregate keeps the model rich
 - [Data Mapper](../patterns/enterprise/data-mapper.md) — Keeping SQL out of the model removes the pressure to flatten it
 - [Encapsulation](../principles/encapsulation.md) — The anaemic model is precisely what its absence produces: public state, rules elsewhere
+
+**Threatens**
+
+- [Domain Service](../patterns/ddd/domain-service.md) — Services that absorb all behaviour are the usual route to an anemic model
+- [Active Record](../patterns/enterprise/active-record.md) — An active record is a row-shaped class with a setter per column, so rules drift out into services
+- [Service Layer](../patterns/enterprise/service-layer.md) — A service layer that holds all the rules turns the domain classes into bags of fields
+- [DTO](../patterns/enterprise/dto.md) — Field-only data transfer object (DTO) classes are easily reused as the domain model, and the rules then live elsewhere
 
 <!-- relationships:end -->

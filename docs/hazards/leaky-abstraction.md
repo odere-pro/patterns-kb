@@ -16,20 +16,17 @@ An abstraction promises that what is underneath it does not matter, and then wha
 ## What it is
 <!--meta block=description-->
 
-A **leaky abstraction** is one whose promise is narrower than it appears. It was stated as a law — all non-trivial abstractions, to some degree, are leaky — and that framing matters: the leak is not a defect somebody forgot to fix. A reliable byte stream over an unreliable network still fails when the cable is cut, because the guarantee was about ordering and retransmission and never about the cable.
-
-The hazard is not that the abstraction exists. It is that **callers were written against the promise**. Code that treats a remote file like a local one has no timeout, no retry and no partial-failure branch — not through carelessness, but because the interface it was handed offered nowhere to put them.
-
-You recognise it by where the symptom and the cause sit. The failure appears at the top layer, the explanation is two or three layers down, and the tooling at each layer only describes that layer. The most expensive variety leaks a **cost model** rather than a behaviour: two logically equivalent queries return identical rows at wildly different cost, because the abstraction described the result and not the procedure — so nothing is broken, and nothing in the interface distinguishes the cheap call from the ruinous one.
-
-The counter-intuitive consequence is about learning time. An abstraction is sold as something that saves you from knowing the layer below, and a leaky one means you have to know both — so it adds a layer to learn rather than removing one. That is the honest price, and it does not mean abstractions fail to pay for themselves. It means the choice is which leaks you can afford, made before you depend on one, rather than which abstraction is leak-free.
+A **leaky abstraction** is a simple interface over a lower layer that cannot hide everything, so the layer below shows through when something goes wrong or slow. You recognise it when a failure at the top has its cause two layers down, or when code that treats a remote call as local has no timeout. The defining trait is that callers needed to know what the interface promised to hide.
 
 ## Explained
 <!--meta block=explain-->
 
-A leaky abstraction is a simple interface that hides a layer below it, but cannot hide everything about it, so the hidden layer shows through when something goes wrong or slow. A reliable data stream over a network still fails when the cable is cut, because its promise covered order and resending, never the cable. Callers are written against the promise: code that treats a remote file as a local one has no timeout and no failure branch, because the interface gave it nowhere to put them. The failure shows at the top while the cause sits two layers down, and the abstraction was sold as saving you from learning that layer, so you now need both. Plugging every leak makes the interface as complicated as what it hides, so ask which leaks you can afford, before you depend on it. Write down what the abstraction does not cover. Put substrate failures in the signature, such as a call whose type admits a timeout. Keep an escape hatch to the raw layer where cost matters. Where the leak is cost, no signature helps, so measure at the boundary.
+A leaky abstraction is a simple interface that hides a layer below it, but cannot hide everything about it, so the hidden layer shows through when something goes wrong or slow. A reliable data stream over a network still fails when the cable is cut, because its promise covered order and resending, never the cable. Callers are written against the promise: code that treats a remote file as a local one has no timeout and no failure branch, because the interface gave it nowhere to put them. The failure shows at the top while the cause sits two layers down, and the abstraction was sold as saving you from learning that layer, so you now need both. Plugging every leak makes the interface as complicated as what it hides, so ask which leaks you can afford before you depend on it. Write down what the abstraction does not cover. Put substrate failures in the signature, such as a call whose type admits a timeout. Keep an escape hatch to the raw layer where cost matters.
 
-**Example.** A page lists 500 orders with each customer's name, using an object mapper that loads each customer on first access. On a developer's machine, with 20 orders, that is 21 queries at 2 ms, 42 ms, which nobody notices. In production, 500 orders make 501 queries, about 1 s, while one join would take around 15 ms. The mapper hid that each name lookup is a query, so the cost model leaked. The team adds an explicit join for list pages, which costs callers some SQL knowledge, and alarms when a request runs over 20 queries.
+- **Wider interfaces.** Failures in the signature make every caller handle them; expose only the ones callers can act on.
+- **Cost leaks.** No signature shows cost, so measure at the boundary.
+
+**Example.** A page lists 500 orders with each customer's name, using an object mapper that loads each customer on first access. On a developer's machine, with 20 orders, that is 21 queries at 2 ms, 42 ms, which nobody notices. In production, 500 orders make 501 queries, about 1 s, while one join would take around 15 ms. The mapper hid that each name lookup is a query. The team adds an explicit join for list pages and alarms when a request runs over 20 queries.
 
 ## How it happens
 <!--meta block=causes-->
@@ -87,5 +84,11 @@ Then choose deliberately. Prefer the abstraction that hides less over the one th
 - [Timeout / Deadline](../patterns/distributed/resilience/timeout-deadline.md) — Puts the remote failure mode in the signature, so a caller cannot inherit the local-call assumption
 - [Fail Fast](../principles/fail-fast.md) — Surfacing the substrate's failure beats a generic error the caller cannot act on
 - [Distributed Tracing](../patterns/distributed/resilience/distributed-tracing.md) — Where the leak is a cost model, measuring at the boundary is the only defence left
+
+**Threatens**
+
+- [Repository](../patterns/enterprise/repository.md) — It presents a collection but hides queries, latency and failures
+- [Data Mapper](../patterns/enterprise/data-mapper.md) — Object access hides the SQL, so cost and failures show through
+- [Proxy](../patterns/gof/structural/proxy.md) — A remote proxy makes a network call look local, with no timeout or failure branch
 
 <!-- relationships:end -->

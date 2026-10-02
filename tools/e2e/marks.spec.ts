@@ -70,7 +70,7 @@ test('tour-progress', async ({ page, kb }) => {
   // A reader who has marked nothing sees no tour list on the home page: it shows only tours begun.
   await kb.visit(site.home);
   await expect(page.getByRole('heading', { name: 'Tours you have started' })).toBeHidden();
-  await expect(page.getByRole('main').getByText(/\d+ of \d+ practiced/).filter({ visible: true })).toHaveCount(0);
+  await expect(page.locator('[data-kb-practiced-tours]').getByText(/\d+ of \d+ practiced/).filter({ visible: true })).toHaveCount(0);
 
   // On the theme page the same reader sees where the tour stands: none of its pages.
   await kb.visit(theme.route);
@@ -90,7 +90,7 @@ test('tour-progress', async ({ page, kb }) => {
 
   // The home page lists the tour now that it is started, and says the same.
   await kb.visit(site.home);
-  const started = page.getByRole('main').getByRole('listitem').filter({ hasText: label });
+  const started = page.locator('[data-kb-practiced-tours]').getByRole('listitem').filter({ hasText: label });
   await expect(started).toBeVisible();
   await expect(started).toContainText(`2 of ${total} practiced`);
 });

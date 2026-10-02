@@ -15,18 +15,17 @@ Funnels every inbound request through one well-guarded entry, instead of leaving
 ## What it is
 <!--meta block=description-->
 
-A **single access point** is an architecture where every external interaction with a system passes through one designated, heavily guarded channel — a gateway, a login portal, a bastion host — instead of each subsystem exposing its own independent way in. Internal services stop listening on the open network at all; the access point is the only thing reachable from outside, and everything behind it is reached only through it.
-
-The force it resolves is that **attack surface scales with entry points**. Every door a system exposes needs its own authentication, its own input validation, its own logging and rate limiting, kept correctly in sync with every other door. In practice they drift: one service gets a security fix, the twin endpoint two teams over doesn't. The weakest of the many doors sets the real security level of the whole system, no matter how strong the others are.
-
-Consolidating to one entry turns that many-times problem into a one-time problem. You harden a single choke point exhaustively — strong auth, strict validation, full audit trail — and every request, from every client, is forced through that same discipline before it touches anything real.
-
-It's the oldest idea in physical security applied to software: a castle with one guarded gate is far easier to defend than a wall lined with unlocked windows, even if the gate itself has to work much harder.
+A single access point makes every external interaction with a system pass through one heavily guarded channel, such as a gateway, login portal or bastion host, while internal services are reachable only through it. Attack surface grows with each entry point and the weakest door sets the real security level, so you harden one choke point with authentication, validation and audit instead of many.
 
 ## Explained
 <!--meta block=explain-->
 
-A single access point makes every outside request enter through one guarded gateway, which does authentication, input checks, rate limiting and logging once, and the services behind it accept traffic from nothing else. Without it, every service exposes its own door, each needs its own copy of those controls, and the copies drift until one is missing. Choose it over per-service protection when you have more than a few services or teams, because attack surface grows with each entry point and you can harden one gate far more thoroughly than twelve. It costs four things. It is one point of failure, so run several copies and plan capacity so that losing one still carries the load. A breach of it exposes everything behind it, so keep its code small and its network rules strict. It can slow every request, so size it for peak traffic and measure the delay it adds. It tends to collect business logic, so keep it to security and routing only. Pair it with a network rule, or a service on its own port is still a second door.
+A single access point makes every outside request enter through one guarded gateway, which does authentication, input checks, rate limiting and logging once, and the services behind it accept traffic from nothing else. Without it, every service exposes its own door, each needs its own copy of those controls, and the copies drift until one is missing. Choose it over per-service protection when you have more than a few services or teams, because attack surface grows with each entry point and you can harden one gate far more thoroughly than twelve. Pair it with a network rule that backends accept only the gateway, or a service on its own port is still a second door.
+
+- **Single point of failure.** Run several copies, sized so that losing one still carries the load.
+- **Breach exposure.** A breach of it exposes everything behind it, so keep its code small and its network rules strict.
+- **Added delay.** It can slow every request, so size it for peak traffic and measure the delay it adds.
+- **Logic creep.** It tends to collect business logic, so keep it to security and routing only.
 
 **Example.** A company runs 12 services, and 11 check tokens. A scan finds the forgotten reports service on port 8081, open to anyone who calls it. With a gateway, a network rule lets the backends accept connections only from the gateway's address, so the same scan from outside times out. The gateway handles 3,000 requests a second and each copy handles 1,500, so you run three copies: if one fails, two carry 3,000. The cost is about 2 ms added to every request.
 

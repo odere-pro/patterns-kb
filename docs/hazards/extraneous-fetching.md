@@ -16,16 +16,17 @@ An operation pulls back far more data than it will use — every column when it 
 ## What it is
 <!--meta block=description-->
 
-**Extraneous fetching** is retrieving data the operation was never going to use. It has three recurring shapes: too many **columns**, where a query selects everything and the code projects two fields out of it; too many **rows**, where an unbounded read returns the whole set to satisfy a screen that shows a page of twenty; and work done in the **wrong place**, where a filter or a total is computed in application memory over records the store could have reduced before sending them. In all three the query is correct, returns the right answer, and moves an order of magnitude more bytes than the answer needed.
-
-The measurement that identifies it is a ratio between two numbers most systems already record: bytes read from the store against bytes returned to the caller. A request that pulls hundreds of kilobytes to emit a response of a few dozen bytes is not a slow query, it is the wrong query. Watch for the shapes that produce the gap — a select with no projection, a read with no limit, and the subtler one where a query builder cannot translate part of a predicate and quietly falls back to filtering in memory, so the code reads as a filter and executes as a full scan plus a discard.
+Extraneous fetching is reading more data than the operation uses: every column when two are needed, every row when the screen shows twenty, or raw rows the application filters or totals itself. You recognise it when a request reads hundreds of kilobytes to return a few dozen bytes, and when a query fast in testing slows as the table grows. The defining trait is the gap between bytes read and bytes returned, not slowness in one query.
 
 ## Explained
 <!--meta block=explain-->
 
-Extraneous fetching is reading data the operation never uses. It comes in three shapes: too many columns, where a query selects everything and the code keeps two fields; too many rows, where a read has no limit and the screen shows twenty; and work in the wrong place, where the application pulls rows to filter or total them itself. The cost is bytes read, moved and thrown away on every request, and it grows with the data, so a query that was fast in testing slows as the table fills. You find it by comparing bytes read from the store with bytes returned to the caller, because a request that reads hundreds of kilobytes to return a few dozen bytes is the wrong query rather than a slow one. Name the columns you need, put the filter and the total in the query, and give every read a page size. When callers want different amounts, split the object into a small common part and a bulky rare part. Precompute an expensive read as a materialized view, a stored query result refreshed on a schedule, and accept its staleness. Stop before moving formatting into the store, which creates a busy database.
+Extraneous fetching is reading data the operation never uses. It comes in three shapes: too many columns, where a query selects everything and the code keeps two fields; too many rows, where a read has no limit and the screen shows twenty; and work in the wrong place, where the application pulls rows to filter or total them itself. The cost is bytes read, moved and thrown away on every request, and it grows with the data, so a query that was fast in testing slows as the table fills. You find it by comparing bytes read from the store with bytes returned to the caller. Name the columns you need, put the filter and the total in the query, and give every read a page size. Precompute a read that is assembled over and over as a [materialized view](../patterns/distributed/coordination/materialized-view.md), and accept its staleness. Stop before moving formatting into the store, which creates a [busy database](busy-database.md).
 
-**Example.** An order screen shows a customer's last 20 orders, two fields each. The query selects every column with no limit. The customer has 5,000 orders of 2 KB each, so the database sends 10 MB. At 100 MB/s on the network that is 100 ms before the application throws away 4,980 rows. Selecting only the id and total with a limit of 20 returns 20 x 40 bytes = 800 bytes, over 12,000 times less. The cost is paging: asking for page 250 needs a key to continue from, and a new column on the screen needs a new query.
+- **Paging.** Deep pages need a key to continue from, so give clients a cursor rather than an offset.
+- **Narrow queries.** A new column on the screen needs a new query; keep the projection in one reviewed place.
+
+**Example.** An order screen shows a customer's last 20 orders, two fields each. The query selects every column with no limit. The customer has 5,000 orders of 2 KB each, so the database sends 10 MB. At 100 MB/s that is 100 ms before the application throws away 4,980 rows. Selecting only the id and total with a limit of 20 returns 20 x 40 bytes = 800 bytes, over 12,000 times less.
 
 ## How it happens
 <!--meta block=causes-->
@@ -75,5 +76,11 @@ Instrument the ratio, because neither half of it alarms on its own. Compare byte
 - [Materialized View](../patterns/distributed/coordination/materialized-view.md) — Precompute the demanding read shape so the request reads an answer rather than assembling one
 - [Vertical Partitioning](../patterns/distributed/routing/vertical-partitioning.md) — Keep the small hot columns apart from the bulky ones so most reads skip the bulk
 - [Pagination](../patterns/distributed/routing/pagination.md) — A page size is what keeps a read from loading everything that has accumulated
+
+**Threatens**
+
+- [Repository](../patterns/enterprise/repository.md) — A generic repository returns whole entities when callers need two fields
+- [Data Mapper](../patterns/enterprise/data-mapper.md) — The mapper loads full rows and objects by default
+- [API Gateway](../patterns/distributed/routing/api-gateway.md) — Fixed response shapes ship fields and rows the client never shows
 
 <!-- relationships:end -->

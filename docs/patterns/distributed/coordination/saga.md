@@ -246,6 +246,21 @@ async function runFlow(flowId: string, personaId: string): Promise<void> {
 
 <!-- fluency:end -->
 
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **Why can another transaction see a half-finished saga?**
+>
+> A saga has no isolation, so partial state is visible mid-flight unless a semantic lock masks it, see [con 1](saga.md#tradeoffs-con-1).
+
+> **What do you do with a compensation that keeps failing?**
+>
+> Nothing compensates a compensation, so route it to a dead-letter queue with an operator behind it, see [con 4](saga.md#tradeoffs-con-4).
+
+> **When is a saga the wrong tool?**
+>
+> When one service owns the whole operation, a local transaction already gives you ACID, see [avoid 1](saga.md#usage-avoid-1).
+
 ## How it relates
 <!--meta block=relationships-->
 
@@ -282,6 +297,10 @@ async function runFlow(flowId: string, personaId: string): Promise<void> {
 
 - [Dual-Write Inconsistency](../../../hazards/dual-write-inconsistency.md) — Replaces the distributed transaction the dual write silently assumed
 - [Distributed Monolith](../../../hazards/distributed-monolith.md) — Insisting on atomic cross-service transactions is one of the ways services end up welded together.
+
+**Exposed to**
+
+- [Retry Storm](../../../hazards/retry-storm.md) — Can fall into retry storm when each step's retries and its compensations multiply load on a service that is already failing
 
 **Demonstrated by**
 

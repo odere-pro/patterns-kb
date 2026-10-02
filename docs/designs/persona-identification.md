@@ -16,43 +16,16 @@ A client starts a flow by providing an email address; the address's owner is inv
 ## Understanding the problem
 <!--meta block=description-->
 
-The task states a flow and four given components — no volumes, no jurisdictions, no data-protection rules. These questions close those gaps. Where no answer was available the assumption is marked; each answer lands in a requirement below.
-
-**Q1 — How many flows a week?** → non-functional requirement (NFR): scale. Assumed, not given: ~100 merchant onboardings a week, and one merchant means several people — under 75 person-flows a day, with headroom designed to 10k. Confirm this first: every capacity decision below is priced against it.
-
-**Q2 — One sanction list, or several?** → functional requirement (FR): screening. Several, and the verdict waits for the slowest. A late answer beats a quietly partial one. Assumed, not given: each vendor returns a hit or a clear, not a raw fuzzy-match score — if one can answer "possible match", that adjudication happens on the client's side of the webhook, because the five-state model carries no review state.
-
-**Q3 — Point-in-time answer, or ongoing obligation?** → FR: re-screening, re-verification, result delivery. Ongoing, on both halves. Sanction lists change, and an ID document expires or is revoked. Both re-run on a cadence set per jurisdiction: re-screening needs nobody, re-verification needs a fresh document from the person.
-
-**Q4 — What are we holding, where may it live, and what must we produce on demand?** → FR: separate PII (personally identifiable information) store, access audit; NFR: compliance, tenancy, retention.
-
-- Name, date of birth, photograph of a government ID — GDPR (General Data Protection Regulation) personal data, on people who are not our customers.
-- It stays in its client's region; the region is fixed when the client is onboarded, not chosen at runtime.
-- On demand: a flow's history — what was checked, when, by whom.
-- On demand: proof that data was erased, not just a claim.
-- Retention is per jurisdiction and counted from the end of the relationship, not the check — an expiry the system enforces, in permanent tension with erasure.
-- A cross-client leak is a reportable incident, not a bug.
-
-{#description-ul-1}
-
-**Q5 — Store the ID photo, or pass it through?** → NFR: compliance; drives the estimate. Store it: an audit asks what was checked, and no evidence means no answer. Storage is sized by that, not by traffic.
-
-**Q6 — Does the client want live progress, or only the result?** → FR: result delivery, flow view, failure notice; out of scope: in-flight status. Only the result — a flow idles for days between two vendor calls, so live updates would report almost nothing. The dashboard shows progress to people who ask; machines get one webhook.
-
-**Q7 — Does residency mean multi-region, and does anything fail over?** (open) → NFR: tenancy; out of scope: geo-failover. Residency yes, failover no. Residency means separate regional deployments sharing no data, at the cost of one copy of everything per region; failover — one client surviving the loss of a region — is not justified at this volume. Still open, for the client to answer: how many regions on day one, and whether a regulator demands failover anyway.
-
-**Q8 — What is deliberately not built?** → Out of scope.
-
-- Cancelling a flow in flight.
-- In-flight status polling — the dashboard answers that.
-- Geo-failover, per Q7.
-
-{#description-ul-2}
+A client starts an identity-and-sanctions flow for a person by email; an outside vendor verifies the ID, sanction lists screen the person, and the result reaches the client's webhook. The task gives no volumes, jurisdictions or data rules, so the requirements mark each assumption, and the page walks through a design whose waits are stored rows.
 
 ## Explained
 <!--meta block=explain-->
 
-This design checks a person's identity and screens them against sanction lists, a process that waits days on people and outside vendors. It stores every wait as a row in one Postgres database, never as an open connection. Each step of a flow commits three things in one transaction: the new state, an event owed to the client and the next task for a worker. Stateless workers claim tasks from that table, call the vendors and write results back. A sender then delivers each owed event to the client's webhook, a callback address you register, with the same event id on every repeat. Choose this over a message broker (a separate queue service) while volume is low, because a broker cannot share a transaction with the state change. It trades three things. One writer means an outage stalls writes until the standby takes over, so keep a standby that confirms every commit. Personal data sits in one vault, so give it separate credentials and keys. Each region needs its own full copy of the stack, so budget for one stack per region.
+This design checks a person's identity and screens them against sanction lists, a process that waits days on people and outside vendors. It stores every wait as a row in one Postgres database, never as an open connection. Each step of a flow commits three things in one transaction: the new state, an event owed to the client and the next task for a worker. Stateless workers claim tasks from that table, call the vendors and write results back. A sender then delivers each owed event to the client's webhook (a callback address the client registers), with the same event id on every repeat. Choose this over a message broker (a separate queue service) while volume is low, because a broker cannot share a transaction with the state change.
+
+- **One writer.** A database outage stalls writes until the standby takes over, so keep a standby that confirms every commit.
+- **One vault.** Personal data sits in one store, so give it separate credentials and keys.
+- **Regional copies.** Each region needs its own full stack, so budget one stack per region.
 
 **Example.** A client creates 10,000 flows a day. Each flow touches about 42 rows, so 10,000 times 42 is 420,000 writes a day, about 5 a second, or 10 at a busy peak. A person takes about 24 hours to submit, so around 10,000 flows sit parked at once. As open connections that would exhaust a pool, but as rows they cost storage only. The ID vendor goes down for 6 hours. Tasks wait, then run, and no result is lost. The cost is a single writer: if its database fails, every write stops until the standby is promoted.
 
@@ -69,7 +42,8 @@ This design checks a person's identity and screens them against sanction lists, 
 - The email's owner receives a single-use invitation link that expires after 48 hours.
 - The person can request a fresh invitation link themselves if theirs expired.
 - The submitted personal information and ID photo are verified through the given external ID-verification provider.
-- Only after verification passes is the person screened against every external sanction list.
+- Only after verification passes is the person screened against every external sanction list, and the verdict waits for the slowest list: a late answer beats a quietly partial one.
+- Assumed, not given: each vendor returns a hit or a clear, never a raw match score, so the flow carries no review state.
 - The client receives the flow's result on a webhook.
 - A result delivered more than once is recognisable to the client as a repeat of the same result.
 
@@ -92,7 +66,7 @@ This design checks a person's identity and screens them against sanction lists, 
 <!--meta requirement=nfr-->
 
 - **Scale**
-  - ~100 merchant onboardings a week today; one merchant means several person-flows.
+  - ~100 merchant onboardings a week today (assumed, not given; confirm first, since every capacity decision is priced against it); one merchant means several person-flows.
   - Headroom to 10k person-flows a day without redesign.
   - Recurring re-screening grows with the book of open relationships, not with daily intake, and must never starve live flows.
   - That book is bounded by the relationships still open, not by everyone ever checked.
@@ -118,7 +92,8 @@ This design checks a person's identity and screens them against sanction lists, 
   - Alarms fire on stuck flows, queue depth and per-vendor error rates.
   - Every alarm has a runbook: what it means, how to diagnose it, how to recover.
 - **Compliance**
-  - Verified documents are stored as evidence, not proxied.
+  - Verified documents are stored as evidence, not proxied; no evidence means no answer to an audit.
+  - Name, date of birth and ID photo are GDPR personal data about people who are not our customers; a cross-client leak is a reportable incident.
   - Personal data is encrypted at rest; right-to-forget is honoured and provable.
   - Retention is a per-jurisdiction policy enforced and evidenced by the system.
 - **Security & tenancy**
@@ -130,7 +105,8 @@ This design checks a person's identity and screens them against sanction lists, 
 ### Out of scope {#requirements-outofscope}
 
 - **Cancelling a flow in flight** — a started flow runs to a terminal or is abandoned.
-- **Status polling in flight** — recovery is webhook replay plus the dashboard, not a second read path.
+- **Status polling in flight** — a flow idles for days between vendor calls, so live updates would report almost nothing; recovery is webhook replay plus the dashboard, not a second read path.
+- **Human review of a possible match** — it happens on the client's side of the webhook.
 - **Cross-region failover** — regional isolation for residency is in scope; surviving the loss of a region is not.
 
 ## Right-sizing
@@ -574,7 +550,7 @@ Every client-facing state-changing call returns 202 — work is recorded durably
   # Re-emits the flow's terminal event from the outbox — the SAME eventId, so the
   # client's dedup absorbs it whether or not the original ever arrived.
   # No Idempotency-Key: replay is repeatable by construction, and a key on a call that
-  # already repeats safely is ceremony (dive 12, Q8).
+  # already repeats safely is ceremony (dive 12).
 
   409 Conflict   { "error": "flow not terminal" }   nothing to replay yet
   ```
@@ -620,7 +596,7 @@ Every client-facing state-changing call returns 202 — work is recorded durably
   # for support triage. No free-text search — the dashboard asks "show me this flow",
   # never "find flows matching text" (Right-sizing).
   # Personal fields render only through the vault, and each read appends an audit_log
-  # row: who, when, 'dashboard_view'. This is the human surface from Q6 — machines
+  # row: who, when, 'dashboard_view'. This is the human surface — machines
   # still get one webhook, and in-flight polling stays out of scope.
   ```
 
@@ -956,7 +932,7 @@ stateDiagram-v2
 
 **Parsing happens before the transaction opens, and that ordering is load-bearing.** Suppose a vendor ships a contract change the parser rejects. With the parse inside the effect transaction, the rollback takes the inbox row with it — so this system holds no record of ever having seen the callback, the vendor retries it forever, and it cannot even dead-letter, because dead-lettering is a write in the transaction that just aborted. One bad message blocking the consumer behind it is exactly the failure a dead-letter channel exists to stop, and here the poison payload also defeats the channel. With the parse in the ACL and ahead of `BEGIN`, the failure has somewhere to land: one transaction commits the inbox row, a dead-letter row and an escalation together, and then ACKs. The vendor stops retrying, and an operator gets the payload that broke us instead of a retry storm nobody is counting.
 
-**Outbound calls carry our idempotency key for the same reason in reverse.** The invite email and the webhook both go to systems that might see our retry as a new request. Each send carries a key built from the task (email) or the event (`eventId`), so the email vendor can collapse a re-sent invite and the client can collapse a re-delivered result. The rule that makes it work is the easy one to miss: the key is built from the durable row's id, never generated at send time — a retry re-reads the row and presents the same key, while a freshly generated one differs on every attempt and therefore collapses nothing (dive 12, Q8). At-least-once internally, at-most-once effect at every boundary.
+**Outbound calls carry our idempotency key for the same reason in reverse.** The invite email and the webhook both go to systems that might see our retry as a new request. Each send carries a key built from the task (email) or the event (`eventId`), so the email vendor can collapse a re-sent invite and the client can collapse a re-delivered result. The rule that makes it work is the easy one to miss: the key is built from the durable row's id, never generated at send time — a retry re-reads the row and presents the same key, while a freshly generated one differs on every attempt and therefore collapses nothing (dive 12). At-least-once internally, at-most-once effect at every boundary.
 
 **The transition itself is the second guard.** Every state change carries `WHERE state = expected AND version = seen`, so even a zombie worker — one whose lock the sweeper already expired and re-queued — writes zero rows instead of a double-apply. The worst case left is a repeated vendor call, which the outbound idempotency key above already collapses.
 
@@ -1486,7 +1462,7 @@ By making each race a deterministic test — the guards are SQL, so the races re
 - [Retry with Backoff](../patterns/distributed/resilience/retry-backoff.md) — vendor calls and webhook deliveries retry on a growing schedule recorded on the task row's run_after before the sweeper escalates them
 - [Timeout / Deadline](../patterns/distributed/resilience/timeout-deadline.md) — every task and every sanctions leg carries its own deadline, because no vendor publishes a latency bound and the sweeper needs a line to enforce
 - [Bulkhead](../patterns/distributed/resilience/bulkhead.md) — each vendor gets its own worker pool, so a stalled sanctions vendor cannot starve ID verification or the email invites
-- [Sweeper](../patterns/distributed/coordination/sweeper.md) — one scheduled job re-queues expired task locks, escalates exhausted tasks to a dead state, breaches the SLA out loud to operator and client, and runs both recheck clocks
+- [Sweeper](../patterns/distributed/coordination/sweeper.md) — one scheduled job re-queues expired task locks, escalates exhausted tasks to a dead state, breaches the service level agreement (SLA) out loud to operator and client, and runs both recheck clocks
 - [Leader Election](../patterns/distributed/coordination/leader-election.md) — the sweeper and both recheck clocks each hold a renewable lease in the shared cache, so a second replica waits instead of double-firing an escalation or buying a vendor screen twice
 - [Anti-Corruption Layer](../patterns/ddd/acl.md) — each vendor gets a translator that parses its payload and maps it onto our own three-valued outcome — and stamps provider and policy version onto the transition, so the history can answer how a person was verified
 - [External Configuration Store](../patterns/distributed/coordination/external-configuration-store.md) — the list roster, each list's criticality, the recheck cadences, vendor quotas and fallback weights move without a deploy — and a worker that cannot reach the store boots from its last cached version rather than from defaults
@@ -1504,23 +1480,23 @@ By making each race a deterministic test — the guards are SQL, so the races re
 **Capacity & admission**
 
 - [Priority Queue](../patterns/messaging/priority-queue.md) — live flows and the recurring recheck batch share one task table, so recheck tasks claim from a separately sized pool — reserved capacity per class, because the batch's jurisdiction cadence is a deadline too
-- [Autoscaling](../patterns/distributed/routing/autoscaling.md) — worker pools scale on the age of their oldest pending task, never on processor load — these pools sit blocked on vendor calls, so CPU stays flat while the queue starves
+- [Autoscaling](../patterns/distributed/routing/autoscaling.md) — worker pools scale on the age of their oldest pending task, never on processor load — these pools sit blocked on vendor calls, so central processing unit (CPU) stays flat while the queue starves
 - [Backpressure](../patterns/concurrency/backpressure.md) — flow creation answers 429 with a Retry-After once the live class's oldest pending task passes its ceiling — the queue is load-levelling, not an unbounded promise
 - [Batching](../patterns/concurrency/batching.md) — the recurring re-screen sends ~500 persons per list-vendor call, and applies the response one member per transaction so a bad record dead-letters its own leg while the rest commit
 
 **Payloads & PII**
 
 - [Object Storage](../patterns/distributed/routing/object-storage.md) — ID photos go straight to an object store by presigned upload, referenced by key from a metadata row written before the upload
-- [Valet Key](../patterns/distributed/routing/valet-key.md) — the ID photo goes up on a presigned URL scoped to one object for fifteen minutes, so the API tier decides who may upload and then leaves the data path entirely
+- [Valet Key](../patterns/distributed/routing/valet-key.md) — the ID photo goes up on a presigned URL scoped to one object for fifteen minutes, so the application programming interface (API) tier decides who may upload and then leaves the data path entirely
 - [Claim Check](../patterns/messaging/claim-check.md) — workers pass the photo's storage key between steps, never the image bytes
-- [Secure Logger](../patterns/security/secure-logger.md) — log lines carry flow and person ids only — the encrypted vault is the single place raw PII exists, so logs never become a second copy of it
+- [Secure Logger](../patterns/security/secure-logger.md) — log lines carry flow and person ids only — the encrypted vault is the single place raw personally identifiable information (PII) exists, so logs never become a second copy of it
 
 **Tenancy & restraint**
 
 - [Secure Session Manager](../patterns/security/secure-session-manager.md) — the onboardee has no account: their session is the magic link's hash — server-side state, single-use, 48-hour expiry, revoked the moment a resend supersedes it
-- [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — per-client limits at the API edge keep one tenant's onboarding burst from consuming the shared vendor quota, and bound the invite-resend endpoint
+- [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — per-client limits at the application programming interface (API) edge keep one tenant's onboarding burst from consuming the shared vendor quota, and bound the invite-resend endpoint
 - [Keep It Simple (KISS)](../principles/kiss.md) — one Postgres and stateless workers carry a confirmed hundred onboardings a week; every rejected broker and engine is priced against that number, with named exits instead of early adoption
-- [Deployment Stamp](../patterns/distributed/routing/deployment-stamp.md) — residency is one full stack per region — gateway, API, workers, Postgres and standby, vault, object store — stamped from the same infrastructure-as-code so only jurisdiction config varies
+- [Deployment Stamp](../patterns/distributed/routing/deployment-stamp.md) — residency is one full stack per region — gateway, application programming interface (API), workers, Postgres and standby, vault, object store — stamped from the same infrastructure-as-code so only jurisdiction config varies
 
 **Alternative to**
 

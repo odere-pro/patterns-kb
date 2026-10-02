@@ -243,10 +243,15 @@ export class Configuration {
 - [Blue-Green Deployment](../routing/blue-green-deployment.md) — Snapshots and revision history let a bad setting roll back like a bad release
 - [Secure Session Manager](../../security/secure-session-manager.md) — Settings live here; credentials and keys live in a secret manager the store only references
 - [Microservices](../../architecture/microservices.md) — Many deployables multiply the places a setting can drift, which is what earns the store its own dependency
+- [Convention over Configuration](../../../principles/convention-over-configuration.md) — An external store holds the settings a convention cannot supply
 
 **Enables**
 
 - [Feature Flag](../routing/feature-flag.md) — Flags need exactly this: runtime change, one value across instances, an audited history
+
+**Exposed to**
+
+- [Lava Flow](../../../hazards/lava-flow.md) — Can fall into lava flow when stale keys and flags accumulate that no one dares remove
 
 **Demonstrated by**
 

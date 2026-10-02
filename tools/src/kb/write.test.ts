@@ -26,7 +26,7 @@ import { writeKbFixture } from '../lib/fixtures.js';
 import { deriveElements, parseKb, type KbElement } from '../lib/kb-attrs.js';
 import { renderRelations, type PageRef, type RelationsFile } from '../lib/render-relations.js';
 import { renderFluency, renderTour, type LearningPaths } from '../lib/render-tours.js';
-import { makeSandbox, type Sandbox } from '../lib/sandbox.js';
+import { makeSandbox, PERMISSIONS_ENFORCED, type Sandbox } from '../lib/sandbox.js';
 
 import { run } from './cli.js';
 import { Corpus, type Page } from './corpus.js';
@@ -349,7 +349,8 @@ describe('link', () => {
     expect(await fails('link', 'retry', 'combines-with', 'queue', '--group', ' ')).toBe('--group: cannot be empty');
   });
 
-  it('writes all of an edge or none of it: a file it cannot write leaves every file as it was', async () => {
+  // Root ignores file modes, so the permission failure this test needs cannot be produced.
+  it.skipIf(!PERMISSIONS_ENFORCED)('writes all of an edge or none of it: a file it cannot write leaves every file as it was', async () => {
     const before = sb.snapshot();
     const dir = path.join(root, 'docs/patterns/messaging');
     fs.chmodSync(dir, 0o555);
@@ -613,6 +614,10 @@ describe('explain', () => {
     const dumped = (await getJson('queue', '--block', 'explain')) as { items: { explain: { text: string; costs: unknown[] } } };
     expect(dumped.items.explain.text).toContain('A [breaker](../resilience/breaker.md) opens.');
     expect(dumped.items.explain.costs).toHaveLength(2);
+    // The dump feeds the writer: rewriting it leaves the page byte for byte as it was.
+    const written = read(QUEUE);
+    await ok('explain', 'queue', '--text', dumped.items.explain.text, '--example', 'One order.');
+    expect(read(QUEUE)).toBe(written);
     // A design may leave the list out: --costs [] drops what it had, and no flag keeps what it has.
     await ok('explain', 'shortener', '--text', text, '--costs', costs, '--example', 'One order.');
     expect(read(SHORTENER)).toContain('- **Latency.** One more hop.');

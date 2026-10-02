@@ -262,7 +262,7 @@ async function cleanupInbox(db: Db, retentionDays: number) {
 **Demonstrated by**
 
 - [WhatsApp](../../../designs/whatsapp.md) — a durable holding queue that outlives a disconnected consumer until it acks is the pattern's whole purpose
-- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a KYC flow deduping vendor callbacks on the sender's request id in the same transaction as the effect, closing the duplicate-that-arrives-first window
+- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a know your customer (KYC) flow deduping vendor callbacks on the sender's request id in the same transaction as the effect, closing the duplicate-that-arrives-first window
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — the receive-side guard generalised past callbacks: one row per batch member, so a redelivered batch applies only what it still owes
 
 <!-- relationships:end -->

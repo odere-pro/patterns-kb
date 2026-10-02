@@ -264,6 +264,30 @@ product feature. When unsure, omit — a three-item list of true things beats a 
 with one lie. Conceptual pages (GoF, functional) may skip the block entirely; a forced block is
 how fabrication happens.
 
+## Selfcheck
+
+**`selfcheck`** (patterns, hazards and principles; optional) — "Check yourself": three
+questions that test whether the reader took the page in, each answerable from the page and
+cited to it ([KB-016](../../docs/reference/page-rules.md#KB-016)). It sits just before
+`relationships`, after `fluency` on a pattern:
+
+```
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **Why trip on an error rate over a window rather than on one failure?**
+>
+> One slow call is noise, and a single trip would flap the breaker; the cost is thresholds you
+> must tune, see [con 1](circuit-breaker.md#tradeoffs-con-1).
+```
+
+Exactly three blockquotes and nothing else; each folds to a `<details>` on the site, its bold
+question the summary. The question is at most 25 words and ends in `?`; the answer is one or
+two sentences of at most 60 words with at least one link to `page.md#element-id` (find ids with
+`kb.mjs get <id> --block tradeoffs`; the link gate resolves them). Ask what tests
+understanding: a tradeoff, a when-not-to-use, a failure mode, never a definition the heading
+already gives. Write it by hand; `kb.mjs get <id> --block selfcheck` reads it.
+
 ## Depth
 
 Every page has ONE depth, for every reader: expert-grade, in plain words. There are no

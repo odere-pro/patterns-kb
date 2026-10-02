@@ -16,18 +16,17 @@ One logical change applied to two systems by two separate calls, with no transac
 ## What it is
 <!--meta block=description-->
 
-A **dual write** is one change applied to two systems through two independent calls: the database and the message broker, the database and the cache, the database and the search index. Each call has its own transaction and its own failure modes, and nothing joins them, so the pair has no atomicity. The code reads as one operation and behaves as two.
-
-Enumerate the branches and the hazard is obvious. If the row commits and the publish fails, the downstream service never learns about a change that really happened. If the publish succeeds and the transaction rolls back, downstream acts on something that never happened. If the process dies between the two, you get the first case with no error recorded anywhere. And if two writers race, both calls can succeed while arriving at the second system in the opposite order — leaving it permanently holding the older value.
-
-You recognize it as drift rather than as failure. A record created yesterday is missing from the search index, a cached price stays wrong until something evicts it, a downstream count no longer matches the source and nobody can say when it stopped. The error budget looks fine, because both calls returned successfully most of the time and the one that did not was retried by a client that had already moved on.
+A **dual write** applies one change to two systems through two independent calls, such as the database and a message broker, a cache or a search index. Nothing joins the calls, so a failure, crash or race between them leaves the two holding different versions. You see drift, not failure: a record missing from the search index, a cached price that stays wrong. Both calls usually succeed and nothing alerts.
 
 ## Explained
 <!--meta block=explain-->
 
-A dual write is one change sent to two systems with two separate calls, such as saving a row to a database and then publishing a message to a broker. Nothing joins the calls, so there is no all-or-nothing. If the row commits and the publish fails, or the process dies between them, the rest of the system never hears of a real change. If the publish succeeds and the row rolls back, others act on something that never happened. Both calls usually succeed, so nothing alerts, and the damage shows up as drift: a missing search entry, a wrong cached price. A retry around the second call closes one branch and opens another, because a repeat now arrives twice. Make it one write. Put the message in an outbox table in the same transaction as the row, and let a relay publish it afterwards. Or read the store's change log instead. The cost is a table, a relay to run, and duplicate deliveries, so give each message an ID and have receivers skip repeats. For a system you do not own, store your intent first and run a reconciliation job that compares both sides.
+A dual write is one change sent to two systems by two separate calls, such as saving a row and then publishing a message to a broker. Nothing joins the calls, so a crash or error between them leaves one side changed and the other not. If the publish succeeds and the row rolls back, others act on something that never happened. Both calls usually succeed, so nothing alerts, and the damage shows up as drift: a missing search entry, a wrong cached price. A retry around the second call closes one branch and opens another, because a repeat now arrives twice. Make it one write. Put the message in an [outbox](../patterns/distributed/coordination/outbox.md) table in the same transaction as the row and let a relay publish it afterwards, or read the store's [change log](../patterns/distributed/coordination/change-data-capture.md). For a system you do not own, store your intent first and run a reconciliation job that compares both sides.
 
-**Example.** An orders service saves an order to its database and then publishes an event for shipping. It handles 100,000 orders a day, and one in 10,000 fails between the two steps. That is 10 orders a day that are paid for and never shipped, 300 in a month, and no error shows in any dashboard. With an outbox, the order row and the event row commit in one transaction, so a crash loses neither. A relay publishes the event, possibly twice, and shipping skips an order ID it has seen. The price is one extra table, one relay process and an ID check in the consumer.
+- **Duplicate deliveries.** A relay can publish twice, so give each message an ID and have receivers skip repeats.
+- **More moving parts.** You run one extra table and a relay; alarm on rows that wait too long.
+
+**Example.** An orders service saves an order, then publishes an event for shipping. It handles 100,000 orders a day, and one in 10,000 fails between the two steps. That is 10 orders a day paid for and never shipped, 300 in a month, with no error in any dashboard. With an outbox, the order row and the event row commit in one transaction, so a crash loses neither. A relay publishes the event, possibly twice, and shipping skips an order ID it has seen.
 
 ## How it happens
 <!--meta block=causes-->
@@ -92,5 +91,10 @@ Where the second system is outside your reach — a payment provider, a partner 
 - [Sweeper](../patterns/distributed/coordination/sweeper.md) — A reconciliation sweep is the permanent repair loop when the second system cannot join the transaction
 - [Compensating Transaction](../patterns/distributed/resilience/compensating-transaction.md) — Where two systems cannot commit together, a recorded undo repairs the half that landed
 - [Two-Phase Commit](../patterns/distributed/coordination/two-phase-commit.md) — Two-phase commit is one cure for two stores drifting apart, at the cost of blocking.
+
+**Threatens**
+
+- [Cache-Aside](../patterns/caching/cache-aside.md) — The app updates the store and then the cache with separate calls, so a failed second call leaves a stale entry
+- [Write-Through](../patterns/caching/write-through.md) — The cache and store are written by two calls with no shared transaction
 
 <!-- relationships:end -->

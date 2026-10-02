@@ -194,12 +194,21 @@ function toShippingOrder(
 
 **Combines with**
 
-- [Anti-Corruption Layer](./acl.md) — An ACL guards a context's boundary
+- [Anti-Corruption Layer](./acl.md) — An anticorruption layer (ACL) guards a context's boundary
 - [Domain Event](./domain-event.md) — Contexts talk by publishing facts, not by sharing a model
 - [Partition Around Limits](../../principles/partition-around-limits.md) — A context boundary is a partition the domain hands you for free
 - [Design for Evolution](../../principles/design-for-evolution.md) — The context is the boundary that keeps a change local
 - [Functional Partitioning](../distributed/routing/functional-partitioning.md) — Giving each context its own store is how the model boundary becomes a physical one rather than a convention
 - [Conway's Law](../../principles/conways-law.md) — A context boundary holds only if the team boundary matches it.
+- [High Cohesion, Low Coupling](../../principles/high-cohesion-low-coupling.md) — A bounded context is high cohesion and low coupling drawn at the scale of a team
+
+**Alternative to**
+
+- [Canonical Data Model](../messaging/canonical-data-model.md) — Lets each context keep its own model and translate at the border
+
+**Generalizes**
+
+- [Context Map](./context-map.md) — A map of bounded contexts shows how each one relates to the others
 
 **Enables**
 

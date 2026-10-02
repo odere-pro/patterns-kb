@@ -16,11 +16,7 @@ A poison message is one message that fails its consumer every time it is tried, 
 ## What it is
 <!--meta block=description-->
 
-A **poison message** is a message whose content, not the moment, makes processing fail. A date in a format the parser rejects, a field the code assumes is present, a number that overflows, a payload that triggers a bug. The consumer throws, the broker sees no acknowledgement and delivers the message again, and the same failure repeats. A transient fault, such as a database that was down for a minute, goes away on retry. This one never will.
-
-You recognise it by what the queue does. One consumer shows the same exception with the same message id every few seconds. The queue's oldest-message age climbs while its depth barely moves. In a queue that preserves order, every message behind the poison one waits, which is [head-of-line blocking](./head-of-line-blocking.md). In a queue with many consumers, each delivery ties up a worker, so useful throughput drops while the error rate and the CPU bill climb.
-
-The defining trait is that retrying is the wrong response. A system built for transient faults, where "retry until it works" is the correct default, applies that default to a failure that is permanent, and the hazard is the missing rule that says when to stop. A message that crashes the consumer process outright, with an out-of-memory error or a segfault, is the worst form: the consumer dies before it can count the attempt, so the retry limit never fires.
+A poison message is a message whose content, not the moment, makes processing fail, such as a malformed date or a missing field. You see one message id fail with the same exception every few seconds, while the oldest-message age climbs and depth barely moves. The defining trait is that retrying is the wrong response: the fault is permanent, and nothing in the system says when to stop.
 
 ## Explained
 <!--meta block=explain-->
@@ -97,5 +93,8 @@ Prevent the next one. Validate against a schema where the message enters, so bad
 **Threatens**
 
 - [Message Queue](../patterns/messaging/message-queue.md) — Any queue with redelivery and no attempt limit can hold one.
+- [Competing Consumers](../patterns/messaging/competing-consumers.md) — Each redelivery ties up a worker and repeats the failure
+- [Sequential Convoy](../patterns/messaging/sequential-convoy.md) — Ordered processing makes one bad message block every message behind it
+- [Publish-Subscribe](../patterns/messaging/pubsub.md) — A subscriber that keeps failing on one event redelivers it without end
 
 <!-- relationships:end -->

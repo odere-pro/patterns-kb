@@ -1,7 +1,7 @@
 /**
- * The KB's own page rules, KB-001 to KB-015 of docs/reference/page-rules.md:
+ * The KB's own page rules, KB-001 to KB-016 of docs/reference/page-rules.md:
  * placement, slugs, block order per kind, the dialect's data layer, sketch
- * languages, the KB's frontmatter keys, the explain block and the description block. Findings are in
+ * languages, the KB's frontmatter keys, the explain block, the description block and the selfcheck block. Findings are in
  * the rule-id shape and carry the rule's anchor.
  */
 
@@ -142,11 +142,11 @@ describe('KB-003 · blocks per kind', () => {
     alpha(dup);
     const r = await sb.run(spec);
     expectFail(r, 'block "explain" appears twice — a block is one section');
-    expectFail(r, 'block "requirements" is not a pattern block — a pattern page carries description, explain, tradeoffs, usage, sketch, relationships');
+    expectFail(r, 'block "requirements" is not a pattern block — a pattern page carries description, explain, tradeoffs, usage, sketch, selfcheck, relationships');
 
     const swapped = KIND_BODY.replace(/## Trade-offs[^]*?(?=## Sketch)/, '').replace('## How it relates', `${/## Trade-offs[^]*?(?=## Sketch)/.exec(KIND_BODY)?.[0] ?? ''}## How it relates`);
     alpha(swapped);
-    expectFail(await sb.run(spec), 'block "tradeoffs" comes after "sketch" — a pattern page orders its blocks description, explain, tradeoffs, usage, sketch, relationships');
+    expectFail(await sb.run(spec), 'block "tradeoffs" comes after "sketch" — a pattern page orders its blocks description, explain, tradeoffs, usage, sketch, selfcheck, relationships');
   });
 
   it('fails a missing required block at the next block, or at the end, and lets an optional one go', async () => {
@@ -445,6 +445,38 @@ describe('KB-015 · the description block', () => {
     allow([PAGE_ALPHA]);
     alpha(withDescription(words(90)));
     expectFail(await sb.run(spec), 'the description is 90 words');
+  });
+});
+
+describe('KB-016 · the selfcheck block', () => {
+  const quote = (q: string, a: string): string => `> **${q}**\n>\n> ${a}`;
+  const GOOD = [
+    quote('Why does it pay off?', 'Because it is cheap, see [pro](alpha.md#tradeoffs-pro-1).'),
+    quote('When does it hurt?', 'Under load, see [con](alpha.md#tradeoffs-con-1).'),
+    quote('What does it replace?', 'A hand-rolled loop, see [sketch](alpha.md#sketch-1).'),
+  ];
+  const withSelfcheck = (quotes: readonly string[]): string =>
+    KIND_BODY.replace('## How it relates', `## Check yourself\n<!--meta block=selfcheck-->\n\n${quotes.join('\n\n')}\n\n## How it relates`);
+
+  it('passes three folded questions that each cite an element id', async () => {
+    alpha(withSelfcheck(GOOD));
+    expectPass(await sb.run(spec));
+  });
+
+  it('is optional', async () => {
+    expectPass(await sb.run(spec));
+  });
+
+  it('fails a block of two blockquotes, and one with a stray paragraph', async () => {
+    alpha(withSelfcheck(GOOD.slice(0, 2)));
+    expectFail(await sb.run(spec), `KB-016 ${PAGE_ALPHA}:`);
+    alpha(withSelfcheck([...GOOD, 'A stray paragraph.']));
+    expectFail(await sb.run(spec), 'the selfcheck block holds a paragraph');
+  });
+
+  it('fails an answer with no cited element id', async () => {
+    alpha(withSelfcheck([GOOD[0] as string, GOOD[1] as string, quote('What does it replace?', 'A loop, see [page](alpha.md).')]));
+    expectFail(await sb.run(spec), 'check 3: the answer cites no element');
   });
 });
 

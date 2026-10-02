@@ -16,9 +16,7 @@ A system designed to scale out grows by adding interchangeable instances rather 
 ## What it says
 <!--meta block=description-->
 
-Add capacity by adding instances, and write the code so that adding one changes nothing else. The alternative — a bigger machine — is simpler, needs no agreement between parts and is the right answer far more often than the internet suggests, right up until you reach the largest machine on offer or need to survive losing it. This is not an instruction to run everything on a crowd of tiny nodes. It is an instruction to keep the option open, because the design decisions that make it possible cost nothing before launch and cost a migration afterwards.
-
-What the principle actually demands is two properties of your code, not of your infrastructure: any instance can serve any request, and any instance can disappear mid-flight without anyone noticing. Everything else — the balancer in front, the automatic capacity, the deploy that replaces machines one at a time — is a consequence of holding those two and is unavailable without them. That is why this is a design constraint rather than an operations task. Nobody can add it from outside the process once a user's cart lives in one process's heap.
+Add capacity by adding instances, and write the code so that adding one changes nothing else. A bigger machine is simpler and is often the right answer, until you hit the largest one or must survive losing it. The principle demands two properties of your code: any instance can serve any request, and any instance can vanish mid-flight unnoticed. They cost nothing before launch and a migration afterwards.
 
 ## Explained
 <!--meta block=explain-->

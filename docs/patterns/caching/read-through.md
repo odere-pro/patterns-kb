@@ -233,6 +233,10 @@ const u = await users.get("42");
 - [Cache Stampede](../../hazards/cache-stampede.md) — One load path per key lets the cache coalesce concurrent misses into a single fetch
 - [No Caching](../../hazards/no-caching.md) — Removes the repeated source read without every caller having to implement the fill
 
+**Exposed to**
+
+- [Stale Cache](../../hazards/stale-cache.md) — Can fall into stale cache when a cached entry has no knowledge of writes made elsewhere
+
 **Demonstrated by**
 
 - [Ticketmaster](../../designs/ticketmaster.md) — the hot event page is the archetypal read-through workload — high-read, low-change data fronted by a cache keyed by id

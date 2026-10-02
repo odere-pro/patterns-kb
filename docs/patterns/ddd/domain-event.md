@@ -181,7 +181,7 @@ class Order {
 
 **Combines with**
 
-- [Event-Driven Architecture](../architecture/eda.md) — Domain events are the currency of EDA
+- [Event-Driven Architecture](../architecture/eda.md) — Domain events are the currency of event-driven architecture (EDA)
 - [Saga](../distributed/coordination/saga.md) — Choreographed sagas react to domain events
 - [Aggregate](./aggregate.md) — Aggregates emit domain events on change
 - [Event Sourcing](../architecture/event-sourcing.md) — Persist the events the domain emits

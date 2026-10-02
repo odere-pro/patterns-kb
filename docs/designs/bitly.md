@@ -17,16 +17,16 @@ A URL shortener maps a long link to a short code and sends everyone who follows 
 ## Understanding the problem
 <!--meta block=description-->
 
-A URL shortener accepts a long URL and returns a short one — `short.ly/abc123` — that redirects to the original. The product is two endpoints wide. What makes it a design problem is the life of a single link: it is written once, in a fraction of a second, then followed by strangers for years, from every continent, with no warning about which link goes viral.
-
-The naive build is a two-column table keyed by a hash of the long URL. It survives a demo and breaks in four places under real traffic. Two URLs can hash to the same short prefix, and one visitor lands on someone else's destination. A billion-row table answering lookups from disk cannot hold a 100&nbsp;ms budget for a reader on another continent. A code short enough to type is short enough to guess, so a script can walk the corpus and read links it was never given. And one link in a television advert puts a five-figure per-second load on a single row.
-
-Those four breakages are the design. Generate codes that cannot collide, answer a click without touching a disk, keep the code space too sparse to walk, and survive the one link everybody clicks at once. This is also the entry point for the read-heavy playbook covered in depth by the [Scaling Reads](../themes/scaling-reads.md) theme.
+A URL shortener accepts a long URL and returns a short one that redirects to the original. The product is two endpoints wide, but one link is written once and then followed by strangers for years, with no warning of which goes viral. This page walks through collision-free codes, redirects served without a disk read, codes that cannot be guessed, and surviving one link everybody clicks at once.
 
 ## Explained
 <!--meta block=explain-->
 
-A link shortener turns a counter value into a short code, stores the code and its long address once, and then answers every click from memory or from a cache near the reader. Links are written rarely and read constantly, roughly a thousand reads for each write, so spend your effort on reads. Choose one database with a cache in front over splitting the data across many servers when the data is small: 1 billion links at about 500 bytes each is 500 GB, and writes run at about 6 a second, so the read rate forces the cache, not the size. It costs three things. Counter values are walkable, so scramble each one with a keyed one-to-one transform before encoding, and use 7 characters so a random guess rarely hits a live link. A viral code makes one expired cache entry send every reader to the database at once, so give entries long lifetimes, serve a stale answer while one request refreshes it, and let only one fetch per code run. And one write path means no new links while it fails over, so keep a warm standby; clicks never depend on it.
+A link shortener turns a counter value into a short code, stores the code and its long address once, and then answers every click from memory or from a cache near the reader. Links are written rarely and read constantly, roughly a thousand reads for each write, so spend your effort on reads. Choose one database with a cache in front over splitting the data across many servers when the data is small: 1 billion links at about 500 bytes each is 500 GB, and writes run at about 6 a second, so the read rate forces the cache, not the size.
+
+- **Walkable codes.** Counter values can be guessed in order, so scramble each with a keyed one-to-one transform and use 7 characters.
+- **Viral stampede.** One expired cache entry for a viral code sends every reader to the database, so serve stale while one request refreshes it.
+- **One write path.** No new links while it fails over, so keep a warm standby; clicks never depend on it.
 
 **Example.** A link in a television ad draws 600,000 redirects a second, against a sustained 17,000 for the whole service. The redirect carries max-age=300, so each edge location asks the origin for that code at most once every 300 s, and 600,000 clicks a second land on the edge, not on your servers. The cost is that if you delete the link, it can keep redirecting for up to 300 s. A guesser does worse: with 6 characters, 1 billion live codes fill 1.8% of the space, so 1 guess in 57 hits a link; with 7 characters it is 1 in 3,500.
 
@@ -50,6 +50,7 @@ Out of scope: accounts and click analytics — named explicitly so the design st
 - **Availability** — 99.99%, favoured over strict consistency (a stale mapping is harmless; a dropped redirect is not).
 - **Unguessability** — holding one code must not hand you the next, and the space must be sparse enough that guessing is not worth the bandwidth.
 - **Scale** — 1B stored URLs, 100M daily actives, with reads dwarfing writes by roughly 1000:1.
+- **Hot links** — one link in a television advert can draw a five-figure load per second; it must not saturate a single row.
 
 ## Right-sizing
 <!--meta block=sizing-->
@@ -385,6 +386,6 @@ flowchart TB
 - [Batching](../patterns/concurrency/batching.md) — Write instances claim counter values in blocks of 1000, cutting allocator round-trips 1000×
 - [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — Per-source limits on the miss rate at the edge stop a scanner turning guessed codes into store reads
 - [Distributed Cache](../patterns/caching/distributed-cache.md) — Hot mappings live in a shared cache tier, so every Read Service instance sees the same entries and one fill serves them all
-- [Immutability](../patterns/functional/immutability.md) — A short code never changes its long URL, so cached copies need only a TTL and no invalidation protocol
+- [Immutability](../patterns/functional/immutability.md) — A short code never changes its long URL, so cached copies need only a time to live (TTL) and no invalidation protocol
 
 <!-- relationships:end -->

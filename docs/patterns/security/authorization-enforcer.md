@@ -16,16 +16,17 @@ Centralizes every check of what a role is allowed to do into one enforcement poi
 ## What it is
 <!--meta block=description-->
 
-An **authorization enforcer** is the single choke point every access decision passes through: given a subject, an action, and a resource, it answers one question — is this allowed? — and the rest of the system defers to that answer instead of deciding for itself. In its most common form, **role-based access control (RBAC)**, the subject's identity is first mapped to one or more roles, and each role carries a fixed set of permissions; the enforcer checks the requested action against the roles held, never against the user directly.
-
-The force it resolves is **authorization sprawl**. Left unchecked, "can this user do this?" gets copy-pasted into controllers, services, templates, and background jobs, each with its own slightly different logic. One missed check is a privilege-escalation bug waiting to be found; one inconsistent check is a silent hole nobody notices until an audit or an incident does it for them. Centralizing the decision means there is exactly one place to get it right, one place to test, and one place to update when a role's permissions change.
-
-The enforcer sits at a fixed point in the request path — middleware, a decorator, a policy call before the handler runs — deliberately decoupled from where the role-to-permission mapping actually lives. That mapping can sit in code, in a database table, or behind an external policy service, and swapping the source never touches a call site.
+An authorization enforcer is the single choke point every access decision passes through: given a subject, an action and a resource, it answers whether the action is allowed. It replaces permission checks copy-pasted into controllers, services and jobs, where one missed check is a privilege-escalation bug. It sits at a fixed point in the request path, decoupled from where the role-to-permission mapping lives, so swapping that source never touches a call site.
 
 ## Explained
 <!--meta block=explain-->
 
-An authorization enforcer is one place that answers the question can this person do this action on this thing, and every other part of the system accepts its answer. Without it, the check gets copied into controllers, services and background jobs, each slightly different, and one missing check lets an ordinary user do an administrator's task. Choose it over checks written inside each handler when permissions change often or must be audited, because you then change a role once and it takes effect everywhere, and you read one policy to see who can do what. It costs four things. A role for every edge case multiplies roles until they are per-user exceptions, so keep roles few and coarse. Coarse roles over-grant, so give the enforcer the resource as well as the role, for rules like only the owner may edit. It is a hot path and one point of failure, so keep decisions fast and make a failure deny. And rules about time or location need extra inputs, so pass them in deliberately.
+An authorization enforcer is one place that answers the question can this person do this action on this thing, and every other part of the system accepts its answer. Without it, the check gets copied into controllers, services and background jobs, each slightly different, and one missing check lets an ordinary user do an administrator's task. Choose it over checks written inside each handler when permissions change often or must be audited, because you then change a role once and it takes effect everywhere, and you read one policy to see who can do what.
+
+- **Role explosion.** A role per edge case becomes per-user exceptions; keep roles few and coarse.
+- **Over-granting.** Coarse roles grant too much; pass the resource to the enforcer for rules like owner-only edit.
+- **Hot path.** Every request waits on it and it is one point of failure; keep decisions fast and make failure deny.
+- **Context rules.** Rules about time or location need extra inputs; pass them in deliberately.
 
 **Example.** A document service has viewer, editor and admin roles, and DELETE /documents/42 needs admin. A viewer hides nothing by removing the delete button: they send the request by hand with curl. The enforcer looks up viewer, finds no delete permission and answers 403 before the handler runs. Without it, one of 30 handlers that forgot its check would delete the document. The cost shows with the rule editors edit only their own documents. That is not a role, so adding one per team gives 200 roles for 200 teams. Instead the enforcer receives the document owner with each call and compares it to the caller.
 
@@ -199,7 +200,7 @@ await documents.delete(docId);
 
 **Implemented by**
 
-- [Identity & Access](../../capabilities/identity.md) — The cloud's IAM engine is this, applied to every resource.
+- [Identity & Access](../../capabilities/identity.md) — The cloud's identity and access management (IAM) engine is this, applied to every resource.
 - [Resource Organisation](../../capabilities/resources.md) — Service control policies, Azure Policy and Organization Policy are decision points above the account, consulted on every control-plane call.
 
 <!-- relationships:end -->

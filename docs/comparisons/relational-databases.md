@@ -16,16 +16,15 @@ The SQL engines you would actually pick between — PostgreSQL, MySQL, MariaDB, 
 ## What this compares
 <!--meta block=description-->
 
-Every engine here gives you tables, joins and a transaction that either commits whole or not at all. The choice between them is not about SQL. It is about the license you inherit, what happens when one machine stops being enough, and who will run it for you — the [managed database capability](../capabilities/databases.md) covers what the cloud sells; this page compares the engines underneath.
-
-Four of the five are servers you reach over a socket. SQLite is not: it runs inside your process and keeps the database in one file. That single difference removes the network hop, the failover plan and the backup daemon from your design, and charges you one writer at a time for it.
-
-The other split is how each engine grows past one node. PostgreSQL, MySQL and MariaDB take every write on one primary and scale reads with copies, so growing the write path is work you do. CockroachDB puts consensus under each write instead: any node accepts one, and you pay in commit latency.
-
+Every engine here gives you tables, joins and a transaction that either commits whole or not at all, so the choice is not about SQL. It is about the license you inherit, what happens when one machine stops being enough, and who runs it. SQLite runs inside your process in one file, trading the network hop for one writer at a time. The [managed database capability](../capabilities/databases.md) covers what the cloud sells.
 ## Explained
 <!--meta block=explain-->
 
-A relational database gives you tables, joins and a transaction that either commits whole or not at all. The engines differ in license, in how they grow past one machine, and in who runs them. Default to PostgreSQL and make yourself argue for leaving it: its license constrains nothing, every major cloud rents it, and your next need, such as map queries or vector search, often arrives as an extension rather than a second system. Choose MySQL when your team and runbooks already know it. Choose SQLite, a database that is a file inside your own process, when the data fits on one machine with one writer, since it removes the server, the failover plan and the backups. Choose CockroachDB only when you need writes in more than one region with full SQL, and try cheaper answers first. Replicas add read capacity but lag the primary, so send a user's reads to the primary briefly after that user writes. Sharding, splitting data across machines by key, adds write capacity but makes you route every query by key. Distributed SQL does both for you and charges commit latency plus a license.
+A relational database gives you tables, joins and a transaction that either commits whole or not at all. The engines differ in license, in how they grow past one machine, and in who runs them. Default to PostgreSQL and make yourself argue for leaving it: its license constrains nothing, every major cloud rents it, and your next need, such as map queries or vector search, often arrives as an extension rather than a second system. Choose MySQL when your team and runbooks already know it. Choose SQLite, a database that is a file inside your own process, when the data fits on one machine with one writer, since it removes the server, the failover plan and the backups. Choose CockroachDB only when you need writes in more than one region with full SQL, and try cheaper answers first.
+
+- **Replicas lag the primary** They add read capacity, so send a user's reads to the primary briefly after that user writes.
+- **Sharding makes you route every query by key** It adds write capacity by splitting data across machines, and the routing is yours to build.
+- **Distributed SQL charges commit latency plus a license** It does the splitting for you, so try the cheaper answers first.
 
 **Example.** A PostgreSQL primary takes 2,000 writes a second and can handle 5,000, but reads are 20,000 a second, so you add 2 replicas. They lag the primary by about 1 second. A user saves a profile, the page reloads from a replica, and the old profile shows. The fix is to read from the primary for 5 seconds after that user's write. The cost is that those reads, a small share of 20,000, load the primary, which you must leave headroom for.
 

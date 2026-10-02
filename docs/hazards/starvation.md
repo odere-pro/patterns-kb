@@ -16,18 +16,17 @@ A fairness failure: one class of work is perpetually overtaken and never reaches
 ## What it is
 <!--meta block=description-->
 
-Starvation is work that never gets its turn. A share of the requests, threads or messages is perpetually overtaken by others, so it waits without bound while everything around it is served normally. Nothing has failed and nothing is blocked — the victim simply never reaches the front.
-
-That is what separates it from [deadlock](./deadlock.md), and the difference decides how you find it. Under deadlock nobody progresses, so the freeze is its own alarm. Under starvation the system progresses fine: throughput sits at target, the workers stay busy, and one class of work never completes.
-
-It is not a [race condition](./race-condition.md) either. A race does the wrong thing quickly; starvation does the right thing for everyone except one class, indefinitely. What is broken is fairness, not correctness — the allocation policy is doing exactly what you configured, and what you configured put no floor under anybody.
+Starvation is work that never gets its turn. One class of requests, threads or messages is perpetually overtaken, so it waits without bound while everything else is served normally. It differs from [deadlock](./deadlock.md), where nobody progresses and the freeze is its own alarm: here throughput is on target and no error appears. It is also not a [race condition](./race-condition.md); the allocation policy works as configured and puts no floor under anyone.
 
 ## Explained
 <!--meta block=explain-->
 
-Starvation is work that never gets its turn. One class of requests, threads or messages is always overtaken by others, so it waits without limit while everything else is served normally. Nothing has failed and nothing is stuck. That separates it from deadlock, where nobody moves and the freeze is its own alarm. Under starvation throughput is on target, the workers are busy, no errors appear, and one class never finishes. The cause is a policy that decides who goes next with no floor under anyone: a preferred class that arrives as fast as the server drains it means the moment the preferred class is idle never comes. Averages hide it because the victim is a minority, so watch per-class tail latency and the age of the oldest queued item. Fix it by giving the victim a guarantee, and expect to pay. Aging raises an item's priority as it waits, but lets aged low-priority work delay urgent work. A reserved share of workers bounds the wait but idles when its class is quiet. A timed wait does not serve the victim but turns silent starvation into a visible error.
+Starvation is work that never gets its turn. One class of requests, threads or messages is always overtaken by others, so it waits without limit while everything else is served normally. Nothing has failed and nothing is stuck, which separates it from deadlock, where nobody moves and the freeze is its own alarm. Under starvation throughput is on target, the workers are busy, no errors appear, and one class never finishes. The cause is a policy that decides who goes next with no floor under anyone: if the preferred class arrives as fast as the server drains it, the moment it is idle never comes. Averages hide it because the victim is a minority, so watch per-class tail latency and the age of the oldest queued item. Fix it by giving the victim a guarantee through [scheduling](../patterns/concurrency/scheduling.md): aging, which raises an item's priority as it waits, or a reserved share of workers.
 
-**Example.** A queue has 4 workers that each handle 25 jobs a second, so 100 a second. Urgent jobs arrive at 100 a second and report jobs at 5 a second, served only when no urgent job waits. The reports never run, and after 10 minutes 3,000 are waiting while every dashboard is green. Aging raises a report one level every 10 s, so after 20 s it ties with urgent jobs and runs. The cost shows at once: demand is now 105 against 100, so the urgent backlog grows by 5 a second, about 1 s of delay every 20 s, until you add capacity.
+- **Aging delays urgent work.** Aged low-priority jobs compete with urgent ones, so urgent latency rises until you add capacity.
+- **Reserved share idles.** A slice held for one class bounds its wait but sits unused when that class is quiet.
+
+**Example.** A queue has 4 workers that each handle 25 jobs a second, so 100 a second. Urgent jobs arrive at 100 a second and report jobs at 5 a second, served only when no urgent job waits. The reports never run, and after 10 minutes 3,000 are waiting while every dashboard is green. Aging raises a report one level every 10 s, so after 20 s it ties with urgent jobs and runs. Demand is now 105 against 100, so the urgent backlog grows by 5 a second until you add capacity.
 
 ## How it happens
 <!--meta block=causes-->
@@ -90,7 +89,7 @@ Instrument before you tune. Per-class tail latency and the age of the oldest que
 **Often confused with**
 
 - [Deadlock](./deadlock.md) — Under deadlock nobody progresses; under starvation the system progresses fine while one victim never does
-- [Priority Inversion](./priority-inversion.md) — Priority inversion is one way a task is starved of CPU time.
+- [Priority Inversion](./priority-inversion.md) — Priority inversion is one way a task is starved of central processing unit (CPU) time.
 - [Head-of-Line Blocking](./head-of-line-blocking.md) — Starvation is policy-driven and blocking is order-driven.
 
 **Mitigated by**
@@ -99,5 +98,10 @@ Instrument before you tune. Per-class tail latency and the age of the oldest que
 - [Timeout / Deadline](../patterns/distributed/resilience/timeout-deadline.md) — Cap the wait so a starved caller fails loudly instead of hanging forever
 - [Scheduling](../patterns/concurrency/scheduling.md) — Raise priority with waiting time, or reserve a slice of capacity for each class
 - [Partition Around Limits](../principles/partition-around-limits.md) — Give each tenant or class its own bounded share instead of a first-come claim on one pool
+
+**Threatens**
+
+- [Priority Queue](../patterns/messaging/priority-queue.md) — Low-priority items are never served while high-priority work keeps arriving
+- [Read-Write Lock](../patterns/concurrency/rw-lock.md) — A stream of readers can keep a writer out indefinitely
 
 <!-- relationships:end -->

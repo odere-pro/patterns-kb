@@ -16,9 +16,7 @@ High-level policy should not depend on low-level detail; both should depend on a
 ## What it says
 <!--meta block=description-->
 
-The D in SOLID, stated by Robert C. Martin in two clauses: “High-level modules should not depend on low-level modules; both should depend on abstractions.” And: “Abstractions should not depend on details; details should depend on abstractions.”
-
-The word that matters is inversion. Left to nature, the module holding the important policy calls down into the concrete gadgets that do the work, and so depends on them. DIP turns that arrow around. The policy declares an abstraction — an interface — describing the service it needs; the low-level detail implements that interface. The interface belongs to the high-level module, so both sides now point at something the policy owns, and it is the detail that has been made to conform.
+The D in SOLID, stated by Robert C. Martin: high-level modules should not depend on low-level modules, and both should depend on abstractions; abstractions should not depend on details. The word that matters is inversion. The policy declares an interface for the service it needs and owns it, and the low-level detail implements it, so the dependency arrow points at something the policy controls.
 
 ## Explained
 <!--meta block=explain-->
@@ -46,6 +44,25 @@ Make the details reach up to the policy rather than the reverse:
 
 The rule of thumb: source-code dependencies should point against the flow of control, toward the stable policy — not with it, toward the detail.
 
+## In code
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — policy built on a concrete client, and policy owning the interface"
+// Before: the policy constructs the detail and depends on it.
+class Checkout {
+  private gateway = new StripeClient();               // concrete, fixed inside
+  pay(cents: number) { return this.gateway.charge(cents); }
+}
+
+// After: the policy owns the interface; the detail conforms to it.
+interface PaymentGateway { charge(cents: number): Promise<void> }
+class Checkout2 {
+  constructor(private gateway: PaymentGateway) {}     // injected at the composition root
+  pay(cents: number) { return this.gateway.charge(cents); }
+}
+class StripeGateway implements PaymentGateway { async charge(cents: number) { /* call the API */ } }
+```
+
 ## Taken too far
 <!--meta block=overreach-->
 
@@ -66,6 +83,7 @@ Invert across the seams that will actually move — the volatile boundaries, the
 - [Open/Closed Principle](./open-closed.md) — Depending on an abstraction is how a module stays closed to edits yet open to new implementations.
 - [Dependency Injection](../patterns/gof/extra/dependency-injection.md) — Injection is how the abstractions high-level code depends on actually get supplied.
 - [Hexagonal](../patterns/architecture/hexagonal.md) — Ports are the abstractions the core owns; adapters are the details that conform to them.
+- [High Cohesion, Low Coupling](./high-cohesion-low-coupling.md) — Depending on an abstraction lowers the coupling between modules
 
 **Prevents**
 
@@ -74,6 +92,6 @@ Invert across the seams that will actually move — the volatile boundaries, the
 **Demonstrated by**
 
 - [Logging Service](../designs/logging-service.md) — the high-level workflow class binding to abstractions rather than concretes is dependency inversion in practice
-- [Inventory Management](../designs/inventory-management.md) — the high-level warehouse and the low-level notifier both depend on an abstraction, which is exactly what DIP prescribes
+- [Inventory Management](../designs/inventory-management.md) — the high-level warehouse and the low-level notifier both depend on an abstraction, which is exactly what dependency inversion principle (DIP) prescribes
 
 <!-- relationships:end -->

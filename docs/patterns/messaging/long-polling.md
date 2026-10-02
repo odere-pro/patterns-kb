@@ -98,11 +98,6 @@ The timeout is not a failure. It keeps the request under the idle limit of every
 - **Gaps can lose events** — between a response and the next request nothing is listening, so you need a cursor and a retained window.
 - **Reconnect storms** — when a server restarts, every client re-asks at once, so you add jitter to the retry delay.
 
-### Cons
-<!--meta polarity=con-->
-
-- TODO.
-
 ## When to use it
 <!--meta block=usage-->
 
@@ -224,11 +219,15 @@ async function poll(url: string, after = 0) {
 
 **Alternative to**
 
-- [Server-Sent Events](./server-sent-events.md) — Both push news over HTTP; long polling answers once per request, SSE streams many events down one response.
+- [Server-Sent Events](./server-sent-events.md) — Both push news over HTTP; long polling answers once per request, server-sent events (SSE) streams many events down one response.
 - [WebSocket](./websocket.md) — Use it when only plain request and response gets through, at a request per message.
 
 **Variant of**
 
 - [Asynchronous Request-Reply](../distributed/routing/async-request-reply.md) — The same ask-and-wait shape, repeated for a stream of events instead of one result.
+
+**Often confused with**
+
+- [Polling Consumer](./polling-consumer.md) — The server holds one request open until data arrives, to avoid empty replies
 
 <!-- relationships:end -->

@@ -224,11 +224,11 @@ class RefreshAheadCache<K, V> {
 
 **Prevents**
 
-- [Cache Stampede](../../hazards/cache-stampede.md) — Reload the hot key before its TTL expires, so it never goes cold under load
+- [Cache Stampede](../../hazards/cache-stampede.md) — Reload the hot key before its time to live (TTL) expires, so it never goes cold under load
 - [Stale Cache](../../hazards/stale-cache.md) — Background refresh keeps the entry close to the source, bounding the stale window
 
 **Demonstrated by**
 
-- [Top-K](../../designs/top-k.md) — the leaderboard stays permanently warm by proactively refreshing on a cadence ahead of TTL expiry, avoiding cold-miss stampedes
+- [Top-K](../../designs/top-k.md) — the leaderboard stays permanently warm by proactively refreshing on a cadence ahead of time to live (TTL) expiry, avoiding cold-miss stampedes
 
 <!-- relationships:end -->

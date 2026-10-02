@@ -16,16 +16,16 @@ Wraps a class you can't change in the interface a client already speaks — so t
 ## What it is
 <!--meta block=description-->
 
-An **adapter** is a class that implements the interface a client expects — the target — and forwards each call to an object with a different, incompatible interface — the adaptee. The client talks only to the target; the adapter quietly translates method names, argument shapes, and return values behind it.
-
-The force it resolves is a **fixed interface mismatch**. You have a class that does exactly what you need — a third-party SDK, a legacy module, a library whose signatures don't line up with your code — but you can't reshape it. The client is written against a stable interface you don't want to churn, and the adaptee is owned by someone else. Neither side can move toward the other, so a piece in the middle does the reconciling.
-
-The common form is the object adapter: it holds a reference to the adaptee and delegates through composition, which lets one adapter wrap any subtype. A class adapter instead inherits from both, but that needs multiple inheritance and couples adapter to a concrete adaptee. Composition is the pragmatic default.
+An adapter is a class that implements the interface a client expects and forwards each call to an object with an incompatible interface, such as a vendor SDK or legacy module. It translates names, argument shapes and return values behind the interface, so you reconcile two sides that neither of you can change.
 
 ## Explained
 <!--meta block=explain-->
 
-An adapter is a small class that offers the interface your code expects and translates each call into calls on an object with a different interface, such as a vendor SDK. Your code talks to the adapter only, so the vendor's names and shapes stop at one file. Choose it when you cannot change either side and the mismatch is fixed. If you own both sides, aligning the signatures once is cheaper than keeping a translator forever. The first cost is lost meaning: where the two models differ in more than spelling, such as how errors, timeouts and missing values are reported, the translation is lossy behind a tidy method. Write down the mapping for each of these and test it. The second is sprawl: one adapter per vendor is a boundary, one per class is a second codebase, so keep each thin. A fat adapter also collects business rules, which belong in your own code.
+An adapter is a small class that offers the interface your code expects and translates each call into calls on an object with a different interface, such as a vendor SDK. Your code talks to the adapter only, so the vendor's names and shapes stop at one file. Choose it when you cannot change either side and the mismatch is fixed. If you own both sides, aligning the signatures once is cheaper than keeping a translator forever.
+
+- **Lost meaning.** Where models differ in errors, timeouts or missing values, translation is lossy behind a tidy method. Write down each mapping and test it.
+- **Sprawl.** One adapter per vendor is a boundary, one per class is a second codebase, so keep each thin.
+- **Fat adapters.** An adapter collects business rules, which belong in your own code.
 
 **Example.** Your app calls pay(amountCents). A vendor SDK wants charge(dollars, currency) and throws an exception on a decline, while your code expects a result with a failure flag. The adapter converts 4,250 cents to 42.50 dollars, adds a currency, and catches the exception into a failed result. A first version divides by 100 using integer division, so 4,250 cents becomes 42 dollars and 50 cents go missing. A test with 4,250 cents catches it. The cost shows later: when the vendor adds a timeout error, the adapter must map it too, or callers see an exception they have never handled.
 
@@ -199,6 +199,6 @@ const { reference } = await processor.pay(2500);
 
 **Prevents**
 
-- [Static Cling](../../../hazards/static-cling.md) — Wrapping a static third-party API in an instance gives it the seam it lacked
+- [Static Cling](../../../hazards/static-cling.md) — Wrapping a static third-party application programming interface (API) in an instance gives it the seam it lacked
 
 <!-- relationships:end -->

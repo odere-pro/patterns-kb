@@ -16,7 +16,7 @@ A metrics platform collects performance signals — CPU, memory, latency, custom
 ## Understanding the problem
 <!--meta block=description-->
 
-This is the engine behind Datadog, Prometheus with Grafana, or CloudWatch: the thing operators stare at during an incident. Services emit numeric measurements over time; the platform ingests them, keeps them as time-series, lets people slice and chart them, and evaluates alert rules that fire a notification when something crosses a line. Everything downstream is decided by one asymmetry — writes arrive constantly and in enormous volume, while reads are bursty, human-driven, and can be brutally expensive. The interesting engineering is absorbing the write flood cheaply, then answering slow questions over a lot of history fast. Log search, distributed tracing, and ML anomaly detection are explicitly out of scope.
+A monitoring platform, the engine behind Datadog, Prometheus with Grafana or CloudWatch, ingests numeric measurements from services, stores them as time-series, charts them and fires alerts. Writes arrive constantly in huge volume, while reads are bursty and expensive. The page walks through absorbing the write flood cheaply and answering slow questions over long history fast.
 
 ## Explained
 <!--meta block=explain-->
@@ -198,7 +198,7 @@ flowchart TB
 
 - [Message Queue](../patterns/messaging/message-queue.md) — Kafka sits between the ingestion service and the store, decoupling them so a spike is buffered rather than dropped
 - [Queue-Based Load Leveling](../patterns/distributed/resilience/load-leveling.md) — the queue smooths a bursty 5M-point/second firehose into a steady rate the write-limited store can sustain
-- [Batching](../patterns/concurrency/batching.md) — host agents batch and pre-aggregate points locally before shipping, and the ingest API itself is batched
+- [Batching](../patterns/concurrency/batching.md) — host agents batch and pre-aggregate points locally before shipping, and the ingest application programming interface (API) itself is batched
 - [CQRS](../patterns/architecture/cqrs.md) — the read (query) path is split from the write (ingest) path so each scales, tunes, and caches independently
 - [LSM Tree](../patterns/distributed/coordination/lsm-tree.md) — the time-series store's log-structured backbone turns the incoming firehose into cheap sequential appends
 - [Materialized View](../patterns/distributed/coordination/materialized-view.md) — metrics are pre-aggregated into multi-resolution rollups so a month-long chart reads buckets, not billions of raw samples

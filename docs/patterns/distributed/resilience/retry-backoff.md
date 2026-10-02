@@ -271,12 +271,17 @@ function isTransient(err: unknown): boolean {
 - [Poison Message](../../../hazards/poison-message.md) — A retry limit is what keeps a permanent failure from becoming a poison message.
 - [Metastable Failure](../../../hazards/metastable-failure.md) — Bounded, jittered retries stop a failure from multiplying into a sustained overload.
 
+**Exposed to**
+
+- [Cascading Failure](../../../hazards/cascading-failure.md) — Can fall into cascading failure when retries add load to an already saturated dependency
+- [Thundering Herd](../../../hazards/thundering-herd.md) — Can fall into thundering herd when clients that fail together retry together unless the delay is jittered
+
 **Demonstrated by**
 
 - [Web Crawler](../../../designs/web-crawler.md) — transient fetch failures are retried with growing delays instead of hammering a struggling origin
 - [Payment System](../../../designs/payment-system.md) — unreliable server-to-server delivery is a textbook case for capped exponential retry
 - [Job Scheduler](../../../designs/job-scheduler.md) — transient job failures are absorbed by spacing retries out exponentially instead of hammering
-- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — backing off vendor calls and webhook delivery attempts in a persona-verification saga before giving up to a DLQ
+- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — backing off vendor calls and webhook delivery attempts in a persona-verification saga before giving up to a dead-letter queue (DLQ)
 - [Gopuff](../../../designs/gopuff.md) — bounding the replay is what stops contention on a promoted item becoming a retry storm
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — backoff with jitter argued from the recovery it belongs to, where the alternative is a synchronised stampede at the end of a six-hour outage
 

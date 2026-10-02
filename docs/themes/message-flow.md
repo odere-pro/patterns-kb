@@ -14,9 +14,7 @@ Once systems talk through messages, each message still has to reach the right pl
 ## The question
 <!--meta block=description-->
 
-A queue moves a message from one producer to one consumer. Real integrations need more: the message must go to the right queue, perhaps to several, its fields may not match what the receiver expects, a large payload may not fit, and two halves may sit on different brokers. Each of those is a step you add on the channel, leaving producer and consumer unchanged.
-
-The vocabulary the page uses is small. A **channel** is the pipe messages travel through. A **filter** is a step that reads a message from one channel and writes to another. A **correlation identifier** is a value shared by every message belonging to one set, so they can be matched up later. A **payload** is the body of the message. A **broker** is the server that holds the channels.
+A queue moves a message from one producer to one consumer. Real integrations need more: routing to the right queue or several, translating mismatched fields, handling oversized payloads, bridging brokers. Each is a step added on the channel, leaving producer and consumer unchanged. A **channel** is the pipe messages travel. A **filter** reads from one channel and writes to another. A **correlation identifier** ties a set of messages together. A **payload** is the body. A **broker** holds the channels.
 
 ## Explained
 <!--meta block=explain-->
@@ -51,9 +49,21 @@ It opens the message and forwards by what it finds, with a short ordered rule se
 
 It computes the set of channels a message belongs on and sends one copy to each. The list is data, so adding a destination changes that data and nothing else, and the sender still makes one publish call.
 
+### [Routing Slip](../patterns/messaging/routing-slip.md) {#tour-routing-slip}
+
+An ordered list of steps rides with the message and each processor forwards it to the next address on the slip, so no central router knows every route.
+
 ### [Message Translator](../patterns/messaging/message-translator.md) {#tour-message-translator}
 
 Sits between producer and consumer and remaps field names, types, units and encodings, doing no business logic. It lets each side keep its own format, and a router upstream sends each incoming shape to its own translator.
+
+### [Content Enricher](../patterns/messaging/content-enricher.md) {#tour-content-enricher}
+
+The step fetches missing data from another source and merges it into the message, so later steps get what they need without a lookup of their own.
+
+### [Canonical Data Model](../patterns/messaging/canonical-data-model.md) {#tour-canonical-data-model}
+
+Each application translates to and from one shared format instead of to every other application, so n applications need n translators, not n squared.
 
 ### [Splitter](../patterns/messaging/splitter.md) {#tour-splitter}
 
@@ -62,6 +72,10 @@ Takes a composite payload such as a batch, an order with line items or a repeati
 ### [Aggregator](../patterns/messaging/aggregator.md) {#tour-aggregator}
 
 A stateful step that recognises which messages belong together by a shared correlation identifier, folds their payloads and releases the result when a completeness rule says the set is done. A window over arrival time is the commonest rule.
+
+### [Resequencer](../patterns/messaging/resequencer.md) {#tour-resequencer}
+
+Messages that arrive out of order are held until the gap fills, then released in sequence. Each message passes on unchanged.
 
 ### [Scatter-Gather](../patterns/messaging/scatter-gather.md) {#tour-scatter-gather}
 

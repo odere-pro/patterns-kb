@@ -15,14 +15,16 @@ Work that's too slow to finish inside a request — transcoding a video, generat
 ## The question
 <!--meta block=description-->
 
-A profile fetch is a quick query — it returns in under a hundred milliseconds and the click feels instant. Generating a user's annual PDF report is not: it queries millions of rows, aggregates them, and renders charts, and it takes the better part of a minute. Serving that slow work synchronously breaks in two ways at once. Most web servers and load balancers cut a request off after 30–60 seconds, so it may never complete; and even when it does, the user stares at a spinner with no feedback, assumes it hung, and hits retry — doubling the work and making the load worse. Video transcoding, image resizing, bulk email, and large CSV imports all have the same shape: too slow for the request path.
-
-The move is to split acceptance from processing. Validate the request, write a job record, return a job id in milliseconds — then let a separate pool of workers pull the job from a durable queue and do the heavy lifting at their own pace, updating status when done. The web tier becomes a lightweight router; the workers can run on hardware suited to the work — a GPU box for transcoding — and scale independently of the front end. This theme is the queue, the workers, and — because "process it later, elsewhere" quietly signs you up for redelivery, poison messages, and backlogs — the patterns that keep that pipeline correct under failure and under load.
+A profile fetch returns in 100 ms, but an annual PDF report takes close to a minute, past the 30 to 60 seconds most load balancers allow, and a user who sees a spinner retries and doubles the load. Split acceptance from processing: record a job, return an id at once, and let separate workers drain a durable queue. That buys redelivery, poison messages and backlogs, which the patterns here contain.
 
 ## Explained
 <!--meta block=explain-->
 
-When work takes longer than a web request can wait, accept the request, record a job, return a job id in milliseconds, and let a separate pool of workers take jobs from a durable queue (a list of jobs that survives a crash) and do them at their own pace. Without this, load balancers cut a request off after 30 to 60 seconds, and a user staring at a spinner clicks retry, which doubles the work. You pay in three ways. The work is not done when the call returns, so show job status and let users poll it. A worker can die mid-job, so jobs are redelivered and may run twice, which means each job must have the same effect however often it runs. A message that always fails will retry forever, so move it to a dead-letter queue after a few attempts. A traffic spike can grow the queue faster than you add workers, so cap its length and refuse new work with a clear error when it is full. Choose this for genuinely slow work, and keep fast queries synchronous.
+When work takes longer than a web request can wait, accept the request, record a job, return a job id in milliseconds, and let a separate pool of workers take jobs from a durable [queue](../patterns/messaging/message-queue.md) (a list of jobs that survives a crash) and do them at their own pace. Without this, load balancers cut a request off after 30 to 60 seconds, and a user staring at a spinner clicks retry, which doubles the work. The work is not done when the call returns, so show job status and let users poll it. Choose this for genuinely slow work, and keep fast queries synchronous. Several workers pulling from one queue are [competing consumers](../patterns/messaging/competing-consumers.md), and the arrangement as a whole is [web-queue-worker](../patterns/architecture/web-queue-worker.md).
+
+- **Twice-run jobs.** A worker can die mid-job, so jobs are redelivered; make each job have the same effect however often it runs (\[idempotency\](../patterns/messaging/idempotency.md)).
+- **Poison messages.** A message that always fails retries forever, so move it to a \[dead-letter channel\](../patterns/messaging/dead-letter-channel.md) after a few attempts.
+- **Backlog.** A spike grows the queue faster than you add workers, so cap its length and refuse new work with a clear error.
 
 **Example.** An annual report takes 45 s to build, and the load balancer cuts requests at 30 s. The API now answers in 50 ms with a job id. 4 workers finish 4 reports per 45 s, about 5.3 a minute. At 9:00, 200 users click at once, so the backlog takes 200 / 5.3, about 38 minutes, to drain. With 12 workers it is 16 a minute and 12.5 minutes. One corrupt account fails 3 times, then goes to the dead-letter queue instead of looping. The queue is capped at 500 jobs, and the 501st request gets a refusal.
 
@@ -55,6 +57,10 @@ flowchart LR
 
 The durable buffer at the center of the pattern. The web tier enqueues a job — typically just an id, with the payload stored elsewhere — and returns immediately; the queue holds it safely until a worker is ready, so nothing is lost if a worker crashes between accept and process. It's what lets acceptance and processing run at their own independent rates.
 
+### [Polling Consumer](../patterns/messaging/polling-consumer.md) {#tour-polling-consumer}
+
+The consumer asks the queue for the next message only when it is free, so it sets its own pace and a burst waits in the queue.
+
 ### [Competing Consumers](../patterns/messaging/competing-consumers.md) {#tour-competing-consumers}
 
 The [worker pool](../patterns/concurrency/thread-pool.md) that drains the queue. Point several identical, stateless workers at the same queue and let the broker hand each job to whichever is free; the delivery guarantee keeps two workers off the same job. Adding capacity for a backlog — month-end reports, a transcoding surge — becomes a deployment decision, not a code change.
@@ -81,7 +87,7 @@ Parallel consumers destroy order, since two workers can take consecutive events 
 
 ### [Backpressure](../patterns/concurrency/backpressure.md) {#tour-backpressure}
 
-The valve on intake. When a spike outpaces the workers, the queue can grow to millions of pending jobs, memory climbs, and wait times stretch to hours. Backpressure sets a depth limit and returns an immediate "system busy" rather than silently accepting work that can't be done in time — usually paired with [autoscaling](../patterns/distributed/routing/autoscaling.md) workers on queue depth, since by the time CPU looks high the queue is already backed up.
+The valve on intake. When a spike outpaces the workers, the queue can grow to millions of pending jobs, memory climbs, and wait times stretch to hours. Backpressure sets a depth limit and returns an immediate "system busy" rather than silently accepting work that can't be done in time — usually paired with [autoscaling](../patterns/distributed/routing/autoscaling.md) workers on queue depth, since by the time central processing unit (CPU) looks high the queue is already backed up.
 
 ### [Sweeper](../patterns/distributed/coordination/sweeper.md) {#tour-sweeper}
 

@@ -16,18 +16,15 @@ The managed side of knowing what your system is doing: somewhere to send logs, m
 ## What it is
 <!--meta block=description-->
 
-Every cloud sells the same three stores and the same two things that read them. A **log store** takes arbitrary text or structured events and lets you search them. A **metric store** takes numeric time series and lets you aggregate them cheaply over long windows. A **trace store** takes spans stitched together by a shared id and shows you one request's whole path. On top sit **dashboards** and **alert rules**, and underneath sits an **agent** that collects from your workloads and forwards.
-
-The reason to treat this as a capability rather than a tool choice is the **cost model**, which is unlike anything else you rent. You are billed by volume ingested, by volume retained, and often again per query — so the bill tracks how chatty your code is, not how many users you have. A debug log left on in one hot path can cost more than the compute emitting it, and nothing in the request path gets slower to warn you.
-
-The three stores differ in what they can answer, and picking wrong is the usual waste. A metric is cheap forever and cannot tell you which customer was affected. A log can tell you exactly that and costs roughly linearly in how much you keep. A trace answers "where did the time go" for one request and is normally sampled, because keeping every span is prohibitive. Emit the same fact into all three and you pay three times for one answer.
-
-The one genuinely portable decision here is the **collection layer**. Instrumentation written against a vendor SDK has to be rewritten to move; instrumentation written against a vendor-neutral standard and forwarded by a collector is repointed with a configuration change, and the collector can fan out to two backends during a migration. That is why the agent row of the mapping table below matters more than any of the store rows: the stores are what you rent, and the collector is what decides whether renting a different one is a project or an afternoon.
-
+Every cloud sells three stores and two readers. A log store searches events, a metric store aggregates numbers over time, and a trace store shows one request's whole path. Dashboards and alert rules read them, and an agent in your workloads feeds them. You are billed by volume ingested and kept, so the bill tracks how chatty your code is. The collection layer is the portable part; the stores are what you rent.
 ## Explained
 <!--meta block=explain-->
 
-An observability platform stores three kinds of evidence about your running system and reads them back: logs (searchable events), metrics (numbers over time) and traces (one request's path through your services), with dashboards and alerts on top. Take the provider's own stack by default and move off it only when the bill or a second cloud forces you. The bill tracks how much your code emits, not how many users you have, so you pay for volume ingested, volume kept and often each query. When you leave, move one store at a time: metrics first, because the data is small, and logs last, because a searchable log store at volume is hard to run. Three costs follow. Query languages and dashboards do not port, so instrument against a vendor-neutral standard and send through a collector you own, which turns a backend change into a pipeline edit. Retention is priced by the longest requirement anyone has, so set it per signal. And spans dropped after collection are already paid for, so sample at the start of a request and keep every error trace.
+An observability platform stores three kinds of evidence about your running system and reads them back: logs (searchable events), metrics (numbers over time) and traces (one request's path through your services), with dashboards and alerts on top. Take the provider's own stack by default and move off it only when the bill or a second cloud forces you. The bill tracks how much your code emits, not how many users you have, so you pay for volume ingested, volume kept and often each query. When you leave, move one store at a time: metrics first, because the data is small, and logs last, because a searchable log store at volume is hard to run.
+
+- **Dashboards and queries do not port** Instrument to an open standard and send via your own collector, so a backend change is a pipeline edit.
+- **Retention is priced by the longest requirement** Set it per signal, not once for everything.
+- **Spans dropped after collection are already paid for** Sample at the start of a request and keep every error trace.
 
 **Example.** Your service takes 500 requests a second, and a debug line of 1 KB is logged on each. That is 500 KB a second, or 43.2 GB a day. At an illustrative 0.50 dollars per GB ingested, one forgotten line costs 21.60 dollars a day, about 650 a month, and no user notices. Sampling at the start of each request and keeping 10 percent cuts it to 2.16 dollars a day. The cost is that you see 1 request in 10, so you also keep every request that ends in an error.
 
@@ -102,6 +99,6 @@ Two decisions people leave until the bill arrives, and should make on day one. S
 
 - [Distributed Tracing](../patterns/distributed/resilience/distributed-tracing.md) — Managed trace collection is this pattern rented: the collector, the store and the waterfall view
 - [Secure Logger](../patterns/security/secure-logger.md) — Redaction rules in the collection pipeline apply this before telemetry reaches any store
-- [Sidecar](../patterns/distributed/routing/sidecar.md) — The telemetry agent is a helper process beside the application, so no service links a vendor SDK.
+- [Sidecar](../patterns/distributed/routing/sidecar.md) — The telemetry agent is a helper process beside the application, so no service links a vendor software development kit (SDK).
 
 <!-- relationships:end -->

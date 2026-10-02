@@ -235,10 +235,15 @@ function onCanary(userId: string, weightPercent: number): boolean {
 - [Health Endpoint Monitoring](../resilience/health-endpoint.md) — A candidate that reports unhealthy leaves rotation before the gate runs
 - [Deployment Stamp](./deployment-stamp.md) — The slice can be a whole stamp rather than a percentage
 - [Quarantine](../../security/quarantine.md) — Pairs with a supply-chain gate: check what you ship, then who sees it first
+- [Rolling Deployment](./rolling-deployment.md) — A canary can be widened as a roll of new instances
 
 **Alternative to**
 
 - [Blue-Green Deployment](./blue-green-deployment.md) — Ramp gradually, or flip everyone across in one routing change
+
+**Has variant**
+
+- [Shadow Traffic](./shadow-traffic.md) — Sends real users to the new version, so it can judge responses users act on
 
 **Requires**
 

@@ -15,9 +15,7 @@ Run more than one of everything on the critical path, and make sure the copies c
 ## What it says
 <!--meta block=description-->
 
-Run more than one of every component a request passes through, and make each copy fail for its own reasons. One instance, one queue, one database primary, one deployment pipeline: each of those is a part whose loss is the system's loss, and counting them is the honest measure of how available you are. A second copy turns a total outage into a degraded minute, but only where losing the first one leaves the second standing.
-
-This is not a spare-parts count. Two instances sharing a rack, a power feed, a config push, an image or a bug are one instance with two invoices, because the event that kills one kills both in the same second — correlated failure is what makes a replica count meaningless on its own. Nor is redundancy free of new questions. The moment copies exist, something has to decide which copy is authoritative, and that decision is where most of the cost and most of the new failure modes live.
+Run more than one of every component a request passes through, and make each copy fail for its own reasons. Each single instance, queue, primary or pipeline is a part whose loss is the system's loss. A second copy turns an outage into a degraded minute, but only if losing one leaves the other standing. Two copies sharing a rack, power feed, config push or bug are one copy, and deciding which is authoritative is where the cost lives.
 
 ## Explained
 <!--meta block=explain-->

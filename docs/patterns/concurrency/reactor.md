@@ -192,6 +192,10 @@ class Reactor {
 - [Thread Confinement](./thread-confinement.md) — One loop owns the state it touches, so no handler needs a lock
 - [Backpressure](./backpressure.md) — Stop watching a socket for readability until its handler drains
 
+**Alternative to**
+
+- [Proactor](./proactor.md) — A reactor is told a channel is ready, and the handler then does the read or write itself
+
 **Prevents**
 
 - [Synchronous I/O](../../hazards/synchronous-io.md) — The structural answer to threads parked one per outstanding call

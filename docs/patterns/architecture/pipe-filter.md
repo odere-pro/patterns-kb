@@ -197,6 +197,8 @@ run();
 - [Producer-Consumer](../concurrency/producer-consumer.md) — Stages are producers and consumers in series
 - [Backpressure](../concurrency/backpressure.md) — Slow filters must push back upstream
 - [Big Data](./big-data.md) — Data pipelines are the pattern at scale, one stage per transformation.
+- [Content Enricher](../messaging/content-enricher.md) — Each filter in a pipeline can be an enricher that adds one piece of data
+- [Routing Slip](../messaging/routing-slip.md) — A fixed pipeline can be made per-message by attaching a routing slip
 
 **Often confused with**
 
@@ -209,6 +211,6 @@ run();
 
 **Implemented by**
 
-- [Data & Analytics](../../capabilities/data-analytics.md) — Managed ETL services are this, with the stages configured rather than coded.
+- [Data & Analytics](../../capabilities/data-analytics.md) — Managed extract, transform, load (ETL) services are this, with the stages configured rather than coded.
 
 <!-- relationships:end -->

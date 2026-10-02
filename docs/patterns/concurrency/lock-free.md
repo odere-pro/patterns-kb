@@ -209,10 +209,12 @@ func increment() { slot.Add(1) }
 **Combines with**
 
 - [Copy-on-Write](./copy-on-write.md) — The pointer swap that publishes a new copy is a single atomic compare-and-swap
+- [Ring Buffer](./ring-buffer.md) — Lock-free queues often use a ring as their storage
 
 **Alternative to**
 
 - [Monitor Object](./monitor-object.md) — One lock across the critical section, or no lock and a retry loop
+- [Mutex](./mutex.md) — Updates shared data with atomic operations and no lock, so no caller waits for a lock holder
 
 **Often confused with**
 
@@ -222,5 +224,9 @@ func increment() { slot.Add(1) }
 **Prevents**
 
 - [Deadlock](../../hazards/deadlock.md) — No locks are held, so no cycle of waiters can form
+
+**Exposed to**
+
+- [Premature Optimization](../../hazards/premature-optimization.md) — Can fall into premature optimization when complex lock-free structures are built for a contention nobody measured
 
 <!-- relationships:end -->

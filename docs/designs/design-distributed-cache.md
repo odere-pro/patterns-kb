@@ -17,16 +17,16 @@ A distributed cache stores key-value pairs in memory across many machines so it 
 ## Understanding the problem
 <!--meta block=description-->
 
-Callers want three primitives — read a value by key, write one, delete one — answered from memory in single-digit milliseconds, with an optional time-to-live so entries retire on their own. The data behind those keys belongs to somebody else: a database, a service, a computation nobody wants to run twice. That single fact shapes every decision here, because it means the cache is allowed to lose data and never allowed to be slow.
-
-The naive build is one process holding a hash table, and it fails in four ways that have nothing to do with each other. The working set grows past one machine's RAM, so entries start falling out and the hit ratio collapses. The request rate grows past one machine's network card, so latency rises while the CPU sits idle. The process restarts and the whole cache is empty at once, so every request behind it lands on the database in the same second. And one key turns out to be a thousand times hotter than the rest, so whichever box owns it is saturated while the others do nothing.
-
-Those four are the agenda, and this page argues them in that order. Split the keyspace across a fleet in a way that survives the fleet changing size (dive 1), keep a second copy of every shard and be honest about what a failover costs (dive 2), stay inside the memory budget without putting a lock on the read path (dive 3), handle the key that does not spread (dive 4), make a delete stick across copies (dive 5), and then spend the remaining milliseconds on the network rather than the lookup (dive 6). The question sits deliberately astride two interview styles — the data-structure design of one node and the distributed-systems design of the fleet — so the answer has to earn both halves.
+A distributed cache answers get, set and delete from memory in single-digit milliseconds, with an optional time-to-live, in front of data that belongs to a database. That makes the cache free to lose data and never free to be slow. This page walks through splitting the keyspace, replication, eviction without a read lock, hot keys, deletes that stick across copies, and network cost.
 
 ## Explained
 <!--meta block=explain-->
 
-A distributed cache spreads an in-memory key-value store over many machines, so each machine holds a slice of the data and answers from memory in under 10 ms. The caller's own library hashes the key to find the owning machine, using a ring so adding or losing a machine moves only a small share of keys, not nearly all of them. Size it by memory, not request rate: memory sets the machine count, and the hit ratio, the share of reads answered from the cache, sets the load on the database behind it. Do not build durability or strong consistency, because the database holds the real data; that is why losing the last unshipped writes in a failover is a price, not a bug. It costs three things. A second copy of each slice doubles the memory bill, so keep one only if the database cannot absorb a refill burst. A failover can bring back a deleted key, so give every key a time-to-live as the backstop. And one viral key lands on one machine, so copy only that key to several machines and let one client refill it while the rest wait.
+A distributed cache spreads an in-memory key-value store over many machines, so each machine holds a slice of the data and answers from memory in under 10 ms. The caller's own library hashes the key to find the owning machine, using a ring so adding or losing a machine moves only a small share of keys, not nearly all of them. Size it by memory, not request rate: memory sets the machine count, and the hit ratio, the share of reads answered from the cache, sets the load on the database behind it. Do not build durability or strong consistency, because the database holds the real data; that is why losing the last unshipped writes in a failover is a price, not a bug.
+
+- **Replica memory.** A second copy of each slice doubles the memory bill, so keep one only if the database cannot absorb a refill burst.
+- **Zombie deletes.** A failover can bring back a deleted key, so give every key a time-to-live as the backstop.
+- **Hot key.** One viral key lands on one machine, so copy only that key to several machines and let one client refill it.
 
 **Example.** You need 1 TB at 100,000 requests a second. A machine with 32 GB of RAM offers about 24 GB usable, so 1,024 / 24 is about 43 machines, rounded to 50. By request rate you would need only 8, so memory decides. Each of the 50 serves about 2,000 requests a second. A 95% hit ratio sends 5,000 misses a second to the database; 90% sends 10,000, double. One extra copy per slice makes it about 100 machines. Adding a machine to the ring moves about 1/51 of the keys, about 20 GB, which arrives as misses refilled from the database.
 
@@ -48,6 +48,8 @@ Out of scope: a user-configurable cache size, and alternative eviction policies 
 - **Availability** — highly available, with [eventual consistency](../themes/consistency-and-replication.md) accepted; a slightly stale read beats a failed one.
 - **Latency** — under 10&nbsp;ms for get and set.
 - **Scale** — up to 1&nbsp;TB of data and a peak of 100k requests/second.
+- **Restart safety** — a restart must not empty the whole cache at once and send every request to the database in the same second.
+- **Hot keys** — one key a thousand times hotter than the rest must not saturate the machine that owns it.
 
 Explicitly not in scope: durability across restarts, strong consistency, rich queries, and transactions — a cache, not a database.
 
@@ -367,9 +369,9 @@ Two tail-latency sources deserve naming because an average hides both. A node th
 - [Consistent Hashing](../patterns/distributed/routing/consistent-hashing.md) — keys sit on a hash ring so adding or removing a node remaps only one arc, not the whole cache
 - [Replication](../patterns/distributed/coordination/replication.md) — each shard streams asynchronously to a replica so a lost node is not lost data
 - [Batching](../patterns/concurrency/batching.md) — clients coalesce many operations — and hot-key writes — into a single network call
-- [Object Pool](../patterns/gof/extra/object-pool.md) — long-lived TCP connections are pooled so no request pays a fresh handshake
+- [Object Pool](../patterns/gof/extra/object-pool.md) — long-lived Transmission Control Protocol (TCP) connections are pooled so no request pays a fresh handshake
 - [Keep It Simple (KISS)](../principles/kiss.md) — the single-node get/set/delete is built and made correct before any distribution is layered on
-- [Sweeper](../patterns/distributed/coordination/sweeper.md) — a background janitor samples keys carrying TTLs and reclaims the expired ones, because lazy expiry never touches a key nobody reads
+- [Sweeper](../patterns/distributed/coordination/sweeper.md) — a background janitor samples keys carrying time to lives (TTLs) and reclaims the expired ones, because lazy expiry never touches a key nobody reads
 - [Count-Min Sketch](../patterns/distributed/coordination/count-min-sketch.md) — hot keys are found by an approximate frequency structure on the client, since exact per-key counters at 100k req/s cost more than the traffic they measure
 
 <!-- relationships:end -->

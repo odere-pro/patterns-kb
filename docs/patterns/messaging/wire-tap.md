@@ -16,16 +16,16 @@ Copies every message that crosses a channel onto a side channel for inspection, 
 ## What it is
 <!--meta block=description-->
 
-A **wire tap** attaches a secondary channel to an existing message flow and copies every message that passes through onto it, while the original message continues to its intended destination completely untouched. The sender and the real receiver never know the tap exists; whatever listens on the tapped side sees the traffic as an observer, not a participant in the exchange.
-
-The force it resolves is that observation tends to interfere with what it observes. Wiring a logger, monitor, or debugger directly into a sender or receiver means editing production code you'd rather leave alone, and a slow or misbehaving observer can end up blocking the very consumer it was meant to watch. A wire tap sidesteps both problems: it needs no change to either endpoint, and it hands off a copy rather than inserting itself into the delivery path.
-
-That holds where the tap is genuinely out-of-band — the copy is handed off and its result discarded, so the tapped channel can be slow, batched, filtered, or dropped outright and at worst the audit trail suffers, never the message itself. A tap that sits in the path is a weaker promise: the classic two-output component consumes from the input channel and republishes to both, and nginx's mirror module reads the client request body up front to copy it, which switches off unbuffered proxying of that body on the original request. Neither changes what the real receiver is sent, but both spend time and buffer on the primary path — which is why a slow observer can still stall the flow the tap was meant to leave untouched.
+A wire tap copies every message passing through a channel onto a second channel for an observer, while the original goes on to its receiver untouched. Sender and receiver do not know it exists. You add audit, monitoring or a shadow consumer without editing production code, and without letting a slow observer block delivery.
 
 ## Explained
 <!--meta block=explain-->
 
-A wire tap copies every message passing through a channel onto a second channel for an observer, while the original message goes on to its receiver untouched. Sender and receiver do not know it exists, so you add audit, monitoring or a shadow consumer without editing production code, and a slow observer cannot block delivery as long as the copy is handed off and its result ignored. Choose it over logging inside the sender or receiver when the observer must not be able to affect delivery. Shadowing a consumer you do not trust yet pays best. It costs three things. The isolation hides the tap's own failure, because a stale audit trail looks like quiet traffic, so alert on the tap's lag and on the gap between the two counts. The tapped channel carries double traffic at that point, so filter or sample what you copy. And the copy can leak sensitive data to a monitoring system that is less protected than the original, so mask fields before the copy leaves.
+A wire tap copies every message passing through a channel onto a second channel for an observer, while the original message goes on to its receiver untouched. Sender and receiver do not know it exists, so you add audit, monitoring or a shadow consumer without editing production code, and a slow observer cannot block delivery as long as the copy is handed off and its result ignored. Choose it over logging inside the sender or receiver when the observer must not be able to affect delivery. Shadowing a consumer you do not trust yet pays best.
+
+- **Hidden failure.** A failing tap looks like quiet traffic. Alert on the tap's lag and on the gap between the two counts.
+- **Double traffic.** The tapped channel carries twice the load at that point, so filter or sample what you copy.
+- **Data leak.** The copy can reach a monitoring system less protected than the original, so mask sensitive fields before it leaves.
 
 **Example.** A payments channel carries 500 messages a second. A tap copies them to an audit store that handles 300 a second. The tap is out of band, so payments keep flowing at 500 a second while the tap queue grows by 200 a second: 200 x 600 = 120,000 messages after 10 minutes. The audit view is then 120,000 / 300 = 400 s behind, and nothing on the payment path shows it. A lag alert on the tap queue catches it, and masking the card number before the copy leaves keeps the audit store out of scope for card data.
 
@@ -184,6 +184,7 @@ await send({ id: "1", payload: { amount: 42 }, timestamp: Date.now() });
 - [Secure Logger](../security/secure-logger.md) — Tap to an audit log
 - [Publish-Subscribe](./pubsub.md) — A broker-level tap is one more subscription on the same topic
 - [Strangler Fig](../distributed/coordination/strangler-fig.md) — Mirror live traffic at a new slice to check it before cutover
+- [Shadow Traffic](../distributed/routing/shadow-traffic.md) — Its copy-to-a-side-channel idea, applied to requests at the router
 
 **Often confused with**
 

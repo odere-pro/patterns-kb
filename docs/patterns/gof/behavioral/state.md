@@ -187,6 +187,7 @@ article.publish(); // in-review -> published
 **Combines with**
 
 - [Flyweight](../structural/flyweight.md) — A state holding no per-object data can be one shared instance serving every context
+- [Make Illegal States Unrepresentable](../../../principles/make-illegal-states-unrepresentable.md) — A state machine that offers only legal transitions is the same idea at run time
 
 **Often confused with**
 

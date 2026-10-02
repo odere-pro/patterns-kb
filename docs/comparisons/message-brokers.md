@@ -16,16 +16,15 @@ The brokers you can run and the services that rent you the same shapes, compared
 ## What this compares
 <!--meta block=description-->
 
-Several products hide behind the words "we need a queue". Kafka, RabbitMQ, NATS, Pulsar and Redpanda are brokers you install and operate; SQS (Simple Queue Service), Service Bus and Pub/Sub rent you the same shapes as a [cloud messaging service](../capabilities/messaging.md).
-
-One distinction decides most of the choice. A [queue](../patterns/messaging/message-queue.md) gives each message to one consumer and deletes it on acknowledgement, so it holds work and shrinks as the work gets done. A log keeps records for a retention window and gives each reader its own position, so a consumer written next month can start from the beginning. Pick the queue, then need replay, and the records were acknowledged away.
-
-The rest is degree. All of them do [publish-subscribe](../patterns/messaging/pubsub.md) and all deliver at least once; what differs is where routing happens, how much attention the cluster wants, which protocols it speaks, and who owns the code.
-
+Several products hide behind the words "we need a queue". Kafka, RabbitMQ, NATS, Pulsar and Redpanda are brokers you install and operate; SQS (Simple Queue Service), Service Bus and Pub/Sub rent you the same shapes. A queue deletes a message on acknowledgement, and a log keeps records for a retention window. Pick the queue, then need replay, and the records were acknowledged away. The rest is degree: routing, operational attention, protocols and ownership.
 ## Explained
 <!--meta block=explain-->
 
-A message broker is a middleman that holds messages so the sender and the receiver need not be running at the same moment. One distinction decides most of the choice. A queue gives each message to one consumer and deletes it once handled, so it holds work. A log keeps records for a retention window and gives each reader its own position, so a consumer written next month can start from the beginning. Start with no broker: at a few thousand jobs a day, a job table in the database you already run commits with your business data. Then default to your cloud's own queue, and leave it only when you must replay records already read, or run the same design on another cloud. Choose a log when several teams read the same records at their own pace. Two costs follow. Delivery is at least once, so write every consumer to survive seeing a message twice. And a log's ordering holds only inside one partition, its unit of parallelism, so choose the key and the partition count before traffic grows. Self-hosting adds operating work, so start on the managed version.
+A message broker is a middleman that holds messages so the sender and the receiver need not be running at the same moment. One distinction decides most of the choice. A queue gives each message to one consumer and deletes it once handled, so it holds work. A log keeps records for a retention window and gives each reader its own position, so a consumer written next month can start from the beginning. Start with no broker: at a few thousand jobs a day, a job table in the database you already run commits with your business data. Then default to your cloud's own queue, and leave it only when you must replay records already read, or run the same design on another cloud. Choose a log when several teams read the same records at their own pace.
+
+- **Delivery is at least once** Write every consumer to survive seeing a message twice.
+- **A log orders only inside one partition** Choose the key and the partition count before traffic grows.
+- **Self-hosting adds operating work** Start on the managed version.
 
 **Example.** A topic has 6 partitions, and each consumer handles 1,500 messages a second. Six consumers, one per partition, handle 9,000 a second. At 6,000 a second, 4 consumers are enough. When traffic reaches 12,000, you need 8 consumers, but only 6 can read, because a partition has one reader in a group, so 2 sit idle and the ceiling stays at 9,000. The fix is more partitions, chosen before you need them, since changing the count later reshuffles which key goes where.
 

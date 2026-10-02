@@ -201,10 +201,12 @@ class Counter extends Actor {
 - [Message Queue](../messaging/message-queue.md) — Each actor has a mailbox queue
 - [Backpressure](./backpressure.md) — Bounded mailboxes push back
 - [Immutability](../functional/immutability.md) — No shared mutable state to guard
+- [Channels](./channels.md) — The actor model adds addresses and supervision over the mailbox
 
 **Alternative to**
 
 - [Monitor Object](./monitor-object.md) — Message-passing vs. shared-state locking
+- [Active Object](./active-object.md) — An actor addresses untyped messages to a mailbox and adds supervision and distribution
 
 **Specializes**
 

@@ -16,16 +16,17 @@ One logical operation is carried out as a long series of small I/O requests — 
 ## What it is
 <!--meta block=description-->
 
-**Chatty I/O** is an operation that crosses an I/O boundary many more times than it needs to. Rendering one screen fires forty small queries; reading one remote object costs six HTTP calls, one per field; appending one record opens, writes and closes a file. Every crossing pays a fixed toll — a round-trip, a handshake, a plan, a syscall — and that toll has nothing to do with how much data moves. Ask forty times for a byte each and you pay forty tolls to move forty bytes.
-
-You recognize it by a ratio rather than by a duration: calls per operation is high and bytes per call is low, while the operation itself is doing very little work. Traces show a long ladder of short, nearly identical spans rather than one slow span. The tell that separates it from ordinary slowness is that response time tracks the **number** of items on the screen rather than their size — and that the remote side reports each individual call as fast, which is exactly why the blame usually lands on the wrong system for the first hour.
+Chatty I/O is an operation that crosses an I/O boundary far more often than it needs to: forty small queries to render a screen, six HTTP calls to read one object. You recognize it by a ratio, high calls per operation and low bytes per call, and by a ladder of short, near-identical spans in traces. The defining trait is that response time tracks item count, and the remote side reports each call as fast.
 
 ## Explained
 <!--meta block=explain-->
 
-Chatty I/O is an operation that crosses a boundary, such as a database, a remote service or a disk, many more times than it needs to. Every crossing pays a fixed toll for the round trip, the handshake and the setup, whatever the amount of data moved. So an operation that does little work still spends its time on the tolls, and its response time follows the number of items rather than their size. In traces it shows as a long ladder of short, near-identical calls instead of one slow one. Choose the fix by who makes the calls. Inside one process, ask once for the whole set: one query with a join or a list of keys instead of one per row, or one buffered file write. Between a client and many services, put a backend for frontend, a small service that makes the internal calls on a fast network and returns one answer shaped for the screen. Do not overshoot, because one huge call that carries data nobody reads trades this for extraneous fetching. Split the object so the small hot part travels in the common call and the bulky rare part waits behind a second one. Then assert on calls per operation in tests, since average latency hides the count.
+Chatty I/O is an operation that crosses a boundary, such as a database, a remote service or a disk, many more times than it needs to. Every crossing pays a fixed toll for the round trip, the handshake and the setup, whatever the amount of data moved. So an operation that does little work still spends its time on the tolls, and its response time follows the number of items rather than their size. Choose the fix by who makes the calls. Inside one process, ask once for the whole set: one query with a join or a list of keys instead of one per row, or one buffered file write ([batching](../patterns/concurrency/batching.md)). Between a client and many services, put a [backend for frontend](../patterns/distributed/routing/bff.md), a small service that makes the internal calls on a fast network and returns one answer shaped for the screen. Then assert on calls per operation in tests, since average latency hides the count.
 
-**Example.** A product page shows 40 items and reads each item's price with its own query. Each query costs a 1.5 ms round trip plus 0.3 ms of work, so 40 x 1.8 ms = 72 ms. One query with a list of 40 keys costs 1.5 ms plus 4 ms of work, 5.5 ms. The page is about 13 times faster, and at 80 items the first design takes 144 ms while the second stays near 9.5 ms. The trap is putting every item's 200 KB description into the same query, which moves 8 MB to save a few milliseconds. The fix keeps descriptions behind a second endpoint, which you must now maintain.
+- **Overshoot.** One huge call that carries data nobody reads trades this for extraneous fetching. Split the object so the small hot part travels alone.
+- **Extra surface.** A batch endpoint or aggregating service is one more thing to version and run.
+
+**Example.** A product page shows 40 items and reads each item's price with its own query. Each query costs a 1.5 ms round trip plus 0.3 ms of work, so 40 x 1.8 ms = 72 ms. One query with a list of 40 keys costs 1.5 ms plus 4 ms of work, 5.5 ms. The page is about 13 times faster, and at 80 items the first design takes 144 ms while the second stays near 9.5 ms. The trap is putting every item's 200 KB description into the same query, which moves 8 MB to save a few milliseconds.
 
 ## How it happens
 <!--meta block=causes-->
@@ -86,5 +87,11 @@ Make the count visible or it will grow back. Assert on calls per operation in a 
 
 - [Batching](../patterns/concurrency/batching.md) — Accumulate the per-item requests and issue one keyed call, so the count stops tracking the result size
 - [Backend-for-Frontend](../patterns/distributed/routing/bff.md) — Make the several calls on a fast internal network and return one client-shaped response
+
+**Threatens**
+
+- [Repository](../patterns/enterprise/repository.md) — A repository that loads per item or per field makes one query per row
+- [Data Mapper](../patterns/enterprise/data-mapper.md) — Lazy loading in the mapper fires a query per association
+- [Microservices](../patterns/architecture/microservices.md) — Fine-grained services need many calls to render one screen
 
 <!-- relationships:end -->

@@ -16,14 +16,15 @@ Only talk to your immediate neighbours. A method may use the objects it is hande
 ## What it says
 <!--meta block=description-->
 
-A method should only call methods belonging to a small, immediate circle: the object's own fields, the parameters it was passed, objects it creates itself, and the object it lives on. It should not call methods on the objects those methods return. Formulated in 1987 by Ian Holland during the Demeter Project at Northeastern University, it is also known as the principle of least knowledge: each unit should assume as little as possible about the structure of anything else.
-
-The classic violation is the “train wreck”: `order.getCustomer().getAddress().getCity()`. Every dot after the first walks one step further into a structure the caller has no business knowing. Its natural partner is Tell, Don’t Ask — rather than pull an object's internals out and decide for it, tell the object what you want and let it decide.
+A method should only call methods on a small circle: its own fields, its parameters, objects it creates and the object it lives on, never on the objects those calls return. Formulated in 1987 by Ian Holland in the Demeter Project at Northeastern University, it is also called the principle of least knowledge. The classic violation is the train wreck, order.getCustomer().getAddress().getCity(); its partner is Tell, Don’t Ask.
 
 ## Explained
 <!--meta block=explain-->
 
-The Law of Demeter says a method should talk only to its own fields, its parameters and objects it creates, never to the objects those calls return. A chain such as order.getCustomer().getAddress().getCity() ties the caller to how three classes are nested, so renaming or moving any of them breaks code far away. The cure is to tell an object what you want and let it decide: order.shippingCity(), or account.withdraw(amount) in place of reading the balance, comparing it and writing it back. Choose it over chains of getters when the objects you reach through hold rules or structure that may change. Leave a chain alone when it is the intended interface, as with a fluent builder or a stream pipeline, where each call hands you the next stage and nothing private is pried open. Obeyed to the letter, it costs a pile of pass-through methods that bury the design under more indirection than the chain had. The counter-move is to treat a second dot as a prompt to ask whose job this is, not as a law, and to add a method only when callers repeatedly want that far-off value.
+The Law of Demeter says a method should talk only to its own fields, its parameters and objects it creates, never to the objects those calls return. A chain such as order.getCustomer().getAddress().getCity() ties the caller to how three classes are nested, so renaming or moving any of them breaks code far away. The cure is to tell an object what you want and let it decide: order.shippingCity(), or account.withdraw(amount) in place of reading the balance, comparing it and writing it back. Choose it over chains of getters when the objects you reach through hold rules or structure that may change. Leave a chain alone when it is the intended interface, as with a fluent builder or a stream pipeline, where each call hands you the next stage and nothing private is pried open.
+
+- **To the letter, it buries the design in pass-through methods.** Treat a second dot as a prompt to ask whose job it is.
+- **Every forwarding method is code to maintain.** Add one only when callers repeatedly want that far-off value.
 
 **Example.** A report calls order.getCustomer().getAddress().getCity() in 14 places. The company then splits Address into BillingAddress and ShippingAddress, and all 14 lines stop compiling. The team adds order.shippingCity() on Order, which asks the customer and keeps the nesting private, so the next such change touches one method, not 14 call sites. The cost is one forwarding method per question callers ask, and a team that adds one for every field ends up with 40 pass-through methods on Order. So they add one only for questions asked from 3 or more places. The list.stream().filter(...).map(...) in the same report stays a chain.
 
@@ -63,6 +64,7 @@ And not every dot is a train wreck. A fluent builder, a stream pipeline, or navi
 - [Encapsulation](./encapsulation.md) — Reaching through an object for its collaborators is only possible where state is exposed
 - [Facade](../patterns/gof/structural/facade.md) — Callers talk to one object instead of walking into a subsystem's internals
 - [Aggregate](../patterns/ddd/aggregate.md) — Outside code goes through the root and never reaches into the objects inside the boundary
+- [High Cohesion, Low Coupling](./high-cohesion-low-coupling.md) — Limiting what a caller may reach is one way to keep coupling low
 
 **Demonstrated by**
 

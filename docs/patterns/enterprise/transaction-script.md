@@ -202,4 +202,8 @@ async function placeOrder(db: Database, input: PlaceOrderInput): Promise<OrderRe
 
 - [Anemic Domain Model](../../hazards/anemic-domain-model.md) — Same procedures over data-only classes; the smell is a domain model that lost its behavior, the script never claimed any
 
+**Exposed to**
+
+- [Primitive Obsession](../../hazards/primitive-obsession.md) — Can fall into primitive obsession when domain rules on raw strings and numbers repeat in every script
+
 <!-- relationships:end -->

@@ -15,18 +15,18 @@ A distributed system fails in ways no single developer can reproduce on a laptop
 ## The question
 <!--meta block=description-->
 
-Something is slow, or failing, for some users, and you don't yet know which service, which dependency, or which code path is responsible. In a monolith you'd attach a debugger. In a system spread across dozens of independently deployed services, that isn't an option — the request has already crossed process and network boundaries you can't pause. The only way to answer "what happened" after the fact is to have already been recording it.
-
-Observability is the discipline of building that recording in from the start: structured logs, exported metrics, and traces that follow a request across every hop, correlated so they can be reassembled into one story. It's distinct from monitoring — watching predefined dashboards for expected failure modes — because it also has to answer questions nobody thought to ask in advance.
-
-Done well, it turns an incident from "reproduce it in staging and hope" into "query the trace and find the exact span that regressed." Done poorly, or not at all, every outage becomes an archaeology exercise against production.
+Something is slow or failing for some users, and you do not know which service or code path is to blame. In a system of dozens of services you cannot attach a debugger, because the request has already crossed process and network boundaries. You can only answer what happened afterwards if you recorded it beforehand: structured logs, metrics and traces, correlated into one story.
 
 ## Explained
 <!--meta block=explain-->
 
-Observability means recording what a running system does, in a form you can query afterwards, so you can answer questions nobody planned for. Once a request crosses dozens of services you cannot attach a debugger, so you rely on three records: logs, which are detailed lines of events; metrics, which are cheap counts and timings with no view of any one request; and traces, which follow one request through every service it touches. A shared id on every call joins them. Monitoring watches dashboards for failures you predicted, and observability is what you need for the ones you did not. The cost is that recording is never free, so you sample. Deciding up front to keep a fixed share is cheap and predictable, but the request that failed for a customer at 3am is mostly not kept. Deciding at the end, keeping only traces that were slow or failed, finds that request, and you pay by holding every unfinished trace in memory until it ends. Keep each record type on its own retention budget, and redact secrets before they are written.
+Observability means recording what a running system does, in a form you can query afterwards, so you can answer questions nobody planned for. Once a request crosses dozens of services you cannot attach a debugger, so you rely on three records: logs, which are detailed event lines; metrics, which are cheap counts and timings with no view of one request; and [traces](../patterns/distributed/resilience/distributed-tracing.md), which follow one request through every service. A shared [correlation id](../patterns/messaging/correlation-identifier.md) on every call joins them. Monitoring watches dashboards for failures you predicted, and observability covers the ones you did not. Recording is never free, so you sample. Deciding up front to keep a fixed share is cheap, but the request that failed at 3am is mostly not kept. Deciding at the end, keeping only slow or failed traces, finds it.
 
-**Example.** A service takes 500 requests a second and each trace is 5 KB. Keeping all traces writes 2.5 MB a second, about 216 GB a day. Keeping 1 in 100 up front writes about 2.2 GB a day, but a failing request has a 99% chance of being missing. Keeping only the 2% that are slow or failed after the request ends writes about 4.3 GB a day and always has the bad ones. The cost is memory: at 2 s per request, about 1,000 traces, 5 MB, sit in the buffer at any moment.
+- **Storage and money.** Every log line, metric label and trace costs. Sample traces and cap metric label combinations.
+- **Tail sampling holds memory.** Every unfinished trace sits in a buffer until it ends. Size the buffer from request rate times duration.
+- **Secrets leak into logs.** Redact fields before writing with a \[secure logger\](../patterns/security/secure-logger.md), and give each record type its own retention budget.
+
+**Example.** A service takes 500 requests a second and each trace is 5 KB. Keeping all traces writes 2.5 MB a second, about 216 GB a day. Keeping 1 in 100 up front writes about 2.2 GB a day, but a failing request has a 99% chance of being missing. Keeping only the 2% that are slow or failed, decided after the request ends, writes about 4.3 GB a day and always has the bad ones. The cost is memory: at 2 s per request, about 1,000 traces, 5 MB, sit in the buffer at any moment.
 
 ## The trade-space
 <!--meta block=tradespace-->
@@ -69,7 +69,7 @@ Copying messages off a channel to an inspection point lets you watch what's actu
 
 ### [Secure Logger](../patterns/security/secure-logger.md) {#tour-secure-logger}
 
-Logging is only safe to turn up when it can't leak credentials, tokens, or PII. A secure logger redacts or masks sensitive fields before they reach disk, so teams can log generously without creating a compliance incident.
+Logging is only safe to turn up when it can't leak credentials, tokens, or personally identifiable information (PII). A secure logger redacts or masks sensitive fields before they reach disk, so teams can log generously without creating a compliance incident.
 
 ### [Circuit Breaker](../patterns/distributed/resilience/circuit-breaker.md) {#tour-circuit-breaker}
 

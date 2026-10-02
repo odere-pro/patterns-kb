@@ -237,6 +237,10 @@ app.get("/readyz", async (_req, res) => {
 
 - [Heartbeat](../coordination/heartbeat.md) — A health endpoint is polled and tests readiness, where a heartbeat is pushed and shows only liveness.
 
+**Exposed to**
+
+- [Cascading Failure](../../../hazards/cascading-failure.md) — Can fall into cascading failure when evicting a node for failing a health check shifts its load onto the rest
+
 **Demonstrated by**
 
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — readiness as an input to a scaler that moves on queue age rather than load

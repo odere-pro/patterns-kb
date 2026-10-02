@@ -202,6 +202,8 @@ func (p *Pool) Close() { close(p.queue); p.wg.Wait() }
 - [Future / Promise](./future-promise.md) — Submitting work returns a future
 - [Semaphore](./semaphore.md) — The pool's size limit is a counting semaphore over its workers
 - [Reactor](./reactor.md) — A pool absorbs handler work so the event loop never blocks
+- [Fork-Join](./fork-join.md) — A fork-join pool is a thread pool tuned for many small tasks that wait for each other
+- [Proactor](./proactor.md) — A pool of workers can drain a proactor's completion queue
 
 **Variant of**
 
@@ -210,6 +212,14 @@ func (p *Pool) Close() { close(p.queue); p.wg.Wait() }
 **Prevents**
 
 - [Resource Leak](../../hazards/resource-leak.md) — Bounded, reused workers with lifecycle management instead of leak-prone ad-hoc threads
+
+**Exposed to**
+
+- [Busy Front End](../../hazards/busy-front-end.md) — Can fall into busy front end when background jobs sharing the request pool or the same cores starve request handling
+- [Connection-Pool Exhaustion](../../hazards/connection-pool-exhaustion.md) — Can fall into connection pool exhaustion when a bounded pool with an unbounded wait hangs requests silently
+- [Noisy Neighbour](../../hazards/noisy-neighbour.md) — Can fall into noisy neighbour when one shared pool lets a slow or heavy task class take every worker
+- [Synchronous I/O](../../hazards/synchronous-io.md) — Can fall into synchronous io when a fixed pool of worker threads runs out when each one parks on a blocking call
+- [Unbounded Queue](../../hazards/unbounded-queue.md) — Can fall into unbounded queue when a work queue with no limit hides overload until the heap is exhausted
 
 **Demonstrated by**
 

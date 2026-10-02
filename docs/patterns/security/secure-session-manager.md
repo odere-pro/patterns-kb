@@ -16,18 +16,17 @@ Issues an opaque session token at login, keeps its real state under server contr
 ## What it is
 <!--meta block=description-->
 
-HTTP has no memory. The request after you sign in arrives knowing nothing about the one where you proved who you were, so something has to carry that decision forward — or the user types their password again on every page. The obvious fix is to hand out a code and let the browser send it back each time, and the obvious fix is where the damage happens. A code that never expires is a standing key to the account. A code that is easy to guess is a key anyone can cut. A code that still works after logout is a key that was never handed back. A **secure session manager** is the one component that issues these codes, decides how long each stays good, and can cancel one on demand.
-
-The manager issues a session identifier the moment a user authenticates, keeps the session's real state — subject, scopes, expiry — server-side or inside a signed, tamper-evident token, and attaches only that identifier to each subsequent request through a cookie or header. The client carries an opaque handle and nothing else. Creation, validation, renewal and destruction all live in that one place, which is what makes a policy change one edit rather than an audit of every route.
-
-A secure session manager treats the session ID itself as a secret: generated from a cryptographically strong random source, sent only over Transport Layer Security (TLS), marked `HttpOnly` and `Secure` so script and plaintext channels can't touch it, and regenerated whenever the user's privilege changes — most critically right after login, which closes the session-fixation hole where an attacker plants a known ID before the victim authenticates into it.
-
-It sits downstream of authentication, not inside it — an [Authentication Enforcer](./authentication-enforcer.md) decides who the caller is; the session manager decides how long that decision stays valid and how it travels between requests. Confuse the two and you either re-check credentials on every call, or trust a session that was never properly revoked.
+HTTP has no memory, so something must carry the sign-in decision to the next request. A secure session manager is the one component that issues the session identifier, decides how long it stays good and can cancel it on demand. It keeps the session state server-side or in a signed token, sends the client only an opaque handle, and treats that identifier as a secret. It sits downstream of authentication and decides how long that decision stays valid.
 
 ## Explained
 <!--meta block=explain-->
 
-A secure session manager gives a signed-in user an unguessable random identifier, sent with each request in a cookie, while the real state (who they are, what they may do, when it expires) stays on the server or inside a signed token. Without it, you ask for the password on every page, or you trust a value the user can edit. Treat the identifier as a secret: random from a strong source, sent only over encrypted connections, hidden from page scripts, and replaced at login so a planted one is useless. Choose a server-side store over a self-contained signed token when you must end sessions on demand, because a token cannot be revoked before it expires without a denylist. It costs four things. The store is as critical as login, since its outage logs everyone out, so give it that availability. Sliding expiry keeps a stolen session alive, so add an absolute maximum age. A leaked signing key exposes every session, so rehearse key rotation. And never put the identifier in a URL, where logs and shared links expose it.
+A secure session manager gives a signed-in user an unguessable random identifier, sent with each request in a cookie, while the real state (who they are, what they may do, when it expires) stays on the server or inside a signed token. Without it, you ask for the password on every page, or you trust a value the user can edit. Treat the identifier as a secret: random from a strong source, sent only over encrypted connections, hidden from page scripts, and replaced at login so a planted one is useless. Choose a server-side store over a self-contained signed token when you must end sessions on demand, because a token cannot be revoked before it expires without a denylist.
+
+- **Store availability.** The store is as critical as login, since its outage logs everyone out; give it that availability.
+- **Sliding expiry.** It keeps a stolen session alive; add an absolute maximum age.
+- **Signing key.** A leaked key exposes every session; rehearse key rotation.
+- **URL leaks.** An identifier in a URL leaks through logs and shared links; keep it in a cookie.
 
 **Example.** An attacker emails a victim the link bank.example/?sid=abc123, hoping the site keeps that identifier through login. Without regeneration the victim signs in, the server attaches the account to abc123, and the attacker, who already knows abc123, is signed in too. With regeneration, login issues a new 32-byte random id, 256 bits, and abc123 is dead. A stolen cookie is limited too: idle expiry is 30 minutes and the absolute cap is 8 hours, so an attacker who keeps it active still loses it at 8 hours. The cost is a store lookup on every request.
 
@@ -251,7 +250,7 @@ class SessionStore {
 
 **Demonstrated by**
 
-- [Persona Identification & Sanction Check](../../designs/persona-identification.md) — a KYC flow builds a session for a principal with no account — an opaque single-use link whose state is a stored hash, which is what lets it be expired and revoked; a self-validating token could be neither
+- [Persona Identification & Sanction Check](../../designs/persona-identification.md) — a know your customer (KYC) flow builds a session for a principal with no account — an opaque single-use link whose state is a stored hash, which is what lets it be expired and revoked; a self-validating token could be neither
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — a session designed around a person who will never register, and revoked by a resend rather than by a logout
 
 <!-- relationships:end -->

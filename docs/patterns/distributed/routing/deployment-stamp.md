@@ -268,7 +268,7 @@ function tierOf(r: Resource): Tier {
 
 **Demonstrated by**
 
-- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — residency is one full stack per region — gateway, API, workers, Postgres and standby, vault, object store — stamped from the same infrastructure-as-code so only jurisdiction config varies
+- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — residency is one full stack per region — gateway, application programming interface (API), workers, Postgres and standby, vault, object store — stamped from the same infrastructure-as-code so only jurisdiction config varies
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — isolation made checkable: a query cannot cross a boundary with no connection across it, at the stated cost of N copies of everything
 
 **Implemented by**

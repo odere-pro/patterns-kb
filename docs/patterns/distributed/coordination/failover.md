@@ -223,4 +223,8 @@ async function watch(primary: Node, standby: Node, router: Router, missesAllowed
 
 - [Split-Brain](../../../hazards/split-brain.md) — Fencing the old primary before promotion keeps two nodes from accepting writes.
 
+**Exposed to**
+
+- [Metastable Failure](../../../hazards/metastable-failure.md) — Can fall into metastable failure when the standby meets the full load cold, and the next failover re-triggers the failure
+
 <!-- relationships:end -->

@@ -16,16 +16,17 @@ An in-memory buffer or per-key state map with no capacity limit keeps accepting 
 ## What it is
 <!--meta block=description-->
 
-An **unbounded queue** is an in-memory buffer created with no ceiling on how many items it will hold. Think of a task scheduler that pushes work off the request path — welcome emails, thumbnail resizing, monthly reports — onto a queue that a pool of worker threads drains. As long as workers keep pace, the queue stays shallow and nothing is wrong. But the moment producers outrun consumers, depth climbs, and with no capacity limit there is nothing to stop it: every queued item is a live object on the heap, so the queue grows in lockstep with memory until there is none left.
-
-It wears two faces. The obvious one is a producer–consumer buffer that fills faster than it empties — a burst of traffic enqueues thousands of tasks that a fixed [worker pool](../patterns/concurrency/thread-pool.md) needs minutes to clear. The quieter one is a per-key state map that only ever grows: rate-limiter buckets keyed by client id, a session cache, a dedup set — one entry added the first time each key is seen and never removed. That second shape is a slow, hidden memory leak that can run for days before it tips over. Both end the same way: the heap fills, and the process dies.
+An unbounded queue is an in-memory buffer with no ceiling on how many items it holds. You see queue depth and heap use climb together whenever producers outrun consumers, ending in an out-of-memory crash that loses every queued item. A quieter form is a per-key map, such as rate-limiter buckets, that only adds entries. The defining trait is no limit and no rule for what happens at one.
 
 ## Explained
 <!--meta block=explain-->
 
-An unbounded queue is an in-memory buffer with no ceiling on how many items it holds. While workers keep up, it stays shallow and looks fine. When work arrives faster than workers drain it, the backlog grows until memory runs out and the process dies, taking every queued item with it. A quieter form is a map keyed by client or session that only ever adds entries. Long before memory is gone, the waits grow too, so you serve work whose value expired some time ago. Choose a bound over a bigger machine: more memory only delays the crash and lengthens the wait. Size the bound from how long an item is still worth doing, as drain rate times that time, not from the memory you have. Then choose what happens when the queue is full. Block the producer, which slows a fast producer down and suits internal pipelines. Reject the new item at once with a clear error, which suits requests from outside. Or drop the oldest, which suits data where only the latest matters. Each choice is a product decision about which work is lost. Where no queue object exists, cap in-flight work with a fixed number of permits, using a semaphore.
+An unbounded queue is an in-memory buffer with no ceiling on how many items it holds. While workers keep up, it stays shallow and looks fine. When work arrives faster than workers drain it, the backlog grows until memory runs out and the process dies, taking every queued item with it. A quieter form is a map keyed by client or session that only ever adds entries. Long before memory is gone, the waits grow too, so you serve work whose value expired. Choose a bound over a bigger machine: more memory only delays the crash and lengthens the wait. Size the bound from how long an item is still worth doing, as drain rate times that time, not from the memory you have. Then choose what happens when the queue is full: block the producer for internal pipelines, reject at once for outside requests, or drop the oldest where only the latest matters. Where no queue object exists, cap in-flight work with a [semaphore](../patterns/concurrency/semaphore.md), and let [backpressure](../patterns/concurrency/backpressure.md) carry the full signal upstream.
 
-**Example.** A pool of 4 workers resizes images at 10 a second each, so 40 a second. A 10-minute spike brings 100 a second, so the queue grows by 60 a second. After 600 s it holds 36,000 items of 50 KB, 1.8 GB, on a 1 GB heap, so the process crashes and loses every job. Valuable work is worth doing for 5 s, so a bound of 40 x 5 = 200 items is enough. During the spike 60 a second are refused with a 503 while the admitted jobs finish within 5 s. The cost is that 60% of spike traffic is rejected and clients must handle that.
+- **Lost work.** A bound turns overload into refused or dropped items, so tell clients how to retry and decide which work may be lost.
+- **Sizing.** Too small a bound rejects normal bursts, so size it from drain rate times the time an item stays worth doing.
+
+**Example.** A pool of 4 workers resizes images at 10 a second each, so 40 a second. A 10-minute spike brings 100 a second, so the queue grows by 60 a second. After 600 s it holds 36,000 items of 50 KB, 1.8 GB, on a 1 GB heap, so the process crashes and loses every job. A job is worth doing for 5 s, so a bound of 40 x 5 = 200 items is enough. During the spike 60 a second are refused with a 503, and admitted jobs finish within 5 s.
 
 ## How it happens
 <!--meta block=causes-->
@@ -77,5 +78,12 @@ A bounded queue also gives you **backpressure** for free: when the buffer is ful
 - [Semaphore](../patterns/concurrency/semaphore.md) — Fixed permits cap in-flight work when there's no queue object to bound
 - [Token Bucket](../patterns/distributed/resilience/token-bucket.md) — Rate-limit intake so the backlog can't outrun the consumer indefinitely
 - [Fail Fast](../principles/fail-fast.md) — Rejecting at the cap is failing fast instead of buffering forever
+- [Ring Buffer](../patterns/concurrency/ring-buffer.md) — A ring buffer is one way to bound the queue
+
+**Threatens**
+
+- [Message Queue](../patterns/messaging/message-queue.md) — A broker queue with no depth or age limit keeps accepting work no one will finish
+- [Thread Pool](../patterns/concurrency/thread-pool.md) — A work queue with no limit hides overload until the heap is exhausted
+- [Channels](../patterns/concurrency/channels.md) — A channel with an unlimited buffer removes the backpressure the channel would otherwise give
 
 <!-- relationships:end -->

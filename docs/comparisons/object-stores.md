@@ -16,16 +16,15 @@ Amazon Simple Storage Service (S3), Azure Blob Storage and Google Cloud Storage 
 ## What this compares
 <!--meta block=description-->
 
-An object store keeps immutable blobs in one flat namespace, addressed by key and reached over HTTP. This page compares the three stores you rent from a cloud provider with the three open-source servers you run yourself, on the axes that decide it: API compatibility, who carries the operational load, the license you inherit, and what leaving costs.
-
-Decide whether you want an object store elsewhere. The [object storage](../patterns/distributed/routing/object-storage.md) pattern argues why blobs leave the application tier, and the [storage](../capabilities/storage.md) capability page places object next to block, file and database storage.
-
-One behaviour is common to all six, so it decides nothing: bytes never stream through your service. You issue a time-limited signed URL and the client talks to the store directly — the [Valet Key](../patterns/distributed/routing/valet-key.md) pattern, on every contender below.
-
+An object store keeps immutable blobs in one flat namespace, addressed by key over HTTP. This page compares three stores you rent from a cloud with three open-source servers you run, on API compatibility, operational load, inherited license and the cost of leaving. On every one, bytes never stream through your service: you issue a time-limited signed URL, the [Valet Key](../patterns/distributed/routing/valet-key.md) pattern, and the client talks to the store directly.
 ## Explained
 <!--meta block=explain-->
 
-An object store keeps whole files, called objects, in one flat namespace, each addressed by a key and reached over HTTP. Your service hands the client a time-limited signed link and the bytes flow straight to the store, never through your servers. In a public cloud, use the cloud's own store: running one yourself on rented machines buys the same disks twice and adds a service to your on-call rotation. Run your own, such as MinIO, when you need the same interface on your own hardware or at the edge and one team can own the cluster. Choose Ceph only when object is one part of a larger private-cloud need and you can staff it. Three costs follow. The S3 interface is the one most others copy, while Azure has its own, so code that must run on both needs an abstraction layer. Leaving a cloud store is metered by the gigabyte read out, so keep a copy elsewhere if exit matters. And a license such as AGPL reaches into what you distribute, so read it before you build on the server. Before any of these, a directory and a table of paths carries one service a long way.
+An object store keeps whole files, called objects, in one flat namespace, each addressed by a key and reached over HTTP. Your service hands the client a time-limited signed link and the bytes flow straight to the store, never through your servers. In a public cloud, use the cloud's own store: running one yourself on rented machines buys the same disks twice and adds a service to your on-call rotation. Run your own, such as MinIO, when you need the same interface on your own hardware or at the edge and one team can own the cluster. Choose Ceph only when object is one part of a larger private-cloud need and you can staff it. Before any of these, a directory and a table of paths carries one service a long way.
+
+- **The S3 interface is the one most others copy** Azure has its own, so code that must run on both needs an abstraction layer.
+- **Leaving a cloud store is metered by the gigabyte read out** Keep a copy elsewhere if exit matters.
+- **A license such as AGPL reaches into what you distribute** Read it before you build on the server.
 
 **Example.** You hold 50 TB, which is 50,000 GB, in a cloud store. Illustratively, reading data out costs 0.09 dollars per GB. Moving everything to another provider then costs 50,000 times 0.09, or 4,500 dollars, before you pay the new store at all. If your code speaks the S3 interface, the code change is mostly a new endpoint address. If it uses a provider's own interface, you also rewrite every call. A self-run store has no per-GB exit fee, but its price is the engineer who keeps it running.
 

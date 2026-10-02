@@ -29,6 +29,7 @@ import path from 'node:path';
 import { listOf, SOLVES_MAX_WORDS, solvesWords, type FmValue } from '../lib/frontmatter.js';
 import { descriptionProblems } from '../lib/description-shape.js';
 import { COSTS_KIND, explainProblems } from '../lib/explain-shape.js';
+import { selfcheckProblems } from '../lib/selfcheck-shape.js';
 import type { Nodes, RootContent } from '../lib/kb-attrs.js';
 import { Ratchets, type RatchetEntry } from '../lib/ratchet.js';
 import { sidesOf } from '../lib/render-relations.js';
@@ -83,7 +84,7 @@ export function shapeRatchets(root: string): Ratchets {
 
 let ratchetCache: { text: string; ratchets: Ratchets } | undefined;
 
-/** KB-014 and KB-015 problems of the explain and description blocks, less what the page's ratchet entries excuse. */
+/** KB-014, KB-015 and KB-016 problems of the explain, description and selfcheck blocks, less what the page's ratchet entries excuse. */
 function shapeMessages(doc: PageDoc, kind: string, source: string, ratchets: Ratchets): string[] {
   const out: string[] = [];
   const explain = doc.blocks.find((x) => x.name === 'explain');
@@ -95,6 +96,10 @@ function shapeMessages(doc: PageDoc, kind: string, source: string, ratchets: Rat
   const description = doc.blocks.find((x) => x.name === 'description');
   if (description !== undefined) {
     for (const p of descriptionProblems(description.nodes)) if (!ratchets.excuses('description', source, p.words)) out.push(`KB-015 ${p.message}`);
+  }
+  const selfcheck = doc.blocks.find((x) => x.name === 'selfcheck');
+  if (selfcheck !== undefined) {
+    for (const p of selfcheckProblems(selfcheck.nodes)) out.push(`KB-016 ${p.message}`);
   }
   return out;
 }

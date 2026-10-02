@@ -205,6 +205,11 @@ func main() {
 - [Backpressure](./backpressure.md) — A full buffer must slow the producer
 - [Scheduling](./scheduling.md) — A scheduler feeds timed work into the queue the consumers pull from
 - [Monitor Object](./monitor-object.md) — In one process the shared buffer is usually a monitor whose conditions gate full and empty
+- [Channels](./channels.md) — The pattern is what a channel implements for in-process use
+
+**Generalizes**
+
+- [Ring Buffer](./ring-buffer.md) — The pattern allows any queue, and a ring buffer is the allocation-free one
 
 **Often confused with**
 

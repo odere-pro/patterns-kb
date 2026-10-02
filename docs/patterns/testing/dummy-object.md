@@ -16,16 +16,16 @@ Handed to a constructor or method purely to satisfy its parameter list — the o
 ## What it is
 <!--meta block=description-->
 
-A **dummy object** is the simplest member of Gerard Meszaros' test double family: an object supplied as an argument purely because a signature demands one, with no expectation that it will ever be read, called, or asserted against by the path a given test exercises. Where a stub returns canned values and a mock verifies how it was used, a dummy does neither — its only job is to occupy a parameter slot.
-
-The force it resolves is a mismatch between what a signature requires and what one particular test actually cares about. Constructors often take every collaborator a class will ever need, but a single test usually drives only one narrow path through that class, leaving most of those collaborators untouched. Building a full stub or mock for each of them adds setup noise and buries the one dependency the test is actually about.
-
-In practice a dummy is whatever is cheapest to construct: a bare `null` where the type permits it, an empty object literal, or a minimal class whose methods do nothing or throw if invoked. That last option — a throwing dummy — turns "never used" from an assumption into an assertion: if a later refactor starts calling it, the test fails loudly instead of quietly passing against the wrong object.
+A dummy object is the simplest of Meszaros' test doubles: an object passed only because a signature demands one, never read, called or asserted on by the path a test exercises. A stub returns canned values and a mock verifies usage; a dummy does neither. It resolves the mismatch between constructors that take every collaborator and a test that drives one narrow path. It is whatever is cheapest: null, an empty literal, or a class that throws if called.
 
 ## Explained
 <!--meta block=explain-->
 
-A dummy object is a placeholder you pass to satisfy a required parameter that the test's code path never uses. A constructor often asks for every helper a class will ever need, while one test drives a narrow path through it. Building a real logger or database client just to fill the slot slows the test and pulls in setup that is irrelevant to it. Choose it over a stub or fake, which are doubles that return canned or working answers, when you are sure the object is never called. It costs three things. A dummy that does nothing hides it when the code starts to use the object, because every call returns a harmless default and the test still passes, so make the dummy throw if anything calls it. Reaching for dummies by default can paper over a class with too many collaborators, so count how many you pass and consider splitting the class. And once the object's behaviour matters, replace the dummy with a stub, fake or mock.
+A dummy object is a placeholder you pass to satisfy a required parameter that the test's code path never uses. A constructor often asks for every helper a class will ever need, while one test drives a narrow path through it. Building a real logger or database client just to fill the slot slows the test and pulls in setup that is irrelevant to it. Choose it over a stub or fake, which are doubles that return canned or working answers, when you are sure the object is never called.
+
+- **Silent drift.** A do-nothing dummy hides it when code starts using the object; make the dummy throw on any call.
+- **Hidden coupling.** Dummies by default can paper over a class with too many collaborators; count them and consider splitting the class.
+- **Outgrown.** Once the object's behaviour matters, replace the dummy with a stub, fake or mock.
 
 **Example.** An OrderTotal class takes a tax service it does not use in sum(). The test passes a dummy and checks that sum of 12 and 8 is 20. Later someone adds a 10% tax call inside sum(), so the real result is 22. A do-nothing dummy returns 0 tax and the test still shows 20, a green test over code that now needs the tax service. A throwing dummy fails the test the moment the call happens, with a message that the dummy was used. The cost is that you edit that test, replacing the dummy with a stub that returns a tax rate.
 

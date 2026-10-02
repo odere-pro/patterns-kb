@@ -14,20 +14,16 @@ How to keep evidence flowing that a change is safe — before any user meets it,
 ## The question
 <!--meta block=description-->
 
-A test suite tells you the change does what its author intended on a machine that resembles production. It cannot tell you how the change behaves at real load, against real data, with the clients you actually have, while the dependency it calls is having a slow afternoon. Those are the conditions that produce the incidents, and they only exist in one place.
-
-Continuous validation is the decision to keep gathering evidence past the point where testing usually stops. Prove the new version works on real infrastructure before a user reaches it. Give it a measured share of traffic and compare it against the version still serving everyone else. And separately, on a schedule, break things on purpose to check that the mechanisms which are supposed to save you actually do.
-
-The three stages answer different questions and none substitutes for another. A smoke test against a freshly built environment answers whether it is wired up at all — certificates, secrets, connectivity. A weighted comparison answers whether the new version behaves like the old one under production conditions. A deliberately injected fault answers whether the timeouts, breakers and probes are configured correctly, which no release ever tests because a healthy release never triggers them.
-
-What makes the evidence actionable is that every stage has a way back that costs the same as going forward. A release that ramps by traffic weight aborts by setting the weight to zero. A release that replaced infrastructure rolls back by pointing at the infrastructure that is still running. Validation without a cheap reversal is just a slower way to find out you were wrong.
-
-The constraint underneath all of it is that two versions are live at once for the whole overlap, and they share a data store that cannot be duplicated. That forces forward compatibility as a code requirement — a version must ignore fields it does not understand rather than rejecting them — and it forces schema changes into expand-then-contract, because the moment the new version writes something the old one cannot read, the reversal you were relying on has quietly stopped working.
+A test suite shows a change does what its author meant on a machine like production. It cannot show how the change behaves at real load, on real data, while a dependency has a slow afternoon. Continuous validation keeps gathering evidence in three stages: a smoke test on fresh infrastructure, a weighted comparison against the live version, and deliberate faults on a schedule. Each stage needs a way back as cheap as going forward.
 
 ## Explained
 <!--meta block=explain-->
 
-Continuous validation means you keep collecting evidence about a release after your tests pass, because tests cannot show how a change behaves under real load, real data and a slow dependency. There are three stages, and none replaces another. A smoke test on freshly built infrastructure proves it is wired up. A canary, which gives the new version a small weighted share of live traffic, proves it behaves like the old version under real conditions. Deliberately injected faults prove that your timeouts and health checks work, which no healthy release ever tests. Each stage needs a reversal as cheap as going forward, such as setting the weight to zero. Choose a canary over more pre-release tests when only real traffic can show the problem. It has costs. A canary exposes some users to a bad version, so state how many you accept, and mirror traffic where none may be hurt, knowing a mirror says nothing about correctness. Thresholds age as traffic changes, so write them as ratios against the live old version and set a minimum sample, so a quiet hour cannot pass a bad release. Two versions share one data store, so new code must ignore fields it does not know, and schema changes must add first and remove later.
+Continuous validation means you keep collecting evidence about a release after your tests pass, because tests cannot show how a change behaves under real load, real data and a slow dependency. There are three stages, and none replaces another. A smoke test on freshly built infrastructure proves it is wired up. A [canary](../patterns/distributed/routing/canary-release.md), which gives the new version a small weighted share of live traffic, proves it behaves like the old version under real conditions. [Deliberately injected faults](../patterns/distributed/resilience/fault-injection.md) prove that your timeouts and health checks work, which no healthy release ever tests. Each stage needs a reversal as cheap as going forward, such as setting the weight to zero. Choose a canary over more pre-release tests when only real traffic can show the problem.
+
+- **Exposed users.** A canary shows a bad version to some users, so state how many you accept before you start.
+- **Aging thresholds.** Traffic changes, so write thresholds as ratios against the live old version, with a minimum sample for quiet hours.
+- **Shared data.** Two versions share one store, so new code must ignore unknown fields and schema changes must add first, remove later.
 
 **Example.** A canary gets 5% of 1,000 requests a second, so 50 a second. The old version fails 0.5% of requests. The rule is: abort if the new version fails more than twice that, 1%, once 1,000 requests have been seen, which takes 20 s. The new version has a bug failing 3%. At 20 s it has served 30 failures against about 5 expected, so the gate sets the weight to zero. About 30 users saw an error. At night, with 5 requests a second, the same sample takes 200 s; without the minimum, one failure in two requests would read as 50% and abort a good release.
 
@@ -56,6 +52,14 @@ The new version runs on its own complete infrastructure while the old one still 
 ### [Canary Release](../patterns/distributed/routing/canary-release.md) {#tour-canary-release}
 
 A weighted slice of live traffic goes to the candidate while the rest stays on the control, so its error rate and latency are compared against a baseline running in the same hour under the same load. It is the only stage that tests the change against conditions no environment reproduces.
+
+### [Shadow Traffic](../patterns/distributed/routing/shadow-traffic.md) {#tour-shadow-traffic}
+
+Real requests are copied to the new version and its responses are thrown away, so no user sees it. You compare its answers and timing against the old version before any real traffic moves.
+
+### [Rolling Deployment](../patterns/distributed/routing/rolling-deployment.md) {#tour-rolling-deployment}
+
+Instances are swapped in place a batch at a time with no second fleet. The roll can pause after the first batch and be judged like a canary before it continues.
 
 ### [Fault Injection](../patterns/distributed/resilience/fault-injection.md) {#tour-fault-injection}
 

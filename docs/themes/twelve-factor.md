@@ -15,16 +15,16 @@ The application side of the bargain: keep configuration outside the build, keep 
 ## The question
 <!--meta block=description-->
 
-A platform can only do things to a process it is allowed to move. If the config is baked into the build, a new environment means a new build. If a session lives in memory, killing an instance loses a user's work. If nothing reports readiness, a restart takes traffic with it. Every one of those is the application refusing a capability the platform was ready to provide.
-
-So this theme reads as a list of properties the application must hold, not a list of tools it must adopt. Configuration comes from the environment. Processes hold no durable local state. Long work is a separate process type rather than a thread borrowed from the request path. Health is a signal, not an inference. Logs are a stream someone else collects. A release is immutable and replaceable.
-
-None of it is free — externalising configuration and state means running a store for each — and none of it is optional if you want the [platform](./cloud-native.md) to do the work. The two halves are one bargain read from opposite sides.
+A platform can only move, restart and replace a process that holds no baked-in config, no in-memory session and no hidden readiness. Each is the application refusing a capability the platform offered. This theme reads as properties the application must hold, not tools it must adopt: config from the environment, stateless processes, workers as separate process types, health as a signal, logs as a stream, immutable releases. Externalising config and state costs a store for each.
 
 ## Explained
 <!--meta block=explain-->
 
-Twelve-factor is a list of properties your application must hold so a platform can move, restart and replace it for you. It is a contract, not a toolset. Configuration comes from the environment, so one build runs everywhere. Processes keep no durable state in memory or on local disk, so any copy can be killed. Slow work runs in a separate worker process. Health is a signal the platform reads, not something it guesses. Logs go to a stream someone else collects, and a release is immutable. Choose it for the parts of your system that should be interchangeable, and skip it for a database, where the state is the point. It costs three things. Moving configuration and state out means running a store for each, which is now on the start-up and request path, so keep that store highly available. A readiness check that tests every dependency takes the whole fleet out when one blinks, so test only what a request needs. And nothing enforces the list, so someone caches one thing in memory, and you find out when a copy is moved at 3am.
+Twelve-factor is a list of properties your application must hold so a platform can move, restart and replace it for you. Configuration comes from the environment, so one build runs everywhere. Processes keep no durable state in memory or on local disk, so any copy can be killed. Slow work runs in a separate worker process. Health is a signal the platform reads, and logs go to a stream someone else collects. A release is immutable. Choose it for the parts of your system that should be interchangeable, and skip it for a database, where the state is the point.
+
+- **Extra stores.** Moving config and state out means running a store for each, now on the request path. Keep each highly available.
+- **Readiness over-checks.** A check that tests every dependency pulls the whole fleet out when one blinks. Test only what a request needs.
+- **No enforcement.** Nothing stops someone caching one thing in memory, found when a copy moves at 3am. Test by killing copies routinely.
 
 **Example.** Four copies share 1,000 requests a second, and 10,000 users are signed in, 2,500 on each copy, with sessions held in memory. When the platform moves one copy, 2,500 users lose their session. Moving sessions to a shared store loses none, at a cost of about 1 ms per request and a store you now depend on. The same copy takes 20 s to start. With no readiness signal, it gets its 250 requests a second at once and fails 20 x 250 = 5,000 requests. With one, it receives traffic only when ready.
 

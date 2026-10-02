@@ -241,12 +241,13 @@ async function release(redis: Redis, key: string, token: string) {
 **Exposed to**
 
 - [Clock Skew](../../../hazards/clock-skew.md) — A lease expiry depends on clocks, so skew can give two holders.
+- [Race Condition](../../../hazards/race-condition.md) — Can fall into race condition when a lock whose expiry races with a slow holder admits two holders
 
 **Demonstrated by**
 
 - [Web Crawler](../../../designs/web-crawler.md) — an atomic cross-node lock serialises access to a shared resource under concurrency
-- [Uber](../../../designs/uber.md) — a short-lived TTL lock is the canonical way to enforce single-owner access across many stateless instances
-- [Ticketmaster](../../../designs/ticketmaster.md) — the seat reservation is exactly a distributed lock with automatic TTL expiry shared across many booking-service instances
+- [Uber](../../../designs/uber.md) — a short-lived time to live (TTL) lock is the canonical way to enforce single-owner access across many stateless instances
+- [Ticketmaster](../../../designs/ticketmaster.md) — the seat reservation is exactly a distributed lock with automatic time to live (TTL) expiry shared across many booking-service instances
 - [Job Scheduler](../../../designs/job-scheduler.md) — automatic crash recovery is exactly self-expiring exclusive ownership of a job
 
 <!-- relationships:end -->

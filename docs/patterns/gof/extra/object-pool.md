@@ -16,18 +16,17 @@ Keeps a fixed set of expensive-to-build objects alive and hands them out on loan
 ## What it is
 <!--meta block=description-->
 
-An **object pool** keeps a set of already-constructed objects ready for reuse. A client acquires an object from the pool, uses it, and releases it back — instead of building a fresh one each time and throwing it away. The objects live across many uses; only their lease is short-lived.
-
-The force it resolves is **construction cost**. Some objects are expensive to create: a database connection needs a TCP handshake and authentication, a thread needs a stack and a kernel-visible entry, a decompression buffer needs a large contiguous allocation. When those objects are needed frequently but held only briefly, building and tearing one down per request dominates the actual work.
-
-A pool also acts as a **ceiling**. Because the number of live objects is bounded, it doubles as a limit on a scarce external resource — you cannot open more connections than the pool allows, which protects the database as much as the caller.
-
-The cost is that pooled objects are reused, so any per-use state must be scrubbed on release, and any object that escapes without coming back is a leak that slowly starves everyone else.
+An object pool keeps a set of already-built objects ready for reuse. A client acquires one, uses it and releases it, instead of building and discarding one each time. It pays off when construction is costly, such as a database connection, and the fixed size also caps use of a scarce resource.
 
 ## Explained
 <!--meta block=explain-->
 
-An object pool keeps a fixed set of already-built objects, such as database connections, and lends one out per use: a caller takes one, uses it and gives it back. You pay the setup cost once and not on every request, and the pool's size caps how many of a scarce resource are open at once. Choose it over creating objects on demand only when construction is measurably slow or the resource must be capped. For an object a modern runtime creates in nanoseconds, a pool is overhead and a new way to fail. It fails in three ways. An object returned dirty leaks one caller's data to the next, so reset it on return. An object never returned shrinks the pool until everyone waits, so return it in a finally block and set a borrow timeout. A task that holds one object while waiting for another from the same pool can deadlock under load, so borrow one at a time. Size the pool against the total across all the services that share the resource.
+An object pool keeps a fixed set of already-built objects, such as database connections, and lends one out per use: a caller takes one, uses it and gives it back. You pay the setup cost once and not on every request, and the pool's size caps how many of a scarce resource are open at once. Choose it over creating objects on demand only when construction is measurably slow or the resource must be capped. For an object a modern runtime creates in nanoseconds, a pool is overhead and a new way to fail.
+
+- **Dirty returns.** An object returned dirty leaks one caller's data to the next, so reset it on return.
+- **Leaks.** An object never returned shrinks the pool until everyone waits, so return it in a finally block and set a borrow timeout.
+- **Deadlock.** A task holding one object while waiting for another from the same pool can deadlock, so borrow one at a time.
+- **Shared sizing.** Size the pool against the total across every service that shares the resource.
 
 **Example.** A database allows 100 connections, and opening one takes 30 ms of handshake. A service runs 10 copies and gives each a pool of 8: 80 connections, 20 spare. A request that fails and forgets to return its connection loses one per failure. After 8 failures in one copy, that copy has none, and each request there waits the 2 s borrow timeout and then errors, while the other 9 copies stay fine. A finally block that returns the connection ends the leak. Had you set 12 per copy, 10 x 12 = 120 would exceed the 100 the database allows.
 
@@ -204,6 +203,10 @@ class ObjectPool<T> {
 
 - [Resource Leak](../../../hazards/resource-leak.md) — A pool with checkout/return discipline and validation reclaims what callers forget
 - [Improper Instantiation](../../../hazards/improper-instantiation.md) — Spreads construction cost across many uses, and caps the scarce resource underneath
+
+**Exposed to**
+
+- [Connection-Pool Exhaustion](../../../hazards/connection-pool-exhaustion.md) — Can fall into connection pool exhaustion when a fixed pool whose borrowers slow down runs dry while traffic stays flat
 
 **Demonstrated by**
 

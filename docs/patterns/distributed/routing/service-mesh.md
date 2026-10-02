@@ -15,16 +15,17 @@ Lifts networking concerns — mutual Transport Layer Security (TLS), retries, ti
 ## What it is
 <!--meta block=description-->
 
-A **service mesh** is a dedicated infrastructure layer that takes over communication between services. It has two halves: a **data plane** of proxies — one deployed beside every service instance — that carries all inbound and outbound traffic, and a **control plane** that configures those proxies but never touches a packet itself. The application dials its local proxy over localhost and is otherwise unaware the mesh exists.
-
-The force it resolves is **duplicated networking logic across a fleet**. In a large microservice system almost every service needs the same set of concerns — mutual TLS, retries, timeouts, load balancing, circuit breaking, and request-level metrics and tracing. Building those as an in-process library means one implementation per language and a lock-step redeploy of every service whenever the library changes; scattering them by hand means they drift out of sync and no two services behave alike. A mesh moves that behaviour out of the app entirely, into a uniform proxy layer whose policy lives in one place and applies to the whole fleet regardless of what language each service is written in.
-
-The split between the two planes is the crux. The control plane holds the desired state — routing rules, security policy, service identity, certificates — and pushes it out to the proxies; the proxies enforce it in the request path. Because the control plane sits outside the data path, it can be updated, restarted, or briefly unavailable without stopping traffic that is already flowing. The "mesh" is the woven layer of proxies through which every request travels.
+A service mesh is an infrastructure layer that takes over communication between services. A data plane of proxies, one beside every instance, carries all traffic, and a control plane configures them without touching a packet. It moves mutual TLS, retries, timeouts, load balancing and metrics out of the application into one policy applied across the fleet in any language. The control plane can restart without stopping traffic already flowing.
 
 ## Explained
 <!--meta block=explain-->
 
-A service mesh puts a proxy beside every service instance to carry all of its traffic, plus a control plane that configures those proxies and never touches a request itself, so retries, encryption and metrics behave the same in every service with no code change. Without it, you write a networking library once per language and redeploy every service whenever it changes, or each team builds its own and they drift apart. Choose it over a library, or over single proxies used alone, when the fleet is large enough that traffic policy must be governed centrally: canary splits, fault injection, mutual TLS (both sides prove who they are) and service identity applied across teams that never deploy together. It costs four things. You run, secure and upgrade a control plane and a proxy per instance, so adopt it only when the shared work outweighs that. Two extra hops per call and memory on every instance add up, so measure them on your hottest path first; a node-level data plane without per-instance proxies lowers the cost but isolates workloads less. Every incident gains a third suspect, so keep proxy metrics beside the application's. One bad policy pushed centrally can stop all traffic, so roll policy out to a small share first.
+A service mesh puts a proxy beside every service instance to carry all of its traffic, plus a control plane that configures those proxies and never touches a request itself, so retries, encryption and metrics behave the same in every service with no code change. Without it, you write a networking library once per language and redeploy every service whenever it changes, or each team builds its own and they drift apart. Choose it over a library, or over single proxies used alone, when the fleet is large enough that traffic policy must be governed centrally: canary splits, fault injection, mutual TLS (both sides prove who they are) and service identity applied across teams that never deploy together.
+
+- **Operating load.** You run, secure and upgrade a control plane and a proxy per instance, so adopt it only when the shared work outweighs that.
+- **Hop overhead.** Two extra hops per call and memory per instance add up, so measure your hottest path first.
+- **Third suspect.** Every incident gains the proxy as a suspect, so keep proxy metrics beside the application's.
+- **Central blast radius.** One bad policy pushed centrally can stop all traffic, so roll policy out to a small share first.
 
 **Example.** A fleet has 300 instances, each with a proxy using 100 MB, so the mesh holds 30 GB. Assume each proxy adds 1 ms, so a call costs 2 ms, and a request that makes 4 calls costs 8 ms more. In return, rotating every certificate is one change in the control plane with no redeploy. A policy that denies all traffic would hit all 300 instances at once, so you push it to 5% first, 15 instances, and catch it within a minute instead of during a full outage.
 
@@ -215,6 +216,7 @@ class MeshProxy {
 - [Load Balancer](./load-balancer.md) — Balancing across instances happens per caller in the sidecar, not at one central hop
 - [Identity Is the Perimeter](../../../principles/identity-as-perimeter.md) — The mesh issues and rotates the workload identity this depends on
 - [Distributed Tracing](../resilience/distributed-tracing.md) — Emitting a span per hop is one of the things a mesh gives you for free at the network layer
+- [Shadow Traffic](./shadow-traffic.md) — A mesh can mirror traffic to a second version
 
 **Composed of**
 

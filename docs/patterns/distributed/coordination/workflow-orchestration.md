@@ -228,6 +228,7 @@ export async function personaFlow(
 - [Sweeper](./sweeper.md) — The engine's durable timers and retries replace the hand-rolled scan for work that stalled
 - [Asynchronous Request-Reply](../routing/async-request-reply.md) — Reach for it once the work has meaningful intermediate steps that must be resumed and unwound
 - [AI Agent](../../architecture/ai-agent.md) — Deterministic and reproducible, which the loop is not — choose it whenever the order is knowable
+- [Routing Slip](../../messaging/routing-slip.md) — A central coordinator drives each step and records its state, which a slip leaves to the processors
 
 **Often confused with**
 
@@ -236,8 +237,8 @@ export async function personaFlow(
 **Demonstrated by**
 
 - [Uber](../../../designs/uber.md) — a long-running process with timeouts, retries and human-in-the-loop waits is the textbook durable-execution use case
-- [YouTube](../../../designs/youtube.md) — coordinating a multi-stage transcode DAG with fan-out and retries is the orchestrator's core job
-- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a KYC flow whose steps run minutes to hours, orchestrated as a persisted state machine plus task queue — the hand-rolled end of the same pattern a workflow engine packages
+- [YouTube](../../../designs/youtube.md) — coordinating a multi-stage transcode directed acyclic graph (DAG) with fan-out and retries is the orchestrator's core job
+- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a know your customer (KYC) flow whose steps run minutes to hours, orchestrated as a persisted state machine plus task queue — the hand-rolled end of the same pattern a workflow engine packages
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — durable orchestration built from two tables, with the engine named as a deferred exit priced against handing over the history
 
 **Implemented by**

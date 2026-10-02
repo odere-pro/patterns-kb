@@ -16,16 +16,16 @@ The geography a cloud sells you — region, zone, and the anti-affinity layer be
 ## What the cloud gives you here
 <!--meta block=description-->
 
-What the cloud gives you here is distance, and the ladder of failures that distance buys you. A disk fails and one host is affected; a switch or a power feed fails and the rack goes with it; a building loses power or cooling and a whole datacenter is out; rarely, a whole region becomes unavailable. [Redundancy](../principles/redundancy.md) is how you cross each step — a copy far enough away that one event cannot reach both — and every step up costs more money and more latency than the step below it.
-
-The top two rungs carry the same names on every cloud. A region is a named geographic area, and inside it a zone is a group of datacenters whose power, cooling and network no sibling zone shares. Below the zone the vocabulary falls apart: all three clouds sell anti-affinity inside a single datacenter under three different names, and only one names the grouping that stops a planned platform reboot from restarting every instance you own at once.
-
-More redundancy buys reliability and costs money, latency and complexity, so the level you pick is a business decision rather than a technical default. [Failure-mode analysis](../principles/failure-mode-analysis.md) gives you the input for that decision: the list of failures you are actually required to survive, rather than the longest list you can imagine. This page has fewer clean cross-cloud rows than its siblings because below the region the constructs genuinely do not line up, and the gaps in the table are the content — where a cell says there is no equivalent, a design written around that construct does not port.
-
+Distance buys you a ladder of failures survived: a disk, a rack, a datacenter, a whole region. Redundancy crosses each step with a copy far enough away that one event cannot reach both, and every step up costs more money and latency than the one below. The top two rungs, [region](../principles/redundancy.md) and zone, carry the same names on every cloud. Below the zone the constructs do not line up, and the gaps in the mapping are the content.
 ## Explained
 <!--meta block=explain-->
 
-A region is a named geographic area, and a zone inside it is a group of datacenters whose power, cooling and network no other zone shares. Spreading copies of your system across zones or regions lets one failure hit only one copy. Choose the scope from the failure you are contractually required to survive, because each step up multiplies the bill and everything past the zone adds delay that no engineering removes. Zones are where most systems should stop: they are cheap, replicate in step, and cover the failure that actually happens. A second region covers the rare regional outage and costs three things. The surviving copies must absorb the lost one's load, so size for that headroom or the failure cascades. Replication lag means a recovery point that is not zero, so write it down as a number and alert on lag against it. A failover path you never run is a plan, not a capability, so exercise it on a schedule. Two writers in two regions has no counter-move, so partition records by key, one home each, or agree a merge rule first.
+A region is a named geographic area, and a zone inside it is a group of datacenters whose power, cooling and network no other zone shares. Spreading copies of your system across zones or regions lets one failure hit only one copy. Choose the scope from the failure you are contractually required to survive, because each step up multiplies the bill and everything past the zone adds delay that no engineering removes. Zones are where most systems should stop: they are cheap, replicate in step, and cover the failure that actually happens. A second region covers the rare regional outage, and costs what is listed below.
+
+- **Surviving copies need headroom** They must absorb the lost one's load, so size for that or the failure cascades.
+- **Replication lag means a nonzero recovery point** Write it down as a number and alert on lag against it.
+- **A failover path you never run is a plan** Exercise it on a schedule.
+- **Two writers in two regions have no clean fix** Partition records by key, one home each, or agree a merge rule first.
 
 **Example.** You run 3 zones, each able to serve 100 requests a second. Traffic is 240 a second, so each zone carries 80. A zone fails, and the other two must carry 120 each. Both pass 100, queue up and fail, and the outage spreads. At 180 a second, each zone carries 60, and after a failure 90 each is survivable. The cost is that 300 of capacity serves at most 200 safely, so a third of what you pay for sits idle until the day you need it.
 

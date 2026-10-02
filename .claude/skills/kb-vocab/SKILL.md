@@ -14,7 +14,7 @@ move with it.
 | Vocabulary | Source | Enforced by | Breaks if wrong |
 |---|---|---|---|
 | Page kinds (7) | `glossary.json` `kinds`; `content-model.json` `kinds` (folder, blocks) | kb-shape | a page sits in a folder no kind owns |
-| Blocks (34) | `glossary.json` `blocks`; `content-model.json` `kinds[].blocks` / `optional` | kb-shape | a missing or out-of-order block |
+| Blocks (35) | `glossary.json` `blocks`; `content-model.json` `kinds[].blocks` / `optional` | kb-shape | a missing or out-of-order block |
 | Section facts and suffix keys | `content-model.json` `facts`, `suffix` | kb-shape | an unknown `<!--meta k=v-->` or `{key=…}` ships |
 | Polarity values (8) | `glossary.json` `polarities`; `content-model.json` `facts.polarity` | kb-shape (KB-007) | an item argues no side |
 | Relation verbs (19) | `glossary.json` `verbs`; `content-model.json` `relations` (inverse, order) | relations | an edge with a verb nothing defines |

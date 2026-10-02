@@ -14,9 +14,7 @@ Concurrency is more than one thing in flight at once, and the coordination that 
 ## The question
 <!--meta block=description-->
 
-A program with one thread cannot race itself. The moment two threads can touch the same data, the result depends on how their steps interleave, and a bug appears that no single run reproduces. Two questions then arrive together: how do you run many tasks without a thread per task, and what do you do about the state those tasks share?
-
-The vocabulary is small. A **race condition** is a result that depends on interleaving. A **lock** lets one thread at a time into a section of code. A **permit** is one unit of a bounded budget that threads take and return. A **compare-and-swap** is one atomic instruction that writes only if the word still holds the value you read. A **mailbox** is the queue of messages an isolated worker reads from. Each pattern here is one answer to the second question, or a way to run the tasks that ask it.
+A program with one thread cannot race itself. Once two threads touch the same data, the result depends on how their steps interleave, and a bug no single run reproduces appears. Two questions follow: how do you run many tasks without a thread each, and what do you do about shared state? A **race condition** is an interleaving-dependent result. A **lock** admits one thread at a time.
 
 ## Explained
 <!--meta block=explain-->
@@ -43,9 +41,17 @@ Running the tasks is a separate axis. A fixed pool of workers bounds how many ta
 
 Before you share anything you decide how the work runs. A fixed set of worker threads pulls tasks from a queue and runs each to completion, so you skip thread start-up cost and cap how many tasks run at once. It also sets the number of threads that can contend for the state in the steps that follow.
 
+### [Fork-Join](../patterns/concurrency/fork-join.md) {#tour-fork-join}
+
+A job splits into small pieces that run on a pool, often with work stealing, then the join waits for them and merges the results.
+
 ### [Future / Promise](../patterns/concurrency/future-promise.md) {#tour-future-promise}
 
 Submitting work to the pool hands back a placeholder at once. The caller carries on, and the value or the error is written into the placeholder when the work finishes, so the caller can wait for it only when it truly needs it.
+
+### [Mutex](../patterns/concurrency/mutex.md) {#tour-mutex}
+
+A lock with an owner guards the shared data, so two threads cannot interleave their reads and writes. Every other caller waits its turn.
 
 ### [Semaphore](../patterns/concurrency/semaphore.md) {#tour-semaphore}
 
@@ -55,9 +61,17 @@ A counter holding N permits: acquire takes one and blocks at zero, release retur
 
 The first answer to shared state: a lock plus condition variables around one object, so only one thread runs its synchronized methods at a time. A method that finds the state not ready waits on a condition and is woken when it changes. It is correct by inspection, which is why you start here.
 
+### [Double-Checked Locking](../patterns/concurrency/double-checked-locking.md) {#tour-double-checked-locking}
+
+Check for the object without a lock, then lock and check again before creating it. It is subtle: it needs a memory barrier to be correct.
+
 ### [Read-Write Lock](../patterns/concurrency/rw-lock.md) {#tour-rw-lock}
 
 A finer-grained monitor: any number of threads may hold read mode together, but a writer waits for every reader and then excludes everyone. It pays off when reads far outnumber writes and readers were queueing behind each other for no reason.
+
+### [Barrier](../patterns/concurrency/barrier.md) {#tour-barrier}
+
+Threads wait at a barrier until all arrive, so no thread starts the next phase before every thread has finished the last.
 
 ### [Copy-on-Write](../patterns/concurrency/copy-on-write.md) {#tour-copy-on-write}
 
@@ -74,6 +88,18 @@ Every race needs mutable state and more than one thread on it. Locks discipline 
 ### [Actor Model](../patterns/concurrency/actor-model.md) {#tour-actor-model}
 
 An actor has private state, a mailbox and a behavior, and never touches another actor's memory. It is confinement made concrete, with message passing as the only way in. Bounded mailboxes push back on a fast sender, and it is the alternative to guarding shared state with a lock.
+
+### [Active Object](../patterns/concurrency/active-object.md) {#tour-active-object}
+
+Calls become queued requests that one scheduler thread runs, and each returns a future. Callers never take a lock, and state stays owned by one thread.
+
+### [Channels](../patterns/concurrency/channels.md) {#tour-channels}
+
+Tasks hand values to each other through a bounded channel, so ownership moves with the value and a full buffer slows the sender.
+
+### [Proactor](../patterns/concurrency/proactor.md) {#tour-proactor}
+
+The operating system completes the read or write and hands the finished result to a handler, so no thread waits while the I/O runs.
 
 <!-- tour:end -->
 

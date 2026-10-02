@@ -16,18 +16,17 @@ One workload takes a disproportionate share of infrastructure it holds in common
 ## What it is
 <!--meta block=description-->
 
-A **noisy neighbour** is a workload that consumes far more of a shared resource than its share, degrading everything else that depends on the same resource. The resource can be anything pooled: CPU and memory bandwidth on a host, IOPS (input/output operations per second) on a volume, leases in a connection pool, entries in a [shared cache](../patterns/caching/distributed-cache.md), capacity on a network link. Nothing is broken and nothing is malicious — the resource simply has no notion of who is entitled to what, so it serves whoever asks hardest.
-
-The distinguishing symptom is that the victim's own telemetry is innocent. Its request rate is flat, no deploy went out, its error rate is zero, and its latency has doubled anyway. The time is being spent queueing at a resource the victim shares and does not control, and the metric that would explain it belongs to a workload the victim cannot see. That is why these incidents are so often investigated in the wrong service for the first hour.
-
-It is a fairness failure, not an overload. An overloaded service has more demand than capacity and says so; a noisy neighbour has capacity that is being allocated badly between independent workloads. It differs from a [hot partition](./hot-partition.md) for the same reason: a hot partition is one workload's own traffic concentrating on one shard, while a noisy neighbour is one workload's traffic landing on somebody else.
+A noisy neighbour is a workload that takes far more than its share of a pooled resource (CPU, disk operations, connections, cache space) and slows everything else on it. Nothing is broken or malicious; the resource serves whoever asks hardest. You recognise it when the victim's request rate is flat, its error rate is zero and its latency has doubled anyway. It is a fairness failure, not overload: capacity exists but is split badly.
 
 ## Explained
 <!--meta block=explain-->
 
-A noisy neighbour is a workload that takes far more than its share of something pooled, such as a connection pool, disk operations, memory bandwidth or cache space, and slows every other workload on it. Nothing is broken and nobody is malicious: a bulk import, a monthly report or a client stuck in a retry loop just uses what it can reach. The victims' own metrics look innocent, because their request rate is flat and their error rate is zero, while their latency has doubled in a queue at the shared resource. Choose this diagnosis over overload when capacity exists but is being split badly. Partition first by giving each class of work its own pool, so a heavy job drains only its own. Then meter at the entrance: attribute every request to the tenant that caused it and cap the top consumer with a per-tenant rate or concurrency limit, which costs far less than a global limit. Attribution comes first, since you cannot cap what the resource never recorded. Separate pools leave capacity idle and cost money, so give hard isolation only to the few workloads whose latency you sell, and let the rest share under quotas.
+A noisy neighbour is a workload that takes far more than its share of something pooled, such as a connection pool, disk operations, memory bandwidth or cache space, and slows every other workload on it. Nothing is broken and nobody is malicious: a bulk import, a monthly report or a client stuck in a retry loop just uses what it can reach. The victims' metrics look innocent, because their request rate is flat and their error rate is zero, while their latency has doubled in a queue at the shared resource. Choose this diagnosis over overload when capacity exists but is split badly. Partition first, giving each class of work its own pool with a [bulkhead](../patterns/distributed/resilience/bulkhead.md), so a heavy job drains only its own. Then meter at the entrance: attribute every request to its tenant and cap the top consumer with a per-tenant [rate limiter](../patterns/distributed/resilience/rate-limiter.md).
 
-**Example.** A database has a shared pool of 100 connections. Interactive traffic keeps 40 busy. A nightly export opens 80, so the pool is 120 wanted of 100 and interactive calls queue, doubling their latency while their own error rate stays zero. You split it: 70 connections for interactive and 30 for batch. Interactive keeps 40 of 70 busy with room for a spike. The export is capped at 30 connections, so it takes about 80 / 30 = 2.7 times longer. The cost is 30 connections that sit mostly idle by day.
+- **Idle capacity.** Separate pools sit unused while their class is quiet; give hard isolation only to workloads whose latency you sell.
+- **Attribution first.** You cannot cap what the resource never recorded, so tag each request with its tenant before you set limits.
+
+**Example.** A database has a shared pool of 100 connections. Interactive traffic keeps 40 busy. A nightly export opens 80, so 120 are wanted of 100 and interactive calls queue, doubling latency while their error rate stays zero. You split the pool: 70 for interactive, 30 for batch. Interactive keeps room for a spike, and the export takes about 80 / 30 = 2.7 times longer. The cost is 30 connections that sit mostly idle by day.
 
 ## How it happens
 <!--meta block=causes-->
@@ -91,5 +90,9 @@ Attribution comes first in practice, because you cannot throttle, bill or even n
 - [Resource Organisation](../capabilities/resources.md) — Separate accounts or projects, with their own quotas, is the structural fix.
 - [Container Orchestration](../patterns/distributed/coordination/container-orchestration.md) — Declared limits and placement stop one heavy workload eating a host's shared capacity
 - [Multi-Tenancy](../patterns/distributed/routing/multi-tenancy.md) — Isolation models and per-tenant quotas contain a noisy tenant.
+
+**Threatens**
+
+- [Thread Pool](../patterns/concurrency/thread-pool.md) — One shared pool lets a slow or heavy task class take every worker
 
 <!-- relationships:end -->

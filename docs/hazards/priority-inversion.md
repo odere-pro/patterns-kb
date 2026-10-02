@@ -15,11 +15,7 @@ A high-priority task waits for a lock held by a low-priority task, and medium-pr
 ## What it is
 <!--meta block=description-->
 
-**Priority inversion** is a scheduling failure in which the priority order you set is reversed in practice. Three things are needed. A low-priority task holds a lock. A high-priority task needs that lock and blocks. And a medium-priority task, which needs neither, becomes runnable. The scheduler always prefers the medium task over the low one, so the low task never runs long enough to release the lock, and the high task waits behind work it outranks.
-
-The well-documented case is the Mars Pathfinder lander in 1997. A high-priority bus management task shared a lock with a low-priority task that collected weather data. A medium-priority communications task preempted the low one while it held the lock. The bus task missed its deadline, a watchdog timer saw it and reset the computer, and the lander lost the data it had gathered that day. Engineers reproduced it on the ground and fixed it by turning on the priority inheritance option in the operating system, which was then uploaded to Mars.
-
-You recognise it by a deadline missed with the CPU not saturated: the urgent task is not slow, it is blocked, and a trace shows it waiting on a lock whose holder is runnable but not running. It is not a [Deadlock](./deadlock.md), because the holder does finish given enough time, and it is not [Starvation](./starvation.md) by policy: the low task is not denied by a rule against it, it is outcompeted by a task unrelated to the lock.
+Priority inversion reverses the priority order you set: a low-priority task holds a lock, a high-priority task blocks on it, and a medium-priority task that needs neither keeps preempting the holder. You see a deadline missed with the CPU not saturated, and a trace showing the urgent task waiting on a lock whose holder is runnable but not running. The defining trait is that an unrelated task outcompetes the holder, which is neither deadlock nor policy starvation.
 
 ## Explained
 <!--meta block=explain-->
@@ -70,5 +66,11 @@ Better still, avoid the sharing. Keep the critical section as short as possible,
 - [Deadlock](./deadlock.md) — Both wait on a lock, but here the holder finishes given time.
 - [Starvation](./starvation.md) — The low task is outcompeted by unrelated work, not denied by policy.
 - [Priority Queue](../patterns/messaging/priority-queue.md) — Priority is set on messages there and on locking tasks here.
+
+**Threatens**
+
+- [Mutex](../patterns/concurrency/mutex.md) — A low-priority holder is preempted by unrelated work while a high-priority task waits
+- [Monitor Object](../patterns/concurrency/monitor-object.md) — A monitor lock shared across priorities is where the inversion forms
+- [Read-Write Lock](../patterns/concurrency/rw-lock.md) — A low-priority reader or writer holding the lock blocks a high-priority task
 
 <!-- relationships:end -->

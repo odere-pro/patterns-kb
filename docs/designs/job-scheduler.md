@@ -16,12 +16,16 @@ A job scheduler stores what to run and when, then makes sure each job fires clos
 ## Understanding the problem
 <!--meta block=description-->
 
-A job scheduler takes a set of jobs and runs each one at its appointed time — once, at a future date, or on a repeating cadence like "every day at 10:00". It is the plumbing behind reminders, nightly batch jobs, and maintenance sweeps. The surface is small, but two properties dominate everything downstream: jobs must **execute close to their scheduled time** even at high volume, and each must run **at least once** even when the machine running it dies mid-job. A naïve "poll the database on a timer" design satisfies neither at scale, so the interesting work is in getting precision and durability without paying for them on every request.
+A job scheduler runs each job at its appointed time, once, at a future date or on a repeating cadence, behind reminders, nightly batches and maintenance sweeps. Jobs must fire close to their due time at high volume, and each must run at least once even when its machine dies mid-job. Polling the database on a timer fails at scale, so the page walks through getting precision and durability cheaply.
 
 ## Explained
 <!--meta block=explain-->
 
-A job scheduler runs each job within 2 seconds of its due time and at least once, even when a worker dies mid-run. Two moves do it. Every due run is stored as its own row, apart from the job's definition, in a table split by hour. A cheap database check every 5 minutes copies the coming runs into a queue that hides each message until its due second. Workers pull from that queue, and a message a crashed worker never confirmed becomes visible again. Choose this over one loop that polls the database every 2 seconds, which sweeps tens of thousands of rows each time and keeps the database busy. It costs three things. A run can happen twice, so write each task to be safe to repeat, for example set a value instead of adding to it. One hour of rows lands on a single partition, so spread those writes across several. A managed queue does the delay and retry for you, so a self-hosted version must build both. Failed runs retry after 5, 25 and 125 seconds, then go to a dead-letter queue.
+A job scheduler runs each job within 2 seconds of its due time and at least once, even when a worker dies mid-run. Two moves do it. Every due run is stored as its own row, apart from the job's definition, in a table split by hour. A cheap database check every 5 minutes copies the coming runs into a queue that hides each message until its due second. Workers pull from that queue, and a message a crashed worker never confirmed becomes visible again. Choose this over one loop that polls the database every 2 seconds, which sweeps tens of thousands of rows each time. Failed runs retry after 5, 25 and 125 seconds, then go to a dead-letter queue.
+
+- **Double runs.** A run can happen twice, so make each task safe to repeat, such as setting a value, not adding to it.
+- **Hot partition.** One hour of rows lands on a single partition, so spread those writes across several.
+- **Queue dependency.** A managed queue does the delay and retry for you, so a self-hosted version must build both.
 
 **Example.** At 10,000 runs a second, each 5-minute check loads 10,000 times 300 s, which is 3 million messages of about 200 bytes, so about 600 MB. A run due at 10:03:20 is read at 10:00 and queued with a 200 s delay. At 10:03:20 a worker takes it, and at 10:03:21 the worker crashes before confirming. The message becomes visible again and another worker runs it. The cost is a possible double run, so a money transfer in that task would pay twice unless it carries an idempotency key, a unique label that makes the second attempt a no-op.
 
@@ -185,7 +189,7 @@ stateDiagram-v2
 - [Retry with Backoff](../patterns/distributed/resilience/retry-backoff.md) — failed executions are re-enqueued with growing DelaySeconds (5s, 25s, 125s) before being given up on
 - [Dead Letter Channel](../patterns/messaging/dead-letter-channel.md) — jobs that exhaust their retry budget move to a dead-letter queue instead of looping forever
 - [Sharding](../patterns/distributed/routing/sharding.md) — write-sharding the hot hourly execution partition fans a whole hour of writes across many partitions
-- [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) — each in-flight job is leased via SQS visibility timeout plus a heartbeat, so a crashed worker's job auto-releases
+- [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) — each in-flight job is leased via Simple Queue Service (SQS) visibility timeout plus a heartbeat, so a crashed worker's job auto-releases
 - [Autoscaling](../patterns/distributed/routing/autoscaling.md) — the worker pool scales on queue depth, with a pre-warmed baseline and spot instances for spikes
 - [Scheduling](../patterns/concurrency/scheduling.md) — a job runs at its appointed time or on its CRON cadence rather than when it was submitted, which is the entire surface of the design
 - [Object Storage](../patterns/distributed/routing/object-storage.md) — Execution rows older than about a year age into cheap object storage so the hot tables stay small

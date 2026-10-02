@@ -1,5 +1,5 @@
 /**
- * The KB's own page rules, KB-001 to KB-015 on docs/reference/page-rules.md:
+ * The KB's own page rules, KB-001 to KB-016 on docs/reference/page-rules.md:
  * what the page shape of spec kb.content.page-shape does not say, because it
  * is this knowledge base's and no other's (plans/harness-optimize.md, P3a).
  *
@@ -20,6 +20,8 @@
  *   KB-014  the explain block: one paragraph of 60 to 180 words, a costs list of 2 to 4
  *           bullets (required on a pattern), then one example
  *   KB-015  the description block: one paragraph of at most 80 words
+ *   KB-016  the selfcheck block, where a kind allows it: three blockquotes, each a bold
+ *           question and a short answer citing an element id
  *
  * Every closed list comes from the measured tree, never from this file: the
  * kinds, their blocks, the fact values and the sketch languages from
@@ -62,6 +64,7 @@ import path from 'node:path';
 import { readAllowlist } from '../lib/allowlist.js';
 import { descriptionProblems } from '../lib/description-shape.js';
 import { COSTS_KIND, explainProblems } from '../lib/explain-shape.js';
+import { selfcheckProblems } from '../lib/selfcheck-shape.js';
 import { gitFiles } from '../lib/exec.js';
 import { frontmatterMany, listOf, SOLVES_MAX_WORDS, solvesWords, type FmValue } from '../lib/frontmatter.js';
 import { main, UsageError, type GateContext, type GateSpec } from '../lib/gate.js';
@@ -93,6 +96,7 @@ export const RULE = {
   keys: 'KB-013',
   explain: 'KB-014',
   description: 'KB-015',
+  selfcheck: 'KB-016',
 } as const;
 
 /**
@@ -260,6 +264,12 @@ export function bodyFindings(text: string, kind: Kind, model: ContentModel, area
     for (const p of descriptionProblems(description.nodes)) {
       out.push({ id: RULE.description, line: p.line ?? description.line, message: p.message, ratchet: 'description', ...(p.words === undefined ? {} : { words: p.words }) });
     }
+  }
+
+  // KB-016: the selfcheck block, when the page carries one.
+  const selfcheck = blockNodes(tree, 'selfcheck');
+  if (selfcheck !== null) {
+    for (const p of selfcheckProblems(selfcheck.nodes)) add(RULE.selfcheck, p.line ?? selfcheck.line, p.message);
   }
   return out;
 }

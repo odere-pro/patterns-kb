@@ -205,6 +205,10 @@ cart.total(100);         // => 90
 - [Bridge](../structural/bridge.md) — Interchangeable behaviour vs. a permanent split between what and how
 - [Command](./command.md) — Swap interchangeable ways of doing one job vs. reify one operation to defer, queue or log it
 
+**Prevents**
+
+- [Shotgun Surgery](../../../hazards/shotgun-surgery.md) — Puts each variant, such as a payment type, in one class, so adding one touches one place
+
 **Demonstrated by**
 
 - [Parking Lot](../../../designs/parking-lot.md) — Parking Lot reaches for a pricing/allocation Strategy only when flat hourly pricing outgrows a single rule

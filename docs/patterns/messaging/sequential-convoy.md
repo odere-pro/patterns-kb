@@ -16,20 +16,16 @@ Partitions a stream by a category key and hands each category to exactly one con
 ## What it is
 <!--meta block=description-->
 
-Order matters more often than it looks. An order is created, a transaction is added to it, that transaction is amended, the order is cancelled — apply those four events in the wrong sequence and the record is wrong in a way no retry will fix.
-
-The two obvious designs each fail at one end. One consumer preserves order perfectly and cannot scale past what a single worker can do. [Competing Consumers](./competing-consumers.md) scales beautifully and destroys order, because two workers can pull consecutive events for the same order and apply them at the same moment.
-
-Sequential convoy resolves that by noticing the requirement was never global. You do not need every message in order — you need each order's messages in order, and one order's events have nothing to do with another's. So stamp every message with a **category key** naming the group it belongs to, and let the broker partition on it. A consumer takes an exclusive lock on a group, receives that group's messages strictly in enqueue order, and holds the group while it works; other consumers hold other groups at the same time.
-
-The decision that matters is the key, because it is the unit of parallelism as well as the unit of ordering. A key too coarse — one covering every order for a customer — collapses the system into a single lane. A key too fine orders things that never needed ordering and buys nothing. Choose the smallest entity whose events genuinely depend on each other.
-
-You pay for this with a strict serial lane per group, and every consequence follows from that one fact. Throughput per group is capped by the time to handle one message. A message that will not process blocks everything behind it in its group, which makes a [Dead Letter Channel](./dead-letter-channel.md) load-bearing rather than nice to have.
+A sequential convoy keeps related messages in order while unrelated ones run in parallel. Each message carries a key naming its group, and only one consumer works on a group at a time, in arrival order. It fits when order matters per entity, such as one order's events, and a single consumer cannot scale.
 
 ## Explained
 <!--meta block=explain-->
 
-A sequential convoy keeps related messages in order while unrelated ones run in parallel. You stamp each message with a key naming its group, such as an order id, and the broker lets only one consumer work on a group at a time, in arrival order, while other consumers take other groups. Choose it over a single consumer, which keeps order but cannot scale, and over competing consumers, which scale but let two workers apply consecutive events of one order at the same time. It costs three things. The key is both the unit of order and the unit of parallelism, so choose the smallest entity whose events must be ordered: too wide a key makes one lane, too narrow orders nothing useful. A message that always fails blocks its whole group, so count delivery attempts and move it to a dead-letter queue (a side queue for failures). And a group lock held too short redelivers work still in progress, while one held too long freezes the group behind a dead consumer, so renew the lock while the handler works.
+A sequential convoy keeps related messages in order while unrelated ones run in parallel. You stamp each message with a key naming its group, such as an order id, and the broker lets only one consumer work on a group at a time, in arrival order, while other consumers take other groups. Choose it over a single consumer, which keeps order but cannot scale, and over competing consumers, which scale but let two workers apply consecutive events of one order at the same time.
+
+- **Key choice.** The key sets both order and parallelism. Pick the smallest entity whose events must be ordered: too wide makes one lane.
+- **Poison message.** A message that always fails blocks its group. Count attempts and move it to a dead-letter queue (a side queue).
+- **Lock timing.** Too short a lock redelivers work in progress; too long freezes the group behind a dead consumer. Renew while the handler works.
 
 **Example.** An order produces 4 events: created, item added, item amended, cancelled. Each takes 100 ms to handle, so one group moves at most 10 messages a second. With 8 consumers each holding one group, you handle up to 80 a second across 8 orders, and each order stays in sequence. Competing consumers could apply amended before added. The cost: if the amended event always fails, with 5 attempts it holds that order for 5 x 100 ms = 0.5 s before it goes to the dead-letter queue, and cancelled waits behind it. Keying by customer instead of order would put a customer with 50 orders in one lane.
 
@@ -251,6 +247,10 @@ async function runOneGroup(broker: SessionBroker, handle: (m: Message) => Promis
 - [Distributed Lock](../distributed/coordination/distributed-lock.md) — Where the broker has no sessions, lock on the category key yourself
 - [Priority Queue](./priority-queue.md) — Sessions inside a priority level, so ordering holds within each class
 
+**Alternative to**
+
+- [Resequencer](./resequencer.md) — Avoids disorder up front by letting one consumer at a time work on each key's messages
+
 **Requires**
 
 - [Dead Letter Channel](./dead-letter-channel.md) — A poison message blocks its whole ordered group, so it needs somewhere to go
@@ -260,13 +260,17 @@ async function runOneGroup(broker: SessionBroker, handle: (m: Message) => Promis
 - [Race Condition](../../hazards/race-condition.md) — One consumer per group at a time removes the concurrent-update race entirely
 - [Head-of-Line Blocking](../../hazards/head-of-line-blocking.md) — The convoy is the answer to an ordered lane whose head can block everything.
 
+**Exposed to**
+
+- [Poison Message](../../hazards/poison-message.md) — Can fall into poison message when ordered processing makes one bad message block every message behind it
+
 **Demonstrated by**
 
-- [Persona Identification & Sanction Check](../../designs/persona-identification.md) — a KYC flow's results are delivered one lane per flow — a delivery_cursor row per flow keeps the queue parallel across flows while each flow is single-file
+- [Persona Identification & Sanction Check](../../designs/persona-identification.md) — a know your customer (KYC) flow's results are delivered one lane per flow — a delivery_cursor row per flow keeps the queue parallel across flows while each flow is single-file
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — a case study that prices the lane as well as praising it: ordering is bought with head-of-line blocking, bounded by the lane's own attempt budget
 
 **Implemented by**
 
-- [Messaging & Eventing](../../capabilities/messaging.md) — FIFO message groups and broker sessions keep one related run in order while others proceed in parallel.
+- [Messaging & Eventing](../../capabilities/messaging.md) — First in, first out (FIFO) message groups and broker sessions keep one related run in order while others proceed in parallel.
 
 <!-- relationships:end -->

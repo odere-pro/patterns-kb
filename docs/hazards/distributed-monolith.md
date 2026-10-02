@@ -16,18 +16,17 @@ A system split into separately deployable services that still cannot be deployed
 ## What it is
 <!--meta block=description-->
 
-You split the monolith into eight services, and eight months later a release still needs every team in the room. The diagnostic is not the diagram, it is the release calendar: if shipping one service requires shipping others on the same afternoon, they are one system wearing several uniforms.
-
-The trade you made when you split was explicit. Distribution costs network hops, partial failure, eventual consistency, a pipeline and a runtime per service, and a failure with no shared call stack to read. You accept that bill in exchange for independence — each team ships when it chooses. A distributed monolith pays the bill and collects nothing.
-
-It is not a [Big Ball of Mud](./big-ball-of-mud.md), though the two get confused. The mud is the absence of discernible structure. A distributed monolith usually has a very tidy diagram: clean boxes, labelled arrows, a slide everyone approved. Its structure is simply drawn in the wrong place, and the network now enforces it — what used to be an unfortunate import is a synchronous call between two teams' roadmaps.
+A distributed monolith is a system split into many services that still have to change and ship together. You recognize it by the release calendar, not the diagram: shipping one service means shipping others the same afternoon. The defining trait is that it pays the full price of distribution and collects none of the independence. It is not a Big Ball of Mud: its diagram is tidy, with the structure drawn in the wrong place.
 
 ## Explained
 <!--meta block=explain-->
 
-A distributed monolith is a system split into many services that still have to change and ship together. You pay the full price of distribution, which is network delays, partial failures and one pipeline per service, and you collect none of the independence it was meant to buy. The test is the release calendar, not the diagram: if shipping one service means shipping others the same afternoon, they are one system. It grows when boundaries are drawn before the business is understood, along technical layers, with a shared database schema, shared libraries holding business logic, or chains of synchronous calls. Each choice looks reasonable alone. Fix the data first, because two services on one schema are one service whatever the pipelines say: give each a private store and local read copies. Then cut the chains, sending an event where the caller needs no answer and running multi-service steps as a series of local steps with undo actions. Draw new boundaries from the business domain, and stay coarse when unsure, since splitting later is routine and merging four services back is a project. Track one number: how many services were released together this month.
+A distributed monolith is a system split into many services that still have to change and ship together. You pay the full price of distribution, which is network delays, partial failures and one pipeline per service, and you collect none of the independence it was meant to buy. It grows when boundaries are drawn before the business is understood, along technical layers, with a shared database schema, shared libraries holding business logic, or chains of synchronous calls. Each choice looks reasonable alone. Fix the data first, because two services on one schema are one service whatever the pipelines say: give each a private store and local read copies. Then cut the chains, sending an event where the caller needs no answer and running multi-service steps as a [saga](../patterns/distributed/coordination/saga.md) of local steps with undo actions. Draw new boundaries from the business domain, and stay coarse when unsure. Track one number: how many services were released together this month.
 
-**Example.** An order request calls pricing, stock, billing and shipping in a chain, all on one shared schema. Each service is up 99.9% of the time, but the chain needs 5 services, so it is up 0.999 to the fifth power, about 99.5%. That is roughly 44 hours of failure a year, not 9. Five teams release together each month. The team gives each service its own store with a local copy of what it reads, and orders publish events that billing and shipping consume. The order request now needs 3 services, orders, pricing and stock, and releases drop from 5 services at once to 1. The price is copies that can lag by seconds.
+- **Stale copies.** Local read copies can lag by seconds, so design screens and rules to tolerate that.
+- **Merging is costly.** Splitting later is routine but merging four services back is a project, so stay coarse when unsure.
+
+**Example.** An order request calls pricing, stock, billing and shipping in a chain, all on one shared schema. Each service is up 99.9% of the time, but the chain needs 5 services, so it is up 0.999 to the fifth power, about 99.5%. That is roughly 44 hours of failure a year, not 9. Five teams release together each month. The team gives each service its own store with a local copy of what it reads, and orders publish events that billing and shipping consume. The order request now needs 3 services, and releases drop from 5 services at once to 1.
 
 ## How it happens
 <!--meta block=causes-->
@@ -87,5 +86,9 @@ If you are already inside one, extract at the edges. Take the service with the f
 - [Contract Testing](../patterns/testing/contract-testing.md) — Verified contracts are what let services deploy separately instead of only together
 - [API Versioning](../patterns/distributed/routing/api-versioning.md) — Versioned contracts remove the lockstep release that makes services a monolith
 - [Conway's Law](../principles/conways-law.md) — Layer-owned services are Conway's law at work, and the cure starts in the org.
+
+**Threatens**
+
+- [Microservices](../patterns/architecture/microservices.md) — A split along technical layers with a shared schema keeps the coupling and adds the network
 
 <!-- relationships:end -->

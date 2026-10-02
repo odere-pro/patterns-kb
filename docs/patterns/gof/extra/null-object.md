@@ -15,16 +15,15 @@ Replaces a null reference with an object that honours the same interface but qui
 ## What it is
 <!--meta block=description-->
 
-A **null object** is a real object that implements the same interface as the thing it stands in for, but whose methods do nothing — or return a neutral, harmless value. Instead of handing back `null` to signal "there is nothing here," a factory or default returns this do-nothing instance. Callers invoke it exactly like the real thing and get safe, empty behaviour. It is not one of the original twenty-three design patterns: it was catalogued separately, first as Void Value and then under this name, and it reached most working programmers through the refactoring literature rather than the design-patterns book.
-
-The problem it resolves is the **null check** that metastasises through a codebase. Every place that might receive a missing collaborator grows an `if (x != null)` guard; forget one and you get a `NullPointerException` at runtime. The checks add noise, hide the real logic, and drift out of sync as the code changes.
-
-The null object collapses all of that into one code path. There is only ever a valid object to call, so the guards disappear and "absent" becomes an explicit, testable behaviour rather than a special case sprinkled across every caller.
+A null object is a real object that implements the same interface as the thing it stands in for, but whose methods do nothing or return a harmless value. A factory or default returns it instead of null, so callers drop their `if (x != null)` guards and run one code path. It is not a Gang of Four pattern.
 
 ## Explained
 <!--meta block=explain-->
 
-A null object is a real object with the same interface as the thing it replaces, whose methods do nothing or return a harmless value, so code that would otherwise get null calls it like any other. It removes the \`if (x != null)\` guard from every caller and leaves one code path. Choose it over a null check when having nothing is a normal state and doing nothing is the correct response, such as a logger with no output. Outside that, it turns a real failure into silence: a write that goes nowhere, a notice nobody receives, a report with no rows and no error. Such bugs cost more than the crash they replaced, since there is no stack trace. Counter it by counting or logging each call to the null object where absence would be a surprise, and keep the pattern to places where silence is intended. It also adds one empty class per interface, so where your language has optional types, use those.
+A null object is a real object with the same interface as the thing it replaces, whose methods do nothing or return a harmless value, so code that would otherwise get null calls it like any other. It removes the \`if (x != null)\` guard from every caller and leaves one code path. Choose it over a null check when having nothing is a normal state and doing nothing is the correct response, such as a logger with no output.
+
+- **Silent failure.** A real failure becomes a write that goes nowhere, with no stack trace. Count or log calls where absence would be a surprise.
+- **Extra class.** It adds one empty class per interface, so where your language has optional types, use those.
 
 **Example.** A checkout sends a receipt through a Mailer. Guests have no email, so the code uses a NullMailer whose send does nothing, and checkout loses its 6 null checks. That works for guests. Then a bug gives registered users a NullMailer too, because their profile lookup failed. 400 receipts are never sent and nothing throws. The fix is to make the NullMailer count its calls and to alert when a registered user reaches it. The cost is one extra class and a counter.
 

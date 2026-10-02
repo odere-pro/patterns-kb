@@ -15,16 +15,17 @@ A dedicated, hardened broker sits at the network edge and validates every reques
 ## What it is
 <!--meta block=description-->
 
-A **gatekeeper** is a dedicated, low-privilege broker that stands between untrusted clients and a protected service or resource. It is the only component allowed to talk to that service directly: every inbound request is authenticated, authorized, rate-limited, and validated against a strict schema before the gatekeeper forwards it on — or hands the client scoped, temporary access to the resource itself.
-
-The problem it resolves is **trust concentration**. A service that faces the open network directly must mix security-sensitive decisions — parsing hostile input, checking credentials, enforcing quotas — into the same process that holds its data and business logic. Any bug in that exposed surface is a bug in the process you can least afford to lose. Splitting the trust boundary into its own process moves the dangerous work somewhere expendable.
-
-The gatekeeper is deliberately small and dumb by design. Less code exposed to the outside world means less to audit and less that can go wrong under attack. It typically runs with minimal privileges and no direct access to the service's data store, so compromising the gatekeeper alone does not hand over the backend — the attacker still has to get past a second, differently-shaped boundary.
+A gatekeeper is a small, low-privilege broker between untrusted clients and a protected service. It is the only component that talks to the service: it authenticates, authorizes, rate-limits and validates each request against a strict schema before forwarding it, or hands the client scoped, temporary access. It resolves trust concentration, where parsing hostile input shares a process with your data. A compromised gatekeeper still faces a second boundary.
 
 ## Explained
 <!--meta block=explain-->
 
-A gatekeeper is a small, low-privilege service that stands between untrusted clients and the service holding your data. It checks who the caller is, applies limits, validates the request against a strict schema and only then forwards it. Without it, the process that holds your data and business logic also parses hostile input and checks credentials, so a bug in that exposed surface is a bug in the process you can least afford to lose. Choose it over letting the service face the network when callers are untrusted: hostile parsing then happens in a process you can throw away, with no route to the data store, so compromising it gets an attacker a second boundary, not the backend. It costs a hop and a validation pass on every call, so measure the added delay. It becomes a single point of failure, so run several copies. Its validation must stay in step with what the service expects, or drift rejects legitimate traffic, so test both against one shared schema. It protects only the path through it, so close every other route to the service, or the boundary is decoration.
+A gatekeeper is a small, low-privilege service that stands between untrusted clients and the service holding your data. It checks who the caller is, applies limits, validates the request against a strict schema and only then forwards it. Without it, the process that holds your data and business logic also parses hostile input and checks credentials, so a bug in that exposed surface is a bug in the process you can least afford to lose. Choose it over letting the service face the network when callers are untrusted: hostile parsing then happens in a process you can throw away, with no route to the data store, so compromising it gets an attacker a second boundary, not the backend.
+
+- **Added hop.** Every call pays a hop and a validation pass, so measure the added delay.
+- **Single point of failure.** It carries all traffic to the service, so run several copies.
+- **Schema drift.** Validation out of step with the service rejects legitimate traffic, so test both against one shared schema.
+- **Bypass routes.** It protects only the path through it, so close every other route to the service.
 
 **Example.** An orders service accepts JSON bodies up to 10 KB. The gatekeeper rejects larger bodies, bad tokens and bad schemas, and allows 50 requests a minute per client. A crafted 5 MB body crashes the gatekeeper's parser, one of 3 copies, which restarts in 2 s while the others serve, and the data store stays out of reach. The cost shows when the service adds a coupon field and the gatekeeper schema is not yet updated: every order with a coupon is rejected for the 40 minutes until the schema ships.
 
@@ -195,7 +196,7 @@ async function handle(req: Request): Promise<Response> {
 - [Valet Key](./valet-key.md) — Screen at the gate, then hand out scoped keys
 - [Intercepting Validator](../../security/intercepting-validator.md) — The gatekeeper validates before forwarding
 - [Identity Is the Perimeter](../../../principles/identity-as-perimeter.md) — The gate is one checkpoint, not the whole boundary
-- [Networking](../../../capabilities/networking.md) — In a cloud network this is the managed WAF or API gateway.
+- [Networking](../../../capabilities/networking.md) — In a cloud network this is the managed web application firewall (WAF) or application programming interface (API) gateway.
 
 **Specializes**
 

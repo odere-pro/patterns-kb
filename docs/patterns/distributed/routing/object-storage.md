@@ -17,18 +17,17 @@ A store built for large, unstructured binary objects — images, video, backups 
 ## What it is
 <!--meta block=description-->
 
-Someone uploads a 40 MB video. Keep it in your database and every backup, every restore and every query that never touches that video gets slower, because the bytes sit in the same pages the rest of your data has to move past. Send the bytes to a store built for exactly this instead: hand it a whole file, get back a short key, present the key later and get the whole file back. Your database keeps the key — a few dozen characters — and stays small and quick.
-
-**Object storage** keeps data as opaque objects — a blob of bytes, a bundle of metadata, and a unique key — in a flat namespace, retrieved by key over an HTTP API rather than by a filesystem path or a database row. Each object is written and read whole: you don't append to one or edit part of it, you replace it. It is purpose-built to hold large, unstructured binary data — images, video, backups, logs, static assets, ML datasets — cheaply and at effectively unbounded scale.
-
-The force it resolves is a mismatch of jobs. A relational or document database is built for many small, structured, frequently updated records with rich queries and transactions. Push large binary blobs into it and everything suffers: rows bloat, backups balloon, the buffer cache thrashes, and every query slows for data it never touches. Object storage takes the blobs out of that hot path — the database keeps only a small reference (a key or URL), and the bytes live in a store designed for exactly this: durable, cheap per gigabyte, horizontally scalable, and directly addressable over HTTP.
-
-Objects live in buckets (containers), each object named by a key, with per-object authorization on an HTTP interface. Because an object is reachable by URL, it pairs naturally with a [CDN](./cdn.md) in front to cache it at the edge, and with a [Valet Key](./valet-key.md) — a short-lived pre-signed URL — so a client can upload or download the bytes directly without routing them through your servers. The price of that simplicity is a narrow interface: no in-place edits, no filesystem semantics, and consistency that varies by store — the flagship clouds are now strongly consistent even for overwrites and listings, but a portable design cannot assume that of every S3-compatible store.
+Object storage keeps data as whole objects, each a blob of bytes, metadata and a unique key, in a flat namespace reached over an HTTP API. You replace an object, never edit it in place. It holds large unstructured data, such as images, video, backups and logs, cheaply at unbounded scale, while your database keeps only the key. It pairs with a CDN for reads and a valet key, a short-lived signed URL, for direct uploads.
 
 ## Explained
 <!--meta block=explain-->
 
-Object storage keeps files as whole objects, each a block of bytes with metadata and a unique key, and you read or write one by key over an HTTP API. You store big files such as videos and backups there and keep only the key in your database. Without it, a 40 MB video in a database row makes every backup, restore and unrelated query slower, because the bytes sit in the same pages as your other data. The store is cheap per gigabyte, copies each object across devices for durability, and grows without you provisioning capacity. Choose it over a database for large files you write once and read whole, and over a file system when you do not need renames, appends or locks. An object is replaced, never edited in place, and you cannot query inside it. It costs four things. Latency is higher than a local disk, so put a CDN in front of hot objects. Consistency varies between stores, so check the guarantee of the one you run. A public bucket or a leaked signed link exposes data, so block public access and keep signed links short. And the database row and the object drift apart, so write the row first and run a sweep that finds orphans in both directions.
+Object storage keeps files as whole objects, each a block of bytes with metadata and a unique key, and you read or write one by key over an HTTP API. You store big files such as videos and backups there and keep only the key in your database. Without it, a 40 MB video in a database row makes every backup, restore and unrelated query slower, because the bytes sit in the same pages as your other data. The store is cheap per gigabyte, copies each object across devices for durability, and grows without you provisioning capacity. Choose it over a database for large files you write once and read whole, and over a file system when you do not need renames, appends or locks. An object is replaced, never edited in place, and you cannot query inside it.
+
+- **Latency.** It is slower than a local disk, so put a CDN in front of hot objects.
+- **Varying consistency.** Guarantees differ between stores, so check the one you run.
+- **Exposure.** A public bucket or leaked signed link exposes data, so block public access and keep signed links short.
+- **Drift.** The database row and the object drift apart, so write the row first and sweep for orphans in both directions.
 
 **Example.** Users upload 1,000 videos of 40 MB a day, 40 GB in all. Each client uploads straight to the store with a signed link that expires in 10 minutes, and your database keeps one row with a key of about 60 characters. The row is written first, marked pending. If 2% of uploads are abandoned, 20 a day leave 800 MB of bytes with no finished row. Without a sweep that is about 292 GB a year paid for and never read. The sweep deletes pending rows and objects older than 1 hour that have no match.
 
@@ -215,7 +214,7 @@ async function idPhotoUrl(flowId: string, store: ObjectStore, db: Db): Promise<s
 
 **Combines with**
 
-- [CDN](./cdn.md) — A CDN caches and serves the store's public objects from the edge, near the user.
+- [CDN](./cdn.md) — A content delivery network (CDN) caches and serves the store's public objects from the edge, near the user.
 - [Valet Key](./valet-key.md) — A pre-signed URL is a valet key: scoped, expiring, direct access to one object.
 - [Claim Check](../../messaging/claim-check.md) — Store the large payload here; the message carries only its key.
 - [Sweeper](../coordination/sweeper.md) — Nothing joins the metadata row to the object, so a sweep reconciles the drift in both directions
@@ -232,7 +231,7 @@ async function idPhotoUrl(flowId: string, store: ObjectStore, db: Db): Promise<s
 - [Instagram](../../../designs/instagram.md) — the design leans on an object store for 750PB of media with cold-tier aging to cheaper storage
 - [Facebook Post Search](../../../designs/fb-post-search.md) — cold-tiering the long tail into object storage is how the design affords 3.6 PB of index
 - [Google News](../../../designs/google-news.md) — article images live as objects referenced by URL from the metadata row, the canonical blobs-belong-in-object-storage split
-- [Strava](../../../designs/strava.md) — cold GPS archives on object storage is the archival tier of a hot/warm/cold layout
+- [Strava](../../../designs/strava.md) — cold Global Positioning System (GPS) archives on object storage is the archival tier of a hot/warm/cold layout
 - [WhatsApp](../../../designs/whatsapp.md) — serving large immutable binaries by reference is precisely what object storage exists for
 - [Dropbox](../../../designs/dropbox.md) — Dropbox offloads virtually unlimited, durable file storage to a blob store and keeps only metadata in its own database
 - [YouTube](../../../designs/youtube.md) — petabyte-scale immutable media addressed by URL is the canonical object-storage workload

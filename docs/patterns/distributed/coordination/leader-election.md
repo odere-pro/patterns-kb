@@ -233,7 +233,7 @@ class LeaderElector {
 
 **Demonstrated by**
 
-- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — the singleton schedulers of a KYC pipeline take a lease rather than relying on being deployed once — takeover on expiry turns a crashed scheduler into a lease interval of delay
+- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — the singleton schedulers of a know your customer (KYC) pipeline take a lease rather than relying on being deployed once — takeover on expiry turns a crashed scheduler into a lease interval of delay
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — leases applied to the recovery machinery itself, so the failover story for the failover mechanism is the same mechanism
 
 **Implemented by**

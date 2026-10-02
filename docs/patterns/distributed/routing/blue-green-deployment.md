@@ -250,6 +250,10 @@ await db.dropColumn("orders", "customer_id");
 
 - [Canary Release](./canary-release.md) — Switch all at once, or ramp a weighted slice and watch
 
+**Has variant**
+
+- [Rolling Deployment](./rolling-deployment.md) — Switches all traffic at once to a full second copy, so rollback is instant but double capacity is needed
+
 **Implemented by**
 
 - [Compute](../../../capabilities/compute.md) — Managed compute platforms ship this as a deployment strategy rather than something you script.

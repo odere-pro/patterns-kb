@@ -215,11 +215,15 @@ class OrderRepository {
 
 **Generalizes**
 
-- [MVC](./mvc.md) — MVC is a layering of UI concerns
+- [MVC](./mvc.md) — Model-view-controller (MVC) is a layering of user interface (UI) concerns
 
 **Prevents**
 
 - [Spaghetti Code](../../hazards/spaghetti-code.md) — Clear tiers keep call flow from tangling
 - [Big Ball of Mud](../../hazards/big-ball-of-mud.md) — Enforced layers resist mud
+
+**Exposed to**
+
+- [Shotgun Surgery](../../hazards/shotgun-surgery.md) — Can fall into shotgun surgery when one new field must be edited into every layer in turn
 
 <!-- relationships:end -->

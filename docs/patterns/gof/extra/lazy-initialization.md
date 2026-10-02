@@ -16,16 +16,16 @@ Holds off building a value until something first asks for it — then creates it
 ## What it is
 <!--meta block=description-->
 
-**Lazy initialization** defers the construction or computation of a value until the first moment it's actually needed. Instead of building everything up front, an accessor checks whether the value already exists; if not, it creates it, stores it, and returns it. Every access after that returns the cached instance.
-
-The force it resolves is **wasted, badly-timed work**. Eager construction pays for objects that may never be used, drags out startup, and can fail before the object is even wanted. Some things are genuinely expensive — a connection pool, a parsed configuration, a large in-memory index — and some can't be built at construction time because their inputs aren't ready yet.
-
-Lazy initialization trades that up-front cost for a small guard on each read: a one-time creation, deferred to the point of first use, then amortized across the object's lifetime. The cost doesn't vanish — it moves.
+Lazy initialization defers building a value until the first time something needs it. An accessor checks whether the value exists, creates and stores it if not, and returns the cached copy on every later call. It avoids paying for objects a run never uses and slow startup. The cost does not vanish; it moves to the first caller.
 
 ## Explained
 <!--meta block=explain-->
 
-Lazy initialization builds a value the first time something asks for it, stores it, and returns the stored copy on every later request. It saves startup time and skips work for features a given run never touches. Choose it over building the value at startup only when construction is expensive and many runs never use the value, otherwise a plain value set at construction is simpler and easier to reason about. Each cost has a counter-move. The first caller pays the whole build time, so warm the value on a background thread at startup if the first request cannot afford that wait. Two callers arriving at once can both build it, so use the thread-safe lazy tool your language provides, not a hand-written lock check. Setup errors appear mid-request rather than at boot, so decide whether a failed build is cached or retried, and report a failure in the logs at once.
+Lazy initialization builds a value the first time something asks for it, stores it, and returns the stored copy on every later request. It saves startup time and skips work for features a given run never touches. Choose it over building the value at startup only when construction is expensive and many runs never use the value, otherwise a plain value set at construction is simpler and easier to reason about.
+
+- **Slow first caller.** The first caller pays the whole build time, so warm the value on a background thread if that wait is too long.
+- **Racing builds.** Two callers arriving at once can both build it, so use your language's thread-safe lazy tool, not a hand-written lock check.
+- **Late errors.** Setup errors appear mid-request, so decide whether a failed build is cached or retried, and log a failure at once.
 
 **Example.** A service has a 400 MB search index that 30 percent of requests use. Built at startup, it adds 20 s to every boot and holds 400 MB in every instance. Built lazily, the 70 percent of requests that skip search never pay, but the first search takes 20 s. Two searches arriving together both start a load, so memory briefly reaches 800 MB. A built-in once-only lazy holder makes the second wait for the first. A background load started at boot then hides the 20 s from users and reports a load error in the logs at once.
 
@@ -181,5 +181,13 @@ export const weightOf = (tier: string): number => rules().lookup(tier);
 - [Proxy](../structural/proxy.md) — A virtual proxy defers creation until first use
 - [Singleton](../creational/singleton.md) — The classic lazily-created single instance
 - [Service Locator](./service-locator.md) — A registry usually builds each service the first time it is asked for
+
+**Alternative to**
+
+- [Double-Checked Locking](../../concurrency/double-checked-locking.md) — Lazy initialization is the wider idea, and a once primitive is the safe way to do it
+
+**Exposed to**
+
+- [N+1 Query](../../../hazards/n-plus-1-query.md) — Can fall into n plus 1 query when loading related data on first touch fires one query per row
 
 <!-- relationships:end -->

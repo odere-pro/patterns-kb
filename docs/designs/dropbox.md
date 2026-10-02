@@ -16,12 +16,17 @@ A file storage service keeps a folder reachable from any device and identical on
 ## Understanding the problem
 <!--meta block=description-->
 
-The service stores files in the cloud, makes them reachable from any device, lets a user share with others, and keeps a folder in sync everywhere it is installed. Editing and in-browser preview are out of scope. Two decisions dominate everything downstream. The first is **file size**: files can be 50GB, which shatters the assumption baked into ordinary request/response design that a payload fits in one round trip — the bytes cannot pass through the app tier at all. The second is **consistency, availability, partition tolerance (CAP) posture**: availability is chosen over consistency, because a few seconds of delay before a change appears on another device is harmless here (unlike a trade that must settle globally before the next order can proceed).
+A cloud file service stores files, makes them reachable from any device, shares them with other users and keeps a folder in sync everywhere it is installed. Two decisions dominate the design. Files reach 50GB, so the bytes cannot pass through the app tier. And availability is chosen over consistency, because a few seconds of sync delay is harmless. The page walks through upload, download, sharing and sync.
 
 ## Explained
 <!--meta block=explain-->
 
-A file service for huge files keeps the bytes off your own servers: your server only checks permissions and signs a short-lived link, and the client sends or fetches the bytes directly from blob storage, which stores files as whole objects. Choose this over passing files through your servers whenever a file cannot cross one request, since a pass-through tier pays for every byte moved while a signing tier pays only per file. It costs four things. You cannot scan or convert a file as it passes, so start that work from storage's upload-complete notice. A signed link works for anyone who holds it, so expire it in minutes. The client is the only witness to its own upload, so before committing the file ask storage which parts arrived instead of believing the client. And favouring availability means two devices can edit at once with no merge, so the later save wins and the earlier edit is lost; say that out loud as a product decision. The client cuts large files into 5 to 10 MB chunks, so a dropped connection resumes from the first missing chunk.
+A file service for huge files keeps the bytes off your own servers: your server only checks permissions and signs a short-lived link, and the client sends or fetches the bytes directly from [blob storage](../patterns/distributed/routing/object-storage.md), which stores files as whole objects. The client cuts large files into 5 to 10 MB chunks, so a dropped connection resumes from the first missing chunk. Choose this over passing files through your servers whenever a file cannot cross one request, since a pass-through tier pays for every byte moved while a signing tier pays only per file. Favouring availability over consistency means a few seconds of sync lag is fine.
+
+- **No inline scanning.** You cannot scan or convert a file as it passes. Start that work from storage's upload-complete notice.
+- **Bearer links.** A signed link works for anyone who holds it, so expire it in minutes.
+- **Untrusted client.** Before committing a file, ask storage which parts arrived instead of believing the client.
+- **Lost edits.** Two devices can edit at once with no merge, so the later save wins. State that as a product decision.
 
 **Example.** A 50 GB file over a 100 Mbps link needs 50 x 8,000 / 100 = 4,000 seconds, about 1.1 hours in one request, and a managed gateway rejects any body over 10 MB. Cut into 10 MB chunks that is 5,000 chunks, each with its own signed link. The connection drops after chunk 3,200: the client resumes at chunk 3,201, not byte zero. Before it marks the file uploaded, your server asks storage which of the 5,000 parts it holds, so a client that lied about its progress cannot commit a broken file.
 
@@ -205,11 +210,11 @@ sequenceDiagram
 - [Valet Key](../patterns/distributed/routing/valet-key.md) — the File Service hands the client a presigned URL — a signed, time-limited grant to write to or read from one exact blob location
 - [Object Storage](../patterns/distributed/routing/object-storage.md) — file bytes live in an S3-style blob store, not on the app servers or in the metadata database
 - [CDN](../patterns/distributed/routing/cdn.md) — downloads are served from the edge cache nearest the user, with only a miss reaching origin blob storage
-- [API Gateway](../patterns/distributed/routing/api-gateway.md) — an LB and API gateway front the File Service, handling routing, TLS termination, rate limiting, and request validation
+- [API Gateway](../patterns/distributed/routing/api-gateway.md) — an load balancer (LB) and application programming interface (API) gateway front the File Service, handling routing, transport layer security (TLS) termination, rate limiting, and request validation
 - [Stateless Service](../patterns/distributed/routing/stateless-service.md) — the File Service signs URLs locally and holds no per-request state, so it scales out horizontally behind the load balancer
 - [Publish-Subscribe](../patterns/messaging/pubsub.md) — the server publishes file change events over a persistent per-device connection so edits propagate to other devices in real time
 - [Idempotency](../patterns/messaging/idempotency.md) — resumable chunked uploads rely on re-reported or re-uploaded chunks being safe no-ops, with a content fingerprint deduplicating identical uploads
-- [Least Privilege](../patterns/security/least-privilege.md) — signed URLs are scoped to one object and expire in minutes, optionally bound to an IP or auth cookie, granting the narrowest access for the shortest time
+- [Least Privilege](../patterns/security/least-privilege.md) — signed URLs are scoped to one object and expire in minutes, optionally bound to an Internet Protocol (IP) or auth cookie, granting the narrowest access for the shortest time
 - [Load Balancer](../patterns/distributed/routing/load-balancer.md) — The File Service sits behind a load balancer and gateway so metadata calls spread across stateless instances
 
 <!-- relationships:end -->

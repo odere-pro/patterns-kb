@@ -16,11 +16,7 @@ Every machine keeps its own clock, no two agree, and any rule that orders events
 ## What it is
 <!--meta block=description-->
 
-**Clock skew** is the difference between the time two machines report for the same instant. Each server counts time with its own crystal, which runs a little fast or slow, and a sync service such as NTP (Network Time Protocol) pulls it back toward a shared reference over a network with delay of its own. Between corrections the readings drift apart, and a correction can move a clock forward or backward in one step. The readings are close, never equal, and no machine can see how far off it is.
-
-The trap is that a timestamp looks like a fact. It is a number with a date format, it sorts, and a database column holds it. So code compares the stamps from two machines and treats the larger one as later. That holds while events are seconds apart and the clocks are milliseconds apart. It fails when two writes land within the skew of each other, and it fails without any error, because both stamps are valid times.
-
-Three rules rest on this assumption. **Last-write-wins** keeps the version with the higher timestamp. A **lease** or lock expires when a clock says so, as in a [distributed lock](../patterns/distributed/coordination/distributed-lock.md). **Ordering logs** by wall-clock time merges events from many hosts into one story. Each rule compares a reading from one machine with a reading from another, and each one is wrong when the skew is larger than the margin the rule was built with. You see it afterward: an update that vanished, a record dated before the thing that caused it, two holders of one lock.
+Clock skew is the difference between the times two machines report for the same instant. You see it afterward: an update that vanished, a record dated before its cause, two holders of one lock. The trap is that a timestamp looks like a fact, so code compares stamps from two machines and treats the larger as later. The defining trait is silence: both stamps are valid times, so nothing errors when the skew exceeds the margin.
 
 ## Explained
 <!--meta block=explain-->
@@ -91,5 +87,7 @@ Where you must use real time, bound it. Keep clocks synced with a time service y
 
 - [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) — Skew makes a lease end earlier or later than the holder believes.
 - [Lease](../patterns/distributed/coordination/lease.md) — Skew and drift between nodes are what make a lease expire early or late.
+- [Conditional Write](../patterns/distributed/coordination/conditional-write.md) — Picking the winner by timestamp (last-write-wins) silently drops the newer update
+- [Event Sourcing](../patterns/architecture/event-sourcing.md) — Ordering events from many hosts by wall-clock time scrambles the stream
 
 <!-- relationships:end -->

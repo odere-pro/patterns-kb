@@ -16,12 +16,16 @@ A commission-free trading app shows live stock prices and lets users place and c
 ## Understanding the problem
 <!--meta block=description-->
 
-A trading app does two visible things: it streams the live price of a stock, and it takes buy and sell orders. What makes the design distinctive is what it is not — it is not the exchange. Orders are matched by an external market, reached over an API the app does not control and cannot cheaply connect to. That single dependency drives everything. Prices must reach millions of screens in real time without every client hammering the exchange, and an order must be tracked reliably even though the source of truth for whether it filled lives on the other side of that boundary. The functional surface is tiny; the two non-functional constraints — sub-200&nbsp;ms latency and correct order state — are where the whole design lives.
+A trading app streams live stock prices and takes buy and sell orders, but it is not the exchange: orders match on an external market reached over an API it does not control. The hard part is fanning prices out to millions of screens without hammering the exchange, and tracking order state that the other side owns. The page walks through both.
 
 ## Explained
 <!--meta block=explain-->
 
-Robinhood shows live prices and places stock orders for millions of people while talking to an outside stock exchange that charges for every connection. Two moves make it work. One price service holds a single subscription per symbol and passes each price tick over a publish-subscribe channel, a topic that delivers only to the servers with a watcher, which then push it to their own users. And each order is saved as pending before the exchange sees it, so a failure at any step leaves a record. Choose this over letting each client poll the exchange, which multiplies the exchange calls by the number of clients. It costs three things. A hot symbol's one tick must reach millions of streams, so spread the watchers across many servers. An order the exchange accepted may never be written locally, so the order carries a client-chosen id and a background sweeper asks the exchange about stalled pending orders and safely resubmits. The exchange reports fills under its own id, so keep a small index from that id to the user's shard. You also accept that an order can sit pending until the sweeper catches up, because correct status beats availability here.
+Robinhood shows live prices and places stock orders for millions of people while talking to an outside exchange that charges for every connection. Two moves make it work. One price service holds a single subscription per symbol and passes each tick over a publish-subscribe channel (a topic that delivers only to servers with a watcher), and those servers push it to their own users. And each order is saved as pending before the exchange sees it, so a failure at any step leaves a record. Choose this over letting each client poll the exchange, which multiplies exchange calls by the number of clients. Correct order status wins over availability here, so an order can sit pending until a background sweeper catches up.
+
+- **Hot symbols.** One tick must reach millions of streams, so spread the watchers across many servers.
+- **Lost writes.** The exchange may accept an order we never record, so give each order a client-chosen id and let a sweeper resubmit safely.
+- **Foreign ids.** The exchange reports fills under its own id, so keep a small index from that id to the user's shard.
 
 **Example.** There are 20 million daily users. If each polled the exchange every 200 ms, that is 5 calls a second each, so 100 million calls a second. One subscription per symbol means a few thousand. An order arrives and is saved as pending. The exchange accepts it, then our write of its id fails. The sweeper finds the stalled pending order, asks the exchange for it by the client id and finds it. Without that id, a resubmission could place it twice. The cost is that the user sees pending until the sweep runs.
 
@@ -208,8 +212,8 @@ sequenceDiagram
 **Demonstrates**
 
 - [Publish-Subscribe](../patterns/messaging/pubsub.md) — each symbol's price is published to a Redis channel so a tick reaches only the symbol-service servers that have a subscriber for it
-- [Fan-Out](../patterns/messaging/fan-out.md) — a symbol-service server that receives one tick pushes it out to every SSE client watching that symbol
-- [Sticky Session](../patterns/distributed/routing/sticky-session.md) — the load balancer pins each long-lived SSE client to the server that owns its stream
+- [Fan-Out](../patterns/messaging/fan-out.md) — a symbol-service server that receives one tick pushes it out to every server-sent events (SSE) client watching that symbol
+- [Sticky Session](../patterns/distributed/routing/sticky-session.md) — the load balancer pins each long-lived server-sent events (SSE) client to the server that owns its stream
 - [Gateway](../patterns/enterprise/gateway.md) — all exchange-bound order traffic is funnelled through one dispatch gateway with a small fixed egress
 - [Sharding](../patterns/distributed/routing/sharding.md) — the order store is horizontally partitioned by userId so a user's orders and queries live on one node
 - [Idempotency](../patterns/messaging/idempotency.md) — a client-supplied order id lets the clean-up job query and re-submit stuck orders without ever double-placing

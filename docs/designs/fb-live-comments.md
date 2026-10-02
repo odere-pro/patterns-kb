@@ -16,12 +16,16 @@ Live Comments streams a running feed of viewer comments beneath a live video: ev
 ## Understanding the problem
 <!--meta block=description-->
 
-Viewers of a live video type comments; those comments appear, near-instantly, on every other viewer's screen. The write is trivial — a short string, saved once — but each write must reach an audience that can range from a handful to hundreds of millions. That asymmetry decides everything: the engineering is not in storing comments, it is in broadcasting them, keeping the end-to-end delay below the threshold at which a human stops perceiving it as live. Two things are explicitly not the job here: deciding who is allowed to post (authorization) and deciding what may be posted (moderation). The design that remains is a study in real-time distribution at scale.
+Viewers of a live video post comments that appear near-instantly on every other viewer's screen. The write is a short string saved once, but each write must reach an audience from a handful to hundreds of millions, so the work is broadcasting, not storing. The page designs real-time distribution that keeps end-to-end delay below what people perceive as live. Authorization and moderation are out of scope.
 
 ## Explained
 <!--meta block=explain-->
 
-A live-comments system saves each comment once, then pushes it down a long-lived connection to every viewer of that video, so the same video's viewers see it in under 200 ms. Writes are cheap; the cost is fan-out, one comment multiplied by the audience. Choose pushing over having each viewer poll once the audience is large, because polling fast enough to feel live makes nearly every request return nothing. For a stream with a few hundred viewers, polling is cheaper, and each open connection is something you must monitor. It costs three things. Delivery is fire-and-forget, so persist every comment before you publish it, keep a bounded cache of recent comments for reconnects, and have the client drop repeats by comment id where replay and live overlap. A huge stream gets too many connections for any fleet, so past a threshold switch it to an edge-cached snapshot of the last couple of hundred comments, accepting 1 to 2 seconds of delay, with separate switch-on and switch-off thresholds so a borderline stream does not flap between modes. And push needs servers grouped by video, so hash the video id at the load balancer.
+A live-comments system saves each comment once, then pushes it down a long-lived connection ([WebSocket](../patterns/messaging/websocket.md) or [server-sent events](../patterns/messaging/server-sent-events.md)) to every viewer of that video, so they see it in under 200 ms. Writes are cheap; the cost is fan-out, one comment multiplied by the audience. Choose pushing over having each viewer poll once the audience is large, because polling fast enough to feel live makes nearly every request return nothing. For a stream with a few hundred viewers, polling is cheaper, and every open connection is something you must monitor.
+
+- **Lossy delivery.** Push is fire-and-forget. Persist before publishing, cache recent comments for reconnects, and have the client drop repeats by comment id.
+- **Connection ceiling.** A huge stream outgrows any fleet. Past a threshold serve an edge-cached snapshot, with separate on and off thresholds to stop flapping.
+- **Sticky routing.** Push needs servers grouped by video, so hash the video id at the load balancer.
 
 **Example.** A stream has 50,000 viewers and 100 comments a second. Each comment goes to all 50,000, so the delivery tier pushes 50,000 x 100 = 5 million messages a second for this one video, while the database takes 100 writes a second. A viewer's train enters a tunnel for 5 seconds and misses 500 comments. On reconnect the browser sends the id of the last comment it saw, the server replays the later ones from the recent cache, and the client discards any it already showed.
 
@@ -202,8 +206,8 @@ sequenceDiagram
 - [Fan-Out](../patterns/messaging/fan-out.md) — a single posted comment must be delivered to every viewer of that video, from a handful to hundreds of millions
 - [Consistent Hashing](../patterns/distributed/routing/consistent-hashing.md) — the L7 load balancer hashes on liveVideoId so same-video viewers converge on the same messaging server, keeping subscription sets small
 - [Load Balancer](../patterns/distributed/routing/load-balancer.md) — a Layer 7 load balancer inspects the request and routes by liveVideoId rather than blindly round-robining connections
-- [CDN](../patterns/distributed/routing/cdn.md) — mega-streams snapshot recent comments to the edge every second and clients poll the CDN instead of holding a live push connection
+- [CDN](../patterns/distributed/routing/cdn.md) — mega-streams snapshot recent comments to the edge every second and clients poll the content delivery network (CDN) instead of holding a live push connection
 - [Distributed Cache](../patterns/caching/distributed-cache.md) — recent comments live in a shared Redis cache so any messaging server can replay them when a reconnecting viewer lands elsewhere
-- [Idempotency](../patterns/messaging/idempotency.md) — on reconnect the same comment can arrive via both SSE replay and the live stream, so the client dedupes by comment id
+- [Idempotency](../patterns/messaging/idempotency.md) — on reconnect the same comment can arrive via both server-sent events (SSE) replay and the live stream, so the client dedupes by comment id
 
 <!-- relationships:end -->

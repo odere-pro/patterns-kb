@@ -14,9 +14,7 @@ A good test checks one behaviour and runs fast. These patterns shape the test bo
 ## The question
 <!--meta block=description-->
 
-A test that calls real collaborators is slow, and one that touches a database or a payment service is also unreliable. Replace the collaborator with something simpler and the test gets fast, but now it can pass while the real thing is broken. Testing patterns are the ways to shape a test and its stand-ins so the answer stays trustworthy.
-
-The vocabulary is small. The **system under test** is the code the test is about. A **test double** is any stand-in for a real collaborator. A **fixture** is the data and state a test needs before it runs. A **selector** is the address of an element on a screen. The double family differs by what the stand-in does: it occupies a slot, answers with canned values, works in a lighter way, records calls, or checks calls against a script.
+A test that calls real collaborators is slow, and one that touches a database or payment service is also unreliable. Replace the collaborator and the test gets fast, but it can pass while the real thing is broken. The **system under test** is the code the test is about. A **test double** is a stand-in for a collaborator. A **fixture** is the data a test needs first. A **selector** addresses a screen element. These patterns keep the answer trustworthy.
 
 ## Explained
 <!--meta block=explain-->

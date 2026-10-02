@@ -205,4 +205,10 @@ await order.save(); // UPDATE orders SET total = ... WHERE id = 42
 
 - [Entity](../ddd/entity.md) — One row that persists itself, not a domain identity
 
+**Exposed to**
+
+- [Anemic Domain Model](../../hazards/anemic-domain-model.md) — Can fall into anemic domain model when an active record is a row-shaped class with a setter per column, so rules drift out into services
+- [Partial Object](../../hazards/partial-object.md) — Can fall into partial object when one wide entity class shared by every query is filled differently per finder
+- [Primitive Obsession](../../hazards/primitive-obsession.md) — Can fall into primitive obsession when columns mapped straight to primitive fields leave domain concepts untyped
+
 <!-- relationships:end -->

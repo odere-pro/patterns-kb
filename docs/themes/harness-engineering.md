@@ -15,16 +15,16 @@ The model is a dependency you did not write and cannot change. Everything else �
 ## The question
 <!--meta block=description-->
 
-Two teams run the same model on the same task and get results far enough apart to argue about. Neither trained anything. The difference is the harness: an agent is a model plus a harness, and the harness is everything in the second half of that sentence.
-
-The question this theme answers is where to spend engineering effort when the interesting component is one you rent. There are two directions of control and you need both. **Guides** act before the model does — instructions, conventions, the tool surface, the files it may open — and raise the chance of a good first attempt. **Sensors** act after — the build, the tests, a reviewer — and close a loop the agent can correct itself from.
-
-Each direction runs at two speeds. A computational check is deterministic and costs milliseconds; an inferential one asks a model to judge and costs a call. The cheap checks catch syntax, style and regressions, and are blind to the failures that actually hurt: a misread requirement, an overengineered answer, a confident wrong diagnosis.
+Two teams run the same model on the same task and get very different results because an agent is a model plus a harness. This theme asks where to spend effort when the model is rented. Guides act before the model does and raise the first attempt; sensors act after and let it self-correct. Each runs as a cheap deterministic check or a costlier model judgment, and cheap checks miss the failures that hurt.
 
 ## Explained
 <!--meta block=explain-->
 
-A harness is everything around a rented model that makes it do useful work: the instructions, tools and files you give it, plus the checks you run on what it produces. Spend effort in two directions. Guides act before the model does and raise the chance of a good first attempt. Sensors act after, such as the build, the tests or a reviewer, and let the agent correct itself. Checks come in two kinds. A deterministic check costs milliseconds and catches syntax errors and broken tests, but cannot see that the agent solved the wrong problem. A check that asks a second model to judge can see it, costs a model call each time, and gives an answer that can vary. Most harnesses use only the cheap kind, so add a judging check where a wrong answer is costly. Asking a human each time is trustworthy but wears out, because people approve without reading once prompts are constant. Prompt rarely and only on real risk. A harness pays back per repetition, so skip it for one-off tasks. Review it, since old guides and sensors end up contradicting each other.
+A harness is everything around a rented model that makes it do useful work: the instructions, tools and files you give it, plus the checks you run on what it produces. Spend effort in two directions. Guides act before the model does and raise the chance of a good first attempt. Sensors act after, such as the build, the tests or a reviewer, and let the agent correct itself. Checks come in two kinds. A deterministic check costs milliseconds and catches syntax errors and broken tests, but cannot see that the agent solved the wrong problem. A check that asks a second model to judge can see it, costs a model call each time, and gives an answer that can vary. Most harnesses use only the cheap kind, so add a judging check where a wrong answer is costly. A harness pays back per repetition, so skip it for one-off tasks.
+
+- **Human fatigue.** People approve without reading once prompts are constant, so prompt rarely and only on real risk.
+- **Judge cost.** A judging check adds a model call and varying answers, so run it only where a wrong answer is costly.
+- **Drift.** Old guides and sensors end up contradicting each other, so review them on a schedule.
 
 **Example.** An agent fixes 100 issues a week across one codebase. A test run of 20 s per fix costs 2,000 s, about 33 minutes, and catches broken code. But 10 of the fixes pass the tests and solve the wrong problem. A judging check on all 100 costs 100 extra model calls and flags most of those 10. Asking a human to approve every fix means 100 prompts, and by the 30th they stop reading. Instead the agent is sandboxed to the repo directory and a human is asked only before a write outside it, which happens 3 times a week.
 

@@ -16,16 +16,16 @@ A working, lightweight implementation of a dependency — an in-memory database 
 ## What it is
 <!--meta block=description-->
 
-A **fake object** is a test double that actually works. It implements the same interface as the real dependency and produces real, computed results — it just takes a shortcut that makes it unfit for production. The canonical example is an in-memory repository backed by a plain `Map` standing in for a database-backed one: inserts really insert, queries really query, but nothing is durable and nothing touches a network.
-
-The force it resolves is the cost of a real dependency inside a test. A production database, message broker, or third-party API is slow to start, flaky over a network, and stateful between runs — exactly the properties a fast, deterministic test suite can't tolerate. Swapping in the real thing everywhere makes tests brittle and slow; hand-coding a response for every call, the mock or stub approach, only tells you the code made the calls you expected, not that the logic built on top of them actually behaves.
-
-A fake sits between those two extremes. Because it has real behavior, code exercised against it runs its actual logic — conditionals, ordering, edge cases — the same way it would against the real dependency, just faster and without the infrastructure. That realism is also the fake's obligation: if it drifts from how the real implementation behaves, tests pass against a fiction.
+A fake object is a test double that actually works: it implements the real dependency's interface and computes real results, but takes a shortcut that makes it unfit for production, such as an in-memory map standing in for a database. It spares tests the cost of slow, flaky, stateful databases, brokers and third-party APIs. Because the fake runs real logic, you must keep it from drifting from the real behaviour.
 
 ## Explained
 <!--meta block=explain-->
 
-A fake object is a test double that really works: it has the same interface as the dependency and computes real answers, but takes a shortcut that makes it unfit for production, such as an in-memory map in place of a database. Real databases, message brokers and third-party APIs are slow to start, flaky over a network and keep state between runs, which a fast and repeatable test suite cannot afford. Choose a fake over a stub, which returns canned answers, when the code under test does several related calls, such as save then find, because a fake keeps state and so runs the real logic. It costs three things. A fake is a second implementation to maintain, so use one only for stable interfaces many tests share. It drifts from the real thing's edge cases and gives false confidence, so run the same set of tests against both the fake and the real dependency. And it does not tell you a call happened or in what order, so use a mock when the call itself is the point.
+A fake object is a test double that really works: it has the same interface as the dependency and computes real answers, but takes a shortcut that makes it unfit for production, such as an in-memory map in place of a database. Real databases, message brokers and third-party APIs are slow to start, flaky over a network and keep state between runs, which a fast and repeatable test suite cannot afford. Choose a fake over a stub, which returns canned answers, when the code under test does several related calls, such as save then find, because a fake keeps state and so runs the real logic.
+
+- **Second implementation.** A fake needs upkeep; use one only for stable interfaces many tests share.
+- **Drift.** It misses the real thing's edge cases and gives false confidence; run the same tests against both.
+- **No call record.** It does not show that a call happened or in what order; use a mock when the call is the point.
 
 **Example.** A suite of 400 tests each needs a user repository. Against a real Postgres, resetting state takes about 250 ms a test, 400 times 250 ms, 100 seconds. Against an in-memory fake, it takes about 1 ms, 0.4 seconds. The fake allows two saves with the same email, while the real table has a unique index and rejects the second. Three tests pass on the fake and fail in production. The fix is to run one shared test, saving a duplicate email must fail, against both, so the fake is changed to match.
 

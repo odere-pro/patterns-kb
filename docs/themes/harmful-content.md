@@ -15,9 +15,7 @@ Proactively moderating harmful posts on a social network at a billion posts a da
 ## The question
 <!--meta block=description-->
 
-A social network wants to catch harmful posts — text and images, spanning nudity and violence through to terrorism — across roughly a billion posts a day, where harmful ones are under 1% of the total. The remediation policy is graduated: auto-remove only what the system is at least 95% sure about, demote the likely-harmful, and route borderline cases to a small, capacity-limited human team.
-
-The sharpest framing choice is the **objective**: not "remove the most content" but minimise the number of views of harmful content, subject to a precision guardrail. That single decision reshapes the design — because harm is measured in views, speed matters (delay lets a harmful post accumulate views), and a post that could go viral is worth catching first.
+A social network wants to catch harmful text and images, from nudity and violence to terrorism, across about a billion posts a day, under 1% of them harmful. Remediation is graduated: auto-remove at 95% confidence or more, demote the likely-harmful, and send borderline cases to a small human team. The objective is to minimise views of harmful content under a precision guardrail, so speed matters and posts that could go viral come first.
 
 ## Explained
 <!--meta block=explain-->
@@ -74,7 +72,7 @@ The most informative features are the raw text and image; behavioural signals (n
 
 ### [Evaluation](../patterns/ml/evaluation.md) {#tour-evaluation}
 
-Offline, PR-AUC and Recall@Precision95 (aligned to the 95% action threshold), with impression-weighted variants matching the view-based objective. Online, importance sampling makes measuring a sub-1% prevalence class affordable, and offline metrics must correlate with online results.
+Offline, precision-recall (PR)-area under the curve (AUC) and Recall@Precision95 (aligned to the 95% action threshold), with impression-weighted variants matching the view-based objective. Online, importance sampling makes measuring a sub-1% prevalence class affordable, and offline metrics must correlate with online results.
 
 ### [Generalization](../patterns/ml/generalization.md) {#tour-generalization}
 

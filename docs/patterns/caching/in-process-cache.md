@@ -201,6 +201,10 @@ function set<V>(key: string, value: V, ttlMs: number): void {
 
 - [Hot Key](../../hazards/hot-key.md) — A local fallback cache keeps the hottest key in the app's own memory
 
+**Exposed to**
+
+- [Premature Optimization](../../hazards/premature-optimization.md) — Can fall into premature optimization when a hand-rolled cache adds staleness and invalidation to a path that was fast enough
+
 **Demonstrated by**
 
 - [Gopuff](../../designs/gopuff.md) — a slow-changing reference table cached inside the service process is a classic in-process cache

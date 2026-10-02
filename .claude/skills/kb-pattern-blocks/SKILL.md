@@ -5,14 +5,14 @@ description: "Write or review any block of a pattern page: description, structur
 
 # The blocks of a pattern page
 
-Eleven blocks, fixed order, after the `description` → `explain` opening and before the
+Twelve blocks, fixed order, after the `description` → `explain` opening and before the
 `relationships` close:
 
 ```
-description  explain  structure  variations  tradeoffs  usage  sketch  wild*  production*  fluency*  relationships
+description  explain  structure  variations  tradeoffs  usage  sketch  wild*  production*  fluency*  selfcheck*  relationships
 ```
 
-`*` optional. `explain` (the paragraph, its costs list and its example) is the **kb-explain**
+`*` optional. `selfcheck` (optional) is three blockquotes, each one bold question of at most 25 words and an answer of at most 60 words that links a `#element-id` it rests on (KB-016). `explain` (the paragraph, its costs list and its example) is the **kb-explain**
 skill; `relationships` is **kb-edit**; the diagrams inside `structure` are **diagram-draw**.
 This skill owns the other seven.
 

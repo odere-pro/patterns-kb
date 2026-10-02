@@ -198,7 +198,7 @@ class Autoscaler {
 - [Cloud Native](../../../themes/cloud-native.md) — Capacity that follows demand instead of a plan {#fluency-cloud-native}
 - [Handling Spikes](../../../themes/spike-handling.md) — Add capacity as the surge builds {#fluency-spike-handling}
 - [Scalability](../../../themes/scalability.md) — Resize the fleet with demand {#fluency-scalability}
-- [Gen AI at Scale](../../../themes/genai-scale.md) — Resize the GPU fleet with demand {#fluency-genai-scale}
+- [Gen AI at Scale](../../../themes/genai-scale.md) — Resize the graphics processing unit (GPU) fleet with demand {#fluency-genai-scale}
 - [Workload Composition](../../../themes/workload-composition.md) — Each separated component follows its own signal {#fluency-workload-composition}
 - [Scale Units & Stamps](../../../themes/scale-units-and-stamps.md) — Right-size each unit against its own regional demand {#fluency-scale-units-and-stamps}
 - [Operating a Live System](../../../themes/operating-a-live-system.md) — The routine change nobody should be making by hand {#fluency-operating-a-live-system}
@@ -228,11 +228,15 @@ class Autoscaler {
 
 - [Stateless Service](./stateless-service.md) — Scaling out is safe only when the added replicas carry no session state
 
+**Exposed to**
+
+- [Cascading Failure](../../../hazards/cascading-failure.md) — Can fall into cascading failure when new cold instances join under full load and die before warming up
+
 **Demonstrated by**
 
 - [LeetCode](../../../designs/leetcode.md) — the execution fleet is sized elastically to demand rather than provisioned for peak
 - [Job Scheduler](../../../designs/job-scheduler.md) — elastic capacity tracking the pending-job backlog is what holds the 2-second budget under load
-- [YouTube](../../../designs/youtube.md) — Queue-depth scaling for a fleet whose CPU signal is useless is the textbook case
+- [YouTube](../../../designs/youtube.md) — Queue-depth scaling for a fleet whose central processing unit (CPU) signal is useless is the textbook case
 - [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a queue-driven fleet whose work is remote calls: the scaling signal is queue age, and scale-in is safe because an abandoned claim is the expired-lock case the sweeper already handles
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — scaling on queue age, with scale-in safe because an abandoned claim is the expired-lease case the failure path already rehearses
 - [Google News](../../../designs/google-news.md) — Autoscaling works here because the Feed Service holds no state

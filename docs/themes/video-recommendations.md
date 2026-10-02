@@ -15,9 +15,7 @@ The "up next" recommendation walked end to end: turning a watch-time-and-satisfa
 ## The question
 <!--meta block=description-->
 
-A user is watching a video. What should play next? Scoped to the "up next" slot on a platform the size of [YouTube](../designs/youtube.md) — on the order of a billion videos in the catalogue, a billion daily users, five suggestions shown, and roughly a 250&nbsp;millisecond window to produce them — this is one of the harder applied-ML problems, and a staple interview question.
-
-The core tension is scale against latency. Ranking every candidate for every request is the natural framing of the ML task, but you cannot score a billion videos in a quarter of a second. Everything downstream follows from resolving that: the system has to narrow aggressively before it can rank carefully, and each narrowing stage that drops a good candidate can never get it back.
+A user is watching a video. What plays next? Scope it to the up-next slot on a YouTube-sized platform: about a billion videos, a billion daily users, five suggestions and a 250 millisecond window. The core tension is scale against latency. You cannot score a billion videos in a quarter of a second, so the system narrows aggressively before it ranks carefully, and a good candidate dropped at any narrowing stage is gone for good.
 
 ## Explained
 <!--meta block=explain-->
@@ -73,7 +71,7 @@ Both the context video and each candidate contribute content and engagement feat
 
 ### [Evaluation](../patterns/ml/evaluation.md) {#tour-evaluation}
 
-Each prediction head is scored on its own; the final ranking uses NDCG, MAP, and diversity, while the gold standard is an A/B test on session watch time and return rate. The catch is the novelty effect — a new model can look good simply because it is different — so experiments must run long enough for that to fade.
+Each prediction head is scored on its own; the final ranking uses normalized discounted cumulative gain (NDCG), mean average precision (MAP), and diversity, while the gold standard is an A/B test on session watch time and return rate. The catch is the novelty effect — a new model can look good simply because it is different — so experiments must run long enough for that to fade.
 
 ### [Generalization](../patterns/ml/generalization.md) {#tour-generalization}
 

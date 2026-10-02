@@ -16,16 +16,16 @@ An object receives its collaborators from the outside instead of building or loo
 ## What it is
 <!--meta block=description-->
 
-**Dependency injection** is the practice of passing an object its dependencies rather than letting it create them. A class declares what it needs — usually as an interface — and some outside party supplies a concrete instance. The class never calls `new` on its collaborators and never reaches into a global to find them.
-
-The force it resolves is coupling to construction. When a class builds its own database client, mailer, or clock, it is welded to those exact implementations. You cannot substitute a fake in a test, swap a vendor, or reconfigure the graph without editing the class. Its lifetime, its wiring, and its behavior all tangle together.
-
-Injection separates using a dependency from choosing and building one. The choosing moves to a single assembly point — the composition root — where the whole object graph is wired once and made explicit. Each class is left to do its own job against an abstraction it does not own.
+Dependency injection passes an object its dependencies instead of letting it create them. A class declares what it needs, usually as an interface, and an outside party supplies the instance. Construction moves to one assembly point, the composition root, so you can swap a fake in a test or a vendor in production without editing the class.
 
 ## Explained
 <!--meta block=explain-->
 
-Dependency injection means a class receives the things it needs, such as a database client or a clock, from outside instead of creating them itself. One place, usually where the app starts and called the composition root, builds every object and wires them together. Choose it over building collaborators inside the class when they vary, such as real in production and fake in test, or one vendor against another, because a swap is then a wiring change and not an edit to working code. A missing piece also fails at startup, not in the middle of a request. The cost is an assembly layer you own. With a container that wires by reflection, the concrete type in use is invisible at the call site and large graphs slow startup, so wire by hand until the graph is big. A constructor with ten parameters means the class does too much, so split it. Passing a constant or a pure function as a parameter only widens the constructor, so inject only what varies.
+Dependency injection means a class receives the things it needs, such as a database client or a clock, from outside instead of creating them itself. One place, usually where the app starts and called the composition root, builds every object and wires them together. Choose it over building collaborators inside the class when they vary, such as real in production and fake in test, or one vendor against another, because a swap is then a wiring change and not an edit to working code. A missing piece also fails at startup, not in the middle of a request.
+
+- **Assembly layer.** A reflective container hides the concrete type and slows large startups, so wire by hand until the graph is big.
+- **Wide constructors.** A constructor with ten parameters means the class does too much, so split it.
+- **Over-injection.** Passing a constant or a pure function only widens the constructor, so inject only what varies.
 
 **Example.** An order service creates its own payment client, so a test of it would charge a real card. Injecting a PaymentClient interface lets the test pass a fake that records 1 charge of 40 dollars and returns success, with no network call. In production the composition root passes the real client. The cost is that the constructor now takes 4 arguments (payments, mailer, clock, repository), and a reader of the service no longer sees which payment client runs without opening the root. If the list reaches ten, split the service.
 
@@ -196,6 +196,7 @@ const underTest = new ReminderService(frozenClock, captureMailer);
 
 - [Hexagonal](../../architecture/hexagonal.md) — Adapters are injected into the core's ports
 - [Dependency Inversion Principle](../../../principles/dependency-inversion.md) — The wiring-time mechanism that realises dependency inversion.
+- [Convention over Configuration](../../../principles/convention-over-configuration.md) — Autowiring is dependency injection steered by convention
 
 **Alternative to**
 
@@ -206,7 +207,7 @@ const underTest = new ReminderService(frozenClock, captureMailer);
 
 **Has variant**
 
-- [Provider](../../frontend/provider.md) — The provider pattern is DI scoped to a UI component subtree
+- [Provider](../../frontend/provider.md) — The provider pattern is dependency injection (DI) scoped to a user interface (UI) component subtree
 
 **Prevents**
 

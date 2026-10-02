@@ -205,6 +205,8 @@ mapReduce(["the cat sat", "the dog sat"]); // { the: 2, sat: 2, cat: 1, dog: 1 }
 - [Fan-In](../../messaging/fan-in.md) — The reduce stage is a keyed fan-in: many map outputs converge per key
 - [HyperLogLog](./hyperloglog.md) — Reduce can merge sketches instead of exact sets, in kilobytes
 - [Big Data](../../architecture/big-data.md) — Map-reduce is the engine the batch half of a big data architecture usually runs on.
+- [Barrier](../../concurrency/barrier.md) — The shuffle between the map and reduce phases is a barrier across the cluster
+- [Fork-Join](../../concurrency/fork-join.md) — Applies the same split-and-merge idea across the machines of a cluster
 
 **Often confused with**
 

@@ -16,16 +16,17 @@ Unsynchronized concurrent access to shared state whose outcome depends on thread
 ## What it is
 <!--meta block=description-->
 
-A race condition is what happens when two or more actors — threads, requests, processes — touch the same shared state at the same time without coordinating, and the outcome depends on which one happens to get there first. The dangerous part is not that it crashes; it rarely does. The code passes every unit test, reads correctly in review, and then in production, under real concurrency, produces results that are simply impossible: a seat booked by two people, a counter that should read 1,000 reading 847, a bank balance missing a deposit that definitely went through.
-
-It hides because the interleaving that breaks it is rare and timing-dependent. Most of the time the two operations don't overlap and everything looks correct; the bug surfaces only when two writers land in the same microsecond, so it is nearly impossible to reproduce on demand and easy to wave off as a fluke. The tell is a single question you can ask of any code that touches shared state: could another actor change this between the moment I read it and the moment I act on it? If the answer is yes, you have a race.
+A race condition is two or more actors (threads, requests, processes) touching the same shared state without coordinating, so the outcome depends on who arrives first. It rarely crashes: it passes tests, then in production returns impossible results, such as a seat sold twice or a counter reading 847 instead of 1,000. The tell is one question: could another actor change this between my read and my action? If yes, you have a race.
 
 ## Explained
 <!--meta block=explain-->
 
-A race condition is a bug where two actors, such as threads or requests, use the same shared data at the same time and the result depends on who gets there first. It rarely crashes. It returns wrong data with no error, such as two buyers getting the same seat or one of two increments vanishing. It takes two forms: check-then-act, where another writer changes the condition between your check and your action, and read-modify-write, where two actors read the same value, each compute a new one, and one write erases the other. A gap of microseconds is crossed many times a day at high volume, and a green test suite proves only that the bad order did not happen. Every fix closes the gap between reading and writing. Fold the check into the write itself, with a conditional update the database applies as one step. Or attach a version to the row and reject a stale write, then retry. Or hold one lock across both steps, and guard every code path that touches the data. Or give the data a single owner so nothing is shared. The cost is a rejected write that must retry or report.
+A race condition is a bug where two actors, such as threads or requests, use the same shared data at the same time and the result depends on who gets there first. It rarely crashes. It returns wrong data with no error, such as two buyers getting the same seat or one of two increments vanishing. It takes two forms: check-then-act, where another writer changes the condition between your check and your action, and read-modify-write, where two actors read the same value and one write erases the other. A gap of microseconds is crossed many times a day at high volume, and a green test suite proves only that the bad order did not happen. Every fix closes the gap. Fold the check into the write with a [conditional write](../patterns/distributed/coordination/conditional-write.md), or attach a version and reject a stale write with [optimistic concurrency control](../patterns/distributed/coordination/optimistic-concurrency-control.md). Or hold one lock across both steps, on every code path. Or give the data a single owner so nothing is shared.
 
-**Example.** A shop has 1 shirt left. Two buyers load the page, each request reads stock = 1, both pass the check, and both write stock = 0. Two orders are confirmed for one shirt, and nothing logs an error. At 10,000 requests a second and a 2 ms gap between read and write, 20 requests are inside that gap at any moment, so overlap on a popular item is routine. The fix is one statement, UPDATE items SET stock = stock - 1 WHERE id = 7 AND stock >= 1. The second buyer's update matches 0 rows and gets a sold-out message. The cost is that this buyer must handle a refusal instead of a silent success.
+- **Rejected writes.** The loser must retry or report a refusal instead of a silent success; design the caller for that.
+- **Lock scope.** A lock held on every path serialises work; keep the critical section to the check and the write.
+
+**Example.** A shop has 1 shirt left. Two buyers load the page, each request reads stock = 1, both pass the check, and both write stock = 0. Two orders are confirmed for one shirt, and nothing logs an error. At 10,000 requests a second and a 2 ms gap between read and write, 20 requests are inside that gap at any moment. The fix is one statement, UPDATE items SET stock = stock - 1 WHERE id = 7 AND stock >= 1. The second buyer's update matches 0 rows and gets a sold-out message.
 
 ## How it happens
 <!--meta block=causes-->
@@ -86,5 +87,14 @@ Every fix closes the gap between reading and writing. **Serialize the check and 
 - [Sequential Convoy](../patterns/messaging/sequential-convoy.md) — Serialize per entity rather than detecting the collision afterwards
 - [Copy-on-Write](../patterns/concurrency/copy-on-write.md) — Publish a finished copy rather than mutating in place, so no reader can catch a partial write
 - [Immutability](../patterns/functional/immutability.md) — Shared state that is never written after creation needs no lock to read safely
+- [Mutex](../patterns/concurrency/mutex.md) — Guarding the shared data with a lock stops two threads interleaving their reads and writes
+- [Barrier](../patterns/concurrency/barrier.md) — A barrier orders the phases of a parallel job, so a fast thread cannot read a slow thread's unfinished result
+
+**Threatens**
+
+- [Double-Checked Locking](../patterns/concurrency/double-checked-locking.md) — The race is the failure this idiom produces when written without a memory barrier
+- [Singleton](../patterns/gof/creational/singleton.md) — Lazy initialisation can create two instances when threads check at once
+- [Cache-Aside](../patterns/caching/cache-aside.md) — A read that reloaded an old value can re-cache it just after a write's invalidation
+- [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) — A lock whose expiry races with a slow holder admits two holders
 
 <!-- relationships:end -->

@@ -201,7 +201,7 @@ class LoginViewModel {
 
 **Variant of**
 
-- [MVC](./mvc.md) — MVVM binds the view to a view-model
+- [MVC](./mvc.md) — Model-view-view-model (MVVM) binds the view to a view-model
 
 **Often confused with**
 

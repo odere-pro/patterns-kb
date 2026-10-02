@@ -16,16 +16,17 @@ A request-handling tier runs heavy work in the background so that the request ca
 ## What it is
 <!--meta block=description-->
 
-A **busy front end** is a request-serving process that also performs its own heavy lifting — resizing the image, rendering the report, running the import — on threads spawned beside the ones answering requests. The intent is sound and the first half of it works: handing the work to a background thread lets the request return immediately instead of holding the caller for a minute. What the move does not do is make the work free. It still runs on this machine, competing for the same processor and memory as every request the tier is trying to serve, and now nothing limits how many of these jobs can be started at once.
-
-The symptom that identifies it is collateral damage. The expensive operation looks acceptable, while a trivial unrelated endpoint on the same tier degrades in step with how often the expensive one is called — its own dependencies healthy, its own code unchanged. Utilization pins at the ceiling, throughput flattens for every route at once, and the failures that surface are generic capacity errors rather than anything naming the real culprit. The correlation to look for is between one operation's call rate and every other operation's latency.
+A busy front end is a request-serving process that also does heavy lifting, such as resizing images or running imports, on threads beside the ones answering requests. You recognize it by collateral damage: a trivial endpoint slows in step with how often the expensive one is called, and failures are generic capacity errors. The defining trait is that the work still competes for the same processor and memory, with nothing limiting how many jobs start.
 
 ## Explained
 <!--meta block=explain-->
 
-A busy front end is a web tier that also does heavy work itself, such as resizing images or running imports, on background threads started beside the ones answering requests. Starting the work on a thread frees the caller at once, which feels like offloading, but the work still uses the same processor and memory as every other request. Nothing caps how many such jobs run together, so their number follows how many users ask, not what you planned for. The symptom is collateral damage: a trivial endpoint slows down in step with how often the heavy one is called, and the errors are generic timeouts that name no culprit. A job held only in memory is also lost when the process restarts, though the caller was told it was accepted. Choose a separate worker tier over adding more front-end servers, because more servers only buy headroom in proportion to their number and leave the coupling in place. The front end writes the job to a queue and returns, and workers drain it at a rate they can sustain. Cap the queue and reject at the front door, or it becomes an unbounded queue. If the work must stay in-process, give it a small fixed pool of its own.
+A busy front end is a web tier that also does heavy work itself, such as resizing images or running imports, on background threads started beside the ones answering requests. Starting the work on a thread frees the caller at once, which feels like offloading, but the work still uses the same processor and memory as every other request. Nothing caps how many such jobs run together, so their number follows how many users ask. A job held only in memory is also lost when the process restarts, though the caller was told it was accepted. Choose a separate worker tier over more front-end servers, because more servers buy headroom only in proportion to their number and leave the coupling in place. The front end writes the job to a queue ([queue-based load leveling](../patterns/distributed/resilience/load-leveling.md)) and returns, and workers drain it at a rate they can sustain. If the work must stay in-process, give it a small fixed pool of its own.
 
-**Example.** A front end with 8 cores handles 400 profile requests a second at 5 ms each, so 2 cores. Each photo upload also starts a thread that spends 2 s of processor time resizing. At 3 uploads a second that is 6 cores, so all 8 are busy and profile calls start to queue. Move resizing to 4 worker cores, which finish 4 x 0.5 = 2 jobs a second, behind a queue capped at 100 jobs. A 10 s burst of 6 uploads a second adds 60 jobs and drains 20, so 40 wait, well under the cap. Profile latency stays flat. The cost is that uploads finish later, and the caller now polls for the result.
+- **Later results.** Work finishes after the reply, so the caller must poll or be notified of the result.
+- **Unbounded queue.** An uncapped queue only moves the overload, so cap it and reject at the front door.
+
+**Example.** A front end with 8 cores handles 400 profile requests a second at 5 ms each, so 2 cores. Each photo upload also starts a thread that spends 2 s of processor time resizing. At 3 uploads a second that is 6 cores, so all 8 are busy and profile calls start to queue. Move resizing to 4 worker cores, which finish 2 jobs a second, behind a queue capped at 100 jobs. A 10 s burst of 6 uploads a second adds 60 jobs and drains 20, so 40 wait, well under the cap. Profile latency stays flat.
 
 ## How it happens
 <!--meta block=causes-->
@@ -79,5 +80,10 @@ Adding a queue relocates the failure rather than removing it, so decide in advan
 - [Bulkhead](../patterns/distributed/resilience/bulkhead.md) — Where the work must stay in-process, a separate fixed pool keeps it from taking the request workers
 - [Web-Queue-Worker](../patterns/architecture/web-queue-worker.md) — Put the heavy job on workers that drain a queue, away from the threads that answer users
 - [Asynchronous Request-Reply](../patterns/distributed/routing/async-request-reply.md) — Give callers a handle to poll or a callback, since the response no longer carries the outcome
+
+**Threatens**
+
+- [Thread Pool](../patterns/concurrency/thread-pool.md) — Background jobs sharing the request pool or the same cores starve request handling
+- [API Gateway](../patterns/distributed/routing/api-gateway.md) — A gateway that transforms payloads itself spends the tier's cores on that work
 
 <!-- relationships:end -->

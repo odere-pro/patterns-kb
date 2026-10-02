@@ -183,7 +183,7 @@ class BloomFilter {
 **Combines with**
 
 - [Cache-Aside](../../caching/cache-aside.md) — Skip a lookup the filter says will miss
-- [LSM Tree](./lsm-tree.md) — LSM read paths put a Bloom filter on each SSTable to avoid scanning files that lack the key
+- [LSM Tree](./lsm-tree.md) — Log-structured merge (LSM) read paths put a Bloom filter on each SSTable to avoid scanning files that lack the key
 
 **Often confused with**
 

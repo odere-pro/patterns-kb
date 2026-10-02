@@ -16,14 +16,16 @@ Every system that stays in service outlives the design it launched with, so buil
 ## What it says
 <!--meta block=description-->
 
-Assume the system will be asked to do something it was not built to do, and arrange it so that answering costs one team one change to one part. Every system that stays in service outlives the design it launched with, so the question worth asking up front is not whether it will change but whether a change stays inside a boundary. At the class level this same rule is [Open/Closed](./open-closed.md) — add an implementation rather than edit working code — and what follows here is everything scale adds to it.
-
-This is not a licence to pre-build for futures nobody has asked for; the rule is that change should be cheap when it comes, not that it should be paid for in advance. What makes the system-scale version a different problem is enforcement. Inside a process the compiler finds every caller when you change an interface, while a published endpoint or message has consumers you cannot enumerate and cannot recompile — so the mechanisms here are deployment units and wire contracts, not class hierarchies.
+Assume the system will be asked to do something it was not built to do, and arrange it so that answering costs one team one change to one part. At class level this is [Open/Closed](./open-closed.md); at system scale the difference is enforcement, because a published endpoint or message has consumers you cannot enumerate or recompile. The tools are deployment units and wire contracts. It is no licence to pre-build futures: change should be cheap when it comes.
 
 ## Explained
 <!--meta block=explain-->
 
-Design for evolution means you arrange the system so that the changes you expect cost one team one change to one part, without paying for flexibility in advance. At class level this is the open-closed idea. At system scale the difference is enforcement: a compiler finds every caller of a changed method, but a published endpoint or message has consumers you cannot list or recompile. So the tools are deployment units and wire contracts. Change a contract by adding, never by removing or redefining, and make readers skip what they do not recognise. Give each business capability one owner and one boundary, and translate a neighbour's model at the edge so one file changes when their schema moves. Choose replacing in slices over a rewrite, because the system stays shippable on every day of the migration. It has costs. Flexibility nobody used is paid in full and returns nothing, so open only the axes you have watched vary. Indirection is paid on every read, so avoid it where a change comes once a year. A second API version that is never retired doubles the surface, so set its end date the day you publish it.
+Design for evolution means you arrange the system so that the changes you expect cost one team one change to one part, without paying for flexibility in advance. At class level this is the open-closed idea. At system scale the difference is enforcement: a compiler finds every caller of a changed method, but a published endpoint or message has consumers you cannot list or recompile. So the tools are deployment units and wire contracts. Change a contract by adding, never by removing or redefining, and make readers skip what they do not recognise. Give each business capability one owner and one boundary, and translate a neighbour's model at the edge so one file changes when their schema moves. Choose replacing in slices over a rewrite, because the system stays shippable on every day of the migration.
+
+- **Flexibility nobody used is paid in full.** Open only the axes you have watched vary, and leave the rest closed.
+- **Indirection is paid on every read.** Avoid it where a change comes once a year, because the next reader pays for it daily.
+- **A second API version never retired doubles the surface.** Set its end date the day you publish it.
 
 **Example.** A shipping service publishes an order event with the address as one text field. Marketing wants a country code. The team adds an optional country field and leaves address as it was. The 5 consumers ignore fields they do not know, so nobody redeploys in lockstep. One consumer, billing, depends on the old format in 40 places, so a translation layer at its edge means a later schema change touches one file. The test passes: one team, one deployment. The cost is that the old address format stays for 6 more months until the last consumer moves, and the end date was set on the day country was added.
 
@@ -75,6 +77,7 @@ The expensive version of this mistake is buying decoupling with asynchrony. Put 
 - [Postel's Law](./postels-law.md) — Tolerate unknown fields and a wire contract can grow additively
 - [Record Architecture Decisions](./architecture-documentation.md) — Evolving a system safely needs to know why it is shaped this way
 - [Conway's Law](./conways-law.md) — Team structure sets the price of changing each boundary.
+- [Rule of Three](./rule-of-three.md) — Structure that changes with real use is better than abstractions fixed in advance
 
 **Generalizes**
 

@@ -16,12 +16,16 @@ CamelCamelCamel watches the price of Amazon products over time and emails a subs
 ## Understanding the problem
 <!--meta block=description-->
 
-The service does two visible things: it shows a chart of how an Amazon product's price has moved, and it lets a user subscribe to be alerted when that price drops below a threshold they set. Both are reachable from a website and from a Chrome extension with roughly a million active users. The visible surface is small; the hard part is invisible. Amazon publishes no price API, discourages scraping, and throttles at about one request per second per IP address, yet there are on the order of 500&nbsp;million products to keep current. So the design is not really about serving charts — it is about collecting price data at that scale without fighting the rate limit with brute force, and it deliberately favours availability and [eventual consistency](../themes/consistency-and-replication.md) over strict correctness: a slightly stale chart is fine, a dropped alert is not.
+A price tracker shows a chart of an Amazon product's price history and alerts a user when the price falls below a threshold they set, from a website and a Chrome extension. The hard part is invisible: Amazon has no price API and throttles to about one request a second per IP, yet 500 million products need fresh prices. This page walks through collecting that data and sending alerts reliably.
 
 ## Explained
 <!--meta block=explain-->
 
-A price tracker for a site with no price feed gets its readings from the browsers of people already visiting the pages: an extension reports each price it sees, and a slow crawler fills only the gaps. Choose this over crawling everything when you have a crowd of users and the site limits you to about 1 request a second per address, because crawling alone cannot keep up, however many servers you add. It costs three things. Coverage follows attention, so rarely viewed products go stale; treat any subscribed product with no recent reading as the crawler's queue. Strangers send wrong or hostile prices, so accept a change at once and alert, but send suspicious ones, such as a big drop, to a verification crawl within 1 to 5 minutes; if it contradicts the report, send a correction and lower that reporter's trust. That means a bad alert can fire for a few minutes. Charts trail the true price, so show the time of each reading beside it. For storage, choose a time-series add-on to the database you already run over a second engine, because one system to operate matters more at this size.
+A price tracker for a site with no price feed gets its readings from the browsers of people already visiting the pages: an extension reports each price it sees, and a slow crawler fills only the gaps. Choose this over crawling everything when you have a crowd of users and the site limits you to about 1 request a second per address, because crawling alone cannot keep up, however many servers you add. For storage, choose a time-series add-on to the database you already run over a second engine, because one system to operate matters more at this size.
+
+- **Uneven coverage.** Rarely viewed products go stale, so treat any subscribed product with no recent reading as the crawler queue.
+- **Hostile prices.** Accept a change and alert, but send big drops to a verification crawl within 5 minutes; a wrong alert can fire briefly.
+- **Stale charts.** Charts trail the true price, so show the time of each reading beside it.
 
 **Example.** The site has 500 million products and allows 1 request a second per address. One crawler needs 500 million seconds, about 16 years, for one pass; 1,000 addresses still need about 6 days. With 1 million extension users, a reading arrives whenever someone views a product. A report says a phone costs 1 cent, a huge drop, so the alert goes out and a verification crawl starts. It finds 999 dollars within minutes, you send a correction, and that reporter loses trust.
 
@@ -190,7 +194,7 @@ flowchart TB
 **Demonstrates**
 
 - [API Gateway](../patterns/distributed/routing/api-gateway.md) — a single gateway fronts every client request, authenticating, rate-limiting, and routing chart reads, subscriptions and price reports to the right service
-- [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — Amazon caps scraping near one request per second per IP, so the crawler and reporting boundary are throttled and the whole design is built to stay polite
+- [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — Amazon caps scraping near one request per second per Internet Protocol (IP), so the crawler and reporting boundary are throttled and the whole design is built to stay polite
 - [Change Data Capture](../patterns/distributed/coordination/change-data-capture.md) — database triggers on price inserts emit change events automatically, so no collection service has to remember to publish
 - [Event-Driven Architecture](../patterns/architecture/eda.md) — notifications flip from a two-hour polling scan to reacting to each price-change event the instant it lands
 - [Publish-Subscribe](../patterns/messaging/pubsub.md) — price-change events land on a Kafka topic that notification consumers subscribe to, decoupling collection from alerting

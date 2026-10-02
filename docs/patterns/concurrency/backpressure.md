@@ -219,6 +219,9 @@ class BoundedChannel<T> {
 - [Reactor](./reactor.md) — An event loop pushes back by unregistering interest, not by blocking
 - [Load Shedding](../distributed/resilience/load-shedding.md) — When the upstream cannot be slowed, refusing at admission is the remaining lever
 - [Leaky Bucket](../distributed/resilience/leaky-bucket.md) — A refusal from a bounded queue is one way to signal a sender to slow down.
+- [Channels](./channels.md) — A bounded channel is one way to apply it
+- [Ring Buffer](./ring-buffer.md) — A bounded ring gives backpressure a visible place to act
+- [Polling Consumer](../messaging/polling-consumer.md) — A consumer that pulls at its own pace is the simplest form of backpressure
 
 **Alternative to**
 
@@ -236,7 +239,7 @@ class BoundedChannel<T> {
 **Demonstrated by**
 
 - [ChatGPT](../../designs/chatgpt.md) — rejecting overload rather than letting latency and queue depth grow without limit is backpressure applied at system scale
-- [Persona Identification & Sanction Check](../../designs/persona-identification.md) — the accept path is coupled to the drain rate: refusing a KYC flow costs the client a retry they can see, accepting it costs them a flow invisible for hours
+- [Persona Identification & Sanction Check](../../designs/persona-identification.md) — the accept path is coupled to the drain rate: refusing a know your customer (KYC) flow costs the client a retry they can see, accepting it costs them a flow invisible for hours
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — refusal published as a contract term, on the argument that an accepted flow buried in a backlog is a worse failure than a rejected one
 
 <!-- relationships:end -->

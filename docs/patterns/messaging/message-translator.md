@@ -15,16 +15,16 @@ Converts a message's fields, encoding, and structure from the format one endpoin
 ## What it is
 <!--meta block=description-->
 
-A **message translator** sits on the channel between a producer and a consumer and converts a message from the format one side speaks into the format the other expects: remapping field names, converting data types and units, restructuring nested shapes, and re-encoding between formats like XML, JSON, or Protobuf. It does no business logic and reshapes no interface — it only reshapes data in flight.
-
-The force it resolves is that independently built systems rarely share a schema. A legacy system emits `snake_case` fields and prices as integer cents; a newer service expects camelCase and decimal currency; a partner's API version differs from yours by two years. Forcing either side to adopt the other's shape couples them directly and blocks either from evolving on its own schedule. A translator lets each side keep its native format and confines the one component that must know about both to a single, replaceable place.
-
-It's easy to conflate with [Adapter](../gof/structural/adapter.md), and the two often sit at the same seam. Adapter changes an interface — the methods and signatures a client calls — while a message translator changes the content of a message moving through a channel, indifferent to whether the caller is invoking a method or publishing an event. At a bounded-context boundary the translator is usually the actual mapping logic that an [Anti-Corruption Layer](../ddd/acl.md) wraps in a broader, more defensive facade.
+A message translator sits on the channel between a producer and a consumer and rewrites each message from the shape one side sends into the shape the other expects: field names, types, units and encoding. Neither system changes, so each evolves on its own schedule. It does no business logic and reshapes no interface; it only reshapes data in flight.
 
 ## Explained
 <!--meta block=explain-->
 
-A message translator sits on the channel between a producer and a consumer and rewrites each message from the shape one side sends into the shape the other expects: field names, types, units and encoding, such as XML to JSON. Neither system changes, so each keeps evolving on its own schedule. Choose it when two schemas must move independently and neither team will change for the other. Skip it when the two already agree, because a hop that maps a field onto itself is pure cost. It costs three things. The dangerous one is silence: a dropped field, cut precision or a misread date passes through looking valid, so validate the output against the consumer schema and test with boundary values. Every schema change on either side means a mapping change, so version the mappings with the schemas. And one translator per pair of systems grows as N times N, so translate every system to one shared canonical shape (a single agreed format) and you need about 2N translators instead.
+A message translator sits on the channel between a producer and a consumer and rewrites each message from the shape one side sends into the shape the other expects: field names, types, units and encoding, such as XML to JSON. Neither system changes, so each keeps evolving on its own schedule. Choose it when two schemas must move independently and neither team will change for the other. Skip it when the two already agree, because a hop that maps a field onto itself is pure cost.
+
+- **Silent errors.** A dropped field, cut precision or misread date passes through looking valid. Validate output against the consumer schema and test with boundary values.
+- **Schema drift.** Every schema change on either side means a mapping change, so version the mappings with the schemas.
+- **Pairwise growth.** One translator per pair of systems grows as N times N. Translate everything to one shared canonical format and you need about 2N.
 
 **Example.** A partner sends dates as 03/04/2026, meaning 3 April, day first. A translator written for month first outputs 2026-03-04. That is a valid date, so every schema check passes, and parcels are booked a month early. Days 1 to 12 of each month are silently wrong, about 39% of a 31-day month. Days 13 to 31 fail loudly, because there is no month 13. A test using 13/04/2026 catches the bug at once, and a test using 03/04/2026 alone never would. With 6 systems, pairwise translators number 30, against 12 with a canonical shape.
 
@@ -190,14 +190,16 @@ function onLegacyOrder(raw: LegacyOrder, publish: (o: CanonicalOrder) => void) {
 
 **Combines with**
 
-- [Anti-Corruption Layer](../ddd/acl.md) — The ACL translates between models
+- [Anti-Corruption Layer](../ddd/acl.md) — The anticorruption layer (ACL) translates between models
 - [Content-Based Router](./content-based-router.md) — A normalizer routes each incoming shape to its own translator
 - [Postel's Law](../../principles/postels-law.md) — Turns tolerated input variety into one internal format
 - [Message Encoding](./message-encoding.md) — A translator converts between formats; the compatibility rules decide when a translation is needed at all
+- [Canonical Data Model](./canonical-data-model.md) — A translator converts an application's own format to and from the canonical one
 
 **Often confused with**
 
 - [Adapter](../gof/structural/adapter.md) — Reshape a message vs. convert an interface
 - [Messaging Bridge](./messaging-bridge.md) — Reshapes the message; a bridge only moves it between infrastructures
+- [Content Enricher](./content-enricher.md) — Changes the format of what the message already carries, and adds nothing
 
 <!-- relationships:end -->

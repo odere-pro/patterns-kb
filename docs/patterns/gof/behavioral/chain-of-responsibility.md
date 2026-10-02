@@ -16,16 +16,15 @@ Hands a request down a line of handlers — each free to deal with it or pass it
 ## What it is
 <!--meta block=description-->
 
-The **Chain of Responsibility** strings a set of handler objects into a line. A request enters at the head; each handler either deals with it or forwards it to its successor. The sender fires the request into the chain without knowing — or caring — which handler ultimately answers.
-
-The force it resolves is **coupling the sender to the receiver**. When several objects could service a request, wiring the caller to all of them produces a growing `if/else` ladder and a rigid, hard-to-reorder set. You want to issue the request once and let the runtime decide who takes it.
-
-The pattern breaks that coupling by giving each handler a single reference to the next. Handlers stay small, focused, and independently orderable, and the chain itself becomes a list you can rebuild at runtime. The price: a request can fall off the end unhandled unless you install a catch-all at the tail.
+A chain of responsibility links handler objects in a line. A request enters at the head, and each handler either deals with it or forwards it to its successor, so the sender never names the receiver. It replaces an if/else ladder with a list you can reorder or rebuild at run time. Without a catch-all at the tail, a request can fall off the end unhandled.
 
 ## Explained
 <!--meta block=explain-->
 
-A chain of responsibility links handlers in a line, each holding a reference to the next. A request enters at the first handler, which either answers it or passes it on, so the sender never names who answers. Choose it over an if/else ladder when the set of handlers, or their order, comes from configuration rather than code, because adding or reordering a handler then touches no caller. For three fixed cases the ladder is shorter and reads on one screen. The main cost is silence. Nothing guarantees that a handler answers: a request can fall off the end, or a handler can forget to pass it on, and nothing throws and nothing is logged. Counter it with a last handler that always answers, even if only with an error and a log line, and test every order you ship. The second cost is debugging, because the path lives in a list built at run time, so log which handler took each request.
+A chain of responsibility links handlers in a line, each holding a reference to the next. A request enters at the first handler, which either answers it or passes it on, so the sender never names who answers. Choose it over an if/else ladder when the set of handlers, or their order, comes from configuration rather than code, because adding or reordering a handler then touches no caller. For three fixed cases the ladder is shorter and reads on one screen.
+
+- **Silent drop.** A request can fall off the end and nothing throws. Add a last handler that always answers and logs.
+- **Hidden path.** The path lives in a list built at run time, so log which handler took each request and test every order you ship.
 
 **Example.** An expense system routes claims through a team lead (limit 1,000 dollars), a director (10,000) and a finance chief (50,000). A 4,200 dollar claim skips the team lead and the director signs it, after two checks. A 60,000 dollar claim passes all three and falls off the end: with no last handler it returns nothing and the employee waits forever. The fix is a fourth handler that rejects anything it receives and logs the claim id. Put the finance chief first by mistake and every claim, even a 20 dollar one, lands on that desk, and nothing in the chain complains.
 
@@ -201,6 +200,7 @@ chain.review({ employee: "Mara", amountUsd: 4_200, reason: "conference" });
 - [Command](./command.md) — Commands flow along a handler chain
 - [Composite](../structural/composite.md) — A node's parent becomes its successor, so requests bubble up the tree
 - [Intercepting Validator](../../security/intercepting-validator.md) — A validator chain is the textbook request-filter use
+- [Front Controller](../../enterprise/front-controller.md) — A request chain is how a front controller runs the shared steps
 
 **Often confused with**
 

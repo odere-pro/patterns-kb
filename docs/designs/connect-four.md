@@ -16,12 +16,16 @@ Two players alternate dropping discs into a seven-column, six-row grid; a disc f
 ## Understanding the problem
 <!--meta block=description-->
 
-On a turn, the current player names a column 0–6 and the disc drops to the lowest empty row of that column. The game ends the instant someone connects four of their discs in a straight line — vertical, horizontal, or either diagonal — or in a draw when the last cell fills with no line. There is no scale story: one game, two players, a fixed forty-two-cell board, backend only, no rendering. Everything interesting is object modelling — naming the right classes, giving each exactly the state and behaviour it needs, and rejecting an illegal move (a full column, a move out of turn, a move after the game is over) without corrupting anything.
+On a turn the current player names a column and the disc drops to the lowest empty row. The game ends when someone connects four in a line, or in a draw when the board fills. There is no scale story: one game, two players, a 42-cell board, backend only. The page is object modelling: the right classes, and rejecting illegal moves without corrupting state.
 
 ## Explained
 <!--meta block=explain-->
 
-A Connect Four model splits the rules by what they depend on: a game object enforces turns and the game's state, a board object owns the grid and checks for four in a row, and a player is just a name and a colour. Choose this split when the rules are fixed and the risk is an illegal move, not speed; a game whose win shapes vary would justify one checker class per direction, and this one does not. Game state is one value, in progress, won or drawn, because three separate true-or-false flags allow 8 combinations when only 3 are legal. A winner stored beside the state still allows won-with-no-winner, so check that pair in the single method that changes state, or use a language whose types can hold the winner inside the won case. A move rejected with a shared -1 cannot say which rule broke, so return a small result type once a caller must react differently per reason. Rescanning the column and the lines on every move costs nothing on 42 cells; add a per-column height index only when the board grows.
+A Connect Four model splits the rules by what they depend on: a game object enforces turns and the game's state, a board object owns the grid and checks for four in a row, and a player is just a name and a colour. Choose this split when the rules are fixed and the risk is an illegal move, not speed; a game whose win shapes vary would justify one checker class per direction, and this one does not. Game state is one value, in progress, won or drawn, because three separate true-or-false flags allow 8 combinations when only 3 are legal.
+
+- **Winner beside state.** A winner stored beside the state still allows won-with-no-winner, so check that pair in the one method that changes state.
+- **Opaque rejection.** A shared -1 cannot say which rule broke, so return a small result type once callers must react per reason.
+- **Rescanning.** Rescanning on every move costs nothing on 42 cells; add a per-column height index only when the board grows.
 
 **Example.** Yellow drops into column 3, which already holds 6 discs. The board answers -1, the game leaves every cell and the turn untouched, and Yellow tries again. Later Red drops into column 4 and the disc lands in row 2. The board counts matching discs from that cell along 4 directions, each way, using one helper that takes a step like (1,1); it finds 4 on a diagonal, and the game sets its state to won and records Red.
 

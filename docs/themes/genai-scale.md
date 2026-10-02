@@ -14,14 +14,16 @@ Generative-AI systems push on the same scaling axes as any large backend, only h
 ## The question
 <!--meta block=description-->
 
-A generative-AI stack looks exotic, but the load it puts on infrastructure is the load any large backend has always faced — turned up a few notches. A single inference request can saturate an expensive GPU. A single model no longer fits in the memory of a single device. A single machine cannot process a training corpus measured in terabytes. And a single agent turn can explode into dozens of parallel model and tool calls.
-
-None of those problems are new, and neither are their answers. Batching, sharding, map-reduce, scheduling, and fan-out/fan-in are the levers system builders have always pulled to trade latency for throughput, spread data and computation across machines, and turn serial work into parallel work. What is new is where they bite — around the GPU, the context window, and the model's weights — and how unforgiving the economics are when they are pulled wrong.
+A generative-AI stack puts ordinary backend load under unusual strain: one inference request can saturate a GPU, one model no longer fits one device, one machine cannot process a terabyte corpus, and one agent turn fans out into dozens of calls. The levers are old ones: batching, sharding, map-reduce, scheduling and fan-out. What is new is where they bite, around the GPU, the context window and the weights.
 
 ## Explained
 <!--meta block=explain-->
 
-Running large models at scale uses the same few moves as any big backend, aimed at the GPU, the memory it holds and the model's weights. One rule decides most choices: GPUs are expensive and idle time is waste, so you trade latency for use of the hardware. Batching groups requests so one pass through the model serves many at once, which multiplies tokens per second, but each request now waits for the group to fill. Sharding splits a model too big for one GPU across several, and every pass then pays for the traffic between them. Map-reduce splits a huge dataset into chunks processed in parallel and then merged, which suits a nightly job, not an interactive one. Scheduling moves work that is not urgent to cheaper off-peak hours. Fan-out sends one agent step to several model or tool calls at once, and the answer waits for the slowest. Choose batching first for serving, since it needs no extra machines. Cap the wait for a full group so a quiet hour does not stall users, and resize the fleet on queue depth so you do not pay for peak all year.
+Running large models at scale uses the same few moves as any big backend, aimed at the GPU, the memory it holds and the model's weights. One rule decides most choices: GPUs are expensive and idle time is waste, so you trade latency for use of the hardware. [Batching](../patterns/concurrency/batching.md) groups requests so one pass through the model serves many at once, which multiplies tokens per second. [Sharding](../patterns/distributed/routing/sharding.md) splits a model too big for one GPU across several. Map-reduce splits a huge dataset into chunks processed in parallel and then merged, which suits a nightly job, not an interactive one. [Scheduling](../patterns/concurrency/scheduling.md) moves work that is not urgent to cheaper off-peak hours. [Fan-out](../patterns/messaging/fan-out.md) sends one agent step to several model or tool calls at once. Choose batching first for serving, since it needs no extra machines.
+
+- **Batch wait.** Each request waits for the group to fill, so cap the wait and let a quiet hour send smaller batches.
+- **Shard traffic.** Every pass pays for traffic between GPUs, so shard only a model that does not fit one.
+- **Slowest call.** A fan-out answer waits for its slowest call, so set a deadline per call.
 
 **Example.** Suppose one decoding step of a model takes 40 ms for a single request and 50 ms for a batch of 16. Alone, a GPU produces 1 token per 40 ms, 25 tokens a second. Batched, it produces 16 tokens per 50 ms, 320 tokens a second, about 13 times more for the same machine. Each user now sees 20 tokens a second instead of 25, plus the time spent waiting for the batch to fill. Capping that wait at 20 ms bounds the added delay, so a quiet hour sends smaller batches rather than holding requests.
 
@@ -41,11 +43,11 @@ One constant shapes almost every decision here: accelerators are expensive and i
 
 ### [Batching](../patterns/concurrency/batching.md) {#tour-batching}
 
-Inference throughput lives and dies on batch size. Grouping requests amortizes the fixed cost of a forward pass across many of them, and continuous batching keeps the batch full by swapping requests in and out at every decoding step instead of waiting for the slowest one to finish. Asynchronous batch APIs push the same idea further, trading up to a day of latency for a lower price per token.
+Inference throughput lives and dies on batch size. Grouping requests amortizes the fixed cost of a forward pass across many of them, and continuous batching keeps the batch full by swapping requests in and out at every decoding step instead of waiting for the slowest one to finish. Asynchronous batch application programming interfaces (APIs) push the same idea further, trading up to a day of latency for a lower price per token.
 
 ### [Sharding](../patterns/distributed/routing/sharding.md) {#tour-sharding}
 
-When a model's weights, gradients, and optimizer state outgrow a single GPU, they are partitioned across many — the same partition-by-key idea as a sharded database, applied to tensors. The data side shards too: billion-vector embedding indexes are split across nodes and answered by a fan-out query.
+When a model's weights, gradients, and optimizer state outgrow a single graphics processing unit (GPU), they are partitioned across many — the same partition-by-key idea as a sharded database, applied to tensors. The data side shards too: billion-vector embedding indexes are split across nodes and answered by a fan-out query.
 
 ### [MapReduce](../patterns/distributed/coordination/mapreduce.md) {#tour-mapreduce}
 
@@ -65,7 +67,7 @@ The other half of the round trip: the outputs of those parallel calls converge a
 
 ### [Autoscaling](../patterns/distributed/routing/autoscaling.md) {#tour-autoscaling}
 
-Inference load is spiky and GPUs are the most expensive line in the budget, so the serving fleet is resized against a signal — queue depth, latency, tokens in flight — instead of paying year-round for a peak that shows up occasionally. It is the precondition that lets every pattern above actually pay off.
+Inference load is spiky and graphics processing units (GPUs) are the most expensive line in the budget, so the serving fleet is resized against a signal — queue depth, latency, tokens in flight — instead of paying year-round for a peak that shows up occasionally. It is the precondition that lets every pattern above actually pay off.
 
 <!-- tour:end -->
 

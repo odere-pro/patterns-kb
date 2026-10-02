@@ -16,16 +16,17 @@ WebSocket upgrades an HTTP connection into a persistent two-way channel (RFC 645
 ## What it is
 <!--meta block=description-->
 
-A WebSocket starts as an ordinary HTTP GET with `Upgrade: websocket` and a `Sec-WebSocket-Key` header. The server answers `101 Switching Protocols` with a matching `Sec-WebSocket-Accept`, and from then on the same TCP connection carries small framed messages, text or binary, in both directions. Either side can send at any moment, and either can close with a status code. Ping and pong frames check that the other end is alive.
-
-Without it a chat message needs one request to send and a held [long poll](./long-polling.md) to receive, each with full headers, and a [Server-Sent Events](./server-sent-events.md) stream can only carry the receiving half. A shared document or a multiplayer game sends dozens of small messages a second each way, and a request per message wastes bandwidth and adds a round trip of delay.
-
-The defining trait is state. The connection is a long-lived object on one specific server. That server holds the socket, usually who the user is and what they subscribed to, and so a message for that user has to reach that server. Scaling out therefore needs either a shared bus, such as [publish-subscribe](./pubsub.md), that carries each event to whichever server holds the socket, or routing that pins each client to one server, as a [sticky session](../distributed/routing/sticky-session.md) does. The [real-time updates](../../themes/realtime-updates.md) theme covers both hops.
+A WebSocket is an HTTP connection that both sides agree to upgrade into a long-lived two-way channel of small framed messages, text or binary. Either side can send at any moment. It suits chat, games and shared editing, where frequent messages each way make a request per message wasteful.
 
 ## Explained
 <!--meta block=explain-->
 
-A WebSocket is an HTTP connection that both sides agree to turn into a two-way message channel. The client sends a GET asking to upgrade, the server answers 101, and the same connection then carries small frames in both directions until one side closes it. Choose it over Server-Sent Events when the client also sends often, as in chat, games or shared editing, and over long polling when messages are frequent, because a frame costs a few bytes where a request costs full headers. The cost is state. The socket lives on one server, so an event on another server cannot reach it unless a shared message bus carries the event there or the balancer pins each client to its server. There is no built-in reconnect or replay, so write backoff and resume-from-id yourself. There is no built-in backpressure, so cap each client's output buffer and disconnect slow readers. Send pings so dead peers are found, and expect a deploy to drop every socket on a server, so stagger restarts.
+A WebSocket is an HTTP connection that both sides agree to turn into a two-way message channel. The client sends a GET asking to upgrade, the server answers 101, and the same connection then carries small frames in both directions until one side closes it. Choose it over Server-Sent Events when the client also sends often, as in chat, games or shared editing, and over long polling when messages are frequent, because a frame costs a few bytes where a request costs full headers.
+
+- **Server-bound state.** The socket lives on one server. Carry events to it over a shared bus, or pin each client to its server.
+- **No reconnect or replay.** Write backoff and resume-from-id yourself.
+- **No backpressure.** Cap each client's output buffer and disconnect slow readers.
+- **Liveness and deploys.** Send pings so dead peers are found, and stagger restarts, since a deploy drops every socket on a server.
 
 **Example.** A chat app runs on 4 servers with 100,000 users, so each server holds about 25,000 sockets. Ana is on server 1 and Raj on server 3. Raj sends a message, server 3 publishes it to the topic room-42, and server 1 is subscribed, so it writes the frame to Ana. Without the bus, the message would reach only users on server 3. Server 1 restarts for a deploy and drops 25,000 sockets, so clients reconnect after a random 1 to 10 s delay and ask for messages after their last id.
 
@@ -96,11 +97,6 @@ sequenceDiagram
 - **No built-in reconnect or replay** — after a drop you write reconnect, backoff and resume-from-id yourself, or a client misses messages.
 - **No automatic backpressure** — a fast sender can fill a slow reader's buffer, so you bound queues and drop or disconnect slow clients.
 - **Costs at the edge** — each socket is a held connection that load balancers, proxies and idle timeouts must allow, and a connection flood is a denial-of-service route.
-
-### Cons
-<!--meta polarity=con-->
-
-- TODO.
 
 ## When to use it
 <!--meta block=usage-->
@@ -227,5 +223,9 @@ setInterval(() => {                                // heartbeat every 30 s
 
 - [Long Polling](./long-polling.md) — Falls back to long polling when the upgrade is blocked.
 - [Server-Sent Events](./server-sent-events.md) — Pick WebSocket when the client also sends often.
+
+**Exposed to**
+
+- [Head-of-Line Blocking](../../hazards/head-of-line-blocking.md) — Can fall into head of line blocking when one multiplexed ordered connection lets one slow message delay all the others behind it
 
 <!-- relationships:end -->

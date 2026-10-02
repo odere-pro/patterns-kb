@@ -17,18 +17,17 @@ Broadcasts one request to a set of recipients in parallel, then waits for their 
 ## What it is
 <!--meta block=description-->
 
-You need a shipping quote and five carriers can give you one. Ask the first, wait 400 ms, ask the second, wait again — five in a row and the customer has been staring at a spinner for two seconds, for work that was never dependent in the first place. **Scatter-Gather** asks all five at the same moment and waits once, for the slowest, not for the sum. Then one place collects whatever came back and turns it into a single answer: the cheapest quote, or all the pieces joined up. The caller still made one call and got one reply, and never learns that five things happened in between.
-
-Two halves joined by one correlated exchange. The scatter half dispatches a request to a set of recipients at once — a fixed list, a topic with several subscribers, or a set resolved at runtime from a registry. The gather half collects the independent replies as they arrive and combines them into one aggregate for the original requestor. Serial querying multiplies latency by the recipient count; this trades that sum for a maximum, and centralizes the merge so the caller's contract stays one request in, one response out.
-
-Two intents show up under the same shape. In the auction form, every recipient answers the identical question and gather keeps only the best reply — cheapest quote, fastest route — discarding the rest. In the distribution form, the request is partitioned so each recipient does distinct work, and gather reassembles the parts into a whole, closer to a [fan-out](./fan-out.md)/[fan-in](./fan-in.md) over a computation than a competition.
-
-Because replies arrive independently and out of order, each one must carry a correlation token back to its originating request, and the gather step has to decide what to do about recipients that never answer.
+Scatter-gather sends one request to several recipients at the same moment, collects the replies as they arrive and combines them into one answer. The caller makes one call and gets one reply. It turns a sum of delays into a maximum when the answer lives in several places, such as quotes from five carriers.
 
 ## Explained
 <!--meta block=explain-->
 
-Scatter-gather sends one request to several recipients at the same moment, collects the replies as they arrive and combines them into one answer for the caller. It turns a sum of delays into a maximum: asking five carriers one after another takes five waits, asking them together takes one, for the slowest. Choose it when the answer lives in several places and asking one by one would multiply the delay by their number. It costs four things. Every call multiplies load by the number of recipients, even if you keep one reply, so size them for that rate and cap how many you ask. The slowest recipient sets the delay, so set a deadline and combine what has arrived. Replies come back out of order, so each carries a correlation id, a token naming the request it answers. And a missing reply has a meaning you must choose and write down: dropping an unanswered quote is fine, reading an unanswered sanctions check as clean is not. Give late replies a place to go instead of dropping them silently.
+Scatter-gather sends one request to several recipients at the same moment, collects the replies as they arrive and combines them into one answer for the caller. It turns a sum of delays into a maximum: asking five carriers one after another takes five waits, asking them together takes one, for the slowest. Choose it when the answer lives in several places and asking one by one would multiply the delay by their number.
+
+- **Load multiplier.** Every call multiplies load by the recipient count, even if you keep one reply. Size for that rate and cap the fan-out.
+- **Slowest sets the pace.** Set a deadline and combine what has arrived. Give late replies a place to go instead of dropping them silently.
+- **Correlation.** Replies come back out of order, so each carries a correlation id, a token naming the request it answers.
+- **Missing replies.** Decide and write down what silence means: dropping an unanswered quote is fine, reading an unanswered sanctions check as clean is not.
 
 **Example.** You want shipping quotes from 5 carriers that answer in 200, 250, 400, 600 and 1,800 ms. One after another that is 3,250 ms. Asked together and waiting for all, it is 1,800 ms. With an 800 ms deadline you answer at 800 ms using 4 quotes. The cost is load: at 20 quotes a second you make 100 carrier calls a second. The slow carrier replies after the deadline has passed, and if its quote was the cheapest, the customer misses the best price, so you log late replies and watch how often that happens.
 
@@ -230,11 +229,16 @@ async function screen(
 **Often confused with**
 
 - [MapReduce](../distributed/coordination/mapreduce.md) — Scatter/gather fans a request to responders; map-reduce grinds a whole dataset
+- [Fork-Join](../concurrency/fork-join.md) — Sends one request to many services over a network and collects the replies
+
+**Exposed to**
+
+- [Synchronous I/O](../../hazards/synchronous-io.md) — Can fall into synchronous io when the gather step ties up a thread per outstanding branch while it waits for replies
 
 **Demonstrated by**
 
 - [Top-K](../../designs/top-k.md) — an exact global ranking is assembled from independent per-shard results, since a global winner must be a winner on its own shard
-- [Gopuff](../../designs/gopuff.md) — the union-across-nearby-DCs read is a textbook scatter to many partitions gathered into a single response
+- [Gopuff](../../designs/gopuff.md) — the union-across-nearby-data centers (DCs) read is a textbook scatter to many partitions gathered into a single response
 - [Persona Identification & Sanction Check](../../designs/persona-identification.md) — a sanctions screening fanned across several lists, with one collector deciding Clear or Sanctioned only when all legs are in
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — a fan-in whose tally is round-scoped, and whose legs carry a third outcome so an unreachable participant still terminates
 - [Uber](../../designs/uber.md) — Scatter-gather as the rare exception cost of sharding by region

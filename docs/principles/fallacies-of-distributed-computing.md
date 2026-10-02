@@ -16,25 +16,16 @@ Eight assumptions that hold on one machine and are false across a network: it is
 ## What it says
 <!--meta block=description-->
 
-Peter Deutsch and colleagues at Sun Microsystems listed seven false assumptions that programmers new to distributed systems make, and James Gosling later added an eighth. Each one is a thing a local call gives you for free and a remote call does not. The list is a checklist of what your code is silently relying on, not a rule about what to build.
-
-The usual misreading is that these are network problems for the network team. They are design inputs. Each fallacy, taken as true, hides a decision you then never make: with the first, how you handle a lost reply; with the second, how long you wait; with the eighth, how two services agree on a format.
-
-Here is each one with the habit it demands:
-
-- **The network is reliable.** Packets drop, connections reset, peers vanish mid-call. Set a timeout on every remote call, retry only work that is safe to repeat (see [Idempotency](../patterns/messaging/idempotency.md)), and decide up front what a failed call means.
-- **Latency is zero.** A remote call costs milliseconds to seconds, not nanoseconds. Count calls per request, batch where you can, and never put a network call inside a tight loop.
-- **Bandwidth is infinite.** Links have a ceiling and you pay to cross zones. Send only the fields the caller needs, paginate, and compress large payloads.
-- **The network is secure.** Anyone on the path can listen or inject. Encrypt in transit, authenticate every caller, and treat a request from inside the network as untrusted (see [Identity as Perimeter](./identity-as-perimeter.md)).
-- **Topology does not change.** Instances come and go, addresses move, routes shift. Find peers through [Service Discovery](../patterns/distributed/routing/service-discovery.md) at call time and never bake an address into config you ship.
-- **There is one administrator.** Other teams, clouds and vendors run parts of the path, on their own schedules. Version your contracts and expect a dependency to change under you.
-- **Transport cost is zero.** Serialising, copying and sending data costs CPU, money and time. Measure the bill for a hop before you add it.
-- **The network is homogeneous.** Different languages, platforms, clocks and protocol versions meet on the wire. Agree on a documented format and test across versions.
+Peter Deutsch and colleagues at Sun Microsystems listed seven false assumptions that programmers new to distributed systems make, and James Gosling added an eighth. Each is something a local call gives you for free and a remote call does not. The list is a checklist of what your code silently relies on. The misreading is that these are network problems for the network team: each fallacy taken as true hides a decision you then never make.
 
 ## Explained
 <!--meta block=explain-->
 
-The fallacies are eight things a local function call gives you for free that a call across a network does not: it can fail, it takes time, it has limited capacity, it can be watched or forged, its route changes, other people run parts of it, it costs money to use, and the machines at each end differ. Peter Deutsch and others at Sun listed seven of them and James Gosling added the eighth. Use them as a review checklist when you add a remote call, ahead of failure-mode analysis, which then takes each answer further. Each fallacy costs you a default. Add a deadline to every call so a hang becomes an error, and retry only work that is safe to repeat. Count calls per request and batch them, because latency adds up. Send only the fields needed, because bytes cost. Authenticate and encrypt each hop. Look peers up at call time. Version your contracts. Skip the defences on a link that cannot fail in the way you fear, such as two processes on one host, since every defence is code you maintain.
+The fallacies are eight things a local function call gives you for free that a call across a network does not: it can fail, it takes time, it has limited capacity, it can be watched or forged, its route changes, other people run parts of it, it costs money to use, and the machines at each end differ. Peter Deutsch and others at Sun listed seven of them and James Gosling added the eighth. Use them as a review checklist when you add a remote call, ahead of [failure mode analysis](./failure-mode-analysis.md), which then takes each answer further. The defaults they demand: a deadline on every call so a hang becomes an error, retries only for work that is safe to repeat, batched calls, only the fields needed, an authenticated and encrypted hop, peers looked up at call time, and versioned contracts.
+
+- **Every defence is code you maintain.** Skip it on a link that cannot fail the way you fear, such as two processes on one host.
+- **Deadlines need choosing.** Pick each from the caller's own budget, and design the page or response to survive a missing piece.
+- **Batching and parallel calls add complexity.** Count calls per request first, and batch only on the hot path.
 
 **Example.** A product page makes 12 sequential calls to other services, each 25 ms on average, with no deadline set. The page takes 300 ms in a quiet test. Then one of the 12 services starts hanging, and each page request that reaches it holds a thread for 30 s. At 10 page requests a second, 200 threads are all stuck within 20 s and every page fails. A 100 ms deadline on each call turns the hang into a fast error and a page without that panel. Running 4 of the calls in parallel cuts the quiet-day time from 300 ms to about 225 ms. The cost is choosing each deadline and designing the page for a missing panel.
 

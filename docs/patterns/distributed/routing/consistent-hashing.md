@@ -187,6 +187,21 @@ class HashRing {
 
 <!-- fluency:end -->
 
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **Why does one ring point per node give uneven load?**
+>
+> Arcs between random points differ in length, and virtual nodes fix it at a memory and lookup cost, see [con 1](consistent-hashing.md#tradeoffs-con-1).
+
+> **What goes wrong when two nodes hold different ring views?**
+>
+> They disagree about who owns a key, see [con 3](consistent-hashing.md#tradeoffs-con-3).
+
+> **When is plain mod-N hashing the better choice?**
+>
+> When the node count is fixed and never changes, see [avoid 1](consistent-hashing.md#usage-avoid-1).
+
 ## How it relates
 <!--meta block=relationships-->
 
@@ -207,6 +222,10 @@ class HashRing {
 **Prevents**
 
 - [Hot Partition](../../../hazards/hot-partition.md) — Spreads ranges evenly so no node inherits the whole tail
+
+**Exposed to**
+
+- [Hot Key](../../../hazards/hot-key.md) — Can fall into hot key when placement by hash balances key count, not traffic
 
 **Demonstrated by**
 

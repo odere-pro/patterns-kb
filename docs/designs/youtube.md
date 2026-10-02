@@ -17,16 +17,16 @@ A video platform accepts a file from one person and plays it back to everyone el
 ## Understanding the problem
 <!--meta block=description-->
 
-A video platform has two moving parts and a very long life in between them. Someone hands you a file — tens of gigabytes, in whatever format their phone produced — and from that moment it is yours to keep, convert and hand back on demand, for years. The upload happens once and takes minutes. The playback happens anywhere from twice to fifty million times, starts in about two seconds each time, and runs over a connection you have never measured.
-
-The naive build is one endpoint that takes the file, writes it to a disk, and serves it back. It survives a demo and breaks in five places. A ten-gigabyte upload pins an application process for the whole transfer and produces nothing if the connection drops at 90%. Handing the file back as it arrived sends a phone on a train the uploader's 4K master, which stalls on the first second. A single file cannot be swapped for a smaller one halfway through, so a bandwidth drop is a freeze rather than a softer picture. One origin makes a viewer on another continent pay a round trip on each of the seventy-odd fetches a watch takes. And the day one clip is shared everywhere, every read of its record lands on the one node holding it.
-
-Those five breakages are the design, and this page takes them in order: get the bytes in without an application server carrying them, convert each upload once into a ladder of qualities the player can move between, put the result where the viewer already is, keep one hot record from taking a storage node down — then decide which of the accumulated petabytes is worth keeping forever. The playback half is the entry point for the [Streaming](../themes/streaming.md) theme; the upload half shares its mechanics with a [Dropbox](./dropbox.md)-style large-file design.
+A video platform accepts a file of tens of gigabytes, then stores, converts and serves it for years. Upload happens once and takes minutes; playback happens up to millions of times, starts in about two seconds and runs over unmeasured connections. The page walks through getting bytes in, converting each upload into a ladder of qualities, serving from near viewers, and protecting hot records. It is the entry point for the Streaming theme.
 
 ## Explained
 <!--meta block=explain-->
 
-YouTube-style video is sized by bytes moved, not by requests: 1 million uploads a day is only 12 a second, yet it stores about 1.7 PB and plays about 5.6 PB. Two moves follow. Uploads go straight from the client into object storage in parts, so no application server carries a byte, and converting a video runs as small segment jobs on a queue. Playback is plain cacheable file fetches from a content delivery network (CDN), a rented network of servers near viewers. Choose a queue over converting inside the upload request, because converting ten minutes of video takes thousands of core-seconds. It costs three things. A video is not watchable until its last segment is done, so show a processing state and keep separate queues so a long upload cannot block a short clip. If the CDN fails, the origin gets about 20 times its load, so contract a second CDN. Storage grows every day and is never deleted, so keep a second-region copy only of the original, which cannot be rebuilt, and rebuild the converted versions instead of copying them.
+YouTube-style video is sized by bytes moved, not by requests: 1 million uploads a day is only 12 a second, yet it stores about 1.7 PB and plays about 5.6 PB. Uploads go straight from the client into object storage in parts, so no application server carries a byte, and converting a video runs as small segment jobs on a [queue](../patterns/messaging/message-queue.md). Playback is plain cacheable file fetches from a content delivery network ([CDN](../patterns/distributed/routing/cdn.md), a rented network of servers near viewers). Choose a queue over converting inside the upload request, because converting ten minutes of video takes thousands of core-seconds and a dropped connection at 90% would lose everything.
+
+- **Not watchable yet.** A video is not playable until its last segment is done. Show a processing state; use separate queues by upload length.
+- **CDN failure.** If the CDN fails, the origin gets about 20 times its load. Contract a second CDN.
+- **Endless storage.** Storage grows daily and is never deleted. Copy only the original to a second region; rebuild the rest.
 
 **Example.** A 10 GB master goes up in 10 MB parts, about 1,000 of them, and the server handles only the part list. Playback totals 100 million watches times 300 s times 1.5 Mbit/s, about 5.6 PB a day, or 520 Gbit/s. With a 95 percent CDN hit ratio the origin serves 26 Gbit/s. If the CDN went down, the origin would face the full 520, 20 times its design. The cost is that a lost CDN is an origin overload, not a slowdown.
 
@@ -50,12 +50,14 @@ Out of scope: search, comments, recommendations, channel subscriptions, live str
 - **Scale**
   - 1M uploads and 100M watches a day, roughly 100 watches per upload.
   - Popularity is concentrated: a small share of the catalogue takes most of the watches. {#requirements-nfr-scale-2}
+  - One viral clip's record must not overload the single storage node holding it. {#requirements-nfr-scale-3}
 - **Throughput**
   - A single upload can be tens of gigabytes and hours long.
   - Bytes moved, not requests served, is the axis the system is sized on. {#requirements-nfr-throughput-2}
 - **Latency**
   - Playback starts in about two seconds.
   - Playback does not stall when the viewer's bandwidth halves mid-watch. {#requirements-nfr-latency-2}
+  - A viewer on another continent pays no extra round trip on each of the seventy-odd fetches a watch takes. {#requirements-nfr-latency-3}
 - **Availability & resilience**
   - 99.9% for playback, favoured over consistency; a video minutes late is acceptable, playback going dark is not.
   - Every failed processing step retries or ends with a recorded reason the uploader can see. {#requirements-nfr-resilience-2}
@@ -425,7 +427,7 @@ That asymmetry is what makes the exits in Right-sizing affordable: cold-tiering 
 - [Valet Key](../patterns/distributed/routing/valet-key.md) — the Video Service hands the client a presigned URL so multi-gigabyte bytes upload straight to the blob store, never through the app tier
 - [Object Storage](../patterns/distributed/routing/object-storage.md) — segments, renditions, and manifests all live in an S3-style blob store — the only tier that scales to a petabyte of new video a day
 - [Pipe-and-Filter](../patterns/architecture/pipe-filter.md) — post-processing is a pipeline of split then transcode then manifest-generation, each a discrete transform over the previous stage's output
-- [Workflow Orchestration](../patterns/distributed/coordination/workflow-orchestration.md) — a Temporal-style orchestrator builds the processing DAG and schedules worker nodes at the right time
+- [Workflow Orchestration](../patterns/distributed/coordination/workflow-orchestration.md) — a Temporal-style orchestrator builds the processing directed acyclic graph (DAG) and schedules worker nodes at the right time
 - [Competing Consumers](../patterns/messaging/competing-consumers.md) — independent segments are transcoded in parallel by a fleet of interchangeable workers pulling from a queue
 - [Cache-Aside](../patterns/caching/cache-aside.md) — a distributed cache keyed by videoId absorbs reads for popular videos so they never reach Cassandra
 - [CDN](../patterns/distributed/routing/cdn.md) — segments and manifests are pushed to edge servers so streaming never travels back to the origin region
@@ -438,8 +440,8 @@ That asymmetry is what makes the exits in Right-sizing affordable: cold-tiering 
 - [Dead Letter Channel](../patterns/messaging/dead-letter-channel.md) — A file that crashes the encoder comes back forever; bounded attempts route it out, marking the video Failed with a reason
 - [Sharding](../patterns/distributed/routing/sharding.md) — VideoMetadata partitions by video id so metadata scales independently of the blob tier
 - [Distributed Cache](../patterns/caching/distributed-cache.md) — Popular rows get a shared cache in front of the metadata store, stacked with a higher replication factor
-- [API Gateway](../patterns/distributed/routing/api-gateway.md) — One entry point terminates TLS, authenticates uploaders and applies per-account limits
-- [Autoscaling](../patterns/distributed/routing/autoscaling.md) — Workers scale on queue depth and oldest-message age — a transcode fleet runs at 100% CPU by definition, so utilisation never fires
+- [API Gateway](../patterns/distributed/routing/api-gateway.md) — One entry point terminates transport layer security (TLS), authenticates uploaders and applies per-account limits
+- [Autoscaling](../patterns/distributed/routing/autoscaling.md) — Workers scale on queue depth and oldest-message age — a transcode fleet runs at 100% central processing unit (CPU) by definition, so utilisation never fires
 - [Write-Behind](../patterns/caching/write-behind.md) — View counts tally in memory and flush an atomic add every few seconds, turning 1,200 increments into one write
 - [Fan-In](../patterns/messaging/fan-in.md) — The workflow fans out to hundreds of video segments and fans in on the last one before publishing
 

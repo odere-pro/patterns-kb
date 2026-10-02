@@ -230,7 +230,7 @@ const latest = await quorumRead(replicas, "x", 2);
 **Alternative to**
 
 - [Gossip Protocol](./gossip-protocol.md) — Use consensus when a single agreed value or linearizable read matters
-- [CRDT](./crdt.md) — Use agreement when a rule spans replicas; use a CRDT when replicas must keep writing alone.
+- [CRDT](./crdt.md) — Use agreement when a rule spans replicas; use a conflict-free replicated data type (CRDT) when replicas must keep writing alone.
 
 **Enables**
 

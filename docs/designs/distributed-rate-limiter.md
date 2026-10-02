@@ -16,12 +16,16 @@ A rate limiter is the traffic controller in front of an API: it counts how many 
 ## Understanding the problem
 <!--meta block=description-->
 
-Take a social platform's public API — post, fetch a timeline, upload a photo. Left unmetered, a single buggy client or a botnet can drown the backend, and one heavy user can starve everyone else. The fix is a request-level [rate limiter](../patterns/distributed/resilience/rate-limiter.md) that admits, say, 100 requests per minute per user and answers the overflow with `HTTP 429 Too Many Requests`. It has to be enforced server-side: a client SDK can be asked to behave, but it cannot be trusted to, so client-side throttling is at best a courtesy layer, never the real defence. The interesting engineering is not the counting rule itself but keeping one honest count when the machines doing the counting are many and the traffic is enormous.
+A rate limiter for a social platform's public API admits, say, 100 requests per minute per user and answers the overflow with HTTP 429. Enforcement must be server-side, because a client cannot be trusted to throttle itself. The hard part is not the counting rule but keeping one honest count when many machines count and traffic is enormous. The page walks through requirements, sizing, the shared-state design and its failure modes.
 
 ## Explained
 <!--meta block=explain-->
 
-A distributed rate limiter keeps each client's allowance in a shared store, so the cap holds no matter which of many gateway servers receives the request. Each gateway hashes the client id to pick one shard, then runs a token-bucket check there: the client has a bucket that refills steadily, each request spends a token, and an empty bucket gets HTTP 429. The check must run as one indivisible script on the shard, because two gateways reading the same last token and both writing would let both requests through. Choose it over a count kept in each gateway's own memory when the cap must hold globally; a per-gateway count lets a client send its full allowance to each of them. It costs three things. The network round trip, not the store, eats the 10 ms budget, so pool connections and keep shards in the caller's region. Counting separately per region can overshoot, so publish a cap with that drift priced in. And a lost shard leaves its clients unchecked, so replicate each shard and reject while it fails over, since outages tend to arrive with the surge the limit exists for.
+A distributed rate limiter keeps each client's allowance in a shared store, so the cap holds no matter which of many gateway servers receives the request. Each gateway hashes the client id to pick one shard ([sharding](../patterns/distributed/routing/sharding.md)), then runs a [token bucket](../patterns/distributed/resilience/token-bucket.md) check there: the bucket refills steadily, each request spends a token, and an empty bucket gets HTTP 429. The check must run as one indivisible script on the shard, because two gateways reading the same last token and both writing would let both requests through. Choose it over a count kept in each gateway's own memory when the cap must hold globally; a per-gateway count lets a client send its full allowance to each gateway.
+
+- **Round trip.** The network hop, not the store, eats the 10 ms budget. Pool connections and keep shards in the caller's region.
+- **Regional drift.** Counting separately per region can overshoot. Publish a cap with that drift priced in.
+- **Lost shard.** Its clients go unchecked. Replicate each shard and reject while it fails over, since outages arrive with the surge the limit exists for.
 
 **Example.** The service handles 1 million checks a second. Each check is a read and a write, so 2 million store operations a second; one Redis instance does 100,000 to 200,000, which is 50,000 to 100,000 checks, so you run about 10 shards. Alice has 1 token left and two gateways check her at once. The shard script runs them one after the other: the first spends the token, the second sees 0 and gets a 429. If Alice's shard dies, the clients on it are rejected for the 1 to 2 seconds a replica takes to be promoted.
 
@@ -210,6 +214,6 @@ sequenceDiagram
 - [Consistent Hashing](../patterns/distributed/routing/consistent-hashing.md) — hashes each client id to a fixed shard so its state never splits across nodes
 - [Sharding](../patterns/distributed/routing/sharding.md) — splits ~2M bucket ops/second across roughly ten Redis nodes to clear the single-instance ceiling
 - [Replication](../patterns/distributed/coordination/replication.md) — each shard runs a master with syncing replicas that auto-promote on failure rather than uncovering its clients
-- [Object Pool](../patterns/gof/extra/object-pool.md) — connection pooling reuses warm TCP connections to Redis so no check pays the 20-50 ms handshake
+- [Object Pool](../patterns/gof/extra/object-pool.md) — connection pooling reuses warm Transmission Control Protocol (TCP) connections to Redis so no check pays the 20-50 ms handshake
 
 <!-- relationships:end -->

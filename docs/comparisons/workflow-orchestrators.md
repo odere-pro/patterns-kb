@@ -16,16 +16,14 @@ Two different jobs answer to one name: keeping a multi-step application transact
 ## What this compares
 <!--meta block=description-->
 
-Split the field on the job before you compare a single product. One job keeps a multi-step application transaction alive: charge the card, reserve the stock, book the courier, and either finish or unwind even though the process died between steps two and three. The other runs a pipeline on a clock: a graph of batch jobs where step four waits on two and three, and a date that failed has to be re-run.
-
-Each product does the other job badly enough to hurt. A durable execution engine remembers the position of every in-flight run and resumes it on another worker, which is what a [saga](../patterns/distributed/coordination/saga.md) needs and what a scheduler never promised. A scheduler owns calendars, dependencies and backfills, which a durable execution engine leaves you to write.
-
-Each cloud also sells a state machine of its own, next to the queues and topics in its [messaging](../capabilities/messaging.md) line-up. Those cost the least to run and the most to leave: the definition is written in the provider's own language and moves nowhere.
-
+Split the field on the job before you compare products. One job keeps a multi-step application transaction alive across a crash: charge the card, reserve the stock, book the courier, then finish or unwind. The other runs a batch pipeline on a clock, where a failed date must be re-run. Each product does the other job badly. Each cloud also sells a state machine of its own, cheapest to run and costliest to leave.
 ## Explained
 <!--meta block=explain-->
 
-A workflow orchestrator runs a sequence of steps and remembers where each run got to, so a crash between steps does not lose the run. Split the field on the job before you compare products. One job keeps an application transaction alive: charge the card, reserve the stock, book the courier, and either finish or undo, even if the process died midway. For that, choose a durable execution engine such as Temporal, which resumes the run on another worker and keeps the undo logic in reviewable code. The other job runs batch pipelines on a clock, where step four waits on steps two and three and a failed date must be re-run. For that, choose a scheduler such as Airflow. Each does the other's job badly. Inside one cloud with modest branching, the cloud's own state machine is the least to operate, but its definition ports nowhere, so accept a rewrite if the work ever moves. A durable engine costs a server cluster and a database, or a vendor bill. Before any of them, a queue, a safe-to-repeat consumer and a status column carry more than you expect.
+A workflow orchestrator runs a sequence of steps and remembers where each run got to, so a crash between steps does not lose the run. Split the field on the job before you compare products. One job keeps an application transaction alive: charge the card, reserve the stock, book the courier, and either finish or undo, even if the process died midway. For that, choose a durable execution engine such as Temporal, which resumes the run on another worker and keeps the undo logic in reviewable code. The other job runs batch pipelines on a clock, where step four waits on steps two and three and a failed date must be re-run. For that, choose a scheduler such as Airflow. Each does the other's job badly. Before any of them, a queue, a safe-to-repeat consumer and a status column carry more than you expect. Inside one cloud with modest branching, the cloud's own state machine is the least to operate.
+
+- **A durable engine costs a cluster** It needs a server cluster and a database, or a vendor bill.
+- **A cloud state machine's definition ports nowhere** It is written in the provider's language, so accept a rewrite if the work moves.
 
 **Example.** A shop handles 10,000 orders a day, and each runs three steps: charge, reserve stock, book a courier. One order in 500 loses its process after step 2, so 20 orders a day are charged with no delivery booked. A status column plus a sweeper job can find them, but you write the sweeper and the refund path. A durable engine resumes each stranded order at step 3, or runs the refund you wrote beside the happy path. The cost is a cluster to run, or a vendor bill.
 

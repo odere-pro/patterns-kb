@@ -16,18 +16,17 @@ A downstream dependency slows down, so every borrowed connection is held longer,
 ## What it is
 <!--meta block=description-->
 
-**Connection-pool exhaustion** is the state where every connection in a pool is checked out and in use, so the next caller has to wait for one to come back. The pool is doing its job — connections are expensive to open, so a fixed set is created once and shared — and the trouble is what happens when the work each borrower does gets slower. How many connections you need is arrival rate multiplied by how long each one is held, so a query that goes from ten milliseconds to one second needs a hundred times the slots to serve the same traffic. The pool runs out long before the database does.
-
-The symptom is the surprising part: requests hang rather than fail. With no limit on how long a caller may wait for a slot, the queue in front of the pool grows without a single error being logged, so nothing upstream sees a failure it could react to. CPU is low, memory is fine, the process is alive and answering nothing. The evidence lives in places you have to go looking for — waiters and wait time on the pool, threads all parked on the same acquire call — which is why this failure is usually diagnosed by elimination.
-
-It is not the same failure as a [resource leak](./resource-leak.md), though it looks identical from outside. A leak is a connection that is never given back, usually on an error path, so capacity falls permanently and never recovers. Exhaustion is every connection legitimately in use at once: stop the traffic and the pool comes back. That difference is the diagnosis — watch whether utilization returns to baseline when load stops.
+Connection-pool exhaustion is the state where every connection in a pool is checked out, so the next caller waits for one to come back. You recognize it when requests hang rather than fail: CPU is low, nothing logs an error, and threads are parked on the same acquire call. The defining trait separating it from a resource leak is that stopping traffic lets the pool recover.
 
 ## Explained
 <!--meta block=explain-->
 
-Connection-pool exhaustion is the state where every connection in a shared pool is checked out, so the next caller must wait for one to come back. A pool exists because opening a connection is slow, so you keep a fixed set and lend them out. The number you need is arrival rate times how long each borrower holds one, so a downstream service that merely gets slower can empty the pool while traffic stays flat. The surprise is that requests hang instead of failing: with no limit on the wait, the line in front of the pool grows silently, the processor stays idle and nothing logs an error. It differs from a resource leak, where a connection is never returned. Here every connection is legitimately busy, and stopping traffic lets the pool recover. Do not just enlarge the pool, because that hands the same queue to the database and slows every other client. Put a timeout on acquiring a connection, so the hang becomes a fast error your alerts can see. Hold each connection for as short a time as possible, never across an outside call. Give each workload its own pool so a slow report cannot starve logins, and alert on waiters.
+Connection-pool exhaustion is the state where every connection in a shared pool is checked out, so the next caller must wait for one to come back. A pool exists because opening a connection is slow, so you keep a fixed set and lend them out. The number you need is arrival rate times how long each borrower holds one, so a downstream service that merely gets slower can empty the pool while traffic stays flat. With no limit on the wait, the line in front of the pool grows silently and nothing logs an error. Do not just enlarge the pool, because that hands the same queue to the database and slows every other client. Put a timeout on acquiring a connection, so the hang becomes a fast error your alerts can see. Hold each connection for as short a time as possible, never across an outside call. Give each workload its own pool ([bulkhead](../patterns/distributed/resilience/bulkhead.md)) so a slow report cannot starve logins, and alert on waiters.
 
-**Example.** A service has a pool of 20 connections and takes 100 requests a second, each holding one for 100 ms, so 10 are busy. The database slows and each hold becomes 400 ms. The pool now serves 20 / 0.4 = 50 requests a second, and 50 a second join the line. After 10 s, 500 callers are waiting and each waits 10 s, with no error logged. With a 500 ms acquire timeout the line holds at about 25 and the other 50 a second get a fast error, which a circuit breaker can see. The cost is that half of the requests fail visibly during the slowdown.
+- **Visible failures.** A timeout turns silent hangs into errors, so some requests fail during a slowdown. Pair it with a circuit breaker.
+- **Split capacity.** Separate pools each need their own sizing, and idle slots in one cannot help another.
+
+**Example.** A service has a pool of 20 connections and takes 100 requests a second, each holding one for 100 ms, so 10 are busy. The database slows and each hold becomes 400 ms. The pool now serves 20 / 0.4 = 50 requests a second, and 50 a second join the line. After 10 s, 500 callers are waiting and each waits 10 s, with no error logged. With a 500 ms acquire timeout the line holds at about 25 and the other 50 a second get a fast error. The cost is that half of the requests fail visibly during the slowdown.
 
 ## How it happens
 <!--meta block=causes-->
@@ -84,5 +83,11 @@ Size it from the downstream's real concurrency limit, not from your request rate
 - [Timeout / Deadline](../patterns/distributed/resilience/timeout-deadline.md) — Acquire and statement timeouts turn a hang into a visible error
 - [Bulkhead](../patterns/distributed/resilience/bulkhead.md) — Per-workload pools stop one slow query starving every path
 - [Circuit Breaker](../patterns/distributed/resilience/circuit-breaker.md) — Releases slots spent on calls that cannot finish in time
+
+**Threatens**
+
+- [Object Pool](../patterns/gof/extra/object-pool.md) — A fixed pool whose borrowers slow down runs dry while traffic stays flat
+- [Thread Pool](../patterns/concurrency/thread-pool.md) — A bounded pool with an unbounded wait hangs requests silently
+- [Semaphore](../patterns/concurrency/semaphore.md) — A counted permit with no acquire timeout parks callers behind slow holders
 
 <!-- relationships:end -->

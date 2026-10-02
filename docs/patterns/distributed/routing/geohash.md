@@ -16,18 +16,15 @@ A scheme that folds a two-dimensional point into one short, prefix-sortable stri
 ## What it is
 <!--meta block=description-->
 
-A geohash encodes a point on Earth — a latitude and longitude — as a single short string. Recursively bisect the globe: the first character selects one of 32 top-level cells, each further character subdivides the chosen cell into 32 smaller ones. More characters means a smaller cell, so a five-character hash pins you to roughly a five-kilometre box and a nine-character hash to a few metres. The crucial property is **prefix locality**: two points that share a longer prefix are guaranteed to sit in the same cell at that depth, so a shared prefix means physical nearness.
-
-The force it resolves is that ordinary indexes cannot answer "what is near here". A range query on one sorted column — ages 20 to 25 — is cheap on a B-tree because the keys are physically ordered and packed onto adjacent pages: one seek, a short sequential read. But distance depends on latitude and longitude jointly. Index latitude alone and you get a horizontal band of the planet; a composite `(lat, lon)` index still sorts primarily by the first column and only tie-breaks on the second, so it is effectively a one-dimensional sort that returns a huge band of unranked rows and forces a brute-force distance check on every one. A one-dimensional sort order simply cannot preserve two-dimensional adjacency.
-
-Geohash sidesteps the problem instead of building a dedicated spatial index. Because the encoded key is just a string (or the same bits read as an integer), "find things nearby" becomes an ordinary prefix or range scan on the B-tree or sorted set the database already ships — no spatial extension required, and a moving point's update is a single small key write.
-
-The catch is the cell boundary. Two points a few metres apart can straddle a cell edge and receive different prefixes, so scanning a single cell can miss a very close neighbour. The standard correction is the **3×3 ring**: compute the query point's own cell plus its eight neighbours, scan all nine, then post-filter by exact distance to discard the far corners that only matched the window. The index never gives the final answer on its own — it narrows "scan everything" down to a small candidate set, and exact distance math finishes the job.
+A geohash encodes a latitude and longitude as one short string by recursively splitting the globe into 32 cells, so a longer string names a smaller cell and a shared prefix means nearness. It answers what is near here with a prefix or range scan on an ordinary sorted index, which a two-column index cannot do. Points near a cell edge get different prefixes, so you scan a 3 by 3 ring and filter by exact distance.
 
 ## Explained
 <!--meta block=explain-->
 
-A geohash turns a latitude and longitude into one short string, so that places close together share the start of their string. The globe is split into 32 cells, each cell into 32 smaller ones, and each character names one choice, so more characters mean a smaller cell, from about 5 km at five characters to a few metres at nine. Because the key is plain text, finding what is near becomes a prefix scan on the sorted index your database already has. Without it, a normal index sorts on one column and cannot keep two-dimensional neighbours adjacent, so the database reads a wide band of rows and checks the distance on every one. Choose it over a dedicated spatial index when your data is mostly moving points, since an update is one small key write. Choose a spatial tree such as an R-tree when you need shapes like polygons. It costs three things. Two close points can sit either side of a cell edge and get different prefixes, so scan the cell and its 8 neighbours, then filter by exact distance. Cells ignore density and shrink toward the poles, so choose the length by how crowded the area is. And it encodes points only.
+A geohash turns a latitude and longitude into one short string, so that places close together share the start of their string. The globe is split into 32 cells, each cell into 32 smaller ones, and each character names one choice, so more characters mean a smaller cell, from about 5 km at five characters to a few metres at nine. Because the key is plain text, finding what is near becomes a prefix scan on the sorted index your database already has. Without it, a normal index sorts on one column and cannot keep two-dimensional neighbours adjacent, so the database reads a wide band of rows and checks the distance on every one. Choose it over a dedicated spatial index when your data is mostly moving points, since an update is one small key write. Choose a spatial tree such as an R-tree when you need shapes like polygons.
+
+- **Cell edges.** Close points can straddle an edge and get different prefixes, so scan the cell and its 8 neighbours, then filter by exact distance.
+- **Uneven cells.** Cells ignore density and shrink toward the poles, so choose the prefix length by how crowded the area is.
 
 **Example.** A ride app tracks 100,000 drivers who each report every 4 s, so 25,000 single-key writes a second. It stores each driver under a 6-character geohash, a cell about 1.2 km by 0.6 km. A rider asks for drivers within 1 km. Scanning only the rider's cell would miss a driver 30 m away across the cell edge, so the app scans 9 cells. If a city cell holds about 20 drivers, that is 180 candidates, which the app narrows with exact distance. The cost is that extra scan and filter on every query.
 
@@ -210,6 +207,7 @@ function geohash(lat: number, lon: number, precision = 9): string {
 **Combines with**
 
 - [Sharding](./sharding.md) — Shard geo data by geohash prefix so nearby points land on the same partition
+- [Trie](../coordination/trie.md) — Shared prefix means same cell, the property a prefix tree exploits
 
 **Demonstrated by**
 

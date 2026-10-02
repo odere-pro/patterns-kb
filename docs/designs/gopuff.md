@@ -17,16 +17,16 @@ A rapid local-delivery service stocks convenience goods in hundreds of small dis
 ## Understanding the problem
 <!--meta block=description-->
 
-Stock does not sit in a handful of large warehouses. It sits in hundreds of micro distribution centers (DCs) placed inside the cities they serve, so that most goods are within an hour of most customers. That inverts the usual inventory question: what a customer can buy is not one store's shelf but the union of stock across every DC that can reach their address inside the delivery window, merged into a single list. The system is two operations wide — answer "what can reach me?", and "reserve these units for me".
-
-The naive build is one inventory table, a distance filter, and an order that reads stock and then writes it. It demonstrates well and breaks in four places on a Friday evening. Two carts read the same last carton as available and both are told yes, so one customer gets a refund instead of dinner. A DC eight miles away across a river sits inside the radius and outside the hour, so the list promises deliveries no rider can make. Browsing outnumbers buying two hundred to one, so the database that arbitrates orders spends its capacity on people who are not buying. And when a storm doubles demand in one city, the extra load lands on exactly the rows that are already contended.
-
-Those breakages are the agenda. Serialize the claim on a physical unit so it can be sold only once (dive 1), decide reachability by drive time rather than by distance (dive 2), answer availability from copies the order path never touches (dive 3), keep the ledger honest when the shelf disagrees with it (dive 4), and decide in advance what gives way when a surge arrives (dive 5). The read half is the playbook of the [Scaling Reads](../themes/scaling-reads.md) theme; the write half belongs to [Dealing with Contention](../themes/dealing-with-contention.md). Payments, driver dispatch, catalog search, cancellations and returns stay out of scope.
+Stock sits in hundreds of micro distribution centers inside the cities they serve, so what a customer can buy is the union of stock across every center that can reach their address within the hour. The system answers two questions: what can reach me, and reserve these units for me. The hard part is selling each physical unit once under a surge while reads stay fast.
 
 ## Explained
 <!--meta block=explain-->
 
-Gopuff answers what you can buy from copies of the stock that the order path never touches, and takes each order in one transaction that claims the physical units, so a unit sells once. It works because browsing outnumbers buying 200 to one, so you keep browsing on a cache and read-only copies, and keep the one writable database per region for orders. Reachability is decided by drive time to the few nearby warehouses, not by distance. Choose it over one table where reads and orders share a database, because 20,000 reads a second would otherwise land on the machine that arbitrates orders. It costs three things. A regional leader failing stops ordering there, so keep browsing entirely off it and the outage is partial. A hot item makes many orders fight over one row, and strict isolation then aborts work already done, so retry a few times with random delays, and claim interchangeable units under a row lock once you measure the aborts. A cached count is up to a minute stale, so the checkout transaction is the only authority and answers 409 when stock is gone. Under a surge, browsing is shed first and ordering never.
+Gopuff answers what you can buy from copies of the stock that the order path never touches, and takes each order in one transaction that claims the physical units, so a unit sells once. It works because browsing outnumbers buying 200 to one, so you keep browsing on a cache and read-only copies, and keep the one writable database per region for orders. Reachability is decided by drive time to the few nearby warehouses, not by distance. Choose it over one table where reads and orders share a database, because 20,000 reads a second would otherwise land on the machine that arbitrates orders. Under a surge, browsing is shed first and ordering never.
+
+- **Leader failure.** A failed regional leader stops ordering there, so keep browsing off it and the outage stays partial.
+- **Hot rows.** Orders on one item fight over a row and aborts waste work, so retry with random delays.
+- **Stale counts.** A cached count is up to a minute old, so checkout is the authority and answers 409 when stock is gone.
 
 **Example.** Gopuff takes 10 million orders a day, about 116 a second. At 200 page views per order that is about 20,000 availability reads a second, served from the cache and replicas. Two carts both see the last carton, a count up to 60 seconds old. Both orders run; strict isolation commits one and aborts the other, which retries after a short random delay, finds 0 left and gets a 409. The five-line order that won wrote about 11 rows.
 
@@ -48,6 +48,8 @@ Out of scope, named on purpose: payments, driver routing and delivery, catalog/s
 - **Strong consistency** — no two customers ever purchase the same physical unit of inventory, and a unit is never held by nobody.
 - **Scale** — up to **10k DCs** and **100k catalog items**, at roughly **10M orders/day**.
 - **Burst tolerance** — evening peaks and weather events concentrate several times the mean load on a few neighbourhoods; browsing may degrade, ordering may not.
+- **Drive-time reachability** — a DC counts only if its drive time to the address fits the hour; straight-line distance promises deliveries no rider can make.
+- **Reads off the order path** — browsing outnumbers buying 200 to one, so availability reads never touch the database that arbitrates orders.
 - Out of scope: privacy/security hardening and disaster recovery.
 
 ## Right-sizing
@@ -395,15 +397,15 @@ Two reflexes are wrong here and worth rejecting out loud. [Autoscaling](../patte
 
 **Demonstrates**
 
-- [Scatter-Gather](../patterns/messaging/scatter-gather.md) — an availability read fans a location out to every in-range DC and unions their inventory into one list
-- [Cache-Aside](../patterns/caching/cache-aside.md) — a Redis layer with a one-minute TTL absorbs the ~20k QPS of availability reads, misses falling through to Postgres and writes invalidating keys
+- [Scatter-Gather](../patterns/messaging/scatter-gather.md) — an availability read fans a location out to every in-range distribution centre (DC) and unions their inventory into one list
+- [Cache-Aside](../patterns/caching/cache-aside.md) — a Redis layer with a one-minute time to live (TTL) absorbs the ~20k queries per second (QPS) of availability reads, misses falling through to Postgres and writes invalidating keys
 - [Optimistic Concurrency Control](../patterns/distributed/coordination/optimistic-concurrency-control.md) — ordering runs as one SERIALIZABLE Postgres transaction so a concurrent double-order hits a serialization failure at commit and is rejected
 - [Replication](../patterns/distributed/coordination/replication.md) — availability reads are served from Postgres read replicas while orders write to the leader for strong consistency
 - [Sharding](../patterns/distributed/routing/sharding.md) — inventory is partitioned by region (first three zip digits) so a location query touches only one or two partitions
-- [In-Process Cache](../patterns/caching/in-process-cache.md) — the Nearby Service holds the whole DC table in memory and refreshes it every five minutes to prune candidates before any drive-time call
+- [In-Process Cache](../patterns/caching/in-process-cache.md) — the Nearby Service holds the whole distribution centre (DC) table in memory and refreshes it every five minutes to prune candidates before any drive-time call
 - [Idempotency](../patterns/messaging/idempotency.md) — POST /orders carries an idempotency key so a client that times out mid-commit replays into the same order instead of a second set of reservations
 - [Sweeper](../patterns/distributed/coordination/sweeper.md) — a scheduled job is the only actor allowed to return units whose held_until has passed, so nothing races to free the same unit
-- [Geohash](../patterns/distributed/routing/geohash.md) — the in-memory DC table is keyed by cell, so a lat/long becomes a cell lookup instead of a scan over 10k depots
+- [Geohash](../patterns/distributed/routing/geohash.md) — the in-memory distribution centre (DC) table is keyed by cell, so a lat/long becomes a cell lookup instead of a scan over 10k depots
 - [Stateless Service](../patterns/distributed/routing/stateless-service.md) — Availability, Orders and Nearby hold no per-request state, so browsing capacity is added by adding instances
 - [Retry with Backoff](../patterns/distributed/resilience/retry-backoff.md) — a serialization abort is replayed a bounded number of times with jittered backoff, then answered 409
 - [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — per-source limits at the edge shed browsing during a surge so the order path never queues

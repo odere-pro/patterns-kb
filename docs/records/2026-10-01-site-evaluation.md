@@ -136,11 +136,64 @@ above were not measured again after these changes.
 
 ## Left for the owner
 
-The items that need a decision before any work are in the [backlog](../../plans/backlog.md):
-the shape of the explain block, the description read before it, start-here tracks and levels,
-a self-check block, progress on a tour, code on principle pages, sketch languages, a relation
-verb for "exposed to", the 404 page on a deep miss, the order of search results for a symptom,
-and the missing pages this pass did not write.
+Round 3, below, closed the items first left for the owner. What remains is in the
+[backlog](../../plans/backlog.md): sketch languages and the thin pages.
+
+## Round 3 (2026-10-02)
+
+A third round closed what the backlog held for the owner and filled the gaps in the page set.
+
+**Closed.**
+
+- **Pages.** 12 scaffold pages written: `active-object`, `channels`, `double-checked-locking`,
+  `ring-buffer`, `context-map`, `domain-service`, `front-controller`, `query-object`,
+  `inverted-index`, `trie`, `rolling-deployment` and `shadow-traffic`. 4 stray TODO bullets
+  removed. All 30 draft pages are published with relations and tour placements, among them
+  `resequencer`, `routing-slip`, `mutex`, `barrier`, `fork-join`, `proactor`,
+  `premature-optimization`, `shotgun-surgery`, `hyrums-law` and
+  `make-illegal-states-unrepresentable`. `lost-update` was skipped as a duplicate of
+  `race-condition`. The tree now holds 448 pages: 255 patterns, 45 hazards and 36 principles.
+- **Description and explain.** 246 pages rewritten. Every description is one paragraph of at
+  most 80 words and every explain follows KB-014 with a costs list, required on patterns. The
+  kb-shape ratchet allowlist went from 475 entries to 0.
+- **Exposed-to edges.** From 3 to about 100: each hazard names the patterns it threatens.
+- **Principle sketches.** Before and after TypeScript sketches on `single-responsibility`,
+  `open-closed`, `interface-segregation`, `liskov-substitution`, `dependency-inversion`,
+  `composition-over-inheritance` and `command-query-separation`.
+- **Start here.** `docs/data/tracks.json` holds 6 tracks over 29 themes, each staged theme
+  with a `tier` of intro, core or advanced. The `check-tracks` gate guards it and a StartHere
+  component sits on the home page.
+- **Self-check.** An optional `selfcheck` block (KB-016): three folded questions citing
+  element ids, seeded on `circuit-breaker`, `bulkhead`, `cache-aside`, `saga`, `outbox`,
+  `event-sourcing`, `cqrs`, `rate-limiter`, `write-behind` and `consistent-hashing`.
+- **Already in the squashed main.** "n of m practiced" on a tour, the inline style on the 404
+  page, the exposed-to verb, and `role="option"` on the search link itself, which emptied the
+  axe waiver list.
+
+**Search.** `rankItems` in `tools/src/lib/search-score.ts` gained `CASE_STUDY_DAMP = 0.3`. In a
+description query, one of three or more terms, a case study is multiplied by 0.3 unless it is
+the best item. Measured on the oracle:
+
+| Measure | Before | After |
+|---|---|---|
+| Designs in the top 5, CLI | 1.2% | 0.0% |
+| Designs in the top 5, search box | 1.9% | 0.0% |
+| Top 1, CLI | 99.1% | 99.1% |
+| Top 1, hub | 99.7% | 99.7% |
+| `maxDesignInTop5` gate | 0.01 | 0.005 |
+
+The new concurrency pages (`barrier`, `actor-model`) out-ranked `circuit-breaker` on "one slow
+dependency blocks my threads" by lexical match. By owner decision its bound loosened to within
+4 and `bulkhead` to within 3; the first `solves` phrase of `barrier` was reworded to be more
+precise.
+
+**Left.**
+
+- Thin pages: `parking-lot` is still the shortest design; 34 of 41 designs have fewer than
+  three diagrams; 73 pages have no inbound prose link; 70 sketches run past 30 lines.
+- Persona-identification grooming, `-v2` included.
+- Tiers sit only on staged themes, and the self-check is seeded on 10 pages only.
+- Sketch languages stay in the [backlog](../../plans/backlog.md).
 
 ## How the pass ran
 

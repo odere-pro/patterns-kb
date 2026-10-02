@@ -15,18 +15,17 @@ Dead code or disused hardware kept around unused — not because anyone still ne
 ## What it is
 <!--meta block=description-->
 
-A **boat anchor** is a component that stays in the system long after it stopped earning its keep: a module with no remaining callers, a config flag nobody has flipped in years, a deprecated service still deployed and patched, a dependency still pinned though the feature it served shipped its replacement months ago. The name comes from gear so useless at the job it was bought for that its weight over the side is the last value anyone can find in it. What keeps it aboard is that throwing it out feels like a decision someone might regret.
-
-You recognize it by the shape of the excuse around it, not just the code itself. A comment reads `// DO NOT REMOVE, may be needed later` with no ticket, owner, or date attached. A grep for callers turns up nothing, yet the file survives three more refactors untouched. A server sits racked, powered, monitored, and getting security patches, while its traffic graph has read zero for a year. Nobody can explain what breaks if it's deleted — they just aren't sure enough to try.
-
-What separates it from ordinary unused code is the decision, or the absence of one, behind it. Nobody actively chose to keep serving this; nobody actively chose to remove it either. It persists by default, and every day it survives makes the next day's inaction easier to justify.
+A boat anchor is a component that stays in the system long after it stopped earning its keep: a module with no callers, a flag nobody has flipped in years, a deprecated server still patched while its traffic graph reads zero. You recognize it by a comment like DO NOT REMOVE, may be needed later, with no owner or date. The defining trait is a missing decision: nobody chose to keep it and nobody chose to remove it.
 
 ## Explained
 <!--meta block=explain-->
 
-A boat anchor is a component that stays in the system long after it stopped being used, such as a module with no callers, a flag nobody has flipped in years, or a server racked and patched while its traffic graph reads zero. It survives by default: nobody chose to keep it and nobody chose to remove it. Blame is asymmetric, since a deletion that breaks something has a name on it while a box costing money every month has none, and fear of regret beats checking. The cost is money for power and licences, attention in every refactor and patch cycle, and unpatched holes in something nobody watches. Flip the default: removal happens on a dated schedule unless someone shows evidence of use. Pay for being wrong in stages, so a path nobody instrumented announces itself while the revert is cheap: fail the calls for a week, then stop the process, then delete. Remove a big one slice by slice behind a routing layer, and give that layer its own removal date. Better still, build nothing for later, and add the option the day a caller exists.
+A boat anchor is a component that stays in the system long after it stopped being used, such as a module with no callers, a flag nobody has flipped in years, or a server racked and patched while its traffic graph reads zero. It survives by default. Blame is asymmetric: a deletion that breaks something has a name on it, while a box costing money every month has none, so fear of regret beats checking. Flip the default: removal happens on a dated schedule unless someone shows evidence of use. Pay for being wrong in stages, so a path nobody instrumented announces itself while the revert is cheap: fail the calls for a week, then stop the process, then delete. Remove a big one slice by slice behind a routing layer, and give that layer its own removal date. Better still, build nothing for later, and add the option the day a caller exists.
 
-**Example.** A team runs a legacy report server at 400 dollars a month, with 6 months of zero requests in its access log. Nobody will delete it. The owner announces removal in 30 days unless someone claims it. On day 30 the server's calls start to fail for a week, and one finance script, run only each quarter, breaks and is moved to the new service. Then the process is stopped for another week, and finally deleted. Keeping it for the year cost 4,800 dollars plus every patch cycle. The price of the fix is two weeks of staged steps and one broken quarterly script found while the revert still took minutes.
+- **Running cost.** It burns money for power and licences, and attention in every refactor and patch cycle.
+- **Unwatched holes.** Nobody patches or monitors it closely, so it carries vulnerabilities. Put it on the same patch schedule or remove it.
+
+**Example.** A team runs a legacy report server at 400 dollars a month, with 6 months of zero requests in its access log. Nobody will delete it. The owner announces removal in 30 days unless someone claims it. On day 30 the server's calls start to fail for a week, and one finance script, run only each quarter, breaks and is moved to the new service. Then the process is stopped for another week, and finally deleted. Keeping it for the year cost 4,800 dollars plus every patch cycle. The fix cost two weeks of staged steps and one broken script.
 
 ## How it happens
 <!--meta block=causes-->
@@ -72,10 +71,18 @@ Give the removal machinery its own removal date. The routing layer and the compa
 
 <!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
 
+**Combines with**
+
+- [Lava Flow](./lava-flow.md) — A component built for a future that never arrives and is kept anyway becomes lava flow
+
 **Mitigated by**
 
 - [Strangler Fig](../patterns/distributed/coordination/strangler-fig.md) — Retire dead legacy slice by slice
 - [You Aren't Gonna Need It (YAGNI)](../principles/yagni.md) — Build only what is needed now and there is no speculative code left to fossilise
 - [Record Architecture Decisions](../principles/architecture-documentation.md) — A dated record of why something was kept makes it possible to tell a live constraint from a dead one
+
+**Threatens**
+
+- [Feature Flag](../patterns/distributed/routing/feature-flag.md) — Flags nobody removes after rollout become permanent dead branches
 
 <!-- relationships:end -->

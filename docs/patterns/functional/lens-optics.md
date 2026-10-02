@@ -16,16 +16,17 @@ A lens pairs a getter and a setter for one field into a single composable value,
 ## What it is
 <!--meta block=description-->
 
-A **lens** is a first-class value pairing a `get` function, which extracts one field from a structure, with a `set` function, which returns a new structure with that field replaced. Unlike a plain accessor, a lens is a value you can hold, pass around, and — crucially — compose: the lens for `user.address.city` is just the lens for `address` composed with the lens for `city`, built once and reused everywhere that path is touched.
-
-The force it resolves is **deep immutable update**. With immutable data, changing one nested field means rebuilding every ancestor on the path to it — `{...s, a: {...s.a, b: {...s.a.b, c: v}}}` — and that spread tower doesn't compose, doesn't survive a reshape of the data gracefully, and gets unreadable past two or three levels. A lens turns "get and set at this path" into a single reusable object; composing lenses mirrors composing the paths themselves.
-
-Lens is the base case of a broader family called **optics**. A Prism focuses on one case of a sum type, where the get may fail. A Traversal focuses on zero or more elements at once, like every item in an array. All of them compose with each other through the same operators, so a single expression can drill into a record, then a variant, then every element of a list, and update all of it immutably in place.
+A lens pairs a get function, which reads one field of a nested structure, with a set function, which returns a new structure with that field replaced. Lenses compose, so the lens for `user.address.city` is built once from two smaller ones and reused. It replaces the unreadable spread tower that deep immutable updates need. Prisms and traversals extend the idea to variants and many elements.
 
 ## Explained
 <!--meta block=explain-->
 
-A lens is a pair of get and set bound to one path into nested data. Get reads the value at that path. Set returns a new copy of the whole structure with only that value changed, so the original is untouched. Lenses compose, so a lens to the address and a lens to the city join into one lens to the city. Choose it over nested copy-with-spread when the same deep path is read and updated in many places, or when the path is chosen while the program runs. For one or two levels a plain spread is clearer. It costs four things. It is an extra concept and usually a library, so use it only for deep paths. Type errors from composed lenses can be unreadable, so annotate each lens with its types. Each call has a small overhead over a plain property access, so measure it on hot paths. A lens hides a path that a spread shows, so name each one after what it points at.
+A lens is a pair of get and set bound to one path into nested data. Get reads the value at that path. Set returns a new copy of the whole structure with only that value changed, so the original is untouched. Lenses compose, so a lens to the address and a lens to the city join into one lens to the city. Choose it over nested copy-with-spread when the same deep path is read and updated in many places, or when the path is chosen while the program runs. For one or two levels a plain spread is clearer.
+
+- **Extra concept.** It adds a concept and usually a library, so use it only for deep paths.
+- **Unreadable type errors.** Composed lenses give long type errors, so annotate each lens with its types.
+- **Call overhead.** Each call costs a little more than a property access, so measure it on hot paths.
+- **Hidden path.** A lens hides a path that a spread shows, so name each one after what it points at.
 
 **Example.** A settings object nests 4 levels deep, down to user.profile.address.geo.city. Updating the city with spreads takes 4 nested braces, repeated at 7 call sites, so 28 braces to maintain. Later the address moves from profile.address to profile.location. That is 7 edits with spreads, and one edit to the lens. With the lens, each call site reads set("Lviv", settings) and the structure stays untouched. The cost is one more concept for a newcomer to learn and a library to add, which is not worth it for a flat two-field object.
 
