@@ -1,0 +1,196 @@
+---
+title: Null Object
+description: A do-nothing stand-in instead of a null check
+area: gof-extra
+owner: Oleksandr Derechei
+tags: [low-level-design, polymorphism, readability, error-handling]
+status: stable
+solves: [every method starts with three lines of guards before the real work begins, I keep getting crashes because someone forgot to check for nothing again, the same absence check is copy-pasted at forty call sites and one of them is wrong, an optional logger forces me to test it exists before every single call, my business logic is buried under branches that only handle the missing case]
+---
+
+# Null Object
+
+Replaces a null reference with an object that honours the same interface but quietly does nothing — so callers drop the guards and treat "absent" as just another valid collaborator.
+
+## What it is
+<!--meta block=description-->
+
+A **null object** is a real object that implements the same interface as the thing it stands in for, but whose methods do nothing — or return a neutral, harmless value. Instead of handing back `null` to signal "there is nothing here," a factory or default returns this do-nothing instance. Callers invoke it exactly like the real thing and get safe, empty behaviour. It is not one of the original twenty-three design patterns: it was catalogued separately, first as Void Value and then under this name, and it reached most working programmers through the refactoring literature rather than the design-patterns book.
+
+The problem it resolves is the **null check** that metastasises through a codebase. Every place that might receive a missing collaborator grows an `if (x != null)` guard; forget one and you get a `NullPointerException` at runtime. The checks add noise, hide the real logic, and drift out of sync as the code changes.
+
+The null object collapses all of that into one code path. There is only ever a valid object to call, so the guards disappear and "absent" becomes an explicit, testable behaviour rather than a special case sprinkled across every caller.
+
+## Explained
+<!--meta block=explain-->
+
+A null object is a real object with the same interface as the thing it replaces, whose methods do nothing or return a harmless value, so code that would otherwise get null calls it like any other. It removes the \`if (x != null)\` guard from every caller and leaves one code path. Choose it over a null check when having nothing is a normal state and doing nothing is the correct response, such as a logger with no output. Outside that, it turns a real failure into silence: a write that goes nowhere, a notice nobody receives, a report with no rows and no error. Such bugs cost more than the crash they replaced, since there is no stack trace. Counter it by counting or logging each call to the null object where absence would be a surprise, and keep the pattern to places where silence is intended. It also adds one empty class per interface, so where your language has optional types, use those.
+
+**Example.** A checkout sends a receipt through a Mailer. Guests have no email, so the code uses a NullMailer whose send does nothing, and checkout loses its 6 null checks. That works for guests. Then a bug gives registered users a NullMailer too, because their profile lookup failed. 400 receipts are never sent and nothing throws. The fix is to make the NullMailer count its calls and to alert when a registered user reaches it. The cost is one extra class and a counter.
+
+## How it works
+<!--meta block=structure-->
+
+```mermaid caption="Both implementations satisfy the same interface. The null variant honours the contract but its body is empty, so callers never branch on which one they hold."
+classDiagram
+    class Logger {
+        <<interface>>
+        +log(msg)
+    }
+    class FileLogger {
+        +log(msg)
+    }
+    class NullLogger {
+        +log(msg)
+    }
+    Logger <|.. FileLogger
+    Logger <|.. NullLogger
+    note for NullLogger "log does nothing, returns nothing"
+```
+
+## Variations
+<!--meta block=variations-->
+
+- **Do-nothing vs. safe-default** — Some null objects are pure no-ops; others return neutral values — an empty collection, a zero, an unchanged input — so downstream arithmetic and iteration still work.
+- **Special Case** — Fowler's generalisation: instead of one "nothing" object, return a dedicated object per known condition — UnknownCustomer, MissingUser — each with its own sensible behaviour.
+- **Shared [singleton](../creational/singleton.md) instance** — Because a null object holds no state, one immutable instance can be reused everywhere rather than allocating a fresh one at each call site.
+- **[Strategy](../behavioral/strategy.md)** — Wire a do-nothing implementation as the default strategy, so a component behaves harmlessly before anyone configures the real algorithm in.
+
+## Trade-offs
+<!--meta block=tradeoffs-->
+
+### Pros
+<!--meta polarity=pro-->
+
+- **Gets rid of the repetitive null checks** scattered across every caller.
+- **Leaves a single code path with no branches** — just call the object and move on.
+- **One unchanging instance** can be shared and reused everywhere at no cost.
+- **Turns "nothing here" into real, testable behaviour** instead of a special case.
+
+### Cons
+<!--meta polarity=con-->
+
+- **Can hide real errors** — a missing value quietly turns into a do-nothing call.
+- **Needs a new class** for every interface you want a do-nothing version of.
+- **The do-nothing behaviour can surprise callers** who expected a failure.
+- **It's the wrong choice** when a missing value genuinely needs different handling.
+
+## When to use it
+<!--meta block=usage-->
+
+### Reach for it when
+<!--meta polarity=when-->
+
+- **A collaborator is optional**, and when it's missing the right response is simply to do nothing.
+- **The same null check** is copy-pasted across many call sites.
+- **You want a safe default** in place before the real dependency is wired in.
+
+### Avoid when
+<!--meta polarity=avoid-->
+
+- **A missing value is an error** the caller must notice and handle.
+- **The do-nothing behaviour would mask a bug** or silently drop data.
+- **There's only one call site**, where a single plain guard is simpler and clearer.
+
+## Code sketch
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — a null logger as a safe default"
+interface Logger {
+  info(message: string): void;
+  warn(message: string): void;
+}
+
+class ConsoleLogger implements Logger {
+  info(message: string): void { console.log(`[info] ${message}`); }
+  warn(message: string): void { console.warn(`[warn] ${message}`); }
+}
+
+// The do-nothing stand-in: same shape, every method an empty body.
+// It holds no state, so one frozen instance is shared everywhere.
+const NULL_LOGGER: Logger = Object.freeze({
+  info(_message: string): void {},
+  warn(_message: string): void {},
+});
+
+// Logging is optional, so it defaults to the null object.
+function processOrder(id: string, logger: Logger = NULL_LOGGER): void {
+  // No `if (logger)` guard anywhere below — just call it.
+  logger.info(`processing order ${id}`);
+  // ... work ...
+}
+
+processOrder("A-1");                       // silent — uses NULL_LOGGER
+processOrder("A-2", new ConsoleLogger());  // logs to the console
+```
+
+## In the wild
+<!--meta block=wild-->
+
+- **Python logging.NullHandler** — A stdlib handler whose emit() does nothing, discarding every record. The documented convention is for a library to attach it to its top-level logger so the library can log unconditionally without emitting the "No handlers could be found" warning or forcing logging config on the host application. {#wild-python-nullhandler}
+- **SLF4J NOPLogger** — The slf4j-nop binding supplies NOPLogger, whose level checks all return false and whose log methods are empty, so every call is a no-op. Dropping the slf4j-nop jar on the classpath silences all SLF4J output without any backend present or any code change at the call sites. {#wild-slf4j-nop}
+- **/dev/null** — The Unix null device: every write() succeeds and is discarded, and every read returns EOF. It stands in wherever a real file or stream would go — redirecting a noisy command to it silences output while keeping the program writing normally. {#wild-dev-null}
+
+## In production
+<!--meta block=production-->
+
+### Tuning knobs
+<!--meta polarity=knob-->
+
+- **Shared instance or new each time** — A stateless null object can be a single shared instance.
+- **What counts as absent** — Which lookup results become a null object and which stay errors.
+- **Detection method** — Whether callers may ask if an object is a null object, or never need to.
+
+### Signals to watch
+<!--meta polarity=signal-->
+
+- **Null checks left in callers** — if x is not null tests that remain beside the null object say adoption is partial.
+- **Silent no-op counts** — How often the null object handles a call. A rise can mean data is going missing.
+- **Wrong-reason absence** — Cases where the null object stood in for an error and not an expected absence.
+
+### Failure modes under load
+<!--meta polarity=failure-->
+
+- **Masked failure** — A lookup that failed returns a null object, and work silently does nothing. Log when it is used in a place that needs the real thing.
+- **Wrong default** — The null object returns a value the caller then treats as real, such as an empty total.
+- **Mixed conventions** — Some methods return null and some return the null object, so callers check both.
+- **Inconsistent behavior** — The null object breaks the interface contract and a caller crashes on its return value.
+
+### Readiness checklist
+<!--meta polarity=check-->
+
+- Every method on the null object returns a safe value for its contract
+- Callers have no null checks for this type left
+- Places where absence is an error use an exception, not a null object
+- The null object is stateless and shared
+
+## Where it shows up
+<!--meta block=fluency-->
+
+<!-- fluency:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+- [Object Behavior](../../../themes/object-behavior.md) — Return a harmless do-nothing object instead of null. {#fluency-object-behavior}
+
+<!-- fluency:end -->
+
+## How it relates
+<!--meta block=relationships-->
+
+<!-- relationships:start -->
+
+<!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
+
+**Combines with**
+
+- [Strategy](../behavioral/strategy.md) — Null Object is a neutral strategy
+- [Singleton](../creational/singleton.md) — It holds no state, so one shared instance serves every call site
+- [Factory Method](../creational/factory-method.md) — A factory hands back the neutral instance instead of a null
+- [Liskov Substitution Principle](../../../principles/liskov-substitution.md) — Doing nothing is only a valid substitute where the contract allows nothing as an answer
+
+**Often confused with**
+
+- [Dummy Object](../../testing/dummy-object.md) — Ships in production; a dummy never leaves the test
+
+<!-- relationships:end -->

@@ -1,0 +1,110 @@
+---
+title: Auth & Access
+description: "Who are you, what may you do, and how is that enforced"
+area: themes-shaping
+owner: Oleksandr Derechei
+tags: [security, authentication, access-control]
+status: stable
+aliases: [authn, authz, access control, IAM]
+---
+
+# Auth & Access
+
+Every request carries an implicit question before it carries a payload: who is asking, and what are they allowed to do here? Auth & Access is the set of patterns that answer both — establishing identity, deciding permission against it, and enforcing that boundary at every layer a request passes through.
+
+## The question
+<!--meta block=description-->
+
+Any system that isn't fully public has to answer two separate questions before it does anything else: who is this, and what are they allowed to do. Conflating them is the most common security mistake in ordinary systems — mistaking "we know who you are" for "you're allowed to do that." Authentication answers the first question, authorization the second, and a correct system checks both, in that order, at every point where a request could act.
+
+The harder design question is where that checking lives. Put it all at one guarded gate and you get a simple mental model — anything that made it past the gate is already screened — but a single bypass, a misconfigured route, or a forgotten internal endpoint exposes everything behind it. Push the checks down into every service and function instead, and a compromise in one place stays contained — at the cost of more code, more places to get the check wrong, and, if nothing is cached, real latency on every hop.
+
+This theme is the vocabulary for that trade-off: the patterns that establish identity, the ones that turn identity into permission, the ones that carry proof of both across a chain of requests, and the discipline — least privilege, scoped and expiring grants — that limits what any single failure actually costs.
+
+## Explained
+<!--meta block=explain-->
+
+Auth and access answer two separate questions: who is calling, and what may they do. You must check both, in that order, wherever a request can act. The deciding choice is where the checks live. One guarded gate is easy to audit and gives you one place to get right, but a single bypass or forgotten internal endpoint exposes everything behind it. Checks in every service contain a break-in to one place, but each copy must stay correct, and a call to a central server per check adds latency, so verify signed tokens locally or cache decisions for a short time. Choose the single gate when few services exist and one team owns them. Choose repeated checks when services are many or hold sensitive data. Then limit what any one credential is worth. A session that lives for days and carries a broad role stays dangerous if stolen, so issue narrow, expiring grants, such as a valet key, a link that allows one action on one resource for a few minutes. The cost is more tokens to issue, renew and revoke, so automate renewal and keep a short revoke list.
+
+**Example.** A photo app has a gateway and 3 services. If each service asked a central auth server about every request at 20 ms, a request costs 60 ms. Instead the gateway checks the sign-in once, and each service checks the signed token itself in 0.1 ms, so 0.3 ms in all. That also covers the case where a compromised service calls another service directly and skips the gateway. For uploads the app issues a link valid for 15 minutes, for one file path and 10 MB. A leaked link lets an attacker write that one file for at most 15 minutes, not touch the whole account. The cost is one issued token per upload, about 1,000 a day.
+
+## The trade-space
+<!--meta block=tradespace-->
+
+The recurring tension isn't whether to check identity and permission — it's **how many times, and how much to hand out at once**. A single enforced gate (Single Access Point plus Gatekeeper) is easy to reason about and easy to audit: there is exactly one place to get the check right. It is also exactly one place an attacker needs to beat, and every service behind it inherits trust it never itself verified. Repeating the check at each boundary — an Authorization Enforcer per service, an Intercepting Validator on each input — contains a compromise to the one place it happened, but only if every one of those repeated checks is kept correct and current.
+
+The second axis is how much any single credential is worth. A role-based grant that stays valid for a whole session is convenient but broad — a stolen session token or an over-scoped role is a standing liability until someone notices. Valet Key and least privilege pull the other way: narrow, expiring, single-purpose grants that make any one leak worth far less, at the cost of more tokens to issue, track, and revoke.
+
+```mermaid caption="One gate is simple to audit; repeated checks are harder to keep correct but contain a breach."
+flowchart TB
+    E{"Where do you place the check?"}
+    E -->|"once, at the edge"| SP["Single Access Point + Gatekeeper"]
+    E -->|"again, at each boundary"| DD["Authorization Enforcer + Intercepting Validator"]
+    SP -->|"one bypass exposes all behind it"| R1["Simple to audit, broad blast radius"]
+    DD -->|"every check must stay current"| R2["More to maintain, breach contained"]
+```
+
+## Patterns that implement the boundary
+<!--meta block=tour-->
+
+<!-- tour:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+### [Authentication Enforcer](../patterns/security/authentication-enforcer.md) {#tour-authentication-enforcer}
+
+Establish who is calling. Every downstream decision in this theme assumes a verified identity; this pattern is where that assumption is earned, checking credentials before anything else in the request runs.
+
+### [Authorization Enforcer (RBAC)](../patterns/security/authorization-enforcer.md) {#tour-authorization-enforcer}
+
+Decide what the role may do. Once identity is settled, this pattern maps it to permissions, denying by default and granting only what the assigned role explicitly allows.
+
+### [Secure Session Manager](../patterns/security/secure-session-manager.md) {#tour-secure-session-manager}
+
+Carry identity safely across requests. HTTP is stateless, so proven identity has to be re-presented on every call without re-authenticating each time; this pattern issues and validates the token or cookie that carries it, and owns the risk of theft, replay, and expiry.
+
+### [Federated Identity](../patterns/distributed/coordination/federated-identity.md) {#tour-federated-identity}
+
+Delegate sign-on to a trusted provider. Rather than owning passwords itself, the system trusts an external identity provider's assertion — fewer credentials to store and breach, at the cost of depending on someone else's uptime.
+
+### [Single Access Point](../patterns/security/single-access-point.md) {#tour-single-access-point}
+
+Funnel access through one guarded entry. Every request into the system passes through one place, which is what makes it possible to guarantee that no request skips the checks that follow.
+
+### [Gatekeeper](../patterns/distributed/routing/gatekeeper.md) {#tour-gatekeeper}
+
+Validate and screen at that entry. Sitting at the single access point, it performs the actual check — validating credentials and requests before they're allowed further in, so the services behind it can assume what arrives has already been screened.
+
+### [Valet Key](../patterns/distributed/routing/valet-key.md) {#tour-valet-key}
+
+Hand out scoped, expiring access. Instead of a standing credential, this pattern issues a narrow, time-limited token scoped to one resource and one action, so a leaked key exposes far less than a leaked master credential would.
+
+### [Least Privilege](../patterns/security/least-privilege.md) {#tour-least-privilege}
+
+Grant the minimum needed, no more. The governing principle behind every grant in this theme — every role, session, and token should carry only the access its job actually requires, so compromise anywhere caps the damage.
+
+### [Intercepting Validator](../patterns/security/intercepting-validator.md) {#tour-intercepting-validator}
+
+Reject bad input before it reaches logic. Authentication and authorization answer who and what; this pattern guards a related question — is the request itself well-formed — rejecting malformed or malicious input at the boundary before it can reach business logic.
+
+<!-- tour:end -->
+
+## When to reach for what
+<!--meta block=decide-->
+
+| If you need… | Lean | Reach for |
+| --- | --- | --- |
+| Prove who's calling, without owning passwords | Delegate | [Federated Identity](../patterns/distributed/coordination/federated-identity.md) |
+| Keep a user signed in across requests | Session | [Secure Session Manager](../patterns/security/secure-session-manager.md) |
+| Decide what a signed-in user can touch | Role-based | [Authorization Enforcer](../patterns/security/authorization-enforcer.md) |
+| Give a third party temporary access to one resource | Scoped | [Valet Key](../patterns/distributed/routing/valet-key.md) |
+| Guarantee no request skips the checks | Perimeter | [Single Access Point](../patterns/security/single-access-point.md), [Gatekeeper](../patterns/distributed/routing/gatekeeper.md) |
+| Limit the blast radius of any one credential | Minimal | [Least Privilege](../patterns/security/least-privilege.md) |
+| Block malformed or malicious input at the edge | Validate early | [Intercepting Validator](../patterns/security/intercepting-validator.md) |
+
+## Related areas
+<!--meta block=siblings-->
+
+- [Resilience](./resilience.md) — Enforcement that fails open instead of closed turns an auth gap into an outage risk.
+- [Scalability](./scalability.md) — A single access point that every request must pass through can become the bottleneck as load grows.
+- [Observability](./observability.md) — Knowing who accessed what, and when, depends on the audit trail these patterns leave behind.

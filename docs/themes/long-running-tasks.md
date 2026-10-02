@@ -1,0 +1,111 @@
+---
+title: Long-Running Tasks
+description: Moving slow work off the request path onto durable queues and workers
+area: themes-data
+owner: Oleksandr Derechei
+tags: [messaging, asynchrony, throughput]
+status: stable
+aliases: [async jobs, background jobs]
+---
+
+# Long-Running Tasks
+
+Work that's too slow to finish inside a request — transcoding a video, generating a report, sending a bulk campaign — accepted immediately with a job id and processed in the background by a pool of workers draining a durable queue. This theme is that pipeline, plus the failure handling that at-least-once processing demands.
+
+## The question
+<!--meta block=description-->
+
+A profile fetch is a quick query — it returns in under a hundred milliseconds and the click feels instant. Generating a user's annual PDF report is not: it queries millions of rows, aggregates them, and renders charts, and it takes the better part of a minute. Serving that slow work synchronously breaks in two ways at once. Most web servers and load balancers cut a request off after 30–60 seconds, so it may never complete; and even when it does, the user stares at a spinner with no feedback, assumes it hung, and hits retry — doubling the work and making the load worse. Video transcoding, image resizing, bulk email, and large CSV imports all have the same shape: too slow for the request path.
+
+The move is to split acceptance from processing. Validate the request, write a job record, return a job id in milliseconds — then let a separate pool of workers pull the job from a durable queue and do the heavy lifting at their own pace, updating status when done. The web tier becomes a lightweight router; the workers can run on hardware suited to the work — a GPU box for transcoding — and scale independently of the front end. This theme is the queue, the workers, and — because "process it later, elsewhere" quietly signs you up for redelivery, poison messages, and backlogs — the patterns that keep that pipeline correct under failure and under load.
+
+## Explained
+<!--meta block=explain-->
+
+When work takes longer than a web request can wait, accept the request, record a job, return a job id in milliseconds, and let a separate pool of workers take jobs from a durable queue (a list of jobs that survives a crash) and do them at their own pace. Without this, load balancers cut a request off after 30 to 60 seconds, and a user staring at a spinner clicks retry, which doubles the work. You pay in three ways. The work is not done when the call returns, so show job status and let users poll it. A worker can die mid-job, so jobs are redelivered and may run twice, which means each job must have the same effect however often it runs. A message that always fails will retry forever, so move it to a dead-letter queue after a few attempts. A traffic spike can grow the queue faster than you add workers, so cap its length and refuse new work with a clear error when it is full. Choose this for genuinely slow work, and keep fast queries synchronous.
+
+**Example.** An annual report takes 45 s to build, and the load balancer cuts requests at 30 s. The API now answers in 50 ms with a job id. 4 workers finish 4 reports per 45 s, about 5.3 a minute. At 9:00, 200 users click at once, so the backlog takes 200 / 5.3, about 38 minutes, to drain. With 12 workers it is 16 a minute and 12.5 minutes. One corrupt account fails 3 times, then goes to the dead-letter queue instead of looping. The queue is capped at 500 jobs, and the 501st request gets a refusal.
+
+## The tradespace
+<!--meta block=tradespace-->
+
+What you buy is decoupling: fast responses, fault isolation — a worker crashing on one job doesn't take down the API — and web servers and workers that scale on their own curves. What you pay is that the work isn't done when the call returns. The system is now eventually consistent, so a user may see stale state until processing finishes, and you've taken on real infrastructure: a queue to operate, job status to store and expose, and a new set of metrics to watch. The honest question isn't whether to go async — for genuinely slow work you have no choice — but how much of the failure surface you're prepared to handle, because a naive queue-and-worker setup has sharp edges. Two more come from the order work is taken. A plain queue treats every job as equal, so a [Priority Queue](../patterns/messaging/priority-queue.md) lets urgent jobs go first at the price of starving the low class. And adding workers breaks per-entity ordering, so a [Sequential Convoy](../patterns/messaging/sequential-convoy.md) keeps each key's messages in order while different keys still run in parallel.
+
+Those edges are what the rest of the theme addresses. A worker can die mid-job, so redelivery has to be at-least-once — which means the same job can run twice, which means the work has to be idempotent. Some messages fail no matter how many times you retry, and left alone they retry forever and can crash a whole worker fleet, so they need somewhere else to go. And demand doesn't respect your worker count: a spike can grow the queue to millions of pending jobs faster than you can add capacity, so intake needs a way to push back. The choice of queue and worker runtime is real but secondary — Redis with Bull, Simple Queue Service (SQS), RabbitMQ, or Kafka; plain servers, serverless functions, or containers — and it matters far less than getting the failure handling right.
+
+```mermaid caption="The web tier accepts and returns a job id immediately; workers drain a durable queue, completed jobs update status, poison messages divert to a dead-letter channel, and a backed-up queue pushes back on intake."
+flowchart LR
+    C["Client"] -->|"request"| W["Web tier: validate, enqueue, return job id"]
+    W -->|"job id (ms)"| C
+    W -->|"enqueue job"| Q[("Durable queue")]
+    Q -->|"deliver job"| P["Worker pool drains at its own pace"]
+    P -->|"succeeds"| S["Store result, mark job complete"]
+    P -->|"keeps failing"| DL[("Dead-letter channel")]
+    Q -.->|"depth too high"| B["Backpressure: reject new work"]
+```
+
+## Patterns that run work in the background
+<!--meta block=tour-->
+
+<!-- tour:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+### [Message Queue](../patterns/messaging/message-queue.md) {#tour-message-queue}
+
+The durable buffer at the center of the pattern. The web tier enqueues a job — typically just an id, with the payload stored elsewhere — and returns immediately; the queue holds it safely until a worker is ready, so nothing is lost if a worker crashes between accept and process. It's what lets acceptance and processing run at their own independent rates.
+
+### [Competing Consumers](../patterns/messaging/competing-consumers.md) {#tour-competing-consumers}
+
+The [worker pool](../patterns/concurrency/thread-pool.md) that drains the queue. Point several identical, stateless workers at the same queue and let the broker hand each job to whichever is free; the delivery guarantee keeps two workers off the same job. Adding capacity for a backlog — month-end reports, a transcoding surge — becomes a deployment decision, not a code change.
+
+### [Priority Queue](../patterns/messaging/priority-queue.md) {#tour-priority-queue}
+
+A plain queue treats every item as equal, so a reset email waits behind ten thousand exports. The producer classifies each message and consumers take the urgent class first, with each class drained by its own pool of workers.
+
+### [Idempotency](../patterns/messaging/idempotency.md) {#tour-idempotency}
+
+The safety net for at-least-once processing. A worker can finish a job and die before reporting success, so the queue redelivers and a second worker re-runs it; without care that means two charges or two emails. An idempotency key per logical job — checked before the irreversible action — makes a redelivered job a no-op, and is the same mechanism that collapses an impatient user's triple-click into one piece of work.
+
+### [Queue-Based Load Leveling](../patterns/distributed/resilience/load-leveling.md) {#tour-load-leveling}
+
+The queue framed as a shock absorber, not just a mailbox. Arrival is bursty; worker capacity — database throughput, a rate-limited downstream, a fixed pool — is comparatively fixed. Putting the queue between them turns a spike that would topple the workers into a managed backlog that drains over the following minutes, trading instant handling for reliable eventual handling.
+
+### [Dead Letter Channel](../patterns/messaging/dead-letter-channel.md) {#tour-dead-letter-channel}
+
+The escape hatch for jobs that will never succeed. A malformed payload or a code bug fails on every retry; left in place it wastes worker cycles, and a poison message can crash instance after instance. After a bounded number of attempts, route it to a separate channel where it can be inspected and replayed once fixed — keeping healthy work flowing past it.
+
+### [Sequential Convoy](../patterns/messaging/sequential-convoy.md) {#tour-sequential-convoy}
+
+Parallel consumers destroy order, since two workers can take consecutive events for one order at the same moment. Routing each entity's events to one consumer at a time restores the order without giving up scale, and a poison message then blocks its whole group, so it needs a dead-letter route.
+
+### [Backpressure](../patterns/concurrency/backpressure.md) {#tour-backpressure}
+
+The valve on intake. When a spike outpaces the workers, the queue can grow to millions of pending jobs, memory climbs, and wait times stretch to hours. Backpressure sets a depth limit and returns an immediate "system busy" rather than silently accepting work that can't be done in time — usually paired with [autoscaling](../patterns/distributed/routing/autoscaling.md) workers on queue depth, since by the time CPU looks high the queue is already backed up.
+
+### [Sweeper](../patterns/distributed/coordination/sweeper.md) {#tour-sweeper}
+
+The recovery pass for the failure nothing reports. A worker that dies between claiming a job and finishing it throws no error and delivers no message, so the retry never fires, the dead-letter channel never sees it, and the job sits marked in-progress while its caller waits. A sweeper runs on a clock asking one question — which claims are older than the lease allows — and hands each answer back to the queue for another worker to take.
+
+<!-- tour:end -->
+
+## When to reach for what
+<!--meta block=decide-->
+
+| If you need… | Strategy | Reach for |
+| --- | --- | --- |
+| To move slow work off the request path so the API returns fast | Accept and defer | [Message Queue](../patterns/messaging/message-queue.md) |
+| Urgent jobs stuck behind a flood of low-value work | Serve the urgent class first | [Priority Queue](../patterns/messaging/priority-queue.md) |
+| To drain a backlog faster by adding capacity | Parallelize workers | [Competing Consumers](../patterns/messaging/competing-consumers.md) |
+| To absorb bursts without toppling the workers | Buffer the rate mismatch | [Queue-Based Load Leveling](../patterns/distributed/resilience/load-leveling.md) |
+| To stop a message that always fails from blocking or crashing workers | Quarantine after N attempts | [Dead Letter Channel](../patterns/messaging/dead-letter-channel.md) |
+| To keep a traffic spike from growing the queue unbounded | Push back on intake | [Backpressure](../patterns/concurrency/backpressure.md) |
+| One customer's jobs in order without dropping to a single worker | Order per key | [Sequential Convoy](../patterns/messaging/sequential-convoy.md) |
+| Redelivered or duplicate jobs to stay correct | Same effect on every attempt | [Idempotency](../patterns/messaging/idempotency.md) |
+
+## Related areas
+<!--meta block=siblings-->
+
+- [Handling Spikes](./spike-handling.md) — A burst that outpaces the workers is a spike; load leveling and backpressure are how a queue turns one into a backlog instead of an outage.
+- [Resilience](./resilience.md) — Redelivery, dead-lettering, idempotency, and backpressure are the resilience patterns that keep an async pipeline correct when workers and dependencies fail.
+- [Streaming](./streaming.md) — Both push work through queues, but streaming keeps an unbounded, ordered flow moving continuously where this theme processes discrete jobs to completion.

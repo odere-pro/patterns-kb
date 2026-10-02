@@ -1,0 +1,78 @@
+---
+title: Record Architecture Decisions
+description: Write down the decision and its reasoning at the moment you make it
+area: principles-systems
+owner: Oleksandr Derechei
+tags: [operations, maintainability]
+status: stable
+aliases: [ADR, architecture decision record, arc42, C4 model]
+solves: [nobody remembers why we chose this database and the person who did has left, we keep re-litigating the same architectural decision every six months, our architecture diagram is beautiful and three years out of date, a new joiner asks why it works this way and the honest answer is that nobody knows, we reversed a decision and then reversed it back because the original reasons were lost]
+---
+
+# Record Architecture Decisions
+
+Capture each significant decision as a short dated record — the context that forced it, the options considered, what was chosen, and what that costs — written when the decision is made rather than reconstructed afterwards.
+
+## What it says
+<!--meta block=description-->
+
+Document decisions, not designs. A design document describes what the system looks like and is wrong the moment the system changes. A decision record describes a choice made at a point in time — what forced it, what else was on the table, what was picked and what it costs — and stays true forever, because the past does not change. Each record is short, dated, numbered and immutable: superseding one means writing a new record that says so, never editing the old one.
+
+The three artifacts usually named together do different jobs and are worth separating. Decision records answer **why**. A structured document template answers **what**, as a stable place for the descriptions that do have to be maintained. A layered diagram notation answers **at what zoom**, so context, containers and components are separate pictures rather than one drawing serving all three audiences badly.
+
+The maxim is narrower than "write documentation", and the narrowness is what makes it survivable. Descriptive documentation decays because reality moves and nobody is paid to chase it; a decision record cannot decay, because it was never a claim about the present. That is why this is the one documentation habit worth making non-negotiable, and why records live in the repository beside the code rather than in a wiki — reviewed in the same pull request as the change they explain.
+
+## Explained
+<!--meta block=explain-->
+
+Architecture documentation means you document decisions, not designs. A design document describes what the system looks like and is wrong as soon as the system changes. A decision record says what forced a choice, what else was on the table, what was picked and what it costs, and it stays true because the past does not change. Each record is short, dated, numbered and never edited: to reverse one, write a new record that links to it. Keep the records in the repository and review them in the same pull request as the change. Choose records over a wiki of descriptions when the choice is expensive to reverse, such as a datastore, a service boundary or an auth model, and skip them for a linter. It has costs. Volume buries the ten records that matter among two hundred, so use reversal cost as the bar. A record required before work starts becomes a gate written to pass, so write it as the decision is taken. Descriptive diagrams still rot, so keep that layer thin, generate what you can, and delete a diagram rather than keep a wrong one.
+
+**Example.** A team chooses DynamoDB over Postgres for its orders store. The record is one page: context (50,000 writes a second at peak, from a load test), options (Postgres with sharding, DynamoDB), decision, and consequences, including that ad hoc joins will not work and reporting needs a copy in a warehouse. Two years later a new engineer proposes Postgres, and the record shows it was considered and why it lost. When the write peak drops to 2,000 a second, the team writes record 31 superseding it, and record 12 stays untouched. They wrote 14 records in a year, not 200, because each cleared the bar of being expensive to reverse.
+
+## Why it helps
+<!--meta block=rationale-->
+
+A decision whose reasoning is lost cannot be revisited safely. Someone will eventually look at the choice, fail to see a reason for it, and either change it — rediscovering the original constraint through an outage — or leave it alone out of superstition. Both outcomes come from the same missing sentence, and the sentence was cheap when the decision was fresh and is unrecoverable later.
+
+It also changes the decision itself. Writing down the options and the cost forces the cost to be named while you can still choose differently, which is the point at which naming it is useful. A choice nobody can articulate a downside for has usually not been compared to anything.
+
+The compounding benefit is organisational. A numbered series of records is a readable history of how the system came to be, so a new joiner learns the constraints in an afternoon rather than by breaking things, and an argument that has already been had can be closed by reference rather than re-run. Teams without one re-litigate the same three decisions indefinitely, because there is no way to distinguish a settled question from an unexamined one.
+
+## Applying it
+<!--meta block=applying-->
+
+Keep the habit cheap enough to survive a busy week:
+
+- One page, four headings — context, options, decision, consequences. If it needs more, the decision has more than one decision in it.
+- Store records in the repository, numbered and dated, and review them in the pull request that makes the change.
+- Write consequences honestly, including the ones you dislike. A record with no costs is marketing and will not be trusted by the person who finds it.
+- Never edit a record to reflect a change of mind. Write a new one, mark the old one superseded, and link them — the reversal is itself information.
+- Record decisions you rejected and why, since the next person will otherwise propose them again.
+- Set the bar at "expensive to reverse". Choosing a datastore, a boundary, an auth model or a messaging style qualifies; choosing a linter does not.
+
+## Taken too far
+<!--meta block=overreach-->
+
+The usual failure is volume. Once a team decides records are good, everything becomes one — library choices, naming conventions, a refactor someone wanted noticed — and a corpus of two hundred records is unsearchable, so the ten that matter are lost among them. The threshold that keeps it useful is reversal cost, and applying it means most decisions get no record at all.
+
+The second failure is turning it into a gate. A record required before work can start makes it an approval step, and approval steps get written to pass rather than to inform — the reasoning becomes justification, and the honest downsides quietly disappear from the consequences section. Write the record as the decision is taken, not as permission to take it.
+
+The third is forgetting which documents are allowed to decay. Decision records are immutable and cost nothing to keep; descriptive documents and diagrams describe a moving target and cost real effort to hold true. Treating both as equally permanent produces a documentation set nobody trusts, because a reader who finds one stale diagram stops believing the accurate records next to it. Keep the descriptive layer deliberately thin, generate what you can from the system itself, and be willing to delete a diagram rather than maintain a lie.
+
+## How it relates
+<!--meta block=relationships-->
+
+<!-- relationships:start -->
+
+<!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
+
+**Combines with**
+
+- [Design for Evolution](./design-for-evolution.md) — A recorded decision is what makes a later reversal a change rather than an excavation
+- [Build for the Needs of the Business](./build-for-business.md) — The context section is where the business constraint that forced a technical choice gets written down
+
+**Prevents**
+
+- [Boat Anchor](../hazards/boat-anchor.md) — A dated record of why something was kept makes it possible to tell a live constraint from a dead one
+
+<!-- relationships:end -->

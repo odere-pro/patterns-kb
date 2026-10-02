@@ -1,0 +1,218 @@
+---
+title: Sticky Session
+description: Pins each client to one backend for the life of its session
+area: distributed-routing
+owner: Oleksandr Derechei
+tags: [routing, load-balancing, state-management]
+status: stable
+aliases: [session affinity]
+solves: [users get randomly logged out when the load balancer routes them to a different server, the shopping cart looks empty on some requests but full on others behind the balancer, session state lives in one instance's memory and the next request hits a different instance, a websocket or long upload breaks when the request gets sent to another backend, I haven't moved sessions to a shared store yet but traffic bounces across instances]
+---
+
+# Sticky Session
+
+Overrides a load balancer's free spreading so that every request from one client is routed to the same backend instance for the life of its session — pinned by a cookie or the client's address — keeping per-session state that lives in that instance's memory reachable without sharing it across the pool.
+
+## What it is
+<!--meta block=description-->
+
+A **sticky session** — also called session affinity — is a load-balancing policy that ties a client to one specific backend instance and keeps routing that client there for the duration of its session, instead of spreading its requests freely across the pool the way a plain [load balancer](./load-balancer.md) would.
+
+The force it resolves is stateful backends sitting behind a balancer that assumes they are not. A load balancer's whole premise is that any instance can answer any request — which holds only while the instances share no per-client state. The moment a backend keeps something in local memory that a later request needs — a login session, a shopping cart, an in-progress upload, an open websocket — a request that lands on a different instance finds nothing there. There are two ways out: externalize the state to a shared store every instance can read, or make sure the client keeps coming back to the one instance that already has it. Sticky sessions take the second route.
+
+The pin is usually expressed one of two ways. With cookie-based affinity the balancer either inserts its own cookie naming the chosen backend, or hashes an application cookie the backend already sets (a session id), and reads it on each later request to route consistently. With source-address affinity the balancer hashes the client's IP to a backend — needing no cookie, but breaking when many clients share one address behind NAT (network address translation) or a proxy. Either way the balancer stops choosing freshly per request and instead honours an existing assignment.
+
+## Explained
+<!--meta block=explain-->
+
+A sticky session ties each client to one backend instance, so every request in its session goes to the instance that holds its state in memory. A load balancer assumes any instance can answer any request, which fails the moment a backend keeps something locally that a later request needs, such as a login, a cart, a half-finished upload or an open websocket. Choose it over moving that state into a shared store when the state cannot leave the process yet, so the fleet works behind a balancer with no shared store on the hot path. The bill is evenness. A few long-lived clients can weigh down some instances while the rest idle, so cap session length. A new instance takes only new arrivals, so it relieves its overloaded peers slowly. Retiring an instance means waiting for its pins to expire. A dead instance loses whatever lived only in its memory, so keep anything that matters in a store as well. Pinning by client address puts a whole office behind one NAT, a shared address translator, on a single backend, so pin by cookie instead.
+
+**Example.** Four instances serve 400 users with a cookie pin, 100 each. Ten users run 30-minute uploads that all pinned to instance 2, whose CPU reaches 95% while the others sit at 30%. You add a fifth instance, but the 400 existing users stay where they are, so it takes only new arrivals and the overload eases only as sessions end. If instance 1 crashes, its 100 users lose any cart held only in its memory, so you also save carts to a store.
+
+## How it works
+<!--meta block=structure-->
+
+```mermaid caption="Where does this client's session live, and how does the balancer find it again? Only in instance A's memory — so the cookie inserted at step 2 is what makes step 5 land back on the one instance that holds it."
+flowchart LR
+    C["Client"]
+    LB["Load balancer"]
+    subgraph Pinned["Instance A — the only copy of this session"]
+        A["Instance A"]
+        S[("Session in local memory")]
+    end
+    B["Instance B"]
+    D["Instance C"]
+    C -->|"1 first request, no cookie"| LB
+    LB -->|"2 choose a backend, insert affinity cookie"| A
+    A -->|"3 keep the session in local memory"| S
+    C -->|"4 later request carries the cookie"| LB
+    LB -->|"5 honour the pin, route back"| A
+    LB -.->|"idle for this client"| B
+    LB -.->|"idle for this client"| D
+```
+
+## Variations
+<!--meta block=variations-->
+
+- **Balancer-inserted cookie vs. application-cookie affinity** — The balancer either adds its own affinity cookie naming the backend, or hashes a cookie the app already sets — a session id — so no extra cookie is needed and the pin follows the application's own session.
+- **Source-IP / Layer-4 affinity** — Pin by hashing the client's address; needs no cookie and works for any protocol, but collapses when many clients share one address behind NAT, a corporate proxy, or carrier-grade NAT.
+- **[Consistent-hashing](./consistent-hashing.md) affinity** — Map the affinity key onto a hash ring so that adding or removing a backend re-pins only a fraction of clients, instead of reshuffling every client the moment the pool changes size.
+
+## Trade-offs
+<!--meta block=tradeoffs-->
+
+### Pros
+<!--meta polarity=pro-->
+
+- **Lets each backend** keep session state in local memory, avoiding a shared session store and its network round-trip on every request.
+- **Keeps a client's data warm on one instance**, so per-user caches and connections stay hot across requests.
+- **Makes long-lived**, inherently pinned connections — websockets, server-sent events, staged uploads — work through a balancer at all.
+
+### Cons
+<!--meta polarity=con-->
+
+- **Breaks even load spreading** — a handful of heavy or long-lived sessions can pin disproportionate load onto a few instances.
+- **Instance failure loses pinned sessions** — an instance failing takes every session pinned to it with it, unless that state is also persisted somewhere.
+- **Blunts elastic scaling**: a freshly added instance receives only new sessions, so it relieves an overloaded peer slowly, and draining one means waiting for its sessions to end.
+- **Affinity is fragile at the edges** — IP affinity mis-pins a whole NAT onto one backend, and cookie affinity fails for clients that strip or reject cookies.
+
+## When to use it
+<!--meta block=usage-->
+
+### Reach for it when
+<!--meta polarity=when-->
+
+- **Backends hold per-session state** in local memory and you cannot externalize it yet.
+- **A protocol or workflow is inherently pinned** — websockets, server-sent events, or a multi-step upload that must stay on one process.
+- **A warm per-user cache** on one instance makes repeat requests markedly cheaper when they return to it.
+
+### Avoid when
+<!--meta polarity=avoid-->
+
+- **Instances are genuinely stateless** — affinity only skews load and buys nothing.
+- **Even spread**, fast scale-out, and quick draining matter more to you than session locality.
+- **Session state already lives** in a shared store or a self-contained token — Redis, a database, a signed JWT (JSON Web Token) — so the client can land anywhere and pinning is pure downside.
+
+## Code sketch
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — cookie-based affinity: honour an existing pin, else pick fresh"
+interface Instance {
+  id: string;
+  healthy: boolean;
+}
+
+const AFFINITY_COOKIE = "srv_id";
+
+class StickyBalancer {
+  private cursor = 0;
+  constructor(private readonly instances: Instance[]) {}
+
+  // Honour an existing pin if its backend is still healthy; otherwise pick fresh.
+  route(cookies: Record<string, string>): { instance: Instance; setCookie?: string } {
+    const pinned = cookies[AFFINITY_COOKIE];
+    if (pinned) {
+      const inst = this.instances.find((i) => i.id === pinned && i.healthy);
+      if (inst) return { instance: inst };           // already pinned, nothing to set
+    }
+    const inst = this.pickHealthy();                 // no pin, or pinned host is down
+    const setCookie =
+      `${AFFINITY_COOKIE}=${inst.id}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+    return { instance: inst, setCookie };            // tell the client where it now lives
+  }
+
+  private pickHealthy(): Instance {
+    const healthy = this.instances.filter((i) => i.healthy);
+    if (healthy.length === 0) throw new Error("no healthy instances");
+    const inst = healthy[this.cursor % healthy.length]; // round-robin for new clients
+    this.cursor++;
+    return inst;
+  }
+}
+```
+
+## In the wild
+<!--meta block=wild-->
+
+- **HAProxy** — In a backend the cookie directive names an affinity cookie and each server tags itself (server s1 ... cookie s1); with insert indirect nocache HAProxy sets the cookie on the first response and routes every later request carrying it back to the same server. {#wild-haproxy}
+- **NGINX** — Open-source NGINX pins by client address with ip_hash in an upstream block; NGINX Plus adds cookie-based affinity via sticky cookie (plus sticky route and sticky learn) so the pin survives a client changing IP. {#wild-nginx}
+- **AWS Elastic Load Balancing** — Application Load Balancer target-group stickiness pins a client for a configurable duration using a load-balancer-generated cookie (AWSALB) or an application-defined cookie, keeping a session on one target. {#wild-aws-elb}
+- **Traefik** — A service load balancer can enable sticky sessions with a cookie whose name, Secure, HttpOnly and SameSite attributes are configurable, pinning a client to the same server. {#wild-traefik}
+
+## In production
+<!--meta block=production-->
+
+### Tuning knobs
+<!--meta polarity=knob-->
+
+- **Affinity mechanism** — Cookie-based versus source-IP hash — a cookie survives a client changing address and works behind NAT, while IP-hash needs no cookie but pins a whole shared address onto one backend.
+- **Stickiness duration / cookie lifetime** — How long a client stays pinned before it may be rebalanced — a cookie Max-Age or a load-balancer stickiness-duration setting; shorter lets the pool rebalance sooner.
+- **Affinity cookie attributes** — The cookie name plus its Secure, HttpOnly and SameSite flags, which govern whether the pin can be read or forged by client-side code.
+- **Failover when the pinned backend is down** — Whether the balancer re-pins the client to a healthy instance — dropping any session held only in the dead one — or fails the request instead.
+- **Draining / stickiness on scale-in** — Whether a backend being removed keeps serving its already-pinned sessions until they end, rather than dropping them the instant it leaves rotation.
+
+### Signals to watch
+<!--meta polarity=signal-->
+
+- **Per-instance load skew** — Requests or active sessions per backend; affinity concentrates load, so a widening gap between the busiest and idlest instance is the thing to watch.
+- **Session-loss / re-pin rate** — How often clients are forced onto a new backend from instance churn or expiry — each event a dropped in-memory session unless that state was persisted.
+- **Sessions pinned per draining instance** — How many live sessions a scale-in or deploying instance still holds, which gates how long it must stay in rotation before it can leave.
+
+### Failure modes under load
+<!--meta polarity=failure-->
+
+- **Instance loss drops its sessions** — When an instance crashes or is recycled, every client pinned to it loses whatever lived only in its memory — logged out, cart emptied, upload restarted.
+- **Hot-instance skew** — A few heavy or long-lived sessions pin onto a few backends and saturate them, while freshly added instances sit nearly idle.
+- **NAT collapse under IP affinity** — Many clients behind one NAT, proxy, or carrier-grade NAT all hash to the same backend, overloading it while the rest of the pool is underused.
+- **Scale-out gives no relief** — Because existing sessions stay pinned, a new instance only takes new clients, so adding capacity does little for an instance already overloaded by long-lived sessions.
+
+### Readiness checklist
+<!--meta polarity=check-->
+
+- Decide the failure policy up front: on losing a pinned instance, re-pin and accept session loss, or persist the session so a re-pin is transparent.
+- Set the stickiness duration no longer than the session actually needs, so the pool can rebalance.
+- Prefer cookie affinity over source-IP affinity wherever clients sit behind NAT or shared proxies.
+- Set Secure, HttpOnly and SameSite on the affinity cookie so it cannot be read or forged from the browser.
+- Confirm connection draining holds the pinned sessions on a scale-in instance until they end or migrate, rather than cutting them.
+
+## Where it shows up
+<!--meta block=fluency-->
+
+<!-- fluency:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+- [Real-Time Updates](../../../themes/realtime-updates.md) — Pin a client's long-lived socket to one server {#fluency-realtime-updates}
+- [Global Traffic & Ingress](../../../themes/global-traffic-and-ingress.md) — Stop a user flipping between versions mid-session {#fluency-global-traffic-and-ingress}
+
+<!-- fluency:end -->
+
+## How it relates
+<!--meta block=relationships-->
+
+<!-- relationships:start -->
+
+<!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
+
+**Combines with**
+
+- [WebSocket](../../messaging/websocket.md) — A held socket is the main reason to pin a client to one instance.
+
+**Alternative to**
+
+- [Stateless Service](./stateless-service.md) — When a service cannot be made stateless, pin each client to the node that holds its state.
+
+**Variant of**
+
+- [Load Balancer](./load-balancer.md) — Sticky sessions are a load-balancing policy that pins a client to one backend, trading even spread for session locality.
+
+**Demonstrated by**
+
+- [Google Docs](../../../designs/google-docs.md) — all connections belonging to one session deterministically land on the same backend instance so shared state stays local
+- [Robinhood](../../../designs/robinhood.md) — stateful streaming connections require session affinity so each tick reaches the right open socket
+
+**Implemented by**
+
+- [Networking](../../../capabilities/networking.md) — Balancer affinity pins a caller to one backend without your code holding the mapping.
+
+<!-- relationships:end -->

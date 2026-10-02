@@ -1,0 +1,100 @@
+---
+title: Observability
+description: Knowing what a running system is actually doing
+area: themes-operating
+owner: Oleksandr Derechei
+tags: [observability, maintainability]
+status: stable
+aliases: [o11y, telemetry]
+---
+
+# Observability
+
+A distributed system fails in ways no single developer can reproduce on a laptop. Observability is the property that a system's internal state can be inferred from what it emits — its logs, metrics, and traces — so whoever is on call can find the actual cause instead of guessing at it.
+
+## The question
+<!--meta block=description-->
+
+Something is slow, or failing, for some users, and you don't yet know which service, which dependency, or which code path is responsible. In a monolith you'd attach a debugger. In a system spread across dozens of independently deployed services, that isn't an option — the request has already crossed process and network boundaries you can't pause. The only way to answer "what happened" after the fact is to have already been recording it.
+
+Observability is the discipline of building that recording in from the start: structured logs, exported metrics, and traces that follow a request across every hop, correlated so they can be reassembled into one story. It's distinct from monitoring — watching predefined dashboards for expected failure modes — because it also has to answer questions nobody thought to ask in advance.
+
+Done well, it turns an incident from "reproduce it in staging and hope" into "query the trace and find the exact span that regressed." Done poorly, or not at all, every outage becomes an archaeology exercise against production.
+
+## Explained
+<!--meta block=explain-->
+
+Observability means recording what a running system does, in a form you can query afterwards, so you can answer questions nobody planned for. Once a request crosses dozens of services you cannot attach a debugger, so you rely on three records: logs, which are detailed lines of events; metrics, which are cheap counts and timings with no view of any one request; and traces, which follow one request through every service it touches. A shared id on every call joins them. Monitoring watches dashboards for failures you predicted, and observability is what you need for the ones you did not. The cost is that recording is never free, so you sample. Deciding up front to keep a fixed share is cheap and predictable, but the request that failed for a customer at 3am is mostly not kept. Deciding at the end, keeping only traces that were slow or failed, finds that request, and you pay by holding every unfinished trace in memory until it ends. Keep each record type on its own retention budget, and redact secrets before they are written.
+
+**Example.** A service takes 500 requests a second and each trace is 5 KB. Keeping all traces writes 2.5 MB a second, about 216 GB a day. Keeping 1 in 100 up front writes about 2.2 GB a day, but a failing request has a 99% chance of being missing. Keeping only the 2% that are slow or failed after the request ends writes about 4.3 GB a day and always has the bad ones. The cost is memory: at 2 s per request, about 1,000 traces, 5 MB, sit in the buffer at any moment.
+
+## The trade-space
+<!--meta block=tradespace-->
+
+Instrumentation costs something whether or not you ever need it: CPU cycles to collect, network to ship, storage to retain, and money for every unique combination of labels a metric or trace carries — its cardinality. The tempting move is to log everything, trace everything, tag every field, until the observability bill rivals the infrastructure it's watching.
+
+The usual answer is sampling, and it comes in two shapes. **Head-based sampling** decides up front — keep one trace in a hundred, say — which is cheap and predictable, but means the one request that timed out for a customer at 3am has a 99% chance of never having been recorded at all. **Tail-based sampling** defers the decision to the end of the request — keep it only if it was slow or errored — which answers the question you actually care about, at the cost of buffering every in-flight trace until its outcome is known.
+
+Logs, metrics, and traces make the same trade at different granularities. Metrics are cheap because they're pre-aggregated and blind to any single request; logs are detailed but expensive and hard to correlate alone; traces are the priciest, and the only one that shows the shape of a request as it crosses services. Most systems need all three, each tuned to its own retention and sampling budget.
+
+```mermaid caption="Every sampling strategy trades storage cost against the risk of missing the one request you needed."
+flowchart TB
+    P{"Capture every trace, or sample?"}
+    P -->|"Keep all"| C["Complete answers, highest storage and cardinality cost"]
+    P -->|"Head-based sample"| H["Cheap, but may drop the one request that broke"]
+    P -->|"Tail-based sample"| T["Buffer until it ends, keep only errors and slow ones"]
+    H -->|"~1% kept"| R["A retention budget bounds the cost either way"]
+    T -->|"errors and slow kept"| R
+    C -->|"full volume"| R
+```
+
+## Patterns that implement the choice
+<!--meta block=tour-->
+
+<!-- tour:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+### [Health Endpoint Monitoring](../patterns/distributed/resilience/health-endpoint.md) {#tour-health-endpoint}
+
+A dedicated endpoint reporting whether a service is alive and whether it's ready for traffic gives load balancers, orchestrators, and on-call engineers a single, cheap signal to poll instead of inferring health from user-facing errors.
+
+### [Correlation Identifier](../patterns/messaging/correlation-identifier.md) {#tour-correlation-identifier}
+
+A single id generated at the edge and propagated through every downstream call turns a scatter of per-service log lines into one traceable story — the thread that makes distributed tracing and cross-service debugging possible at all.
+
+### [Wire Tap](../patterns/messaging/wire-tap.md) {#tour-wire-tap}
+
+Copying messages off a channel to an inspection point lets you watch what's actually flowing between services without touching the producer or consumer — observability added at the transport layer, at zero risk to the transaction itself.
+
+### [Secure Logger](../patterns/security/secure-logger.md) {#tour-secure-logger}
+
+Logging is only safe to turn up when it can't leak credentials, tokens, or PII. A secure logger redacts or masks sensitive fields before they reach disk, so teams can log generously without creating a compliance incident.
+
+### [Circuit Breaker](../patterns/distributed/resilience/circuit-breaker.md) {#tour-circuit-breaker}
+
+Beyond protecting callers from a failing dependency, a circuit breaker's open, closed, or half-open state is itself one of the most useful signals a system exposes — it names exactly which dependency is unhealthy right now, no dashboard archaeology required.
+
+### [Distributed Tracing](../patterns/distributed/resilience/distributed-tracing.md) {#tour-distributed-tracing}
+
+The answer to "which of these six services was slow". Every unit of work becomes a span carrying one shared trace identity and a link to what caused it, so the pieces reassemble into the request's actual path. Metrics say how many were slow; a trace says why this one was, and the two are joined by putting the trace id on the log line.
+
+<!-- tour:end -->
+
+## When to reach for what
+<!--meta block=decide-->
+
+| If you need… | Signal | Reach for |
+| --- | --- | --- |
+| A cheap way to know an instance is alive and ready for traffic | Liveness / readiness | [Health Endpoint Monitoring](../patterns/distributed/resilience/health-endpoint.md) |
+| To follow one request across every service it touches | Traceability | [Correlation Identifier](../patterns/messaging/correlation-identifier.md) |
+| Visibility into message traffic without touching producer or consumer | Passive inspection | [Wire Tap](../patterns/messaging/wire-tap.md) |
+| High log volume without leaking secrets | Safe logging | [Secure Logger](../patterns/security/secure-logger.md) |
+| An instant read on which dependency is unhealthy right now | Failure signal | [Circuit Breaker](../patterns/distributed/resilience/circuit-breaker.md) |
+
+## Related areas
+<!--meta block=siblings-->
+
+- [Resilience](./resilience.md) — Retries, timeouts, and circuit breakers only help if you can see whether they're firing.
+- [Performance](./performance.md) — You can't tune what you can't measure — latency histograms and traces are the raw material.
+- [Streaming](./streaming.md) — Message flow between services is invisible by default; the same instrumentation makes a pipeline observable.

@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# pre-commit — run the gates the staged change can break against the STAGED tree, not the
+# working tree.
+#
+# Why this exists, precisely: every freshness gate regenerates its output from the sources it
+# can see and byte-compares, and it sees the WORKING TREE. So a session holding an uncommitted
+# docs/data/relations.json beside a regenerated relationships block passes `make validate`
+# locally, commits only the page, and pushes a tree where the block has no source. Extracting
+# the index to a temp dir and running the gates THERE is the only way to ask the question that
+# matters — "does what I am about to commit stand up on its own?" It runs from inside the
+# extracted tree, so the staged programs judge the staged pages.
+#
+# Which gates: the driver's --changed mode (tools/src/run-gates.ts) with the staged paths, so
+# only the gates whose `scans` match run, a file-scoped gate on just those files. A staged
+# deletion runs every gate instead: a deleted path cannot be handed to a gate, and what it
+# breaks (a link to it, a row naming it) is somewhere else. The site-build gates never run here;
+# they need a fresh build, which takes minutes.
+#
+# The reader's flows (`make site-e2e`, about ten seconds) do run, when the staged change touches
+# what a page is built from or the flows themselves and a built site exists: they judge the last
+# build of the working tree with the staged flows. With no site/dist they skip with one line.
+#
+# Skips when nothing a gate reads is staged. Bypass with `git commit --no-verify`.
+
+set -euo pipefail
+
+# Only what a registered gate reads can make one fail: the pages and data files, the tools and
+# site workspaces, the harness text (every CLAUDE.md, README.md and `.claude/`), the tests, the
+# workflows, the Makefile and the package files. A change to anything else commits unchecked.
+# The list is read whole before it is searched: `git diff … | grep -q` under pipefail fails when
+# grep stops at its first match while git is still writing a long list, and a large commit
+# would then skip the check.
+RELEVANT='^(docs/|tools/|site/|scripts/|tests/|\.claude/|\.github/|\.githooks/|Makefile$|README\.md$|package(-lock)?\.json$)|(^|/)CLAUDE\.md$'
+changed="$(git diff --cached --name-only --diff-filter=ACMRD)"
+if ! grep -qE "$RELEVANT" <<<"$changed"; then
+  exit 0
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node not on PATH — skipping the staged-tree check." >&2
+  exit 0
+fi
+
+# The gates run in the tools workspace. With no install to borrow there is nothing to run them
+# with, and installing into the temp extract would go to the network on every commit.
+if [ ! -x node_modules/.bin/tsx ]; then
+  echo "pre-commit: no node_modules — run 'make install' once, then commit again." >&2
+  exit 1
+fi
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/kb-staged.XXXXXX")"
+# The report lives beside the extract, not in it: a file in the extract is one more
+# untracked path the gates would read.
+OUT="$TMP.out"
+trap 'rm -rf "$TMP" "$OUT"' EXIT
+
+# The index, exactly as it will be committed. --all so unstaged edits cannot leak in.
+git checkout-index --all --prefix="$TMP/"
+
+# node_modules is ignored, so the extracted tree has none. Borrow the working tree's by
+# symlink rather than installing: the staged package-lock.json is what CI installs from, and a
+# lockfile change is caught there.
+ln -s "$PWD/node_modules" "$TMP/node_modules"
+
+# Several gates ask git for the tracked file list, and the extracted tree has no .git. Give it a
+# throwaway repository of its own, holding a copy of the index being committed: `git ls-files`
+# reads the index alone, so the list is exactly what was extracted. Never point the gates at
+# this repository instead (GIT_DIR, GIT_WORK_TREE): the test suites among them make sandbox
+# repositories, and a sandbox's `git init`, `git config` and `git commit` would then act on this
+# one — its HEAD, its branches and its config.
+INDEX="${GIT_INDEX_FILE:-$(git rev-parse --absolute-git-dir)/index}"
+case "$INDEX" in /*) ;; *) INDEX="$PWD/$INDEX" ;; esac
+env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$TMP" init -q
+cp "$INDEX" "$TMP/.git/index"
+
+if [ -n "$(git diff --cached --name-only --diff-filter=D)" ]; then
+  set -- # every gate
+else
+  staged=()
+  while IFS= read -r f; do staged+=("$f"); done < <(git diff --cached --name-only --diff-filter=ACMR)
+  set -- --changed ${staged[@]+"${staged[@]}"}
+fi
+
+if ! ( cd "$TMP" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE node_modules/.bin/tsx tools/src/run-gates.ts "$@" ) >"$OUT" 2>&1; then
+  echo >&2
+  echo "pre-commit: the STAGED tree fails its gates." >&2
+  echo "  Your working tree may well be green — that is the point. Something staged is" >&2
+  echo "  missing the source or the regenerated output that goes with it." >&2
+  echo >&2
+  sed 's/^/    /' "$OUT" >&2
+  echo >&2
+  echo "  Fix:    make gen && git add <the regenerated paths>, or the fix the gate names" >&2
+  echo "  Bypass: git commit --no-verify   (CI still runs the same gates)" >&2
+  exit 1
+fi
+
+# The reader's flows, only for a change that can break one: the site's sources, the site build's
+# steps and generators, the structure file, and the flows and their wrapper.
+E2E='^(site/src/|tools/src/site/|tools/src/gen/[^/]*site[^/]*$|docs/data/site-structure\.json$|tools/e2e/|tools/src/gates/check-site-e2e\.ts$)'
+if ! grep -qE "$E2E" <<<"$changed"; then
+  exit 0
+fi
+if [ ! -f site/dist/index.html ]; then
+  echo "pre-commit: no built site — skipping the reader flows (make site-build, then make site-e2e)." >&2
+  exit 0
+fi
+
+# The built site is ignored, so the extract has none: borrow the working tree's, as node_modules
+# is borrowed. `-o` holds make to the borrowed install: the extract's package files are newer than
+# its stamp, and without it make would run npm ci into the working tree's node_modules.
+ln -s "$PWD/site/dist" "$TMP/site/dist"
+if ( cd "$TMP" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE make --no-print-directory -o node_modules/.kb-install-stamp site-e2e ) >"$OUT" 2>&1; then
+  exit 0
+fi
+
+echo >&2
+echo "pre-commit: a reader flow fails on the built site." >&2
+echo "  The flows ran against the last 'make site-build' of your working tree; rebuild if" >&2
+echo "  it is older than the change." >&2
+echo >&2
+sed 's/^/    /' "$OUT" >&2
+echo >&2
+echo "  Fix:    the flow the finding names (docs/reference/triage.md#site-reader-flows)" >&2
+echo "  Bypass: git commit --no-verify   (CI still runs the same flows)" >&2
+exit 1

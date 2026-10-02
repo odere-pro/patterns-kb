@@ -1,0 +1,60 @@
+---
+title: Convention over Configuration
+description: "Give every choice a sensible default, so users configure only where they differ"
+area: principles-craft
+owner: Oleksandr Derechei
+tags: [api-design, maintainability, readability]
+status: draft
+aliases: [Coding by convention]
+solves: [every new project needs the same forty lines of settings that nobody reads, setting up a new resource means editing four config files that must agree, two teams lay out the same kind of project differently and cannot move between them, most of our configuration just repeats the usual values]
+---
+
+# Convention over Configuration
+
+Give every choice a sensible default, so users configure only where they differ from the usual.
+
+## What it says
+<!--meta block=description-->
+
+Convention over configuration says a framework or tool should assume reasonable defaults, such as names, file locations and wiring, and ask for configuration only where the user departs from them. David Heinemeier Hansson popularised the phrase through Ruby on Rails. It is often read as "no configuration". It means the common case needs none, and the unusual case can still override the default.
+
+## Explained
+<!--meta block=explain-->
+
+Convention over configuration means a tool picks a sensible default for every ordinary choice, such as file locations, names and wiring, and asks you for settings only where you differ. The default replaces a pile of settings that every project would otherwise write and keep in sync, so two projects on the same convention look alike and the tool finds your code by its name and place. Rails does this when it maps a class named Order to a table named orders. Choose it over explicit configuration when most users want the same thing, and keep an override for the rest. The cost is that the convention is hidden: a newcomer cannot see why something is wired, and cannot find the setting to change it. Document the rule in one place, have the tool print what it inferred, and make the override one explicit line, in the spirit of [least astonishment](least-astonishment.md).
+
+**Example.** A service framework needs a route, a handler and a database table for each resource. By convention, a file named orders.ts gives the route /orders and the table orders, so a new resource is 1 file instead of 4 config entries. One legacy table is called tbl_ord, and a single line overrides the table name. The risk is the hidden rule: a developer spent an hour finding why /orders existed, so the tool now prints each inferred route at startup. The convention saves about 3 edits per resource and costs one startup log and a page of docs.
+
+## Why it helps
+<!--meta block=rationale-->
+
+Without defaults, every project writes the same settings: where files live, what a table is called, which class handles which route. Each setting is a decision that must be made, written down, kept in sync and read by the next developer. The defect is not any one setting but the pile of them, which nobody tests because each looks trivial, and any one of which can be wrong in only one project.
+
+A shared convention removes the pile. Two projects built on it look alike, so a developer moves between them without relearning the layout, and the tool can find your code by its name and place. The only configuration that remains is the part that differs from the norm, which makes it the part worth reading.
+
+## Applying it
+<!--meta block=applying-->
+
+Design the default first and the knob second:
+
+- **Choose defaults for the common case.** If most users name the table after the class, do that automatically and make the exception a single line.
+- **Make the convention discoverable.** Document the rule in one place and make the tool print what it inferred, so users can see the result without reading source.
+- **Keep an escape hatch.** Every default needs an override that is local and explicit, so one odd case does not force a fork.
+- **Fail with a clear message.** When the convention is not followed, say which name or path was expected, since a silent mismatch is a puzzle with no clue.
+- **Keep the convention stable.** A default that changes between versions is a breaking change for everyone who relied on it.
+
+## Taken too far
+<!--meta block=overreach-->
+
+Conventions work as hidden configuration, and hidden is the cost. A newcomer cannot see why a class is wired to a route, because the reason is a naming rule in a framework they have not learned, and when the rule is wrong for them they cannot find the setting. The more that is implicit, the more the framework becomes a thing you must know by heart.
+
+The other failure is the missing escape. A convention with no override forces users to fight the tool or abandon it for the one case that does not fit. Make the default cover most cases, make the override cheap, and log what the convention chose, so the invisible choice can still be checked.
+
+## How it relates
+<!--meta block=relationships-->
+
+<!-- relationships:start -->
+
+<!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
+
+<!-- relationships:end -->

@@ -1,0 +1,87 @@
+---
+title: ML System Design
+description: "Structuring the applied-ML interview — from business objective to model, evaluation, and deep dives"
+area: themes-starting
+owner: Oleksandr Derechei
+tags: [machine-learning, validation]
+status: stable
+aliases: [ML system design, applied ML interview, ML design framework]
+---
+
+# ML System Design
+
+The delivery framework for the applied-ML system design interview: turn an ambiguous business goal into an ML system across a handful of phases, showing sound tradeoff reasoning rather than chasing a perfect design in forty-five minutes.
+
+## The question
+<!--meta block=description-->
+
+An interviewer opens with a vague, high-level prompt — "design a recommendation system", "build a fraud detector" — and the job is to turn it into a working ML system under time pressure. This is the applied-ML analogue of the [system design interview](./system-design-interview.md): the goal is not a perfect design in forty-five minutes, but a structured walk that demonstrates you can make reasonable tradeoffs.
+
+What separates a strong answer is navigation: framing the business goal before the ML objective, choosing informative data with a hypothesis for each signal, designing a model that is effective and efficient, and connecting it to production with an evaluation strategy that ties back to the business. The single most common failure is jumping to a model before framing the problem it should solve.
+
+## Explained
+<!--meta block=explain-->
+
+An ML system design question gives you a vague prompt, such as a fraud detector, and 45 minutes to turn it into a working system. The method is a fixed walk with a time budget per phase, so you do not spend the whole time on a model. First frame the problem: state the business goal, then the ML goal it becomes, such as classifying a payment as fraud or ranking items. These differ, so say where. A fraud model should weigh a 5,000 payment far above a 5 one. Then sketch the whole flow, choose data signals with a reason for each, start with a simple baseline model, and only then describe a more complex one. Finish with how you will measure it. Offline metrics are cheap but may not predict real results, so confirm with an A/B test, where part of the live traffic sees the new model, on a business measure. Adding model complexity costs training, serving time and upkeep, so justify each step by what it gains. The most common failure is naming a model before framing the problem.
+
+**Example.** For a fraud detector, a 45-minute plan runs: framing 6 minutes, sketch 3, data 10, model 10, evaluation 7. That leaves 9 for deep dives such as new cardholders with no history. The business goal is cutting fraud losses while declining at most 1 in 200 good payments. The ML goal is a fraud probability weighted by amount. The baseline is logistic regression on amount, country and device age, and the next step is boosted trees, which cost more to serve. Offline you check precision at a fixed recall, then an A/B test measures money lost.
+
+## The trade-space
+<!--meta block=tradespace-->
+
+The framework runs in phases, each with a rough time budget. **Problem framing** (5–7&nbsp;min) clarifies scope and scale, establishes a business objective, and translates it into a concrete ML objective — classification, ranking, regression. A crucial move here is separating the two: the ML loss is rarely the true goal, and naming where they diverge (a harmful-content model should weight high-view posts far above zero-view ones) is a senior signal. **High-level design** (2–3&nbsp;min) sketches inputs, components, and the action taken on outputs — a communication aid, not a graded artifact.
+
+**Data and features** (~10&nbsp;min) works from raw sources through selected features to their representation, leaning on semi- and self-supervised data beyond the obvious supervised set. **Modeling** (~10&nbsp;min) proposes a simple baseline first, then surveys candidate architectures and their tradeoffs before committing to one to detail. **Inference and evaluation** (~7&nbsp;min) covers offline metrics that predict online results, A/B testing on business metrics, and serving concerns like caching, quantization, and distillation. Whatever time remains goes to **deep dives** — cold start, scaling, monitoring — following the interviewer's lead.
+
+```mermaid caption="The framework runs left to right: frame the business objective before the ML objective, sketch the lifecycle, then go deep on data, model, evaluation, and finally the problems with the biggest payoff."
+flowchart LR
+    PF["Problem framing (business to ML objective)"] -->|"ML objective"| HL["High-level design"]
+    HL -->|"component sketch"| DF["Data and features"]
+    DF -->|"feature representation"| MO["Modeling (baseline to architecture)"]
+    MO -->|"chosen architecture"| IE["Inference and evaluation"]
+    IE -->|"metrics and tradeoffs"| DD["Deep dives"]
+```
+
+## The concepts each phase leans on
+<!--meta block=tour-->
+
+<!-- tour:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+### [Feature Engineering](../patterns/ml/feature-engineering.md) {#tour-feature-engineering}
+
+The data-and-features phase is where interviews are won or lost. Enumerate signal sources before individual features, choose an encoding per source, and flag the pitfalls — leakage, cold start, drift — that a given problem is most exposed to.
+
+### [Embeddings](../patterns/ml/embeddings.md) {#tour-embeddings}
+
+The default way to feed high-cardinality categorical, graph, and text signals into a model, and the backbone of retrieval-style architectures. Being specific about the loss, negatives, and dimensionality is what reads as real production experience.
+
+### [Generalization](../patterns/ml/generalization.md) {#tour-generalization}
+
+Model capacity against available data, regularisation, and drift — the questions behind "will this hold up in production?" Proposing a huge model on tiny data is a red flag interviewers are highly sensitive to.
+
+### [Evaluation](../patterns/ml/evaluation.md) {#tour-evaluation}
+
+Design offline metrics that predict online results and tie back to the business objective; strong ML-metric performance with no business impact is not valued. Each system type — classification, recommender, search, generative — needs its own evaluation strategy.
+
+<!-- tour:end -->
+
+## Reading the signal at each phase
+<!--meta block=decide-->
+
+| In this phase… | Establish | What signals seniority |
+| --- | --- | --- |
+| Problem framing | A business objective distinct from the ML loss | Naming where the two diverge |
+| Data & features | Impactful signals, each with a hypothesis | Reaching past supervised data to semi/self-supervised |
+| Modeling | A simple baseline before the complex model | Framing added complexity as a cost/benefit call |
+| Inference & evaluation | An offline metric that predicts online | Interleaving / shadow mode / A/B, plus serving cost |
+
+## Related areas
+<!--meta block=siblings-->
+
+- [System Design Interview](./system-design-interview.md) — The software-systems sibling of this framework, for non-ML designs.
+- [Harmful Content](./harmful-content.md) — The framework applied to a multi-modal content-moderation problem.
+- [Bot Detection](./bot-detection.md) — The framework applied to adversarial account classification.
+- [Video Recommendations](./video-recommendations.md) — The framework applied to a large-scale ranking problem.
+- [GenAI at Scale](./genai-scale.md) — Scale-out patterns for the serving side of large models.

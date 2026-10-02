@@ -1,0 +1,197 @@
+---
+title: Command
+description: Turns a request into a standalone object
+area: gof-behavioral
+owner: Oleksandr Derechei
+tags: [low-level-design, decoupling, state-management, encapsulation]
+status: stable
+aliases: [Action, Transaction]
+solves: [users keep asking for undo and my code mutates everything in place, "every button hardcodes the one object it calls, so I cannot reuse it", I want to run this operation later on a worker but it is just a method call, I have no way to log or replay what the user actually did, "the same action lives in a menu, a toolbar, and a shortcut and I wrote it three times"]
+---
+
+# Command
+
+Packages a request — the action, its target, and its arguments — into a standalone object you can pass around, queue, log, undo, and replay long after the caller that issued it has moved on.
+
+## What it is
+<!--meta block=description-->
+
+A **command** turns a request into a first-class object. Instead of calling a method directly, you define a small interface — usually a single `execute()` — and wrap each operation in a concrete class that binds its receiver (the object that does the real work) together with any arguments. The invoker holds a command and triggers it without knowing, or caring, what it actually does.
+
+The forces it resolves come from needing to issue a request while decoupled from when, where, and by whom it runs. A button should fire "some action" without hard-wiring which one. An operation may need to be queued, scheduled, retried, sent across a wire, or reversed. A plain method call can't be stored, deferred, or undone — it happens once and is gone.
+
+By reifying the call as data, Command lets you treat operations the way you treat any other object: put them in a list, keep a history, serialize them, replay them. The invoker and the receiver never meet.
+
+## Explained
+<!--meta block=explain-->
+
+A command wraps one operation as an object that holds the thing to act on, the arguments and an \`execute()\` method. The caller triggers it without knowing what it does, and because the call is now data you can queue it, save it, send it to another machine, log it or reverse it. Choose it over passing a plain function when the operation must outlive the moment of its call, for example to undo or replay it. If you need none of that, a function does the same work with no extra type. The first cost is volume: one class per action inflates the type count, so let simple actions share one class that takes a parameter. The second is lost context, because the code that queued a command is not on the stack when it runs, so store who asked and when inside the command. The third is undo: each command must save enough state to reverse itself, and that save goes stale when the receiver gains a field nobody added, so test every command by running it, then its undo, and comparing the results.
+
+**Example.** A text editor records each edit as a command. You type "hello " (6 characters) and "world" (5), so the history holds two commands and the text is 11 characters long. Undo pops the last command, which removes 5 characters and leaves "hello ". Later a developer adds a cursor position to the document. Undo still restores the text but leaves the cursor at position 11, past the end of a 6-character text, and nothing fails until a user types. A test that runs the command, then its undo, and compares the whole document before and after catches it. The cost is that each of your edit kinds needs its own class and its own undo.
+
+## How it works
+<!--meta block=structure-->
+
+```mermaid caption="The client builds a concrete command bound to a receiver and hands it to the invoker. The invoker calls execute, the command calls the receiver — invoker and receiver stay decoupled."
+flowchart LR
+    Client["Client"] -->|builds and binds| Cmd["Command"]
+    Client -->|configures| Invoker["Invoker"]
+    Invoker -->|execute| Cmd
+    Cmd -->|action| Receiver["Receiver"]
+```
+
+## Variations
+<!--meta block=variations-->
+
+- **Macro command** — A composite command that holds a list of commands and executes them as one unit — grouping several operations behind a single trigger.
+- **Undoable command** — Each command carries an `undo()` that reverses `execute()`; a [Memento](./memento.md) can capture the pre-state when reversal isn't a simple inverse.
+- **Queued / deferred command** — Commands are pushed onto a queue and run later — enabling scheduling, [throttling](../../distributed/resilience/rate-limiter.md), retries, or handing work to a background worker.
+- **Routed command** — A command is dispatched to whichever handler can process it, often along a [Chain of Responsibility](./chain-of-responsibility.md) — the backbone of command-bus and CQRS (Command Query Responsibility Segregation) designs.
+
+## Trade-offs
+<!--meta block=tradeoffs-->
+
+### Pros
+<!--meta polarity=pro-->
+
+- **The thing that triggers an action** and the thing that performs it never know about each other.
+- **Each request becomes an object**, so you can queue it, log it, schedule it, or send it over a network.
+- **Undo and redo come almost for free** — just keep a history of the commands you ran.
+- **Add a new operation as a new class**; the code that triggers it stays untouched.
+
+### Cons
+<!--meta polarity=con-->
+
+- **One class per action** means many small types for what a single call could say.
+- **Hides the real control flow** — the extra layer can hide it when you're debugging.
+- **Supporting undo** forces each command to save or rebuild state, which isn't always cheap.
+- **When your language has first-class functions**, a full command class is often overkill.
+
+## When to use it
+<!--meta block=usage-->
+
+### Reach for it when
+<!--meta polarity=when-->
+
+- **You want to hand an object** the action it should run — a menu item, button, or toolbar entry.
+- **You need to queue, schedule, log, or run** operations on a remote machine.
+- **You need undo/redo**, or to replay a sequence of operations as one transaction.
+
+### Avoid when
+<!--meta polarity=avoid-->
+
+- **The action is a single call** you never store, defer, or reverse.
+- **Your language has first-class functions** and you need none of the queuing, logging, or undo.
+- **The extra layer adds only ceremony** over a plain method call.
+
+## Code sketch
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — editor commands that carry their own undo"
+interface Command {
+  readonly label: string;
+  execute(): void;
+  undo(): void;
+}
+
+class TextDocument {
+  private text = "";
+  append(chunk: string): void { this.text += chunk; }
+  removeLast(count: number): void { this.text = this.text.slice(0, -count); }
+  toString(): string { return this.text; }
+}
+
+class TypeText implements Command {
+  readonly label: string;
+  constructor(
+    private readonly doc: TextDocument,
+    private readonly chunk: string,
+  ) {
+    this.label = `type "${chunk}"`;
+  }
+  execute(): void { this.doc.append(this.chunk); }
+  undo(): void { this.doc.removeLast(this.chunk.length); }  // reverse exactly what we did
+}
+
+class Editor {                          // the invoker
+  private readonly history: Command[] = [];
+  run(cmd: Command): void {
+    cmd.execute();
+    this.history.push(cmd);             // remember it so we can undo
+  }
+  undoLast(): void {
+    this.history.pop()?.undo();
+  }
+}
+
+const doc = new TextDocument();
+const editor = new Editor();
+editor.run(new TypeText(doc, "hello "));
+editor.run(new TypeText(doc, "world"));
+editor.undoLast();                      // doc is back to "hello "
+```
+
+## In the wild
+<!--meta block=wild-->
+
+- **java.util.concurrent Runnable/Callable** — Runnable.run() and Callable.call() reify a unit of work; an ExecutorService accepts them through execute() or submit(), queues them in its work queue, and runs them on a pooled thread. Callable returns a value and may throw, both surfaced through the Future the executor hands back. {#wild-java-concurrent}
+- **javax.swing.Action** — An Action extends ActionListener with bound state: an enabled flag, name, icon, and accelerator key. One instance shared by a toolbar button, a menu item, and a key binding keeps them all enabled or disabled together when setEnabled() is called. {#wild-swing-action}
+- **Redux** — Each dispatched action is a plain serializable object with a type field; a pure reducer maps (state, action) to the next state. Because actions are data, the DevTools can log, replay, and time-travel through the sequence. {#wild-redux}
+
+## In production
+<!--meta block=production-->
+
+### Tuning knobs
+<!--meta polarity=knob-->
+
+- **History depth** — For undo/redo, how many executed commands the invoker keeps. An unbounded history grows memory for the length of the session; a capped stack drops the oldest reversible steps.
+- **Serialization boundary** — When commands are queued, persisted, or shipped over a wire they must serialize to data. A command that captures a live receiver reference or a closure will not marshal, so what the command carries is a real design dial.
+
+### Signals to watch
+<!--meta polarity=signal-->
+
+- **Command queue depth** — For deferred or queued commands, the number waiting to run. A rising backlog means the invoker is producing faster than the worker drains.
+
+### Failure modes under load
+<!--meta polarity=failure-->
+
+- **Unbounded undo history** — The invoker never trims executed commands, and retained state (including pre-images captured for undo) grows without limit.
+- **Non-idempotent replay** — A queued or retried command that is not idempotent applies its effect twice when the queue redelivers or a retry fires after a partial success.
+
+### Readiness checklist
+<!--meta polarity=check-->
+
+- Undo or command history is bounded or trimmed so it cannot grow for the life of the session.
+- Commands that may be retried or redelivered are idempotent, or carry a dedup key.
+- Commands that cross a queue or wire serialize cleanly, without live object references.
+
+## Where it shows up
+<!--meta block=fluency-->
+
+<!-- fluency:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+- [Event Modeling](../../../themes/event-modeling.md) — The user's intent, as its own object {#fluency-event-modeling}
+
+<!-- fluency:end -->
+
+## How it relates
+<!--meta block=relationships-->
+
+<!-- relationships:start -->
+
+<!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
+
+**Combines with**
+
+- [Memento](./memento.md) — Command does; Memento captures state to undo
+- [Chain of Responsibility](./chain-of-responsibility.md) — Commands flow along a handler chain
+- [Flux](../../frontend/flux.md) — Flux actions are commands routed through a reducer
+- [Mediator](./mediator.md) — Request objects give a dispatcher something uniform to route
+
+**Often confused with**
+
+- [Strategy](./strategy.md) — Reify an operation so it can be deferred, queued or undone vs. swap one algorithm behind a call
+
+<!-- relationships:end -->

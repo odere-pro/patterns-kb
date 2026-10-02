@@ -1,0 +1,101 @@
+---
+title: Poison Message
+description: "One message that always fails its consumer is redelivered forever, blocking the queue or burning capacity"
+area: hazards
+owner: Oleksandr Derechei
+tags: [messaging, error-handling]
+status: stable
+aliases: [poison pill, poisoned message, stuck message]
+solves: [one message keeps failing with the same error every few seconds and the queue behind it is not moving, the oldest message in the queue gets older while the worker logs the same exception again and again, a consumer crashes or runs out of memory each time it picks up one particular message, retries never end for one bad message and they keep using worker capacity that good messages need]
+---
+
+# Poison Message
+
+A poison message is one message that fails its consumer every time it is tried, so the broker redelivers it forever and it blocks the queue or burns capacity on attempts that cannot succeed.
+
+## What it is
+<!--meta block=description-->
+
+A **poison message** is a message whose content, not the moment, makes processing fail. A date in a format the parser rejects, a field the code assumes is present, a number that overflows, a payload that triggers a bug. The consumer throws, the broker sees no acknowledgement and delivers the message again, and the same failure repeats. A transient fault, such as a database that was down for a minute, goes away on retry. This one never will.
+
+You recognise it by what the queue does. One consumer shows the same exception with the same message id every few seconds. The queue's oldest-message age climbs while its depth barely moves. In a queue that preserves order, every message behind the poison one waits, which is [head-of-line blocking](./head-of-line-blocking.md). In a queue with many consumers, each delivery ties up a worker, so useful throughput drops while the error rate and the CPU bill climb.
+
+The defining trait is that retrying is the wrong response. A system built for transient faults, where "retry until it works" is the correct default, applies that default to a failure that is permanent, and the hazard is the missing rule that says when to stop. A message that crashes the consumer process outright, with an out-of-memory error or a segfault, is the worst form: the consumer dies before it can count the attempt, so the retry limit never fires.
+
+## Explained
+<!--meta block=explain-->
+
+A poison message is a message that fails its consumer every time because of its content, not because of timing. A date the parser rejects or a field the code assumes is there makes the consumer throw, the broker sees no acknowledgement, and it delivers the message again. A failure from a brief outage clears on retry, but this one never does. In an ordered queue or a single partition, everything behind it waits. In a pool of workers, each retry takes a worker and calls any dependency again. The worst form crashes the consumer process, so it cannot count attempts itself. Decide where the retry stops. Let the broker count deliveries, and after 3 to 5 attempts move the message with its error to a dead letter channel so the main queue moves on. Send errors that can never succeed, like parse failures, there on the first try, and retry only the transient ones with backoff. Validate at the producer, and alert on the oldest-message age.
+
+**Example.** A payments queue has 20 workers and handles 400 messages a second. A message arrives with an amount field of null, and the consumer throws on it. With no attempt limit, the broker redelivers it every 5 s, and in an ordered partition 400 messages a second pile up behind it, so after 10 minutes 240,000 are waiting. With a limit of 5 attempts, the message sits in the dead letter queue after 25 s, the backlog is at most 10,000, and an alert on the dead letter depth pages the owner.
+
+## How it happens
+<!--meta block=causes-->
+
+It starts with a default that is right most of the time. A message fails, so it goes back on the queue and is tried again, because most failures are a brief outage. Nothing in that loop tells a permanent failure from a brief one, so a message that can never succeed is retried at the same pace as one that will succeed in a second. Each pass costs a delivery, a log entry and a worker's time.
+
+```mermaid caption="Why one bad message never leaves: each failed attempt returns it to the queue, and nothing counts the attempts or tells a permanent failure from a transient one."
+flowchart LR
+    Q["Queue"] -->|"deliver"| C["Consumer"]
+    C -->|"throws, no ack"| R["Broker requeues"]
+    R -->|"redeliver at once"| Q
+    C -->|"same error each time"| L["Error log fills"]
+    Q -.->|"behind it, waiting"| M["Healthy messages"]
+```
+
+- Retry on every error with no limit, so a permanent failure and a transient one get the same treatment forever.
+- No difference between errors that can be retried and errors that cannot, such as a malformed payload that fails parsing every time.
+- Messages accepted without checks at the producer or the edge, so a bad payload enters the queue with no schema or type validation.
+- A schema or code change on one side of the queue that makes old messages unreadable, or new ones unreadable to old consumers during a rollout.
+- A broker that does not count deliveries or offers no way to move a message aside, so the consumer has no attempt number to act on.
+- A consumer that is crashed by the message, for example by running out of memory, so no code runs that could give up on it.
+- Ordered delivery from a single partition or queue, where the consumer cannot skip the failing message without breaking the order.
+
+## What it costs
+<!--meta block=cost-->
+
+- **Everything behind it waits.** In an ordered queue or a Kafka partition, the consumer cannot move past the failing message, so a single bad record turns into a full stop for that stream.
+- **Capacity burns on a guaranteed failure.** Each redelivery uses a worker, a database call or an API call, and the retries compete with good messages for the same capacity.
+- **The logs and alerts drown.** The same exception repeats thousands of times, which hides other errors and fills log storage.
+- **Retries multiply the load on dependencies.** If the failing handler calls another service first, each attempt hits it again, and the poison message adds to a [retry storm](./retry-storm.md).
+- **The backlog keeps growing.** Producers keep writing while the stream is stuck, and an [unbounded queue](./unbounded-queue.md) fills memory or disk until it fails too.
+- **Recovery needs a person.** Someone must find the message, read why it fails, fix the code or the data, and replay the rest in order.
+
+One bad message makes a small, fixable fault in a payload into an outage of the whole stream, and that outage lasts as long as it takes someone to notice. The oldest-message age is the number that shows it early, because the depth can look normal.
+
+## Getting out
+<!--meta block=mitigation-->
+
+Count attempts and stop at a limit. Let the broker keep the delivery count, because a consumer that crashes cannot count for itself. After a small number of tries, 3 to 5 is common, move the message to a [dead letter channel](../patterns/messaging/dead-letter-channel.md) together with the error and the attempt count. The main queue moves on, and the message waits in a place built for a person to inspect. SQS (Simple Queue Service) redrive policies, RabbitMQ dead-letter exchanges and Kafka dead-letter topics all work this way.
+
+Then tell the two kinds of failure apart. A parse or validation error is permanent, so send it to the dead letter channel on the first attempt, with no retries. A timeout or a 503 from a dependency is transient, so retry it with [backoff](../patterns/distributed/resilience/retry-backoff.md) before giving up. Where order must hold, a stream can pause the one key that failed and carry on with others, rather than stop everything.
+
+Prevent the next one. Validate against a schema where the message enters, so bad data is refused at the producer and never reaches the queue. Version message formats and keep old readers working through a rollout. Alert on the dead letter channel's depth and on the age of the oldest message in the main queue, so a person learns of the first poison message in minutes. After the fix, replay the dead letters into the main queue, and make the consumer [idempotent](../patterns/messaging/idempotency.md) so a replayed message that half succeeded before cannot apply twice. A [message queue](../patterns/messaging/message-queue.md) with no dead letter route and no attempt limit is how the hazard gets in.
+
+## How it relates
+<!--meta block=relationships-->
+
+<!-- relationships:start -->
+
+<!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
+
+**Combines with**
+
+- [Unbounded Queue](./unbounded-queue.md) — The backlog behind a stuck message grows until an unbounded queue fills memory.
+- [Retry Storm](./retry-storm.md) — Each redelivery repeats calls to a dependency and adds to a retry storm.
+
+**Often confused with**
+
+- [Head-of-Line Blocking](./head-of-line-blocking.md) — A poison message is one common cause of a stuck queue head.
+
+**Mitigated by**
+
+- [Dead Letter Channel](../patterns/messaging/dead-letter-channel.md) — Move the message aside after a few attempts so the queue moves on.
+- [Idempotency](../patterns/messaging/idempotency.md) — Replaying dead letters after the fix needs consumers that can take a message twice.
+- [Retry with Backoff](../patterns/distributed/resilience/retry-backoff.md) — Retry only transient failures, with backoff, and stop at a limit.
+
+**Threatens**
+
+- [Message Queue](../patterns/messaging/message-queue.md) — Any queue with redelivery and no attempt limit can hold one.
+
+<!-- relationships:end -->

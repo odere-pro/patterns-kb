@@ -1,0 +1,188 @@
+---
+title: Mock Object
+description: "Pre-programmed with expectations, fails if they're unmet"
+area: testing
+owner: Oleksandr Derechei
+tags: [testing, isolation, decoupling]
+status: stable
+aliases: [mock]
+solves: [my code sends an email and there is nothing left over for the test to assert on, "the only thing this method does is call something else, so how do i test it at all", i do not want my test suite actually charging a real credit card, i want to check the right event got published but there is no queue running in my test, i cannot confirm the audit entry was written without standing up a real database]
+---
+
+# Mock Object
+
+A test double pre-loaded with the exact calls it expects to receive — right method, right arguments, right number of times — that fails the test outright the moment reality diverges from the script.
+
+## What it is
+<!--meta block=description-->
+
+A **mock object** is a test double that is programmed, before the code under test runs, with the calls it expects to receive: which method, with what arguments, how many times. As the system under test executes, the mock checks each incoming call against that script. When the test asks it to `verify()` — either explicitly or automatically, depending on the framework — it confirms every expected call actually happened. Any mismatch, an unexpected call, a wrong argument, a missing call, fails the test immediately, usually naming exactly which expectation broke.
+
+It resolves a specific gap in state-based testing: some collaborators have no return value or state change to read back afterward. Sending an email, publishing a message, writing an audit-log entry, charging a card through a gateway — the observable result of the operation is the call itself, not something you can query once it's over. A mock lets the test assert on that interaction directly, instead of inferring it indirectly through side effects that may be slow, external, or simply invisible from inside a test.
+
+That makes Mock Object the pattern of behavior verification rather than state verification — the distinction Martin Fowler drew out of Steve Freeman and Nat Pryce's early work on jMock. A stub or a fake lets a test check the final state of the world; a mock checks the conversation that produced it. That precision is also the pattern's chief risk: a mock encodes not just what the collaborator should accomplish, but exactly how the code under test talks to it, and the two are easy to conflate.
+
+## Explained
+<!--meta block=explain-->
+
+A mock object is a test double loaded before the test runs with the calls it should receive, which method, with which arguments, how many times, and it fails the test when the code makes a different call or leaves one out. Use it when the outcome you care about is a call and nothing else shows it, such as sending an email, publishing a message or charging a card. Choose it over a stub or fake, which let you check the final state, when there is no state to read afterwards. It costs four things. It ties the test to how the code calls its collaborator, so mock only at the edge of your system, where the call is the result. Over-specific expectations make a harmless refactor break many tests, so expect only what matters. Mocking simple value objects adds nothing, so use real ones. And it proves a call happened, not that the real effect was right, so keep one test against the real service.
+
+**Example.** A refund service must call gateway.refund with payment pay_7 and 2,500 cents exactly once. A retry bug makes it call twice, so the customer gets 5,000 cents back instead of 2,500. State shows nothing, because the gateway returns success both times. A mock expecting one call fails on the second, naming the extra call. The cost arrives when the team batches refunds into one call per hour: customers are still refunded correctly, but 14 tests that expected one call per refund now fail and must be rewritten to expect the batch.
+
+## How it works
+<!--meta block=structure-->
+
+```mermaid caption="The test programs the mock's expectations before the run, then asks it to verify them afterward — the mock itself decides whether the test passes."
+sequenceDiagram
+    autonumber
+    participant T as Test
+    participant M as Mock
+    participant S as SUT
+    T->>M: expect send(to, subject) once
+    T->>S: run()
+    S->>M: send(to, subject)
+    T->>M: verify()
+    alt expectation met
+        M-->>T: pass
+    else call missing or wrong args
+        M--xT: fail, expectation unmet
+    end
+```
+
+## Variations
+<!--meta block=variations-->
+
+- **Hand-rolled mock** — A small class written by hand that implements the collaborator's interface, records expected calls, and exposes its own `verify()` — no framework, full control, more boilerplate.
+- **Framework-generated mock** — Libraries like Mockito, jMock, Moq, or Sinon generate the double at runtime via reflection or proxies; expectations are set with a fluent DSL (domain-specific language) instead of hand-written code.
+- **Strict vs. nice mocks** — A strict mock fails the test on any call it wasn't told to expect; a nice (lenient) mock quietly returns a default for unexpected calls, trading precision for less brittle setup.
+- **Ordered expectations** — Some frameworks let a mock fail not just on the wrong call but on the right call in the wrong order — useful when the sequence of calls is itself part of the contract.
+
+## Trade-offs
+<!--meta block=tradeoffs-->
+
+### Pros
+<!--meta polarity=pro-->
+
+- **Tests behavior that has no observable return value** or state to assert on directly.
+- **Fails fast and precisely** — pinpoints exactly which expected call was missed or malformed.
+- **Removes the real collaborator entirely**, so the test is fast, deterministic, and side-effect free.
+- **Forces a narrow**, explicit collaborator interface, which tends to improve its design.
+
+### Cons
+<!--meta polarity=con-->
+
+- **Couples the test to an implementation detail** — how the SUT calls its collaborator — not just the outcome.
+- **Over-specified expectations turn a harmless refactor** into a wave of broken tests.
+- **Easy to overuse**: mocking every collaborator, including simple value objects that don't need it.
+- **Verifies that calls happened**, not that the real-world effect behind them was correct end to end.
+
+## When to use it
+<!--meta block=usage-->
+
+### Reach for it when
+<!--meta polarity=when-->
+
+- **A collaborator's contract is a side effect** with no return value — sending an email, publishing an event, writing a log line.
+- **The real collaborator is slow**, non-deterministic, or unavailable in the test environment.
+- **What you're actually testing is the interaction itself** — right method, right arguments, right count.
+
+### Avoid when
+<!--meta polarity=avoid-->
+
+- **Collaborator result you can assert on** — it returns a value or updates state you can assert on directly; a [Test Stub](./test-stub.md) only needs to answer, not be verified.
+- **You're testing business logic** that happens to call a collaborator incidentally — mocking there re-asserts the implementation, not the outcome.
+- **The interface under test is still unstable** — a mock's expectations lock in the exact call shape, and every refactor breaks tests that never touched behavior.
+
+## Code sketch
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — a minimal hand-rolled mock"
+interface EmailSender {
+  send(to: string, subject: string): void;
+}
+
+class MockEmailSender implements EmailSender {
+  private expected: { to: string; subject: string } | null = null;
+  private called = false;
+
+  expectSend(to: string, subject: string): void {
+    this.expected = { to, subject };
+  }
+
+  send(to: string, subject: string): void {
+    if (!this.expected || this.expected.to !== to || this.expected.subject !== subject) {
+      throw new Error(`unexpected call: send(${to}, ${subject})`);
+    }
+    this.called = true;
+  }
+
+  verify(): void {
+    if (this.expected && !this.called) {
+      throw new Error("expected send() was never called");
+    }
+  }
+}
+
+// Test
+const mock = new MockEmailSender();
+mock.expectSend("a@x.com", "Welcome");
+new SignupService(mock).signUp("a@x.com");
+mock.verify(); // throws if the expectation was never met
+```
+
+## In the wild
+<!--meta block=wild-->
+
+- **jMock** — The Java library from Freeman and Pryce where the pattern was worked out; expectations are declared up front in an \`Expectations\` block and the test rule verifies them automatically at the end of the test. {#wild-jmock}
+- **EasyMock** — Records expected calls during a setup phase, switches to replay with \`replay()\`, and \`verify()\` fails the test if the actual calls did not match the recorded script. {#wild-easymock}
+- **Mockito** — Generates doubles at runtime; \`verify(mock, times(n))\` checks interactions after the fact and names the exact call that was missing or malformed, and strict stubbing flags expectations that were set but never used. {#wild-mockito}
+
+## In production
+<!--meta block=production-->
+
+### Tuning knobs
+<!--meta polarity=knob-->
+
+- **Strictness** — A strict mock fails the test on any call it was not told to expect; a nice or lenient mock returns a default for the unexpected — trading precision for less brittle setup. Both are a named mode in the major frameworks.
+- **Argument matching** — Expectations pinned to exact argument values versus matchers — any value, a type, or a predicate — which loosen what counts as a satisfied call.
+- **Invocation count** — How many times a call is expected — exactly once, at least, never — verified as part of the expectation.
+
+### Failure modes under load
+<!--meta polarity=failure-->
+
+- **Over-specified expectations** — Encoding every call the system under test makes turns a harmless refactor into a wave of broken tests that never touched behavior.
+- **Interaction over outcome** — The mock proves the calls happened, not that the real-world effect behind them was correct end to end.
+
+### Readiness checklist
+<!--meta polarity=check-->
+
+- Mock only collaborators whose contract is the interaction itself — a side effect with no return value or state to read back.
+- Prefer a nice mock unless call order or count is genuinely part of the contract.
+- Pair an interaction test with at least one test that asserts on the observable outcome.
+
+## Where it shows up
+<!--meta block=fluency-->
+
+<!-- fluency:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+- [Testing](../../themes/testing.md) — Script the calls a collaborator should receive and fail on any mismatch. {#fluency-testing}
+
+<!-- fluency:end -->
+
+## How it relates
+<!--meta block=relationships-->
+
+<!-- relationships:start -->
+
+<!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
+
+**Often confused with**
+
+- [Test Stub](./test-stub.md) — State vs. behavior verification
+- [Test Spy](./test-spy.md) — Record and assert later vs. expect up front
+- [Fake Object](./fake-object.md) — Programmed expectations vs. a real lightweight impl
+- [Dummy Object](./dummy-object.md) — Verifies calls; a dummy expects none
+
+<!-- relationships:end -->

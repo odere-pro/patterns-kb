@@ -1,0 +1,104 @@
+---
+title: Dealing with Contention
+description: Keeping concurrent writers correct when they fight over the same data
+area: themes-scale
+owner: Oleksandr Derechei
+tags: [concurrency, state-management]
+status: stable
+aliases: [concurrency control, write contention]
+---
+
+# Dealing with Contention
+
+Keeping concurrent writers correct when they contend for the same record — a ladder of coordination mechanisms you climb as collisions grow more frequent and reach further across servers and time.
+
+## The question
+<!--meta block=description-->
+
+Picture one row — a seat count, an account balance, a live scoreboard — and two requests arriving in the same millisecond, each wanting to change it. The obvious code reads the current value, decides what to do with it, and writes the result back. Run that under concurrency and it is quietly broken: both requests read the same starting value before either write lands, both compute from it, and one write silently erases the other. The seat sells twice, a deposit vanishes, the counter drifts low. Nothing throws; the numbers are just wrong.
+
+That naive read-modify-write is a [race condition](../hazards/race-condition.md), and closing it is what this theme is about. The fixes are not one trick but a ladder. At the bottom sits a single statement the database makes atomic for you; a rung up is a version check that lets the rare loser retry; higher still is an explicit lock that makes writers queue; at the top is a [lease](../patterns/distributed/coordination/lease.md) that outlives an entire transaction, backed by a [fencing token](../patterns/distributed/coordination/fencing-token.md) so a holder that paused past its deadline cannot overwrite the new owner. You climb only as far as the collision rate and the reach of the contention actually force you — the whole skill is not over-building.
+
+## Explained
+<!--meta block=explain-->
+
+When two requests change the same row at the same moment, code that reads the value, decides, and writes it back loses one of the changes without any error. You fix it by climbing a ladder and stopping at the first rung that fits. First, fold the safety rule into one write the database runs atomically, such as an update that only applies if seats are left. Next, attach a version to the row and let the rare loser retry, which is optimistic because it assumes nobody interferes. If writers collide often, retries pile up faster than they clear, so take a lock up front and make writers queue, which is pessimistic. Last, if exclusivity must span several servers or outlast one transaction, use a lease: a record of who holds the claim, which expires on its own. Choose by how often writers meet and how far the contention reaches. Each rung costs something. Locks slow every writer even when none would collide, and a lock held during a slow call stalls the queue behind it. Retries are only safe if doing a write twice equals doing it once, so give each operation a key the store remembers.
+
+**Example.** A flash sale has 100 buyers hitting one stock row at once. With a version check, each round one writer wins and the other losers retry: 100 + 99 + ... + 1 is 5,050 attempts for 100 sales, and the retries arrive as fast as they clear. With a row lock, the 100 writers queue and run 100 writes, about 5 ms each, so the last waits about 0.5 s. A single update that only applies when stock is above zero needs no lock at all and fits here. The cost of the lock is that every buyer waits in line, even on a quiet day.
+
+## The tradespace
+<!--meta block=tradespace-->
+
+Two questions place you on the ladder. **How often do writers actually collide?** When collisions are rare — most retail checkout, admin edits, a review-count bump — bet on that and pay nothing for the common case: fold the whole safety rule into one conditional write the store executes atomically, or attach a version to the row and let the occasional loser retry. This is the optimistic stance: assume no interference, detect the exception, redo only the rare bit. When collisions are frequent — a hot auction, the one flash-sale row everyone wants — optimism turns into a [retry storm](../hazards/retry-storm.md) that clears slower than it fills, and it is cheaper to be pessimistic: take an explicit lock up front so writers block in an orderly queue instead of thrashing.
+
+**How far does the contention reach?** While the decision fits inside one row and one transaction, the database itself is your coordinator — a `WHERE` clause or a `SELECT ... FOR UPDATE` is all the machinery you need. Once exclusivity must be seen by more than one server, or must outlive the transaction — hold a seat for ten minutes of checkout, keep two workers off the same job — a transaction-scoped lock can't stretch that far, and you need a lease any server can read and that expires on its own. A lease still cannot stop a holder that stalled past its deadline and wakes up believing it owns the record, so have the resource itself refuse writes carrying an older token than the last it accepted.
+
+Cutting across both axes is one enabler: a retry, or a duplicate delivery, is only safe if applying a write twice equals applying it once. Make each operation [idempotent](../patterns/messaging/idempotency.md) and every retry on the ladder becomes trustworthy. And there is a boundary: once an operation must stay correct across several independent stores at the same time, it has left contention behind and become a distributed-transaction problem.
+
+```mermaid caption="Climb only as high as scope and collision rate force you: reach for a lease last, prefer a single atomic write first, and choose optimism or pessimism by how often writers actually meet."
+flowchart TB
+    S["Two writers contend for one record"] -->|"how to serialize?"| Q1{"Must exclusivity span servers or outlive the transaction?"}
+    Q1 -->|"Yes"| DL["Distributed lock: a lease with a TTL"]
+    Q1 -->|"No"| Q2{"Does the safety rule fit in the row's WHERE clause?"}
+    Q2 -->|"Yes"| CW["Conditional write: one atomic statement"]
+    Q2 -->|"No, needs app logic"| Q3{"Do writers collide often?"}
+    Q3 -->|"Rarely"| OCC["Optimistic control: version check, loser retries"]
+    Q3 -->|"Often"| PL["Pessimistic lock: acquire the rows up front"]
+```
+
+## The escalation ladder
+<!--meta block=tour-->
+
+<!-- tour:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+### [Conditional Write](../patterns/distributed/coordination/conditional-write.md) {#tour-conditional-write}
+
+The cheapest rung, and the one to try first. When the safety rule is a predicate on the row you're writing — `available_seats > 0`, `status = 'available'` — you need no lock at all: fold the check into the write's `WHERE` clause and let the store serialize writes to that row for you. The loser's condition re-evaluates against the winner's result, matches zero rows, and does nothing. One atomic statement, no coordinator.
+
+### [Optimistic Concurrency Control](../patterns/distributed/coordination/optimistic-concurrency-control.md) {#tour-optimistic-concurrency-control}
+
+When the decision needs a little application logic but collisions are rare, don't lock — assume no one else touched the row and check that assumption as you write. Attach a version that changes on every write and condition the update on the version you read still being current. If a concurrent writer moved it first, your update matches zero rows and you retry. You pay only when there is a real conflict, which makes it ideal for high read-to-write ratios.
+
+### [Pessimistic Locking](../patterns/distributed/coordination/pessimistic-locking.md) {#tour-pessimistic-locking}
+
+When collisions are frequent, optimism degrades into a retry storm. Lock the contended rows up front instead — `SELECT ... FOR UPDATE` — so a competing writer blocks until you commit rather than doing work it will have to discard. The price is that every writer pays lock overhead even when it would never have collided, and a lock held across slow I/O — a payment call, say — stalls everyone queued behind it.
+
+### [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) {#tour-distributed-lock}
+
+When exclusivity must outlive a single transaction or be seen by more than one server — hold a seat through a ten-minute checkout, keep two workers off the same task — a row lock cannot reach that far. Represent the lock as a lease instead: a record of who holds it and when it expires, readable by any server and self-cleaning when its TTL lapses. The escalation of last resort — reach for it only when a single-transaction guard genuinely cannot do the job.
+
+### [Lease](../patterns/distributed/coordination/lease.md) {#tour-lease}
+
+A lease is a grant that ends at a deadline unless the holder renews it. A holder that crashes frees the resource when the deadline passes, with no cleanup job. A paused holder can still act after expiry, so pair it with a check at the resource.
+
+### [Fencing Token](../patterns/distributed/coordination/fencing-token.md) {#tour-fencing-token}
+
+Each grant of the lock carries a number that rises, and the resource refuses any write with a lower number than one it has seen. A paused holder that wakes after its lease ended is refused, whatever the clocks say. The resource must be able to do the check.
+
+### [Idempotency](../patterns/messaging/idempotency.md) {#tour-idempotency}
+
+Every rung above leans on retrying the loser, and a retry is only safe if doing the write twice equals doing it once. Give each operation a key the store remembers, so a replayed or duplicated request returns the first result instead of applying a second charge. It doesn't resolve contention on its own — it is what makes the whole ladder's retries trustworthy from client to store.
+
+<!-- tour:end -->
+
+## How to decide
+<!--meta block=decide-->
+
+| If you need… | Lean | Reach for |
+| --- | --- | --- |
+| The safety rule to fit inside one row's `WHERE` clause (a counter, status, or claim) | Atomic write | [Conditional Write](../patterns/distributed/coordination/conditional-write.md) |
+| Read-decide-write correctness where collisions are rare and reads dominate | Optimistic | [Optimistic Concurrency Control](../patterns/distributed/coordination/optimistic-concurrency-control.md) |
+| Correctness when many writers keep hitting the same hot row | Pessimistic | [Pessimistic Locking](../patterns/distributed/coordination/pessimistic-locking.md) |
+| Exclusivity that spans servers or an external wait such as checkout | A lease | [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) |
+| A paused or slow holder to be unable to overwrite the new owner | Storage refuses stale writes | [Fencing Token](../patterns/distributed/coordination/fencing-token.md) |
+| A claim that frees itself when its holder crashes | Time-limited grant | [Lease](../patterns/distributed/coordination/lease.md) |
+| A retried or duplicated write to land exactly once | Safe replay | [Idempotency](../patterns/messaging/idempotency.md) |
+
+## Sibling themes
+<!--meta block=siblings-->
+
+- [Consistency & Replication](./consistency-and-replication.md) — Contention is the single-node face of the question replication asks across many: whose write wins, and when does everyone agree on it.
+- [CAP Theorem](./cap-theorem.md) — When contention spreads across a partitioned network, keeping writers correct turns into the consistency-versus-availability choice.
+- [Scalability](./scalability.md) — A hot contended row is where horizontal scaling stops helping — sharding splits keys, but not the one key every writer wants at once.

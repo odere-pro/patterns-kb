@@ -1,0 +1,92 @@
+---
+title: Partial Object
+description: "One class, populated differently by every code path that returns it"
+area: hazards
+owner: Oleksandr Derechei
+tags: [low-level-design, validation, code-smell]
+status: stable
+aliases: [partial object population, POOP, optional object population]
+solves: [whether a field is populated depends on which method returned the object, we keep getting null reference errors on a field that is set on some paths, a total came out wrong because a price was zero instead of missing, I cannot tell from the type which fields I am actually guaranteed, this class grew a nullable field for every screen that reused it]
+---
+
+# Partial Object
+
+One class reused across several contexts, each filling in a different subset of its fields and leaving the rest at their defaults — so which fields are actually populated depends on which code path built the instance, and nothing in the type says which.
+
+## What it is
+<!--meta block=description-->
+
+A **partial object** is an instance whose contract you cannot read from its type. One class serves several purposes, and each producer populates the part it cares about: a full lookup fills everything, a list view leaves the price out, a discount lookup fills only the discount fields. Every one of them returns the same type, so a caller holding one has no way to know which of its fields mean anything.
+
+The worst property is that **absent and zero become the same value**. A field left at its default is indistinguishable from a field deliberately set to that default, so a total computed over an unpopulated price is not an exception — it is a wrong number, returned confidently, with nothing anywhere flagging it.
+
+You recognise it by a specific question having no answer: which fields am I guaranteed? Nobody can answer it from the signature, so understanding one call means tracing every producer of that type. The defensive consequence follows — null checks spread into code that has no business caring, and each new field multiplies them.
+
+Underneath is a reuse decision that looked like avoiding duplication. Writing a second class for the second use case feels like repeating yourself, so the existing type is widened instead, and each added context makes the populated subset less predictable. That is also why it couples consumers who never meet: a field added for one context appears on every other, so [interface segregation](../principles/interface-segregation.md) is violated through a shared type rather than a shared interface, and a change made for one consumer can break another.
+
+## Explained
+<!--meta block=explain-->
+
+A partial object is an instance whose type does not tell you which of its fields hold real data. One class serves several uses, and each code path that builds it fills in only the part it needs, so a list view leaves out the price and a discount lookup fills only the discount. A field left unfilled reads as zero or empty, which looks the same as a real zero, so a total over a missing price is a confident wrong number, not an error. It grows because a second class feels like repeating yourself, so the existing one is widened, and each new use makes the filled-in part less predictable. Repair it at the type, never at the call site, because a null guard added where the failure surfaced just moves the wrong answer elsewhere. Give each context its own type holding exactly what it guarantees. Require the mandatory fields in the constructor and make them read-only, so an incomplete instance cannot be built. The cost is two similar types and the conversion between them, which is cheaper than an unknowable contract. For a screen-shaped read, return a plain carrier, not the entity.
+
+**Example.** A Product class has name, price and discount. A list finder fills only the name, so price stays 0. A cart of 3 items priced 12.50, 8.00 and 4.50 should total 25.00, but items loaded by the list finder show 0.00, and the checkout charges the wrong amount with no error. Adding a null check at checkout would hide it. The fix is two types: ProductSummary with id and name, and PricedProduct whose constructor demands a price. The total function accepts only PricedProduct, so passing a summary fails to compile. The cost is one extra class and a mapping where the cart loads its items.
+
+## How it happens
+<!--meta block=causes-->
+
+It arrives one reasonable decision at a time. A screen needs the same entity with fewer fields, so a second finder populates fewer of them; a report needs two extra fields, so they are added to the same class. Nobody introduces a partial object — the type simply accumulates contexts until no single statement describes what it holds.
+
+Two things make it hard to stop. A constructor that required every field would break the contexts that do not have them, so there is no place to enforce anything; and projection tooling makes selecting fewer columns into the same entity type a one-line change, which is cheaper than declaring a purpose-shaped type. The cheap path and the correct path diverge at exactly the moment nobody is thinking about the type's contract.
+
+```mermaid caption="Why is step 5 worse than a crash? Because the caller at step 4 cannot tell which producer it came from, and an unpopulated price reads as zero rather than as missing — so the failure is a plausible total rather than an exception someone would investigate."
+flowchart LR
+    F1["findProduct"] -->|"1 fills every field"| P["Product"]
+    F2["listProducts"] -->|"2 leaves price null"| P
+    F3["findDiscounted"] -->|"3 fills only discount fields"| P
+    P -->|"4 same type, unknown contract"| C["Caller computing a total"]
+    C -->|"5 wrong number, no error"| R["Report"]
+```
+
+- **Several finders, one return type.** Each populates the subset its own caller needed, and the type's contract becomes the union of all of them with none guaranteed.
+- **Optional-field creep.** A nullable field is added per new caller until most of the type is nullable, at which point the type asserts nothing at all.
+- **A depth flag.** A "summary" or "full" parameter silently changes which fields come back, so the contract depends on an argument rather than on the type.
+- **Detached lazy-loading proxies.** The fields exist and touching them triggers a load, so an instance separated from its source behaves exactly like a partially populated one — and fails somewhere far from where it was built.
+- **Optionality pushed into a base class.** The shared fields are hoisted into a parent, which reproduces the problem one level up and adds an inheritance constraint on top.
+- **A domain type used as a query result.** A read shaped for a screen is returned as the entity, so the entity's invariants are quietly not upheld by that path.
+
+## What it costs
+<!--meta block=cost-->
+
+- **Null-reference failures in production.** They land on the paths where a caller assumed a field its particular producer never set, which is the combination least likely to be covered by a test.
+- **Silently wrong answers, not crashes.** Where the unset value is a valid-looking zero or empty string, the system computes and reports something plausible instead of failing.
+- **Understanding one call means reading every producer.** The signature answers nothing, so the type's real contract lives only in the set of methods that build it.
+- **Defensive checks spread outward.** Null guards accumulate in code that does not care about the field, and every field added multiplies them.
+- **Unrelated consumers get coupled.** They share one wide type, so a change made for one appears on all of them and can break any.
+
+The expensive part is how fixes behave. A null guard added where the exception surfaced does not restore the missing value — it substitutes a default, so the wrong answer moves somewhere else and looks fixed. That pattern repeats until the codebase carries a layer of guards whose collective effect nobody can describe, which is why the only durable repair is at the type rather than at the call site. Price the original saving honestly against it: one class not written, weighed against a contract no reader can recover for the remaining life of the code.
+
+## Getting out
+<!--meta block=mitigation-->
+
+Give each context its own type, holding exactly the fields that context guarantees. Two similar types with honest contracts beat one type with an unknowable contract, and the duplication you are avoiding is cheaper than the ambiguity you are buying — this is the case where [Don't Repeat Yourself (DRY)](../principles/dry.md) is misapplied, because the two shapes look alike today and answer different questions.
+
+Then make the invalid state unconstructable. Require the mandatory fields as constructor parameters and make the fields read-only, so an incompletely populated instance cannot exist at all — the same [validate-at-construction](../patterns/ddd/value-object.md) discipline a value object uses. Where a field is genuinely optional, say so with a type that separates "not loaded" from "loaded and empty", instead of letting one default mean both.
+
+For the query-shaped cases, stop returning the domain type. A read built for a screen is a [purpose-shaped carrier](../patterns/enterprise/dto.md), not an entity, and treating the read and write models as separate things removes the pressure that widened the type in the first place. Group related fields into small types and compose the shapes each context needs, rather than hoisting the optional ones into a base class.
+
+## How it relates
+<!--meta block=relationships-->
+
+<!-- relationships:start -->
+
+<!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
+
+**Mitigated by**
+
+- [Value Object](../patterns/ddd/value-object.md) — Validate at construction and the incompletely populated instance cannot exist
+- [Encapsulation](../principles/encapsulation.md) — A type that cannot be constructed invalid cannot be partially populated
+- [DTO](../patterns/enterprise/dto.md) — A purpose-shaped carrier per context beats one wide type with an unknown contract
+- [CQRS](../patterns/architecture/cqrs.md) — Separating the read model from the write model removes the pressure that widened the type
+- [Interface Segregation Principle](../principles/interface-segregation.md) — The coupling here runs through one wide shared type rather than a shared interface
+
+<!-- relationships:end -->

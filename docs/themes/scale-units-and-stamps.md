@@ -1,0 +1,111 @@
+---
+title: Scale Units & Stamps
+description: "Choosing the unit you deploy, size, isolate and throw away as one thing"
+area: themes-operating
+owner: Oleksandr Derechei
+tags: [scalability, isolation, availability]
+status: stable
+---
+
+# Scale Units & Stamps
+
+How to bundle infrastructure into a unit whose capacity you can measure and whose failure you can contain, so growth becomes arithmetic and recovery becomes replacement.
+
+## The question
+<!--meta block=description-->
+
+Scaling a system one resource at a time works until it does not. You add front-end instances and the database saturates. You add database capacity and the connection pool runs out. You size everything generously and hit an account limit nobody knew existed. Each fix moves the bottleneck somewhere else, and nobody can answer the question the business actually asked: how much more traffic can we take, and what does it cost to be ready for it?
+
+The answer is to stop scaling resources and start scaling a bundle. Group the components that have to grow together into one unit, load-test the unit as a whole, and learn what it serves. Now capacity is arithmetic — demand divided by that number — and growth is deploying another unit rather than reasoning about which resource moves next.
+
+Bundling buys a second thing that has nothing to do with capacity. If the unit is deployed independently, a failure inside it stays inside it, so a corrupted cluster or an exhausted quota affects the users on one unit rather than everyone. That is why the same construct turns up under two names: it is a **scale unit** when you are talking about capacity and a **stamp** when you are talking about the thing the pipeline provisions and destroys.
+
+Making it work forces every resource into one of three tiers. Global resources are shared by every unit and live as long as the system. Regional resources outlive individual units — logs and metrics have to be readable after the unit that emitted them is gone. And the unit's own resources must hold nothing anybody would miss, because the whole value of the arrangement is that you can delete one.
+
+Two mistakes account for most of the disappointment. Sizing each unit for its own peak means a failover moves the outage rather than absorbing it, so the capacity model has to carry spare units rather than spare headroom inside them. And leaving a stateful resource inside the unit quietly removes the ability to destroy it, which is the property everything else was built on — at which point you have paid for the multiplication and kept none of the benefit.
+
+## Explained
+<!--meta block=explain-->
+
+A scale unit, also called a stamp, is a bundle of everything that must grow together, deployed, tested and thrown away as one thing. Scaling one resource at a time fails because each fix moves the bottleneck: more web servers saturate the database, more database capacity exhausts the connection pool. Load-test the bundle once, learn what it serves, and capacity becomes arithmetic: demand divided by that number. Growth means deploying another unit. Because each unit is deployed apart, a corrupted cluster or used-up quota hurts only the users on that unit. Choose units over single-resource scaling when you need a capacity number you can defend and failures that stop at a boundary. Two costs follow. Size each unit for its own peak and a failover moves the outage instead of absorbing it, so budget spare units, not spare room inside units. And any durable data inside a unit stops you deleting it, so keep state in shared global resources, and write logs somewhere that outlives the unit. Bigger units are cheaper but put more users behind one failure.
+
+**Example.** A load test shows one stamp serves 2,000 requests a second. Peak demand is 9,000, so you need 5 stamps, each at 1,800. If one fails, the other 4 carry 2,250 each, over the limit, so the outage spreads. With a sixth stamp, losing one leaves 5 stamps at 1,800 each, within the limit. The cost is that the sixth stamp sits idle, 1 in 6 of everything you run, about 17% extra, to buy a failure that stays contained.
+
+## The tradespace
+<!--meta block=tradespace-->
+
+The dial is unit size, and both ends cost something. A large unit is cheaper per request, wastes less on fixed overhead and gives you fewer things to operate — and it puts more users behind a single failure, and takes longer to provision when you need another one. A small unit contains failure tightly and multiplies everything you have to deploy, observe and pay for. [Compute Resource Consolidation](../patterns/distributed/routing/compute-resource-consolidation.md) pushes back from that end by packing several idle tasks onto one unit, trading the isolation between them for a bill that matches the work.
+
+The second dial is how many units you keep spare. Isolation only pays out if the survivors can absorb the load of a unit that drops, and that headroom is idle capacity you are buying for an event that may not happen this year. Size the fleet for its own peak and the boundary is decorative: the failure moves rather than being contained. Two more choices set what a unit holds and where it runs. [Multi-Tenancy](../patterns/distributed/routing/multi-tenancy.md) decides whether customers share a unit or get their own, with big tenants on dedicated units and small ones packed together. A [Geode](../patterns/distributed/routing/geode.md) places a full-replica unit in each region, so any node answers any request and a lost region needs no failover step.
+
+Underneath both sits a discipline rather than a trade: the unit is only disposable while nothing durable lives in it. Every convenience that puts state back inside — a local cache someone came to depend on, a file written to instance disk, a queue with a long retention — converts the unit from replaceable to repairable, and repair is exactly the mode the design was adopted to avoid.
+
+**Bigger units cost less and fail wider; spare units cost money to sit idle and are the only thing that makes the boundary real.**
+
+## The tour
+<!--meta block=tour-->
+
+<!-- tour:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+### [Stateless Service](../patterns/distributed/routing/stateless-service.md) {#tour-stateless-service}
+
+A unit is only disposable if nothing inside it holds something you would miss. Pushing state out to a store that outlives the unit is what converts destruction from a data-loss event into a routine step of the pipeline.
+
+### [Deployment Stamp](../patterns/distributed/routing/deployment-stamp.md) {#tour-deployment-stamp}
+
+The unit itself: compute, ingress and buffering provisioned from one template and addressed as a whole, so growth is another stamp and recovery is deleting a bad one. Everything else in this tour is either a precondition for it or a consequence of it.
+
+### [Multi-Tenancy](../patterns/distributed/routing/multi-tenancy.md) {#tour-multi-tenancy}
+
+Tenants can share rows, share a database, or each get a whole stamp, and the choice trades cost against isolation. A catalog of where each tenant lives lets you move a tenant to a stronger model later. The price is a noisy tenant in the shared models and an operations bill in the isolated ones.
+
+### [Bulkhead](../patterns/distributed/resilience/bulkhead.md) {#tour-bulkhead}
+
+The isolation argument, at the largest scale it is usually drawn. Partitioning by thread pool contains a slow dependency; partitioning by unit contains a bad cluster, an exhausted quota or a degraded region — and the compartment holds only because the units share nothing that can fail for both.
+
+### [Autoscaling](../patterns/distributed/routing/autoscaling.md) {#tour-autoscaling}
+
+Units serve different regions and different hours, so each scales in when its own demand falls rather than holding peak capacity all night. Without it the arrangement multiplies the bill by the unit count and gets nothing back for it.
+
+### [Compute Resource Consolidation](../patterns/distributed/routing/compute-resource-consolidation.md) {#tour-compute-resource-consolidation}
+
+A unit at eight percent utilisation costs the same as one at eighty, so group tasks onto one unit to use the capacity you already pay for. A unit scales as a unit, so only tasks with matching scale profiles may share one, and the isolation you give up is the price.
+
+### [Sharding](../patterns/distributed/routing/sharding.md) {#tour-sharding}
+
+The unit boundary caps compute, and data has ceilings of its own — a partition size limit, a per-key throughput limit. Splitting by key is how the shared store keeps up with a growing fleet of units, and a badly chosen key concentrates their traffic on one partition regardless of how well the compute is spread.
+
+### [Replication](../patterns/distributed/coordination/replication.md) {#tour-replication}
+
+Every unit reads and writes the same durable state, which makes that store the one thing whose failure is not contained. Copies across regions are what stop the global tier being the single point of failure the unit boundary cannot protect you from.
+
+### [Geode](../patterns/distributed/routing/geode.md) {#tour-geode}
+
+Each geode holds a complete replica, and a global edge tier steers every request to the nearest healthy node, so there is no home region and no failover step. It needs multi-write replication underneath and stateless nodes on top, and a geode never stands alone as a stamp can.
+
+<!-- tour:end -->
+
+## When to reach for what
+<!--meta block=decide-->
+
+| If you need… | Move | Reach for |
+| --- | --- | --- |
+| Capacity planning that is arithmetic rather than argument | Size one bundle | [Deployment Stamp](../patterns/distributed/routing/deployment-stamp.md) |
+| To destroy and rebuild an environment without losing anything | State lives outside | [Stateless Service](../patterns/distributed/routing/stateless-service.md) |
+| Thirty mostly idle services billing for reserved capacity | Pack tasks onto one unit | [Compute Resource Consolidation](../patterns/distributed/routing/compute-resource-consolidation.md) |
+| Customers to share a deployment without seeing each other's data | Tenant-aware units | [Multi-Tenancy](../patterns/distributed/routing/multi-tenancy.md) |
+| Users far from the one home region, or a region loss that takes the service down | A full unit per region | [Geode](../patterns/distributed/routing/geode.md) |
+| A failure to stop at a boundary instead of reaching everyone | Compartmentalise | [Bulkhead](../patterns/distributed/resilience/bulkhead.md) |
+| Off-peak units to stop costing peak money | Scale in when idle | [Autoscaling](../patterns/distributed/routing/autoscaling.md) |
+| Data throughput to grow with the fleet | Partition by key | [Sharding](../patterns/distributed/routing/sharding.md) |
+| The shared store not to be the one failure nothing contains | Copies across regions | [Replication](../patterns/distributed/coordination/replication.md) |
+
+## Related areas
+<!--meta block=siblings-->
+
+- [Workload Composition](./workload-composition.md) — What goes inside a unit, and why the pieces scale on different signals once they are separated.
+- [Global Traffic & Ingress](./global-traffic-and-ingress.md) — A fleet of units is only useful if something in front sends each user to a healthy one.
+- [Scalability](./scalability.md) — The general case: growing capacity with load, of which the unit is one particular commitment.
+- [Resilience](./resilience.md) — Isolation at the level of a whole environment, rather than a pool or a call.

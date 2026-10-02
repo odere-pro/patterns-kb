@@ -1,0 +1,98 @@
+---
+title: CAP Theorem
+description: "When the network splits, you choose consistency or availability — never both"
+area: themes-data
+owner: Oleksandr Derechei
+tags: [consistency, availability]
+status: stable
+aliases: [CAP, Brewer's theorem]
+favourite: true
+---
+
+# CAP Theorem
+
+When the network splits, a distributed data store can keep answering or keep every copy in agreement — but not both. Consistency, availability, partition tolerance (CAP) is the lens for that choice, and for the patterns that implement each side of it.
+
+## The question
+<!--meta block=description-->
+
+Every distributed system spanning more than one machine eventually faces a moment the network drops messages between its nodes — a **partition**. In that moment a node holding your data has two honest choices: answer the request with what it knows (and risk being out of date), or refuse to answer until it can confirm agreement with its peers. The CAP theorem says you cannot escape this choice — you can only decide, in advance, which way you'll fall.
+
+CAP names three properties: **Consistency** (every read sees the most recent write), **Availability** (every request gets a non-error response), and **Partition tolerance** (the system keeps working despite dropped messages between nodes). Eric Brewer's theorem, proven by Gilbert and Lynch, states you can guarantee at most two of the three at once.
+
+## Explained
+<!--meta block=explain-->
+
+The CAP theorem says that when a network split cuts your database copies off from each other, each copy must either answer with what it knows, which may be out of date, or refuse to answer until it can confirm with the others. You cannot have both, so you decide in advance which way to fall. Splits happen on every real network, so the real choice is between the two. Choose the refusing side (consistent, called consistency and partition tolerance (CP)) when a wrong answer costs more than an error, as with a ledger or a unique username. Choose the answering side (available, called AP) when a stale answer is acceptable, as with a shopping cart or a feed. The costs have counter-moves. A refusing system returns errors during the split, so let the side holding a majority of copies keep serving and only the minority refuse. An answering system lets two sides accept conflicting writes, so define a merge rule or a compensating action in advance. When the network is healthy you get both properties, and even then keeping copies in step costs round trips, which is the trade the PACELC extension describes.
+
+**Example.** A bank keeps a balance of 100 in data centres A and B, and the link between them drops for 10 minutes. As CP, B sees it cannot reach a majority and refuses withdrawals, so B customers get errors for 10 minutes and the balance stays correct. As AP, both sides accept an 80 withdrawal. When the link returns, the balance is 100 - 80 - 80 = -60, so you must add a rule, such as an overdraft fee or reversing the second withdrawal. A shopping cart in the same split would just merge both item lists, which is why carts suit AP and ledgers suit CP.
+
+## The trade-space
+<!--meta block=tradespace-->
+
+The framing "pick two of three" is a little misleading. On any real network, partitions will happen — so **P is not optional**. The real decision is what to do during a partition: sacrifice consistency to stay available (**AP**), or sacrifice availability to stay consistent (**CP**).
+
+A **CP** store refuses writes it can't confirm across a quorum — safe, but it returns errors when partitioned. A **AP** store keeps accepting reads and writes on both sides of the split and reconciles later — always answers, but two clients can briefly see different truths. Neither is "better"; a bank ledger wants CP, a shopping cart or social feed usually wants AP. And when the network is healthy, a good system gives you both — CAP only bites during the partition.
+
+Read the labels narrowly. CAP's availability is the literal 100% kind — every request to a reachable node answers — so a store that refuses even a handful of writes during a rare partition is formally **CP**. Google Spanner is the canonical case: technically CP, yet available enough in practice that most teams plan around their own network before they plan around its outages. CP and AP tell you what happens during a partition, not what uptime you will measure over a year.
+
+Its practical cousin, **PACELC**, extends the idea: if Partitioned, choose A or C; Else, choose Latency or Consistency — because even with no partition, keeping copies in sync costs round-trips.
+
+```mermaid caption="CAP only forces a choice during a partition. The design decision is which branch you take."
+flowchart TD
+    P{"Network partition?"}
+    P -->|"No"| E["Serve fast from any replica, sync in the background"]
+    P -->|"Yes"| C{"Choose during the split"}
+    C -->|"Stay consistent (CP)"| CP["Reject writes without a quorum, return errors"]
+    C -->|"Stay available (AP)"| AP["Accept on both sides, reconcile later"]
+```
+
+## Patterns that implement the choice
+<!--meta block=tour-->
+
+<!-- tour:start -->
+
+<!-- GENERATED by gen-tours from docs/data/learning-paths.json. Do not edit this block. -->
+
+### [Write-Ahead Log](../patterns/distributed/coordination/write-ahead-log.md) {#tour-write-ahead-log}
+
+The durable, ordered record replicas ship and replay to converge. It is the mechanism underneath consistent replication.
+
+### [Replication](../patterns/distributed/coordination/replication.md) {#tour-replication}
+
+The copies whose agreement CAP is about. Synchronous replication leans CP; asynchronous replication leans AP and low latency but risks stale reads.
+
+### [Quorum & Consensus](../patterns/distributed/coordination/quorum-consensus.md) {#tour-quorum-consensus}
+
+The dial itself. Requiring a majority to agree before a write counts is how a CP store trades availability for a single, agreed truth. Tuning read/write quorum sizes moves you along the C/A spectrum.
+
+### [Leader Election](../patterns/distributed/coordination/leader-election.md) {#tour-leader-election}
+
+Funnelling writes through one elected leader gives a clean, consistent order — a CP move that becomes unavailable if the leader is partitioned away until a new one is chosen.
+
+### [Saga](../patterns/distributed/coordination/saga.md) {#tour-saga}
+
+An AP answer for multi-service transactions: proceed optimistically, then reconcile with compensating steps — eventual consistency instead of a [distributed lock](../patterns/distributed/coordination/distributed-lock.md).
+
+### [Gossip Protocol](../patterns/distributed/coordination/gossip-protocol.md) {#tour-gossip-protocol}
+
+Peer-to-peer state spreading that always accepts updates and converges over time — an AP building block for membership and eventually-consistent state.
+
+<!-- tour:end -->
+
+## When to reach for what
+<!--meta block=decide-->
+
+| If you need… | Lean | Reach for |
+| --- | --- | --- |
+| A correct ledger, balances, unique constraints | CP | [Quorum](../patterns/distributed/coordination/quorum-consensus.md), [Leader Election](../patterns/distributed/coordination/leader-election.md) |
+| Always-on reads/writes, tolerate brief staleness | AP | [Gossip](../patterns/distributed/coordination/gossip-protocol.md), async [Replication](../patterns/distributed/coordination/replication.md) |
+| Cross-service "transaction" without a global lock | AP | [Saga](../patterns/distributed/coordination/saga.md) + [Outbox](../patterns/distributed/coordination/outbox.md) |
+| Low latency when healthy, safety when split | PACELC | Tunable [quorums](../patterns/distributed/coordination/quorum-consensus.md) per operation |
+
+## Related areas
+<!--meta block=siblings-->
+
+- [Consistency & Replication](./consistency-and-replication.md) — The mechanics — replicas, quorums, and logs — behind the CAP choice.
+- [Scalability](./scalability.md) — Sharding and replication multiply the nodes CAP reasons about.
+- [Resilience](./resilience.md) — Staying available under partition is a resilience goal too.

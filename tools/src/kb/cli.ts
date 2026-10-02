@@ -1,0 +1,524 @@
+/**
+ * kb.mjs — the reader and writer over docs/, launched by scripts/kb.mjs
+ * (tools/src/kb/spec.ts is its command surface): the argument rules and
+ * output shapes the HTML-era reader set, read from the markdown and the data
+ * files. tools/src/kb/relevance.test.ts holds `find` to its fixture.
+ *
+ * The writers are tools/src/kb/write.ts: frontmatter, blocks, suffixes and
+ * the data files, each write worked out whole before a byte is written;
+ * tools/src/kb/write.test.ts and write-tree.test.ts hold them in sandbox trees.
+ * A page or data file a generator owns (a stamp, or a note that says
+ * GENERATED) is refused.
+ *
+ * `run` is the whole program and writes only through `io`, so a test drives
+ * it in-process; `main` is the process wrapper.
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+import { relationGroups } from '../lib/render-relations.js';
+import { readTagLabels } from '../lib/search-tree.js';
+
+import { parseArgs, type Args } from './args.js';
+import { Corpus, KbError, rootFrom, type Page } from './corpus.js';
+import { today } from './data.js';
+import {
+  clickTargets,
+  explainItems,
+  mdPlain,
+  parsePage,
+  productionItems,
+  proseLinks,
+  wildItems,
+  type PageDoc,
+} from './page.js';
+import { indexBody, loadSynonyms, proseLines, rank, type Body, type CatalogNode, type Scored } from './rank.js';
+import { blockText } from './render.js';
+import { quickFacts } from './scan.js';
+import { RETIRED, USAGE_HEADER, usageText } from './spec.js';
+import { validatePages } from './validate.js';
+import { WRITE } from './write.js';
+
+export interface Io {
+  out(line: string): void;
+  err(line: string): void;
+}
+
+/** A relation side as scripts/kb.mjs printed it. */
+export interface Relation {
+  readonly type: string;
+  readonly to: string;
+  readonly label: string;
+  readonly note: string;
+}
+
+const json = (v: unknown): string => JSON.stringify(v, null, 2);
+
+/**
+ * What one invocation reads: the corpus and the parsed flags.
+ * Exported so the relevance fixture scores through exactly the path `find`
+ * takes.
+ */
+export class Session {
+  readonly corpus: Corpus;
+  readonly args: Args;
+
+  constructor(corpus: Corpus, args: Args) {
+    this.corpus = corpus;
+    this.args = args;
+  }
+
+  doc(slug: string): PageDoc {
+    return this.corpus.cached(`doc:${slug}`, () => parsePage(this.corpus.text(slug)));
+  }
+
+  /** A link url on `from`'s page → the page it names. */
+  target(from: Page, url: string): Page | undefined {
+    const bare = (url.split('#')[0] as string).split('?')[0] as string;
+    if (/^[a-z]+:|^\/\//i.test(bare)) return undefined;
+    if (bare.startsWith('/')) return this.corpus.byRoute(bare);
+    if (!bare.endsWith('.md')) return undefined;
+    const source = path.posix.normalize(path.posix.join(path.posix.dirname(from.source), bare));
+    return this.corpus.pages.find((p) => p.source === source);
+  }
+
+  /** Every block of a page, as text. */
+  blocks(page: Page): Record<string, string> {
+    const doc = this.doc(page.slug);
+    const out: Record<string, string> = {};
+    for (const b of doc.blocks) {
+      const text = blockText(doc, b, {
+        diagrams: this.args.flag('diagrams'),
+        slugOf: (url) => this.target(page, url)?.slug ?? null,
+      });
+      out[b.name] = text;
+    }
+    return out;
+  }
+
+  /** A page's relation sides in the order its relationships block renders them. */
+  relations(slug: string): Relation[] {
+    const { verbs, relOrder } = this.corpus.model;
+    return this.corpus.cached(`relations:${slug}`, () =>
+      relationGroups(slug, this.corpus.relations, verbs, relOrder).flatMap((g) =>
+        // relationGroups has already refused a verb the content model does not label.
+        g.sides.map((s) => ({ type: s.verb, to: s.to, label: (verbs[s.verb] as { label: string }).label, note: mdPlain(s.note) })),
+      ),
+    );
+  }
+
+  catalogNode(page: Page): CatalogNode {
+    const m = this.corpus.meta(page.slug);
+    const facts = quickFacts(this.corpus.text(page.slug));
+    return {
+      id: page.slug,
+      name: m.title,
+      kind: page.kind,
+      band: page.band,
+      essence: m.essence,
+      path: page.path,
+      ...(m.favourite ? { favourite: true as const } : {}),
+      ...(m.aliases.length > 0 ? { aliases: m.aliases } : {}),
+      ...(m.tags.length > 0 ? { tags: m.tags } : {}),
+      ...(m.solves.length > 0 ? { solves: m.solves } : {}),
+      ...(facts.hasExample ? { hasExample: true as const } : {}),
+      ...(facts.hasExplain ? { hasExplain: true as const } : {}),
+    };
+  }
+
+  /** The listing, filtered by --tag, --band, --kind. */
+  candidates(): CatalogNode[] {
+    const tag = this.args.opt('tag');
+    const band = this.args.opt('band');
+    const kind = this.args.opt('kind');
+    return this.corpus.listing
+      .map((p) => this.catalogNode(p))
+      .filter((n) => (tag === null || (n.tags ?? []).includes(tag)) && (band === null || n.band === band) && (kind === null || n.kind === kind));
+  }
+
+  body(n: CatalogNode): Body {
+    return this.corpus.cached(`body:${n.id}`, () =>
+      indexBody(this.corpus.derived(n.id, 'lines', () => proseLines(this.doc(n.id)))),
+    );
+  }
+
+  async search(q: string, nodes: readonly CatalogNode[], limit: number): Promise<Scored[]> {
+    const syn = await this.corpus.cached('synonyms', () => loadSynonyms(this.corpus.root));
+    const tagLabels = this.corpus.cached('tagLabels', () => readTagLabels(this.corpus.root));
+    return rank({ nodes, q, syn, bodyOf: (n) => this.body(n), categoriesOf: (n) => this.corpus.need(n.id).categories, tagLabels, limit });
+  }
+
+  /**
+   * A page's prose mentions, as build.mjs worked them out: pages it links in
+   * prose, first mention only, less itself and every page a typed relation,
+   * a theme it belongs to or its own tour already names.
+   */
+  mentions(page: Page): string[] {
+    return this.corpus.cached(`mentions:${page.slug}`, () => this.#mentions(page));
+  }
+
+  #mentions(page: Page): string[] {
+    const declared = new Set<string>([
+      ...this.relations(page.slug).map((r) => r.to),
+      ...this.corpus.themesOf(page.slug).map((t) => t.id),
+      ...this.corpus.membersOf(page.slug).map((m) => m.id),
+    ]);
+    const out: string[] = [];
+    for (const url of this.corpus.derived(page.slug, 'links', () => proseLinks(this.doc(page.slug)))) {
+      if (!url.split('#')[0]?.endsWith('.md')) continue;
+      const t = this.target(page, url)?.slug;
+      if (t === undefined || t === page.slug || declared.has(t) || out.includes(t)) continue;
+      out.push(t);
+    }
+    return out;
+  }
+}
+
+function printRelations(io: Io, rels: readonly Relation[]): void {
+  const byType = new Map<string, Relation[]>();
+  for (const r of rels) byType.set(r.label, [...(byType.get(r.label) ?? []), r]);
+  for (const [label, list] of byType) {
+    io.out(`${label}:`);
+    for (const r of list) io.out(`  ${r.to}${r.note === '' ? '' : ` — ${r.note}`}`);
+  }
+}
+
+function printMatches(io: Io, scored: readonly Scored[]): void {
+  for (const { n, why } of scored) {
+    io.out(`${n.id}  (${n.kind}/${n.band})  — ${n.essence}`);
+    if (why !== null) io.out(`    ↳ ${why.length > 150 ? `${why.slice(0, 150)}…` : why}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+function cmdGet(s: Session, io: Io): number {
+  const page = s.corpus.need(s.args.positional[1]);
+  const meta = s.corpus.meta(page.slug);
+  const blocks = s.blocks(page);
+  const only = s.args.opt('block');
+  // Own keys only: `--block constructor` names no block, whatever Object.prototype holds.
+  if (only !== null && !Object.hasOwn(blocks, only)) {
+    io.err(`no block "${only}" on ${page.slug}. has: ${Object.keys(blocks).join(', ')}`);
+    return 1;
+  }
+  const picked = only !== null ? { [only]: blocks[only] as string } : blocks;
+  const doc = s.doc(page.slug);
+  const items = {
+    ...('wild' in picked ? { wild: wildItems(doc) } : {}),
+    ...('production' in picked ? { production: productionItems(doc) } : {}),
+    ...('explain' in picked ? { explain: explainItems(doc) } : {}),
+  };
+  if (s.args.flag('json')) {
+    io.out(
+      json({
+        id: page.slug,
+        name: meta.title,
+        kind: page.kind,
+        band: page.band,
+        group: page.group,
+        essence: meta.essence,
+        path: page.path,
+        source: page.source,
+        blocks: picked,
+        ...(Object.keys(items).length > 0 ? { items } : {}),
+        relations: s.relations(page.slug),
+        themes: s.corpus.themesOf(page.slug),
+      }),
+    );
+    return 0;
+  }
+  if (only === null) {
+    io.out(`# ${meta.title}  [${page.slug}]`);
+    io.out(`${page.kind} · ${page.band}${page.group !== page.band ? ` · ${page.group}` : ''}`);
+    io.out(`essence: ${meta.essence}`);
+    io.out(`path: ${page.path}`);
+    io.out(`source: ${page.source}`);
+  }
+  for (const [name, text] of Object.entries(picked)) {
+    io.out(`\n## ${name}\n`);
+    io.out(text);
+  }
+  return 0;
+}
+
+function cmdRelated(s: Session, io: Io): number {
+  const page = s.corpus.need(s.args.positional[1]);
+  const rels = s.relations(page.slug);
+  if (s.args.flag('json')) {
+    io.out(json(rels));
+    return 0;
+  }
+  io.out(`# ${s.corpus.meta(page.slug).title} — ${rels.length} relations\n`);
+  printRelations(io, rels);
+  const themes = s.corpus.themesOf(page.slug);
+  if (themes.length > 0) {
+    io.out('\nIn themes:');
+    for (const t of themes) io.out(`  ${t.id} — ${t.role}`);
+  }
+  return 0;
+}
+
+async function cmdFind(s: Session, io: Io): Promise<number> {
+  const q = s.args.positional.slice(1).join(' ').toLowerCase();
+  const candidates = s.candidates();
+  if (q === '') {
+    if (s.args.opt('tag') === null && s.args.opt('band') === null && s.args.opt('kind') === null) {
+      io.err('usage: kb.mjs find <query…> [--tag T] [--band B] [--kind K]');
+      return 1;
+    }
+    listing(io, s, candidates);
+    return 0;
+  }
+  const scored = await s.search(q, candidates, Number(s.args.opt('n') ?? 8));
+  if (s.args.flag('json')) io.out(json(scored.map((x) => ({ ...x.n, why: x.why }))));
+  else if (scored.length === 0) io.out(`no match for "${q}"`);
+  else {
+    printMatches(io, scored);
+    io.out(`\n${scored.length} match(es). Next: kb.mjs get <id> [--block usage]`);
+  }
+  return 0;
+}
+
+async function cmdBrief(s: Session, io: Io): Promise<number> {
+  const q = s.args.positional.slice(1).join(' ').toLowerCase();
+  if (q === '') {
+    io.err('usage: kb.mjs brief <query…> [--theme <id>] [--tag T] [--band B] [--kind K] [--n 5]');
+    return 1;
+  }
+  const scored = await s.search(q, s.candidates(), Number(s.args.opt('n') ?? 5));
+  if (scored.length === 0) {
+    io.out(`no match for "${q}"`);
+    return 0;
+  }
+  let themeId = s.args.opt('theme');
+  if (themeId !== null && s.corpus.page(themeId)?.kind !== 'theme') {
+    io.err(`not a theme id: ${themeId}`);
+    return 1;
+  }
+  if (themeId === null) {
+    themeId = scored.find((x) => x.n.kind === 'theme')?.n.id ?? null;
+    if (themeId === null) {
+      const counts = new Map<string, number>();
+      for (const { n } of scored) for (const t of s.corpus.themesOf(n.id)) counts.set(t.id, (counts.get(t.id) ?? 0) + 1);
+      themeId = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    }
+  }
+  const decide = themeId === null ? null : (s.blocks(s.corpus.need(themeId))['decide'] ?? null);
+  const related: Record<string, Relation[]> = {};
+  for (const { n } of scored.slice(0, 3)) if (n.kind !== 'theme') related[n.id] = s.relations(n.id);
+
+  if (s.args.flag('json')) {
+    io.out(json({ query: q, matches: scored.map((x) => ({ ...x.n, why: x.why })), theme: themeId === null ? null : { id: themeId, decide }, related }));
+    return 0;
+  }
+  io.out(`# brief: ${q}\n\n## matches\n`);
+  printMatches(io, scored);
+  if (themeId !== null) {
+    io.out(`\n## theme: ${themeId} — decide\n`);
+    io.out(decide ?? '(no decide block on this theme)');
+  }
+  for (const [id, rels] of Object.entries(related)) {
+    io.out(`\n## related: ${id}\n`);
+    printRelations(io, rels);
+  }
+  io.out('\nNext: kb.mjs get <id> --block usage|tradeoffs');
+  return 0;
+}
+
+function listing(io: Io, s: Session, rows: readonly CatalogNode[]): void {
+  if (s.args.flag('json')) {
+    io.out(json(rows));
+    return;
+  }
+  for (const n of rows) io.out(`${n.id.padEnd(28)} ${n.essence}`);
+  io.out(`\n${rows.length} entries.`);
+}
+
+function cmdLs(s: Session, io: Io): number {
+  const band = s.args.opt('band');
+  const kind = s.args.opt('kind');
+  listing(
+    io,
+    s,
+    s.corpus.listing.filter((p) => (band === null || p.band === band) && (kind === null || p.kind === kind)).map((p) => s.catalogNode(p)),
+  );
+  return 0;
+}
+
+/**
+ * `--file`: a markdown page under docs/. A page the structure file lists in
+ * an area of no kind (the reference pages) is named as such: kb.mjs reads the
+ * seven kinds only.
+ */
+function pageOfFile(s: Session, file: string): Page {
+  const abs = path.resolve(file);
+  const rel = path.relative(s.corpus.root, abs).split(path.sep).join('/');
+  if (!fs.existsSync(abs)) throw new KbError(`no such file: ${file}`);
+  if (!rel.startsWith('docs/')) throw new KbError(`not under docs/: ${file}`);
+  const page = s.corpus.pages.find((p) => p.source === rel);
+  if (page !== undefined) return page;
+  const other = s.corpus.otherRows.find((r) => r.source === rel);
+  if (other !== undefined) throw new KbError(`${rel}: the structure file lists it in area "${other.area}", which holds no knowledge-base kind — kb.mjs reads the seven kinds only`);
+  throw new KbError(`${rel}: no row in docs/data/site-structure.json lists this page`);
+}
+
+function cmdValidate(s: Session, io: Io): number {
+  const file = s.args.opt('file');
+  const id = s.args.positional[1];
+  const targets = file !== null ? [pageOfFile(s, file)] : id !== undefined ? [s.corpus.need(id)] : [...s.corpus.pages];
+  const problems = validatePages(s.corpus, targets, (p) => s.doc(p.slug));
+  if (s.args.flag('json')) io.out(json({ pages: targets.length, problems }));
+  else if (problems.length > 0) {
+    io.err(`${problems.length} problem(s) across ${targets.length} page(s):`);
+    for (const p of problems) io.err(`  ${p}`);
+  } else io.out(`OK — ${targets.length} page(s) structurally valid.`);
+  return problems.length > 0 ? 1 : 0;
+}
+
+function cmdBacklinks(s: Session, io: Io): number {
+  const page = s.corpus.need(s.args.positional[1]);
+  const inbound: { from: string; type: string; label: string; note: string }[] = [];
+  const mentionedBy: string[] = [];
+  for (const other of s.corpus.listing) {
+    if (other.slug === page.slug) continue;
+    for (const r of s.relations(other.slug)) if (r.to === page.slug) inbound.push({ from: other.slug, type: r.type, label: r.label, note: r.note });
+    if (s.mentions(other).includes(page.slug)) mentionedBy.push(other.slug);
+  }
+  const out = { id: page.slug, inbound, mentionedBy, mentions: s.mentions(page) };
+  if (s.args.flag('json')) {
+    io.out(json(out));
+    return 0;
+  }
+  io.out(`# ${s.corpus.meta(page.slug).title} — ${inbound.length} inbound relation(s)\n`);
+  for (const r of inbound) io.out(`  ${r.from}  [${r.type}]${r.note === '' ? '' : ` — ${r.note}`}`);
+  if (mentionedBy.length > 0) io.out(`\nMentioned in prose by: ${mentionedBy.join(', ')}`);
+  if (out.mentions.length > 0) io.out(`Mentions in its own prose: ${out.mentions.join(', ')}`);
+  return 0;
+}
+
+function cmdRefs(s: Session, io: Io): number {
+  const file = s.args.opt('file');
+  const page = file !== null ? pageOfFile(s, file) : s.corpus.need(s.args.positional[1]);
+  const doc = s.doc(page.slug);
+  const relations = s.relations(page.slug).map((r) => ({ rel: r.type, to: r.to }));
+  const members = s.corpus.membersOf(page.slug).map((m) => ({ to: m.id, role: m.role }));
+  const fluency = fluencyOf(s, page);
+  const uniq = (urls: readonly string[]): string[] => {
+    const out: string[] = [];
+    for (const u of urls) {
+      const t = s.target(page, u)?.slug;
+      if (t !== undefined && t !== page.slug && !out.includes(t)) out.push(t);
+    }
+    return out;
+  };
+  const prose = uniq(proseLinks(doc));
+  const clicks = uniq(clickTargets(doc));
+  const typed = new Set([...relations.map((r) => r.to), ...members.map((m) => m.to), ...fluency]);
+  const untyped = [...new Set([...prose, ...clicks])].filter((t) => !typed.has(t));
+  if (s.args.flag('json')) {
+    io.out(json({ id: page.slug, path: page.path, source: page.source, relations, members, fluency, proseLinks: prose, clicks, untyped }));
+    return 0;
+  }
+  io.out(`# ${s.corpus.meta(page.slug).title}  [${page.slug}]\n`);
+  const byVerb = new Map<string, string[]>();
+  for (const r of relations) byVerb.set(r.rel, [...(byVerb.get(r.rel) ?? []), r.to]);
+  io.out(`relations (${relations.length})`);
+  for (const [verb, list] of byVerb) io.out(`  ${verb}: ${list.join(', ')}`);
+  if (members.length > 0) io.out(`\ntheme members (${members.length})\n  ${members.map((m) => `${m.to}${m.role === '' ? '' : ` [${m.role}]`}`).join(', ')}`);
+  if (fluency.length > 0) io.out(`\nfluency tie-ins (${fluency.length})\n  ${fluency.join(', ')}`);
+  const section = (label: string, list: readonly string[]): void => io.out(`\n${label} (${list.length})${list.length > 0 ? `\n  ${list.join(', ')}` : ''}`);
+  section('prose links', prose);
+  section('mermaid clicks', clicks);
+  section('untyped — linked in prose, no typed relation', untyped);
+  return 0;
+}
+
+/** The themes a page's fluency block names, in its order (tools/src/lib/render-tours.ts). */
+function fluencyOf(s: Session, page: Page): string[] {
+  const touring = s.corpus.paths.profiles.filter((p) => p.stages.includes(page.route)).map((p) => p.id);
+  const named = Object.keys(s.corpus.paths.notes[page.route] ?? {}).filter((t) => touring.includes(t));
+  return [...named, ...touring.filter((t) => !named.includes(t))];
+}
+
+const READ: Readonly<Record<string, (s: Session, io: Io) => number | Promise<number>>> = {
+  get: cmdGet,
+  related: cmdRelated,
+  find: cmdFind,
+  brief: cmdBrief,
+  ls: cmdLs,
+  validate: cmdValidate,
+  backlinks: cmdBacklinks,
+  refs: cmdRefs,
+};
+
+/** What a run may be told beyond its arguments. */
+export interface RunOptions {
+  /** The day a writer dates a data file with (`updated`); today by default. */
+  readonly today?: string;
+}
+
+/** The whole program: exit 0, 1 on a failed lookup or a finding, as scripts/kb.mjs does. */
+export async function run(argv: readonly string[], io: Io, root: string | Corpus, opts: RunOptions = {}): Promise<number> {
+  const args = parseArgs(argv);
+  if (args.opt('level') !== null) {
+    io.err('--level is gone: reading levels were retired, a page reads at one depth');
+    return 1;
+  }
+  const cmd = args.positional[0];
+  const retired = cmd === undefined ? undefined : RETIRED[cmd];
+  if (retired !== undefined) {
+    io.err(retired);
+    return 1;
+  }
+  const reader = cmd === undefined ? undefined : READ[cmd];
+  const writer = cmd === undefined ? undefined : WRITE[cmd];
+  if (reader === undefined && writer === undefined) {
+    io.out(usageText(USAGE_HEADER));
+    return cmd === undefined ? 0 : 1;
+  }
+  const session = new Session(typeof root === 'string' ? new Corpus(root) : root, args);
+  try {
+    if (writer !== undefined) return writer(session, io, { today: opts.today ?? today() });
+    const code = await (reader as NonNullable<typeof reader>)(session, io);
+    session.corpus.saveDerived();
+    return code;
+  } catch (e) {
+    if (!(e instanceof KbError)) throw e;
+    io.err(e.message);
+    return 1;
+  }
+}
+
+/**
+ * Stop writing quietly when the reader goes away (`kb.mjs ls | head`), as
+ * console.log does for scripts/kb.mjs; any other stream error still throws.
+ */
+export function quietOnClose(stream: NodeJS.WritableStream): void {
+  stream.on('error', (e: NodeJS.ErrnoException) => {
+    if (e.code !== 'EPIPE') throw e;
+  });
+}
+
+/** Run as a program when this file is the entry point. */
+export function main(moduleUrl: string, argv: readonly string[] = process.argv): void {
+  const entry = argv[1];
+  if (entry === undefined || pathToFileURL(path.resolve(entry)).href !== moduleUrl) return;
+  quietOnClose(process.stdout);
+  const io: Io = { out: (l) => process.stdout.write(`${l}\n`), err: (l) => process.stderr.write(`${l}\n`) };
+  run(argv.slice(2), io, rootFrom(process.env)).then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (err: unknown) => {
+      process.stderr.write(`kb.mjs: ${String(err)}\n`);
+      process.exitCode = 2;
+    },
+  );
+}
+
+main(import.meta.url);
