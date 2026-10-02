@@ -98,9 +98,7 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — a minimal hand-rolled mock"
-interface EmailSender {
-  send(to: string, subject: string): void;
-}
+interface EmailSender { send(to: string, subject: string): void }
 
 class MockEmailSender implements EmailSender {
   private expected: { to: string; subject: string } | null = null;
@@ -118,9 +116,7 @@ class MockEmailSender implements EmailSender {
   }
 
   verify(): void {
-    if (this.expected && !this.called) {
-      throw new Error("expected send() was never called");
-    }
+    if (this.expected && !this.called) throw new Error("expected send() was never called");
   }
 }
 

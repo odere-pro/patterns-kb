@@ -88,53 +88,34 @@ flowchart LR
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — an expense-approval chain, each approver forwarding what it can't sign off"
-interface ExpenseRequest {
-  readonly employee: string;
-  readonly amountUsd: number;
-  readonly reason: string;
-}
+interface ExpenseRequest { readonly employee: string; readonly amountUsd: number }
 
-type Decision =
-  | { readonly outcome: "approved"; readonly by: string }
-  | { readonly outcome: "denied"; readonly reason: string };
+type Decision = { outcome: "approved"; by: string } | { outcome: "denied"; reason: string };
 
 abstract class Approver {
   private next?: Approver;
-
-  linkTo(next: Approver): Approver {
-    this.next = next;          // return next so links read left-to-right
-    return next;
-  }
+  linkTo(next: Approver): Approver { this.next = next; return next; } // links read left-to-right
 
   review(req: ExpenseRequest): Decision {
     if (this.canApprove(req)) return { outcome: "approved", by: this.role };
     if (this.next) return this.next.review(req);   // over my limit — pass it up
     return { outcome: "denied", reason: "exceeds every approval limit" };
   }
-
   protected abstract readonly role: string;
   protected abstract canApprove(req: ExpenseRequest): boolean;
 }
-
 class TeamLead extends Approver {
-  protected readonly role = "team lead";
-  protected canApprove(req: ExpenseRequest): boolean {
-    return req.amountUsd <= 1_000;
-  }
+  protected readonly role = "team lead"; protected canApprove(r: ExpenseRequest) { return r.amountUsd <= 1_000; }
 }
-
 class Director extends Approver {
-  protected readonly role = "director";
-  protected canApprove(req: ExpenseRequest): boolean {
-    return req.amountUsd <= 10_000;
-  }
+  protected readonly role = "director"; protected canApprove(r: ExpenseRequest) { return r.amountUsd <= 10_000; }
 }
 
 // build the chain, then let a request walk it
 const chain = new TeamLead();
 chain.linkTo(new Director());
 
-chain.review({ employee: "Mara", amountUsd: 4_200, reason: "conference" });
+chain.review({ employee: "Mara", amountUsd: 4_200 });
 // → { outcome: "approved", by: "director" }
 ```
 

@@ -39,7 +39,7 @@ flowchart TB
 - **Prototype becomes product.** Code written to try an idea ships under a deadline, and the cleanup that was promised never gets scheduled.
 - **Turnover without handover.** The person who knew why a branch exists leaves, and what remains is code that works and cannot be explained.
 - **No tests to prove it is safe.** Without tests, nobody can show that deleting a module changes nothing, so the safe choice is to keep it.
-- **Commented-out and flagged-off code.** Developers keep old versions "just in case", and a feature flag stays in the code long after its rollout ended.
+- **Commented-out and flagged-off code.** Developers keep old versions "just in case", and a feature flag stays in the code long after its rollout ended. Kept with no use, such code is a [boat anchor](./boat-anchor.md).
 - **Pressure to add, not remove.** Features are tracked and rewarded, while deletion is invisible work with only downside if something breaks.
 
 ## What it costs

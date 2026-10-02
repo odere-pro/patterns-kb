@@ -153,6 +153,28 @@ pickup(code):
     token.compartment.markFree(); tokens.remove(code)          # clear the deposit
 ```
 
+```mermaid caption="Which answer does a pickup get? A missing code is invalid whether never issued or already redeemed, a mapped but expired token says so, and only a live token opens the door."
+sequenceDiagram
+    participant C as Customer
+    participant L as Locker
+    participant T as AccessToken
+    participant D as Compartment
+    C->>L: pickup(code)
+    L->>L: look up code in token map
+    alt code not in map
+        L--xC: Invalid access token code
+    else token found
+        L->>T: isExpired()
+        alt expired
+            L--xC: Access token has expired
+        else live
+            L->>D: open(), markFree()
+            L->>L: remove code from map
+            L-->>C: door open
+        end
+    end
+```
+
 ### 3 · Lazy expiry, and the deposit you have to trust
 
 Expiry is lazy on purpose. Nothing sweeps the map at the seven-day mark; a token lingers so a late pickup gets "expired" instead of "invalid", and because the package is still physically present. The staff tool `openExpiredCompartments()` opens every expired door but pointedly does not free the compartment or drop the token — the real cleanup waits until a human has physically pulled the parcel and run a separate, out-of-scope step. Deposit has a matching act of faith: it opens the door, marks it occupied, and issues the code all on the assumption the driver actually put the package in. A driver who opens the door and walks away leaves a valid code for an empty compartment. In production that becomes a two-phase commit — `reserve` the door and return a reservation id, then `confirmDeposit` only once a sensor or a manual tap registers the parcel, with a short reservation timeout to reclaim an abandoned door. That buys a `RESERVED` state and a second map, correctly deferred here because the single-phase flow is cleaner and good enough for the interview scope.

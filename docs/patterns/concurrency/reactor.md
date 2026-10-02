@@ -74,7 +74,7 @@ flowchart LR
 ### Cons
 <!--meta polarity=con-->
 
-- **A single blocking or CPU-heavy handler** stalls every other event on that loop.
+- **A single [blocking](../../hazards/synchronous-io.md) or CPU-heavy handler** stalls every other event on that loop.
 - **One loop uses one core** — real parallelism needs multiple reactor instances.
 - **Callback-driven control flow** is harder to step through than straight-line, blocking code.
 - **Every handler must be written non-blocking**, which pushes async style through the whole call chain.

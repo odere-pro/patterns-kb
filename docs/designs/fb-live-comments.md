@@ -141,6 +141,17 @@ On technology: Redis pub/sub suits this better than Kafka, which struggles with 
 
 **Mega-streams.** A World-Cup-final stream — hundreds of millions of viewers, thousands of comments a second — breaks even the co-located design. At 5,000 comments/sec each on-screen comment lasts a few milliseconds; nobody is reading individual comments, they are feeling a crowd. That reframes the goal, and two moves follow. Sampling pushes a representative fraction — the rate adapting to velocity, biased toward followed or verified authors — giving each viewer a steady, readable trickle. The most scalable move drops push entirely: keep a ring buffer of the last ~200 comments, snapshot it to a [CDN](../patterns/distributed/routing/cdn.md) every second, and let clients poll the edge — a comment snapshot is just cacheable content, like a thumbnail. A stream auto-flips from SSE to CDN (content delivery network) once it crosses a threshold (say 100k viewers or 500 comments/sec), trading ~1–2s of latency, which the "vibe" reframing makes acceptable, for effectively unbounded reach. Hysteresis around the threshold keeps a stream hovering near the line from flapping between modes.
 
+Past a threshold, the stream stops pushing and hands delivery to the edge.
+
+```mermaid caption="When does a mega-stream flip from push to CDN snapshots, and how are comments then delivered?"
+flowchart TB
+    In["New comment"] -->|"append"| Ring["Ring buffer of last ~200 comments"]
+    Ring -->|"above 100k viewers or 500 comments/sec?"| Mode{"which mode?"}
+    Mode -->|"no: push over SSE"| SSE["Viewers on SSE servers"]
+    Mode -->|"yes: snapshot every second"| CDN["CDN"]
+    CDN -->|"clients poll the edge"| V["Viewers"]
+```
+
 ### 3 · Surviving disconnects without losing the thread
 
 Mobile networks drop — tunnels, backgrounding, wifi-to-cellular hand-offs. A viewer must be able to reconnect and recover what they missed without the feed silently skipping ahead.

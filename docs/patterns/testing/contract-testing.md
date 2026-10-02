@@ -104,26 +104,23 @@ flowchart LR
 const interaction = {
   description: "a customer that exists",
   request: { method: "GET", path: "/customers/42" },
-  response: {
-    status: 200,
+  response: { status: 200,
     // Matchers, not values: the contract asserts SHAPE. Pinning "Ada" here would
     // fail the provider for having different test data, which proves nothing.
     body: { id: like(42), email: like("a@example.com"), tier: term(/gold|silver/) },
   },
 };
-
 test("shows the customer's tier", async () => {
-  await provider.addInteraction(interaction);       // stands up the stub
-  const view = await customerClient.load(42);       // the real consumer code
+  await provider.addInteraction(interaction);   // stands up the stub
+  const view = await customerClient.load(42);   // the real consumer code
   expect(view.tier).toBe("gold");
 });
 // On success the recorded interactions are published to the broker.
-
 // ---- provider side: runs in the PROVIDER's pipeline, against the real thing ----
 verifyProvider({
   providerBaseUrl: "http://localhost:8080",
   brokerUrl: process.env.BROKER_URL,
-  // Only verify against what the consumer currently has deployed, or a rename is
+  // Only verify against what the consumer has deployed, or a rename is
   // blocked by an expectation nobody depends on any more.
   consumerVersionSelectors: [{ deployedOrReleased: true }],
   stateHandlers: {

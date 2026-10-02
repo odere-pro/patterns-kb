@@ -128,6 +128,66 @@ Pricing is a business policy, not a property of a receipt.
 
 Two entrances can both see one spot as free and both claim it — a race in the window between checking availability and recording the claim. The pragmatic interview answer is a coarse lock around the whole of `enter()`: a 200-spot lot turning over every couple of hours needs ~0.03 vehicles/sec, while a synchronised `enter()` — an uncontended monitor around a 200-entry scan and two in-memory writes — runs in microseconds and so sustains hundreds of thousands of calls a second, millions of times the demand. The lock is nowhere near the bottleneck, and correctness wins over cleverness. When contention is real, a [read-write lock](../patterns/concurrency/rw-lock.md) lets many entrances search concurrently and takes the exclusive lock only to claim, re-checking after acquiring it and retrying if another thread got there first. Notably, the ticket stores its spot as an `id` string rather than a spot reference — keeping the record from reaching into the domain model, in the spirit of the [Law of Demeter](../principles/law-of-demeter.md).
 
+Without the lock the interleaving is plain. Gate A scans and finds spot `C-12` free, gate B scans and finds `C-12` free, and both add it to `occupiedSpotIds` and issue a ticket. The set accepts the second add silently, so nothing fails and two cars hold tickets for one bay. The lock closes the window by making the scan and the claim one step.
+
+```mermaid caption="Why can two entrances not take one bay? The lock makes find-and-claim one step, so the second gate scans after the first claim is recorded and gets the next free spot."
+sequenceDiagram
+    participant A as Gate A
+    participant B as Gate B
+    participant L as ParkingLot
+    A->>L: enter(car)
+    Note over L: lock held for A
+    L->>L: scan, find C-12 free
+    L->>L: add C-12 to occupiedSpotIds
+    L-->>A: Ticket(C-12)
+    Note over L: lock released
+    B->>L: enter(car)
+    Note over L: lock held for B
+    L->>L: scan, skip C-12, find C-13
+    L-->>B: Ticket(C-13)
+```
+
+### 4 · Which spot does a vehicle get?
+
+Placement is a rule about fit, so it belongs in `findAvailableSpot` and nowhere else. The first requirement says each vehicle type matches a spot type, so the baseline is an exact match: a motorcycle takes a motorcycle bay, a car takes a car bay, a large vehicle takes a large bay.
+
+- **Exact match, first free (chosen).** One scan, one comparison per spot, and a lot that has run out of car bays turns a car away even when large bays sit empty. The cost is lost revenue on a quiet day, the benefit is a rule a new engineer reads in one line.
+- **Fit-up fallback.** A car may take a large bay when no car bay is free. That raises occupancy, but a large vehicle arriving later finds no bay and the lot is full for the one type that has nowhere else to go. Add it only when the owner would rather park a car than refuse one.
+- **Placement strategy.** Nearest to the exit, or the emptiest floor, needs a distance or a floor on each spot and an ordering over the free ones. That is the point where a [strategy](../patterns/gof/behavioral/strategy.md) earns its interface, and not before.
+
+```mermaid caption="How does enter() decide? The scan filters by spot type and by the occupied set, and a miss is the only path that rejects the vehicle."
+flowchart TB
+    Start(["enter(vehicleType)"]) --> Next{"Spot left to check?"}
+    Next -->|"no"| Full["Raise: lot is full for this type"]
+    Next -->|"yes"| Type{"spotType matches vehicleType?"}
+    Type -->|"no"| Next
+    Type -->|"yes"| Taken{"id in occupiedSpotIds?"}
+    Taken -->|"yes"| Next
+    Taken -->|"no"| Claim["Add id to occupiedSpotIds, issue Ticket"]
+```
+
+### 5 · Ticket lifecycle and the second exit
+
+A ticket has two states that matter, active and gone. The lot holds active tickets in a map keyed by id, and `exit` removes the entry in the same step that frees the spot, so presence in the map is the whole state.
+
+That choice makes a repeated exit cheap to reject. The second call with the same id finds no entry and raises. The same lookup answers an id the lot never issued, so the two cases collapse into one "invalid ticket" error. Splitting them, for a clerk who must tell a lost ticket from a reused one, costs a `usedTicketIds` set that grows by one entry per car for ever, and the lot has no need to keep it.
+
+```mermaid caption="What can happen to a ticket? Exit settles an active ticket once, and every later use of the same id ends in the invalid error."
+stateDiagram-v2
+    [*] --> Active: enter() issues the ticket
+    Active --> Settled: exit() charges and frees the spot
+    Settled --> [*]
+    [*] --> Invalid: id never issued
+    Settled --> Invalid: exit() with the same id
+    Invalid --> [*]: raise, charge nothing
+```
+
+### 6 · A pricing rule changes while cars are parked
+
+The lot stores `hourlyRateCents` once and `computeFee` reads it at exit, so a rate change at 14:00 reprices every car already inside. That is the simplest behaviour and the one a driver sees on the sign when they pay. The ticket holds `entryTime` and no rate, so it cannot disagree with the lot.
+
+Stamping the rate on the ticket at entry makes the price match what was posted when the car arrived. It also gives the ticket a second reason to change and a field that every later pricing rule, such as a daily cap or a per-type rate, has to extend. Take that step when the business promises the entry price, and take it as the trigger for the strategy interface in dive 2, not before. Until then the rounding rule stays the only policy: a stay of 5 minutes is one hour, 500 cents at the example rate.
+
 ## Limitations & trade-offs
 <!--meta block=tradeoffs-->
 
@@ -144,6 +204,8 @@ Two entrances can both see one spot as free and both claim it — a race in the 
 - The occupancy index is computed from tickets — it must be updated in lockstep with them or it drifts.
 - "Never existed" and "already used" collapse into one "invalid ticket" error; splitting them needs a used-ticket set.
 - First-match allocation ignores placement quality (proximity, floor balancing) until a strategy is added.
+- Exact-type matching turns a car away while large bays sit empty, so occupancy on a quiet day stays below what the spots could hold.
+- A rate change reprices cars already parked, because the ticket carries no rate (see dive 6).
 
 ## What's expected at each level
 <!--meta block=levels-->
@@ -151,6 +213,7 @@ Two entrances can both see one spot as free and both claim it — a race in the 
 - **Junior** — a working system: spots, tickets, an orchestrator; `enter` assigns and returns a ticket, `exit` charges and frees, with basic rejection of a full lot and invalid tickets. May need a hint on where pricing belongs.
 - **Mid-level** — clean separation without prompting (lot orchestrates, spot holds properties, ticket is a data holder), sees that Vehicle needn't be a class, handles double-exit, and justifies the map and the pricing placement.
 - **Senior** — class boundaries are obvious; volunteers the occupancy and enum trade-offs, catches edge cases unprompted, and walks the multi-floor and concurrency extensions — simple solution first, then when a Strategy pattern earns its keep.
+- **Staff** — treats the lot as a policy question: argues exact match against fit-up from the owner's revenue and the stranded large vehicle, says a rate change reprices parked cars and names the trigger for stamping the rate on the ticket, and shows that the one lock stays correct as entrances multiply because the claim is a single atomic step.
 
 ## Patterns it demonstrates
 <!--meta block=relationships-->

@@ -116,25 +116,22 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — keyset paging with a lookahead row and an opaque cursor"
-const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;   // published, enforced — an uncapped limit is a DoS parameter
 
 type Cursor = { createdAt: string; id: string };
 
-// The cursor is opaque on purpose: encode it, sign it, and clients cannot
-// hand-craft one that skips the filters or outlives a change of sort order.
+// Opaque on purpose: signed, so clients cannot hand-craft one that skips filters.
 const encode = (c: Cursor) => sign(Buffer.from(JSON.stringify(c)).toString("base64url"));
 const decode = (t: string): Cursor => JSON.parse(Buffer.from(verify(t), "base64url").toString());
 
 async function listOrders(q: { limit?: number; cursor?: string }) {
-  const limit = Math.min(q.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+  const limit = Math.min(q.limit ?? 25, MAX_LIMIT);
   const after = q.cursor ? decode(q.cursor) : undefined;
 
-  // (created_at, id) is a TOTAL order. Sorting on created_at alone lets rows
-  // with an identical timestamp repeat or vanish across a page boundary.
+  // (created_at, id) is a TOTAL order. created_at alone lets rows with an
+  // identical timestamp repeat or vanish across a page boundary.
   const rows = await db.query(
-    `SELECT id, created_at, total
-       FROM orders
+    `SELECT id, created_at, total FROM orders
       WHERE customer_id = $1
         AND ($2::timestamptz IS NULL OR (created_at, id) < ($2, $3))
       ORDER BY created_at DESC, id DESC
@@ -142,18 +139,13 @@ async function listOrders(q: { limit?: number; cursor?: string }) {
     [customerId, after?.createdAt ?? null, after?.id ?? null, limit + 1],
   );
 
-  // Read one extra row to answer "is there more" without counting anything.
+  // One extra row answers "is there more" without counting anything.
   const hasMore = rows.length > limit;
   const items = hasMore ? rows.slice(0, limit) : rows;
   const last = items.at(-1);
-
-  return {
-    items,
-    has_more: hasMore,
-    next_cursor: hasMore && last ? encode({ createdAt: last.created_at, id: last.id }) : null,
-  };
+  const next_cursor = hasMore && last ? encode({ createdAt: last.created_at, id: last.id }) : null;
+  return { items, has_more: hasMore, next_cursor };
 }
-
 ```
 
 ## In the wild

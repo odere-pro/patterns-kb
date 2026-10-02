@@ -160,6 +160,17 @@ Dispatch lives in the controller's `selectBestElevator`, and there is a ladder o
 
 Whichever rule you land on, `selectBestElevator` sits behind a fixed signature — which is exactly a [strategy](../patterns/gof/behavioral/strategy.md): a wait-time-minimizing policy for a busy office tower and an energy-saving policy for a quiet overnight building are swappable without touching a line of movement code. The controller also keeps no queue of unassigned requests; a hall call is assigned immediately. Holding pending requests for cars to pull from is the more general design, but it only earns its keep once "what if every car is busy?" is a real requirement — deferring it is a [You Aren't Gonna Need It (YAGNI)](../principles/yagni.md) call. In the same spirit, `requestElevator` and `addRequest` both read like "add a request," yet forcing them under one shared `IRequestHandler` interface would invent polymorphism that is not there: the controller is not a kind of car, and no code ever needs to treat them interchangeably.
 
+The direction-aware rule is a ladder of three checks.
+
+```mermaid caption="How does selectBestElevator pick a car for a hall call?"
+flowchart TB
+    Call["Hall call"] -->|"selectBestElevator"| P1{"car moving the right way and positioned to reach the floor?"}
+    P1 -->|"yes"| A["Assign that car"]
+    P1 -->|"no"| P2{"any idle car?"}
+    P2 -->|"yes"| B["Assign nearest idle car"]
+    P2 -->|"no"| C["Assign nearest car of any kind"]
+```
+
 ### 4 · Extending it without a rewrite
 
 The follow-ups are where the placement pays off:

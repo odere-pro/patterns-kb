@@ -99,24 +99,21 @@ flowchart LR
 ```typescript summary="TypeScript — a minimal gossip round"
 type NodeId = string;
 interface PeerState { version: number; data: Record<string, unknown>; }
+type Digest = Map<NodeId, PeerState>;
 
 class GossipNode {
-  private state = new Map<NodeId, PeerState>();
+  private state: Digest = new Map();
 
-  constructor(
-    private readonly peers: NodeId[],
-    private readonly fanout = 3,
-  ) {}
+  constructor(private readonly peers: NodeId[], private readonly fanout = 3) {}
 
   // One round: pick a few random peers, exchange state, merge
-  async round(exchange: (peer: NodeId, mine: Map<NodeId, PeerState>) => Promise<Map<NodeId, PeerState>>) {
+  async round(exchange: (peer: NodeId, mine: Digest) => Promise<Digest>) {
     for (const peer of pickRandom(this.peers, this.fanout)) {
-      const theirs = await exchange(peer, this.state); // push-pull
-      this.merge(theirs);
+      this.merge(await exchange(peer, this.state)); // push-pull
     }
   }
 
-  private merge(incoming: Map<NodeId, PeerState>) {
+  private merge(incoming: Digest) {
     for (const [id, remote] of incoming) {
       const local = this.state.get(id);
       if (!local || remote.version > local.version) {

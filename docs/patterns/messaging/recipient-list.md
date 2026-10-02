@@ -124,13 +124,7 @@ sequenceDiagram
 
 ```typescript summary="TypeScript — compute the recipients, then collect an outcome per recipient"
 type Channel = "billing" | "fulfilment" | "audit" | "eu-tax";
-
-interface OrderPlaced {
-  orderId: string;
-  region: "US" | "EU";
-  total: number;
-}
-
+interface OrderPlaced { orderId: string; region: "US" | "EU"; total: number }
 // The list is data: one predicate per destination, and EVERY match gets a copy.
 const rules: { channel: Channel; wants: (o: OrderPlaced) => boolean }[] = [
   { channel: "billing", wants: () => true },
@@ -138,37 +132,25 @@ const rules: { channel: Channel; wants: (o: OrderPlaced) => boolean }[] = [
   { channel: "audit", wants: (o) => o.total >= 10_000 },
   { channel: "eu-tax", wants: (o) => o.region === "EU" },
 ];
-
-function recipientsFor(order: OrderPlaced): Channel[] {
-  return rules.filter((r) => r.wants(order)).map((r) => r.channel);
-}
+const recipientsFor = (o: OrderPlaced): Channel[] =>
+  rules.filter((r) => r.wants(o)).map((r) => r.channel);
 
 type Outcome = { channel: Channel; ok: boolean; error?: unknown };
-
 async function dispatch(order: OrderPlaced): Promise<Outcome[]> {
   const recipients = recipientsFor(order);
-
-  if (recipients.length === 0) {
-    // an empty list is not a no-op — it is a message nobody will ever see
+  if (recipients.length === 0) {  // an empty list is a message nobody will ever see
     await deadLetter.publish(order, "no recipient matched");
     return [];
   }
-
   // one failed send must not hide the outcome of the others
-  const settled = await Promise.allSettled(
-    recipients.map((c) => channels[c].publish(order)),
-  );
-
-  return settled.map((result, i) => ({
-    channel: recipients[i],
-    ok: result.status === "fulfilled",
-    error: result.status === "rejected" ? result.reason : undefined,
+  const settled = await Promise.allSettled(recipients.map((c) => channels[c].publish(order)));
+  return settled.map((r, i) => ({
+    channel: recipients[i], ok: r.status === "fulfilled",
+    error: r.status === "rejected" ? r.reason : undefined,
   }));
 }
-
-// Retry only what failed — the recipients that succeeded already have their copy.
+// Retry only what failed — the others already have their copy.
 const unsent = (await dispatch(order)).filter((o) => !o.ok);
-
 ```
 
 ## In the wild

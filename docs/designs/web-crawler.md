@@ -140,6 +140,23 @@ Second, cap the request rate per domain — the industry rule of thumb is ~1 req
 
 The subtle bug is a race: several fetchers can read the same stale last-crawl time simultaneously and all conclude it's their turn — a classic check-then-act. Fix it with an atomic per-domain claim before crawling: `Redis SET domain NX` with a TTL (time to live) equal to the crawl delay, a lightweight [distributed lock](../patterns/distributed/coordination/distributed-lock.md). Whoever wins the key crawls; the losers defer their message. And when a rate-limit window resets, every waiting fetcher can retry in lockstep — a [thundering herd](../hazards/thundering-herd.md) — so add per-fetcher jitter to spread the retries out.
 
+The per-domain claim is what closes the check-then-act race:
+
+```mermaid caption="How does an atomic per-domain claim stop two fetchers hitting the same domain inside its crawl delay?"
+sequenceDiagram
+    autonumber
+    participant A as Fetcher A
+    participant B as Fetcher B
+    participant R as Redis
+    participant O as Origin site
+    A->>R: SET domain NX, TTL = crawl delay
+    R-->>A: key set, A wins
+    B->>R: SET domain NX, TTL = crawl delay
+    R--xB: key exists, B loses
+    B->>B: defer message (ChangeMessageVisibility), add jitter
+    A->>O: GET page
+```
+
 ### 3 · Hitting 10 billion pages in five days
 
 The throughput math (above) says eight ~200&nbsp;Gbps machines at 30% real utilisation clear 10B pages in ≈3.9 days. Parser workers scale more simply — they only read HTML and write text — so autoscale them on the extraction queue's depth rather than provisioning a fixed count (Lambda or Fargate). The real surprise is DNS: at thousands of requests per second across millions of unique domains, resolution becomes the bottleneck. The classic Mercator crawler paper found DNS could eat up to 70% of a thread's time before they built a custom resolver. Mitigate with a DNS cache in each fetcher (repeat lookups for a domain are free) and round-robin across multiple DNS providers to spread load and dodge per-resolver limits.

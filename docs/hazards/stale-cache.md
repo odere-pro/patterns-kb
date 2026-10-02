@@ -54,7 +54,7 @@ flowchart TB
 ## How to avoid it
 <!--meta block=mitigation-->
 
-There's no perfect fix — how much staleness is acceptable is a per-datum judgment. The strongest option is to **invalidate on write**: when the store changes, delete (or update) the cached key in the same path, so the next read misses and reloads the current value. Where a bounded lag is fine, a **short TTL** caps how long any entry can be wrong. And in many cases the honest answer is to **accept [eventual consistency](../themes/consistency-and-replication.md)** — decide the stale window is harmless for this data (a feed, a metric, a profile image) and document it — rather than pay for a guarantee the use case doesn't need. Writing through the cache synchronously removes the window entirely at the cost of write latency.
+There's no perfect fix — how much staleness is acceptable is a per-datum judgment. The strongest option is to **invalidate on write**: when the store changes, delete (or update) the cached key in the same path, so the next read misses and reloads the current value. Where a bounded lag is fine, a **short TTL** caps how long any entry can be wrong. And in many cases the honest answer is to **accept [eventual consistency](../themes/consistency-and-replication.md)** — decide the stale window is harmless for this data (a feed, a metric, a profile image) and document it — rather than pay for a guarantee the use case doesn't need. Writing through the cache synchronously removes the window entirely at the cost of write latency. Dropping the cache instead is [no caching](./no-caching.md): every read hits the source again.
 
 ## How it relates
 <!--meta block=relationships-->

@@ -119,11 +119,7 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — a minimal queue with visibility timeout"
-interface Message<T> {
-  id: string;
-  body: T;
-  visibleAt: number; // 0 means visible now
-}
+interface Message<T> { id: string; body: T; visibleAt: number } // 0 means visible now
 
 class MessageQueue<T> {
   private messages: Message<T>[] = [];
@@ -149,10 +145,8 @@ class MessageQueue<T> {
 
   nack(id: string): void {
     const msg = this.inFlight.get(id);
-    if (msg) {
-      this.messages.push(msg); // back on the queue for redelivery
-      this.inFlight.delete(id);
-    }
+    if (msg) this.messages.push(msg); // back on the queue for redelivery
+    this.inFlight.delete(id);
   }
 }
 ```

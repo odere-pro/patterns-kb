@@ -98,12 +98,7 @@ flowchart LR
 
 ```typescript summary="TypeScript — translating a legacy order into the canonical shape"
 // What the legacy system produces
-interface LegacyOrder {
-  ord_id: string;
-  cust_name: string;
-  amt_cents: number;
-  ccy: string;
-}
+interface LegacyOrder { ord_id: string; cust_name: string; amt_cents: number; ccy: string }
 
 // What the rest of the system expects
 interface CanonicalOrder {

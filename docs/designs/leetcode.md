@@ -138,6 +138,20 @@ A contest is 90 minutes, 10 problems, up to 100k users; the ranking is problems-
 - **Periodically refreshed cache.** Recompute the standings into Redis every ~30 s and let polls hit the cache. A big improvement, but the results are coarse and can lag reality by half a minute.
 - **Redis sorted set (chosen).** Maintain the leaderboard as a live, precomputed projection — a [materialized view](../patterns/distributed/coordination/materialized-view.md) kept in a sorted set keyed `competition:leaderboard:{competitionId}`. On each accepted submission the worker does one `ZADD` with the user's score; a poll reads the top N with `ZRANGE … REV WITHSCORES` in O(log&nbsp;n + N), never touching the durable store. The database stays the source of truth for submissions; the sorted set is the fast read model. WebSockets were considered and rejected — with a 5-second freshness target and this user count, they are complexity the problem does not earn. Polling frequency is even tunable: tighten it near the finish, relax it otherwise.
 
+The leaderboard is a read model: the worker writes it once per accepted submission and polls only read it.
+
+```mermaid caption="How does a 5-second poll read standings without touching the durable store?"
+sequenceDiagram
+    participant W as Worker
+    participant Z as Redis sorted set
+    participant C as Client
+    W->>Z: ZADD user's score (on accepted submission)
+    loop every ~5 s
+        C->>Z: ZRANGE REV WITHSCORES, top N
+        Z-->>C: standings
+    end
+```
+
 ### 4 · One test suite, every language
 
 You do not want to hand-write test cases per problem and per language. Author one canonical set of input/expected-output pairs per problem in a language-neutral serialization format, then give each runtime a thin harness that deserializes the input, calls the user's function, and compares its output against the expected value. A binary-tree input, for instance, serializes as a level-order (BFS) array like `[3, 9, 20, null, null, 15, 7]`; every language ships a matching `TreeNode`-style type alongside the user's code so the harness can rebuild the tree before invoking their solution. Define a serialization strategy once per data-structure type and every supported language reuses the same canonical cases.

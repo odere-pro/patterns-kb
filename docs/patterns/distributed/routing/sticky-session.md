@@ -98,10 +98,7 @@ flowchart LR
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — cookie-based affinity: honour an existing pin, else pick fresh"
-interface Instance {
-  id: string;
-  healthy: boolean;
-}
+interface Instance { id: string; healthy: boolean }
 
 const AFFINITY_COOKIE = "srv_id";
 
@@ -125,9 +122,7 @@ class StickyBalancer {
   private pickHealthy(): Instance {
     const healthy = this.instances.filter((i) => i.healthy);
     if (healthy.length === 0) throw new Error("no healthy instances");
-    const inst = healthy[this.cursor % healthy.length]; // round-robin for new clients
-    this.cursor++;
-    return inst;
+    return healthy[this.cursor++ % healthy.length];  // round-robin for new clients
   }
 }
 ```

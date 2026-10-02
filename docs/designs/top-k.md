@@ -115,6 +115,26 @@ flowchart TB
 
 Running the windowed query on every request would melt the store — millions of identical queries competing for the same expensive scan. The one-minute freshness budget is the opening: the answer barely changes second to second, so compute it rarely and reuse it. A [cache-aside](../patterns/caching/cache-aside.md) layer (Redis) keyed by `top-k:{window}:{truncated_timestamp}` turns almost all traffic into sub-millisecond hits. The weakness is the moment an entry expires: a flood of requests all miss at once and pile onto the store, every one of them blowing the SLA — a classic [cache stampede](../hazards/cache-stampede.md). [Request coalescing](../patterns/distributed/resilience/request-coalescing.md) (one in-flight recompute per window, the rest waiting on its result) limits the pile-up but not the latency spike. The fix is to stop letting entries expire cold: a precompute job runs on a fixed cadence and [refreshes each window ahead of time](../patterns/caching/refresh-ahead.md), so the cache is always warm and the Top-K service becomes a pure cache reader. Keep entries alive for a couple of hours so a late precompute serves slightly stale data rather than nothing.
 
+The precompute job keeps the cache warm so the read path never waits on the store:
+
+```mermaid caption="How does refresh-ahead keep every window warm so no request ever meets a cold cache?"
+sequenceDiagram
+    autonumber
+    participant J as Precompute job
+    participant S as Window tables
+    participant C as Redis cache
+    participant T as Top-K service
+    participant Cl as Client
+    loop fixed cadence, before entries expire
+        J->>S: query each window's top-K
+        J->>C: write top-k:{window}:{truncated_timestamp} (kept a couple of hours)
+    end
+    Cl->>T: request top-K
+    T->>C: read entry
+    C-->>T: warm hit
+    T-->>Cl: top-K list
+```
+
 ### 2 · Absorbing the write firehose
 
 700k writes/sec is roughly 70× a single node, and view volume is wildly skewed — a handful of videos take a huge share of traffic, so those keys become [hot keys](../hazards/hot-key.md) that no single writer can keep up with. Two moves compound. First, [shard](../patterns/distributed/routing/sharding.md) the ingest and the store on video ID; Kafka is already partitioned that way, so each consumer set owns a partition and writes only its own shard. Second, and more powerful, [batch](../patterns/concurrency/batching.md) the writes: Flink aggregates views per video over a tumbling window and flushes one bulk write instead of thousands of increments. Because the skew is exactly where batching helps most, the collapse is large — often 2–100× fewer writes — and shard count drops from ~70 to a realistic 5–10. Flink's checkpointing (with a bounded-out-of-orderness watermark tolerating ~30s of late events, inside the one-minute budget) means a failed node rewinds to the last Kafka offset and replays with no lost or double-counted views. Sharding does break the single-query read — the global top-K now lives across shards — but a [Scatter-Gather](../patterns/messaging/scatter-gather.md) fixes it: query each shard for its local top-K and merge. It is exact, because a video in the true global top-K must be in the top-K of whatever shard holds it.

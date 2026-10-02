@@ -134,7 +134,6 @@ await withRetry(() => verifyDocument(personaId, deadline));
 
 ```typescript summary="TypeScript — backoff with full jitter, written to a queue column"
 const MAX_ATTEMPTS = 5, BASE_MS = 200, MAX_MS = 15 * 60_000;
-
 // The delay is a column, not a sleep. The worker hands the row back and moves
 // on; whichever replica claims it after run_after is the one that retries.
 function nextRunAfter(attempts: number): Date {
@@ -149,32 +148,21 @@ async function runTask(db: Db, task: Task): Promise<void> {
   } catch (err) {
     const attempts = task.attempts + 1;
     if (!isTransient(err)) {
-      await db.query(
-        `UPDATE task SET status = 'dead', attempts = $2 WHERE id = $1`,
+      return void await db.query(`UPDATE task SET status = 'dead', attempts = $2 WHERE id = $1`,
         [task.id, attempts]);
-      return;
     }
     // Transient: back to pending with a later run_after. Once attempts are
     // exhausted it simply stops being claimed, and the sweeper escalates it.
     await db.query(
-      `UPDATE task SET status = 'pending', locked_at = NULL,
-              attempts = $2, run_after = $3
-        WHERE id = $1`,
-      [task.id, attempts, nextRunAfter(attempts)]);
+      `UPDATE task SET status = 'pending', locked_at = NULL, attempts = $2, run_after = $3
+        WHERE id = $1`, [task.id, attempts, nextRunAfter(attempts)]);
   }
 }
 
 // Claiming honours the schedule — a backed-off task is not yet visible at all.
-const claim = `SELECT * FROM task
-                WHERE status = 'pending' AND run_after <= now()
-                  AND attempts < ${MAX_ATTEMPTS}
-                ORDER BY run_after
-                FOR UPDATE SKIP LOCKED LIMIT 1`;
-
-function isTransient(err: unknown): boolean {
-  return err instanceof NetworkError || err instanceof RateLimitError
-      || err instanceof VendorUnavailable;   // breaker open — ask again later
-}
+const claim = `SELECT * FROM task WHERE status = 'pending' AND run_after <= now()
+                AND attempts < ${MAX_ATTEMPTS} ORDER BY run_after FOR UPDATE SKIP LOCKED LIMIT 1`;
+// isTransient: NetworkError, RateLimitError, or VendorUnavailable (breaker open — ask again later)
 ```
 
 ## In the wild

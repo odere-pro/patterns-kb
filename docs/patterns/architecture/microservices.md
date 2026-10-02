@@ -108,7 +108,7 @@ sequenceDiagram
 - **Calls become network hops** — every call that used to be a function call is now one, and a chain three services deep adds three timeouts' worth of tail latency.
 - **One user action spans many services**, so debugging needs correlated logs and distributed tracing in place before the first incident, not after it.
 - **Decentralised choice with no standards** produces a fleet nobody can operate — agree platform-wide rules for logging, metrics and deployment even while service internals stay free.
-- **The style assumes automated deployment, per-service monitoring** and teams that own their services in production. Without those, splitting the deployable multiplies the operational surface and buys none of the autonomy.
+- **The style assumes automated deployment, per-service monitoring** and teams that own their services in production. Without those, splitting the deployable multiplies the operational surface and buys none of the autonomy, which is the [distributed monolith](../../hazards/distributed-monolith.md).
 
 ## When to use it
 <!--meta block=usage-->

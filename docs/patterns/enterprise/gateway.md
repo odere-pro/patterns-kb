@@ -110,7 +110,6 @@ interface ShippingGateway {
   getRates(originZip: string, destZip: string, weightKg: number): Promise<Rate[]>;
 }
 interface Rate { carrier: string; costCents: number; etaDays: number; }
-
 // The vendor's own client — field names and units we don't control
 declare class LegacyCarrierClient {
   quoteRates(req: { origin_zip: string; dest_zip: string; weight_lbs: number }):
@@ -119,18 +118,13 @@ declare class LegacyCarrierClient {
 
 class LegacyCarrierGateway implements ShippingGateway {
   constructor(private readonly client: LegacyCarrierClient) {}
-
   async getRates(originZip: string, destZip: string, weightKg: number): Promise<Rate[]> {
     const raw = await this.client.quoteRates({
       origin_zip: originZip,
       dest_zip: destZip,
       weight_lbs: weightKg * 2.20462, // vendor only speaks pounds
     });
-    return raw.quotes.map(q => ({
-      carrier: q.carrier_name,
-      costCents: Math.round(q.price_usd * 100),
-      etaDays: q.transit_days,
-    }));
+    return raw.quotes.map(q => ({ carrier: q.carrier_name, costCents: Math.round(q.price_usd * 100), etaDays: q.transit_days }));
   }
 }
 

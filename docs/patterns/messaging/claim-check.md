@@ -146,23 +146,18 @@ interface Task {
   type: "verify" | "screen";
   photoKey: string;                        // the check, not the image
 }
+type Queue = { send(task: Task): Promise<void> };
 
 async function submitIdPhoto(
-  flowId: string,
-  personaId: string,
-  photo: Buffer,
-  store: ClaimCheckStore,
-  queue: { send(task: Task): Promise<void> },
+  flowId: string, personaId: string, photo: Buffer,
+  store: ClaimCheckStore, queue: Queue,
 ): Promise<void> {
   const photoKey = await store.put(photo);              // bytes land in the store first
   await queue.send({ flowId, personaId, type: "verify", photoKey });
 }
 
 async function runVerify(
-  task: Task,
-  store: ClaimCheckStore,
-  idVendor: IdVendor,
-  queue: { send(task: Task): Promise<void> },
+  task: Task, store: ClaimCheckStore, idVendor: IdVendor, queue: Queue,
 ): Promise<void> {
   const photo = await store.get(task.photoKey);         // redeem the check for the bytes
   await idVendor.verify(task.flowId, photo);

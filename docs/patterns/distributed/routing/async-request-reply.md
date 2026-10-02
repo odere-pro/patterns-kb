@@ -131,46 +131,28 @@ sequenceDiagram
 app.post("/reports", async (req, res) => {
   const key = req.header("Idempotency-Key");
   if (!key) return res.status(400).json({ error: "Idempotency-Key required" });
-
   // Insert-or-return: a retried submit gets the ORIGINAL operation, not a second job.
   const op = await db.one(
     `INSERT INTO operations (id, idempotency_key, state, params)
           VALUES (gen_random_uuid(), $1, 'accepted', $2)
      ON CONFLICT (idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
-       RETURNING id, state`,
-    [key, req.body],
-  );
-
+       RETURNING id, state`, [key, req.body]);
   await queue.enqueue({ operationId: op.id });   // same transaction, or an outbox
-
-  res.status(202)
-     .location(`/operations/${op.id}`)
-     .set("Retry-After", "5")
-     .json({ id: op.id, state: op.state });
+  res.status(202).location(`/operations/${op.id}`).set("Retry-After", "5").json({ id: op.id, state: op.state });
 });
-
 // STATUS: one resource, three answers. 303 hands the caller to the result so it
 // never has to learn a second URL, and Retry-After keeps the poll rate yours.
 app.get("/operations/:id", async (req, res) => {
   const op = await db.oneOrNone(`SELECT * FROM operations WHERE id = $1`, [req.params.id]);
   if (!op) return res.sendStatus(404);          // retention expired, or never existed
-
-  switch (op.state) {
-    case "succeeded":
-      return op.resource_url
-        ? res.redirect(303, op.resource_url)
-        : res.json({ state: "succeeded", result: op.result });
-    case "failed":
-      return res.json({ state: "failed", error: op.error });   // 200: the ASK succeeded
-    default:
-      // Back the interval off as the operation ages, so a thousand waiting
-      // callers do not turn into a poll storm against the job store.
-      const age = Date.now() - Date.parse(op.created_at);
-      return res.set("Retry-After", String(Math.min(60, 5 + Math.floor(age / 10_000))))
-                .json({ state: op.state });
-  }
+  if (op.state === "succeeded") return op.resource_url ? res.redirect(303, op.resource_url)
+                                                       : res.json({ state: "succeeded", result: op.result });
+  if (op.state === "failed") return res.json({ state: "failed", error: op.error }); // 200: the ASK succeeded
+  // Back the interval off as the operation ages, so a thousand waiting
+  // callers do not turn into a poll storm against the job store.
+  const age = Date.now() - Date.parse(op.created_at);
+  res.set("Retry-After", String(Math.min(60, 5 + Math.floor(age / 10_000)))).json({ state: op.state });
 });
-
 ```
 
 ## In the wild

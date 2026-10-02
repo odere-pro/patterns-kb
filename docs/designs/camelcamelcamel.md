@@ -144,6 +144,22 @@ The naïve notifier is a cron every two hours that scans the Price table for rec
 
 Either way, price-change events land on a Kafka topic that notification consumers subscribe to — [publish/subscribe](../patterns/messaging/pubsub.md) that decouples collection from alerting. A consumer looks up only the subscriptions for that one product and emails the ones whose threshold is now met. Per-event lookups replace full-table scans, and because most products rarely move, event volume stays modest even at billions of rows.
 
+```mermaid caption="How does a price change reach the right inboxes inside the hour? The change is published once, and a consumer looks up only that product's subscriptions instead of scanning them all."
+flowchart LR
+    Coll["Collection service"]
+    Price[("Price table")]
+    Topic[("Kafka price-change topic")]
+    Cons["Notification consumer"]
+    Subs[("Subscriptions")]
+    Email["Email to subscribers"]:::ext
+    Coll -->|"1 insert price"| Price
+    Price -->|"2 publish product id, old price, new price"| Topic
+    Topic -->|"3 deliver event"| Cons
+    Cons -->|"4 look up one product's subscriptions"| Subs
+    Cons -->|"5 email where threshold is met"| Email
+    classDef ext stroke-dasharray:4 4;
+```
+
 ### 4 · Serving chart queries under 500&nbsp;ms
 
 Plain PostgreSQL indexed on `(product_id, timestamp)` misses the target for popular products: a two-year chart aggregates thousands of raw points on the fly.

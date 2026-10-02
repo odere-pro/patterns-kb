@@ -117,46 +117,31 @@ sequenceDiagram
 
 ```typescript summary="TypeScript — a registry with lease-based eviction, and a caller that caches"
 type Instance = { id: string; url: string; expiresAt: number };
-
-// ---- the registry: registration is a lease, and a heartbeat renews it ----
+// the registry: registration is a lease, and a heartbeat renews it
 class Registry {
   private byService = new Map<string, Map<string, Instance>>();
-
-  // A registration that is never renewed simply expires. Crash-safe by default:
-  // there is no "deregister" call an instance has to survive long enough to make.
+  // Unrenewed means expired: crash-safe, no "deregister" call to survive long enough to make.
   heartbeat(service: string, id: string, url: string, leaseMs = 10_000): void {
-    const instances = this.byService.get(service) ?? new Map();
-    instances.set(id, { id, url, expiresAt: Date.now() + leaseMs });
-    this.byService.set(service, instances);
+    const m = this.byService.get(service) ?? new Map();
+    this.byService.set(service, m.set(id, { id, url, expiresAt: Date.now() + leaseMs }));
   }
-
   resolve(service: string): Instance[] {
-    const now = Date.now();
-    const instances = this.byService.get(service) ?? new Map();
-    for (const [id, i] of instances) if (i.expiresAt <= now) instances.delete(id);
-    return [...instances.values()];
+    const m = this.byService.get(service) ?? new Map();
+    for (const [id, i] of m) if (i.expiresAt <= Date.now()) m.delete(id);
+    return [...m.values()];
   }
 }
-
-// ---- the caller: cache the list, and eject an instance the moment it refuses ----
+// the caller: cache the list, eject an instance the moment it refuses
 class Client {
-  private cache: Instance[] = [];
-  private refreshAt = 0;
-
+  private cache: Instance[] = []; private refreshAt = 0;
   constructor(private registry: Registry, private service: string) {}
-
   async call(path: string): Promise<Response> {
-    if (Date.now() >= this.refreshAt) {
-      this.cache = this.registry.resolve(this.service);
-      this.refreshAt = Date.now() + 5_000;
+    if (Date.now() >= this.refreshAt) { // cache the list for 5s
+      [this.cache, this.refreshAt] = [this.registry.resolve(this.service), Date.now() + 5_000];
     }
-    // The cache is always slightly stale, so a refusal is expected, not exceptional.
-    for (const instance of [...this.cache]) {
-      try {
-        return await fetch(instance.url + path);
-      } catch {
-        this.cache = this.cache.filter((i) => i.id !== instance.id);
-      }
+    for (const i of [...this.cache]) {  // stale cache: a refusal is expected, not exceptional
+      try { return await fetch(i.url + path); }
+      catch { this.cache = this.cache.filter((c) => c.id !== i.id); }
     }
     throw new Error(`no reachable instance of ${this.service}`);
   }

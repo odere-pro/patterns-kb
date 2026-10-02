@@ -89,10 +89,7 @@ flowchart TB
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — a report skeleton with overridable steps"
-interface Row {
-  readonly name: string;
-  readonly value: number;
-}
+interface Row { readonly name: string; readonly value: number }
 
 abstract class ReportBuilder {
   // the template method: the fixed skeleton, not overridable
@@ -116,9 +113,7 @@ class CsvReport extends ReportBuilder {
   protected loadRows(): readonly Row[] {
     return [{ name: "ada", value: 1 }, { name: "bob", value: 2 }];
   }
-  protected formatRow(row: Row): string {
-    return `${row.name},${row.value}`;
-  }
+  protected formatRow(row: Row): string { return `${row.name},${row.value}`; }
   protected override header(): string { return "name,value\n"; }
 }
 ```

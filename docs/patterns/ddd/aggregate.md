@@ -56,7 +56,7 @@ flowchart TB
 
 - **Invariants spanning multiple objects** are enforced in one place, not scattered across services.
 - **A clear transaction boundary** — one aggregate is one atomic load and save, no partial updates.
-- **Encapsulation**: internal entities are hidden, so their rules can't be bypassed from outside.
+- **[Encapsulation](../../principles/encapsulation.md)**: internal entities are hidden, so their rules can't be bypassed from outside.
 - **Concurrency control stays tractable** — version or lock the root, not a web of related tables.
 
 ### Cons

@@ -112,9 +112,7 @@ class PlaceOrder {
   constructor(private readonly orders: OrderRepository) {}
 
   async execute(order: Order): Promise<void> {
-    if (order.items.length === 0) {
-      throw new Error("cannot place an empty order");
-    }
+    if (order.items.length === 0) throw new Error("cannot place an empty order");
     await this.orders.save(order);
   }
 }

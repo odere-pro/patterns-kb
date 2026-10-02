@@ -147,6 +147,18 @@ An abstract base class only pays off when subclasses share fields or behaviour w
 
 Config entries all share a shape but differ in their `algoConfig` payload, and the runtime `algorithm` string decides which class to instantiate — the textbook trigger for a factory. `LimiterFactory.create` switches on the discriminator, extracts that algorithm's parameters, and constructs the matching limiter; an unknown algorithm fails fast with an exception rather than silently defaulting. This is a [factory](../patterns/gof/creational/factory-method.md) concentrating all creation knowledge in one place, and it is what makes the system [open for extension, closed for modification](../principles/open-closed.md): adding Fixed Window Counter means writing one new `Limiter` class and adding one `case` — the orchestrator and every existing limiter stay untouched. If algorithms ever need to be registered at runtime rather than compiled in, the switch graduates to a registry (a map of name&nbsp;→&nbsp;constructor); for two algorithms in scope, the switch is clearer.
 
+A config entry becomes a limiter in one place, and an unknown algorithm stops there.
+
+```mermaid caption="How does one config entry become the right Limiter, and what happens to an unknown algorithm?"
+flowchart TB
+    Cfg["Config entry: algorithm + algoConfig"] -->|"create(entry)"| F["LimiterFactory"]
+    F -->|"switch on algorithm"| Sw{"which algorithm?"}
+    Sw -->|"token bucket"| TB["Token Bucket limiter"]
+    Sw -->|"sliding window log"| SW["Sliding Window Log limiter"]
+    Sw -->|"fixed window counter"| FW["Fixed Window Counter limiter"]
+    Sw -->|"unknown"| Err["throw exception, no silent default"]
+```
+
 ### 3 · Lazy refill and the retry-time math (Token Bucket)
 
 [Token Bucket](../patterns/distributed/resilience/token-bucket.md) is the workhorse: each client holds a bucket that refills at a steady rate and drains one token per request, permitting bursts up to `capacity` while bounding the average rate. The subtlety is when refill happens. Rather than a background thread topping up every bucket on a timer — which would scan even idle clients — refill is computed on demand from elapsed time at request time. A first-time client's bucket starts full, so it gets an immediate burst. On denial the limiter reports exactly how long to wait: the tokens still needed, divided by the refill rate, rounded up so the client never retries a hair too early. This is the [lazy](../patterns/gof/extra/lazy-initialization.md) instinct applied to state, not objects — do the work only when a request forces it.
@@ -166,6 +178,18 @@ def allow(self, key: str) -> RateLimitResult:
 
     needed = 1 - bucket.tokens                       # e.g. 0.7 tokens short
     return RateLimitResult(False, 0, ceil(needed * 1000 / self._rate))
+```
+
+The refill happens only when a request arrives, and the same step decides allow or deny.
+
+```mermaid caption="What happens inside one Token Bucket allow call, and how is the retry time computed on a denial?"
+flowchart TB
+    Req["allow(key)"] -->|"get or create bucket, new bucket starts full"| Fill["Refill from elapsed time, capped at capacity"]
+    Fill -->|"update lastRefillTime"| Chk{"tokens >= 1?"}
+    Chk -->|"yes"| Take["Drain one token"]
+    Take -->|"allowed, remaining = floor(tokens)"| Ok["RateLimitResult allowed"]
+    Chk -->|"no"| Wait["needed = 1 - tokens"]
+    Wait -->|"retryAfterMs = ceil(needed / rate)"| No["RateLimitResult denied"]
 ```
 
 ### 4 · Concurrency: the check-then-act race

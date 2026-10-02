@@ -112,11 +112,7 @@ flowchart TB
 
 ```typescript summary="TypeScript — a minimal target-tracking loop"
 interface Metrics { averageCpuPercent: number; instanceCount: number; }
-
-interface InstancePool {
-  scaleOut(n: number): Promise<void>;
-  scaleIn(n: number): Promise<void>;
-}
+interface InstancePool { scaleOut(n: number): Promise<void>; scaleIn(n: number): Promise<void>; }
 
 function desiredInstances(m: Metrics, targetCpu = 60, min = 2, max = 20): number {
   // How many instances would hold CPU at the target, given current load.
@@ -130,10 +126,8 @@ class Autoscaler {
 
   async tick(pool: InstancePool, metrics: Metrics): Promise<void> {
     if (Date.now() - this.lastScaledAt < this.cooldownMs) return; // still cooling down
-
     const target = desiredInstances(metrics);
     if (target === metrics.instanceCount) return;
-
     if (target > metrics.instanceCount) {
       await pool.scaleOut(target - metrics.instanceCount);
     } else {

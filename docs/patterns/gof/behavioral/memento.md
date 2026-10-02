@@ -101,22 +101,16 @@ sequenceDiagram
 ```typescript summary="TypeScript — an editor whose undo history is opaque snapshots"
 // The snapshot: only the Editor knows how to read one back.
 class EditorSnapshot {
-  constructor(
-    readonly content: string,
-    readonly cursor: number,
-  ) {}
+  constructor(readonly content: string, readonly cursor: number) {}
 }
 
 class Editor {
   private content = "";
   private cursor = 0;
-
   type(text: string): void {
     this.content += text;
     this.cursor = this.content.length;
   }
-  read(): string { return this.content; }
-
   save(): EditorSnapshot {
     return new EditorSnapshot(this.content, this.cursor);   // capture full state
   }

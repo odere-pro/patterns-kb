@@ -53,7 +53,7 @@ flowchart LR
 ## What it costs
 <!--meta block=cost-->
 
-- **The outage outlives its cause.** The dependency spends its returning capacity on retries, so it never gets the quiet interval it needs to drain the backlog that the retries are made of.
+- **The outage outlives its cause.** The dependency spends its returning capacity on retries, so it never gets the quiet interval it needs to drain the backlog that the retries are made of. That self-sustaining state is a [metastable failure](./metastable-failure.md).
 - **Recovery is punished.** Bring an instance back and the waiting attempts consume it within seconds, which is why a restarted service dies again immediately and the graph shows a sawtooth rather than a rise.
 - **Most of the load is unwanted work.** Attempts whose caller has already given up still cost the dependency a full query, so a large share of what is knocking it over is work no one will ever read.
 - **The blast radius is wider than the dependency.** Retries occupy threads, connections and load-balancer capacity that unrelated calls share, so requests that never touch the failing service start failing too.

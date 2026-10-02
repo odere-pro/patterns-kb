@@ -158,6 +158,22 @@ Polling every few seconds is both too slow for a hot auction and wasteful — ne
 
 That coordination gap is closed with [pub/sub](../patterns/messaging/pubsub.md). When the consumer accepts a new high it publishes it to a channel keyed by auction; every SSE server subscribes, and each [fans the update out](../patterns/messaging/fan-out.md) to its own connected watchers of that item. Now a bid landing anywhere reaches everyone, across up to ~100M connections spread over many boxes. The compute tier is easy: the Bid and Auction services are [stateless](../patterns/distributed/routing/stateless-service.md), so they scale horizontally under an autoscaler tracking CPU and memory. The database is the pinch — ~15k writes/sec exceeds one Postgres instance — so [shard by `auctionId`](../patterns/distributed/routing/sharding.md). Because a bid touches only its own auction's row and log, every read and write for an item stays on one shard: no [Scatter-Gather](../patterns/messaging/scatter-gather.md), and the optimistic single-row update from deep dive&nbsp;1 keeps working unchanged. Left to right, each tier scales on its own axis — queue on partitions, services on instances, storage on shards.
 
+Pub/sub carries each accepted high from the consumer to every SSE server.
+
+```mermaid caption="How does a bid consumed on server A reach a watcher connected to server B?"
+sequenceDiagram
+    participant Co as Consumer
+    participant P as Pub/sub channel (per auction)
+    participant A as SSE server A
+    participant B as SSE server B
+    participant Wa as Watcher on B
+    Co->>P: publish new high
+    P-->>A: new high
+    P-->>B: new high
+    B-->>Wa: push over SSE stream
+    A-->>A: push to its own watchers
+```
+
 ### 5 · Ending the auction
 
 A fixed end date is trivial. "End an hour after the last bid" is not — it is a scheduling problem. The cheap version stores a running `end_time` on the auction row and lets a periodic sweep close whatever has expired. The precise version uses a delayed-task [scheduler](../patterns/concurrency/scheduling.md) — a Redis sorted set keyed by fire time, or a durable job queue — that on each bid schedules a check for one hour later; when it fires, it closes the auction only if that bid is still the latest. Doing it well pulls in clock drift and concurrent termination attempts, which is exactly the kind of adjacent complexity a staff answer surfaces unprompted.

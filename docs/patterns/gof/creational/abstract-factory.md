@@ -108,26 +108,14 @@ class DarkThemeFactory implements WidgetFactory {
   }
 }
 
-class LightThemeFactory implements WidgetFactory {
-  createButton(label: string): Button {
-    return { label, render: () => `<button class="light">${label}</button>` };
-  }
-  createPanel(title: string): Panel {
-    return { title, render: () => `<section class="light">${title}</section>` };
-  }
-}
+class LightThemeFactory implements WidgetFactory { /* same two methods, class="light" */ }
 
 // The client depends only on the interfaces — one factory swaps the whole set.
-function renderToolbar(factory: WidgetFactory): string {
-  return factory.createPanel("Settings").render() +
-    factory.createButton("Save").render();
-}
+const renderToolbar = (f: WidgetFactory) =>
+  f.createPanel("Settings").render() + f.createButton("Save").render();
 
 const prefersDark = true;
-const theme: WidgetFactory = prefersDark
-  ? new DarkThemeFactory()
-  : new LightThemeFactory();
-console.log(renderToolbar(theme));
+console.log(renderToolbar(prefersDark ? new DarkThemeFactory() : new LightThemeFactory()));
 ```
 
 ## In the wild

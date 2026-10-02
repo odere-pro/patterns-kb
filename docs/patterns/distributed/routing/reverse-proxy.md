@@ -98,8 +98,8 @@ flowchart LR
 ```typescript summary="TypeScript — forward each request to a hidden backend and stream the response back"
 import http from "node:http";
 
-// A minimal reverse proxy: accept a client request, forward it to a
-// backend chosen from a hidden pool, and stream the response back out.
+// Accept a client request, forward it to a backend from a hidden pool,
+// and stream the response back out.
 const backends = ["http://10.0.0.1:8080", "http://10.0.0.2:8080"];
 let next = 0;
 
@@ -109,10 +109,7 @@ const proxy = http.createServer((clientReq, clientRes) => {
 
   const upstream = http.request(
     target,
-    {
-      method: clientReq.method,
-      headers: { ...clientReq.headers, host: target.host },
-    },
+    { method: clientReq.method, headers: { ...clientReq.headers, host: target.host } },
     (upstreamRes) => {
       // Relay the backend's status and headers, then pipe its body through.
       clientRes.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);

@@ -131,11 +131,7 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — the loop, its budget, and the guard in front of every call"
-type Tool = {
-  name: string;
-  schema: object;                          // what the model must send
-  run(args: unknown): Promise<string>;     // the observation it gets back
-};
+type Tool = { name: string; schema: object; run(args: unknown): Promise<string> };
 
 async function runAgent(goal: string, tools: Tool[], limits: { turns: number; tokens: number }) {
   const transcript: Message[] = [{ role: "user", content: goal }];
@@ -161,7 +157,6 @@ async function runAgent(goal: string, tools: Tool[], limits: { turns: number; to
   }
   return { status: "turn-limit", transcript, turns: limits.turns, spent };
 }
-
 ```
 
 ## In the wild

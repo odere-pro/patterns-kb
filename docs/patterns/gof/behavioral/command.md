@@ -88,27 +88,15 @@ flowchart LR
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — editor commands that carry their own undo"
-interface Command {
-  readonly label: string;
-  execute(): void;
-  undo(): void;
-}
-
+interface Command { execute(): void; undo(): void }
 class TextDocument {
   private text = "";
   append(chunk: string): void { this.text += chunk; }
   removeLast(count: number): void { this.text = this.text.slice(0, -count); }
   toString(): string { return this.text; }
 }
-
 class TypeText implements Command {
-  readonly label: string;
-  constructor(
-    private readonly doc: TextDocument,
-    private readonly chunk: string,
-  ) {
-    this.label = `type "${chunk}"`;
-  }
+  constructor(private readonly doc: TextDocument, private readonly chunk: string) {}
   execute(): void { this.doc.append(this.chunk); }
   undo(): void { this.doc.removeLast(this.chunk.length); }  // reverse exactly what we did
 }
@@ -119,11 +107,8 @@ class Editor {                          // the invoker
     cmd.execute();
     this.history.push(cmd);             // remember it so we can undo
   }
-  undoLast(): void {
-    this.history.pop()?.undo();
-  }
+  undoLast(): void { this.history.pop()?.undo(); }
 }
-
 const doc = new TextDocument();
 const editor = new Editor();
 editor.run(new TypeText(doc, "hello "));

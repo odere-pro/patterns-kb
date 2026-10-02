@@ -131,10 +131,7 @@ class IdempotencyStore {
   // is not seen by other instances and is lost on restart, so duplicates slip through.
   private results = new Map<string, StoredResult>();
 
-  async execute(
-    key: string,
-    handler: () => Promise<StoredResult>,
-  ): Promise<StoredResult> {
+  async execute(key: string, handler: () => Promise<StoredResult>): Promise<StoredResult> {
     const cached = this.results.get(key);
     if (cached) return cached; // duplicate — skip re-execution
 
@@ -146,10 +143,9 @@ class IdempotencyStore {
   }
 }
 
-// One store, one boundary. A KYC flow has four, each keyed by whichever side can
-// actually see the duplicate: the client's stored key on create, the vendor's own
-// request id on callback (below), the task row id on a re-claimed worker lease,
-// and the event id on a redelivered webhook. One key cannot cover all four.
+// One boundary of four in a KYC flow, each keyed by whichever side can see the
+// duplicate: client key on create, vendor request id on callback (below), task
+// row id on a re-claimed lease, event id on a redelivered webhook.
 const store = new IdempotencyStore();
 const { flowId, providerRequestId, verdict } = parseCallback(req);
 const key = `idVendor:${flowId}:${providerRequestId}`;

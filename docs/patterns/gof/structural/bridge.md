@@ -99,9 +99,7 @@ classDiagram
 
 ```typescript summary="TypeScript — notifications bridged over delivery channels"
 // Implementation side — the "how" a message actually goes out.
-interface Channel {
-  send(to: string, text: string): void;
-}
+interface Channel { send(to: string, text: string): void }
 
 class EmailChannel implements Channel {
   send(to: string, text: string) { console.log(`email ${to}: ${text}`); }

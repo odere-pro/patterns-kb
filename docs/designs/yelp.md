@@ -177,6 +177,15 @@ sequenceDiagram
     end
 ```
 
+The geometry is paid once, when the business is written:
+
+```mermaid caption="How is a neighbourhood search answered without testing polygons on every request?"
+flowchart LR
+    New["Business created"] -->|"resolve containing areas"| Locations[("locations table: name, type, polygon")]
+    Locations -->|"store location_names as keyword terms"| Biz[("Business record")]
+    Query["Search: pizza in The Mission"] -->|"inverted-index lookup on location_names"| Biz
+```
+
 ## Limitations & trade-offs
 <!--meta block=tradeoffs-->
 

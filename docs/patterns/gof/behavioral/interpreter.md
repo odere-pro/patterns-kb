@@ -100,16 +100,11 @@ interface Rule {
 
 class Flag implements Rule {                       // terminal: read one fact
   constructor(private readonly name: string) {}
-  evaluate(ctx: Context): boolean {
-    return ctx[this.name] ?? false;
-  }
+  evaluate(ctx: Context): boolean { return ctx[this.name] ?? false; }
 }
 
 class And implements Rule {                        // composite of two rules
-  constructor(
-    private readonly left: Rule,
-    private readonly right: Rule,
-  ) {}
+  constructor(private readonly left: Rule, private readonly right: Rule) {}
   evaluate(ctx: Context): boolean {
     return this.left.evaluate(ctx) && this.right.evaluate(ctx);
   }
@@ -117,9 +112,7 @@ class And implements Rule {                        // composite of two rules
 
 class Not implements Rule {                         // composite of one rule
   constructor(private readonly inner: Rule) {}
-  evaluate(ctx: Context): boolean {
-    return !this.inner.evaluate(ctx);
-  }
+  evaluate(ctx: Context): boolean { return !this.inner.evaluate(ctx); }
 }
 
 // "beta tester AND NOT suspended"

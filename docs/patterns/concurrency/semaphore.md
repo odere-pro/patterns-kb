@@ -113,11 +113,10 @@ flowchart TB
 <!--meta block=sketch-->
 
 ```go summary="Go — a counting semaphore gating outbound calls"
+
 // A buffered channel is a counting semaphore: its capacity is the permit
 // count, a send takes a permit, and a receive returns one.
 type Semaphore chan struct{}
-
-func NewSemaphore(permits int) Semaphore { return make(Semaphore, permits) }
 
 var ErrBusy = errors.New("no permit in time")
 
@@ -135,15 +134,14 @@ func (s Semaphore) Acquire(timeout time.Duration) error {
 func (s Semaphore) Release() { <-s }
 
 // Cap calls to a fragile downstream at 5 at a time.
-var gate = NewSemaphore(5)
+var gate = make(Semaphore, 5)
 
 func callDownstream() error {
 	if err := gate.Acquire(time.Second); err != nil {
 		return err
 	}
 	defer gate.Release() // always release, even if the call panics
-	time.Sleep(20 * time.Millisecond)
-	return nil
+	return nil           // ... the downstream call goes here
 }
 ```
 

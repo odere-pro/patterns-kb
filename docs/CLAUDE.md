@@ -16,9 +16,9 @@ routes to in `concepts/`, the [records](records/) and the [trap inbox](inbox.md)
   file and the command to run after an edit; commit the file with whatever that command
   rewrote.
 - **An allowlist is `data/allow/<gate>.json`**: entries of `name`, `match` and `reason`, plus
-  `owner` and `since` when one excuses a failure. It ships empty unless the
-  [plan](../plans/harness-optimize.md) records a deviation that needs one; its gate fails an
-  entry that excuses nothing.
+  `owner` and `since` when one excuses a failure. It ships empty unless a recorded
+  deviation needs one, and the entry's `reason` records it; its gate fails an entry that
+  excuses nothing.
 - **A page opens with frontmatter**: `title`, `description`, `area`, `owner`,
   `tags`, `status`, in the [dialect](../tools/src/lib/dialect.md) the rules cite; a page
   has its row in `data/site-structure.json`, which `kb.mjs new` writes.

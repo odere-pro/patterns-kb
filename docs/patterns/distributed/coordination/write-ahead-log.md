@@ -125,10 +125,7 @@ interface LogEntry { seq: number; key: string; value: string; }
 class WriteAheadLog {
   private seq = 0;
   private readonly fd: number;
-
-  constructor(private readonly path: string) {
-    this.fd = fs.openSync(path, "a");
-  }
+  constructor(private readonly path: string) { this.fd = fs.openSync(path, "a"); }
 
   // Durable before the caller is told the write succeeded.
   append(key: string, value: string): number {

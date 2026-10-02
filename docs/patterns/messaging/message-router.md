@@ -99,12 +99,7 @@ flowchart LR
 
 ```typescript summary="TypeScript — a rule-based router"
 type Channel = "orders" | "refunds" | "support";
-
-interface Message {
-  headers: Record<string, string>;
-  body: unknown;
-}
-
+interface Message { headers: Record<string, string>; body: unknown }
 type Rule = { matches: (m: Message) => boolean; channel: Channel };
 
 class MessageRouter {

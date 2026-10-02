@@ -140,49 +140,35 @@ setInterval(sweepOnce, 30_000);
 ```
 
 ```typescript summary="TypeScript — one tick, three predicates, every write guarded"
-const LEASE_MS = 60_000;      // a claim not renewed within this is presumed dead
-const MAX_ATTEMPTS = 5;
+const LEASE_MS = 60_000, MAX_ATTEMPTS = 5; // a claim unrenewed for LEASE_MS is presumed dead
 
 async function sweepOnce(db: Db, notify: Notifier): Promise<void> {
-  // 1 · Reclaim expired leases — a worker that died mid ID-verification call
-  //     leaves its task claimed forever. The guard is `locked_at = seen`: if the
-  //     holder renewed its lease since this row was selected, the update hits
-  //     0 rows and the healthy worker keeps its task.
+  // 1 · Reclaim expired leases. The guard is `locked_at = seen`: if the holder
+  //     renewed since this row was selected, the update hits 0 rows and the
+  //     healthy worker keeps its task.
   const stale = await db.query(
     `SELECT id, locked_by, locked_at FROM task
-      WHERE status = 'processing' AND locked_at < now() - $1::interval`,
-    [`${LEASE_MS} milliseconds`]);
-
-  for (const t of stale.rows) {
-    await db.query(
-      `UPDATE task SET status = 'pending', locked_by = NULL, locked_at = NULL
-        WHERE id = $1 AND locked_by = $2 AND locked_at = $3`,
-      [t.id, t.locked_by, t.locked_at]);
-  }
-
-  // 2 · Escalate exhausted work — a sanctions task that burned every retry —
-  //     to the dead state, once. The status guard is what makes a second sweep
-  //     (or a second sweeper) a no-op.
+      WHERE status = 'processing' AND locked_at < now() - $1::interval`, [`${LEASE_MS} ms`]);
+  for (const t of stale.rows) await db.query(
+    `UPDATE task SET status = 'pending', locked_by = NULL, locked_at = NULL
+      WHERE id = $1 AND locked_by = $2 AND locked_at = $3`,
+    [t.id, t.locked_by, t.locked_at]);
+  // 2 · Escalate exhausted work to the dead state, once. The status guard
+  //     makes a second sweep (or a second sweeper) a no-op.
   const dead = await db.query(
-    `UPDATE task SET status = 'dead'
-      WHERE status = 'pending' AND attempts >= $1
+    `UPDATE task SET status = 'dead' WHERE status = 'pending' AND attempts >= $1
       RETURNING id, flow_id`, [MAX_ATTEMPTS]);
-
-  for (const t of dead.rows) await notify.operator(t);   // safe: only newly-dead rows return
-
+  for (const t of dead.rows) await notify.operator(t);   // only newly-dead rows return
   // 3 · Breach the SLA out loud. `escalated_at IS NULL` is the idempotency key:
-  //     stamping it in the same statement means the customer is told exactly once.
+  //     stamped in the same statement, the customer is told exactly once.
   const overdue = await db.query(
     `UPDATE flow SET escalated_at = now()
       WHERE escalated_at IS NULL AND state = $1 AND entered_state_at < now() - $2::interval
       RETURNING id`, ['awaiting_submission', '48 hours']);
-
   for (const f of overdue.rows) await notify.customer(f);
 }
-
 // Run it under a lock so N replicas do not sweep N times.
 setInterval(() => withLeaderLock('sweeper', () => sweepOnce(db, notify)), 30_000);
-
 ```
 
 ## In the wild

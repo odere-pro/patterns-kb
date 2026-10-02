@@ -122,29 +122,22 @@ interface Entry<V> { value: V; ttlMs: number; expiresAt: number; }
 class RefreshAheadCache<K, V> {
   private store = new Map<K, Entry<V>>();
   private inFlight = new Set<K>();
-
   constructor(
     private readonly load: (key: K) => Promise<V>,
     private readonly ttlMs = 60_000,
     private readonly refreshBelow = 0.2, // reload once 20% of TTL remains
   ) {}
-
   async get(key: K): Promise<V> {
     const entry = this.store.get(key);
     if (!entry) return this.populate(key);        // cold miss, must block
-
-    if (entry.expiresAt - Date.now() < entry.ttlMs * this.refreshBelow) {
-      this.refresh(key);                          // fire-and-forget
-    }
+    if (entry.expiresAt - Date.now() < entry.ttlMs * this.refreshBelow) this.refresh(key); // fire-and-forget
     return entry.value;                           // always served from cache
   }
-
   private async populate(key: K): Promise<V> {
     const value = await this.load(key);
     this.store.set(key, { value, ttlMs: this.ttlMs, expiresAt: Date.now() + this.ttlMs });
     return value;
   }
-
   private refresh(key: K): void {
     if (this.inFlight.has(key)) return;            // single-flight, no dupes
     this.inFlight.add(key);

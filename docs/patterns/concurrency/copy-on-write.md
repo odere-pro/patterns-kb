@@ -142,14 +142,11 @@ class RouteTable {
   }
 }
 
-// The whole trick is here: capture the reference ONCE, then read it to the end.
+// Capture the reference ONCE, then read it to the end: a concurrent add()
+// cannot touch `routes`. Calling table.snapshot() inside the loop would let
+// two turns land on two different versions and send to one host twice.
 const routes = table.snapshot();
-for (const r of routes) {
-  send(r.host);        // a concurrent add() cannot touch `routes`
-}
-
-// Calling table.snapshot() inside the loop would throw that away: two turns of
-// the loop could land on two different versions and send to one host twice.
+for (const r of routes) send(r.host);
 ```
 
 ## In the wild

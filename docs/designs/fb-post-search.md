@@ -150,6 +150,22 @@ sequenceDiagram
 
 Two write sources stress the index for different reasons. **Post creation** is heavy because each post fans out into many keyword appends, and a burst can overwhelm a single ingester and drop events. Putting a Kafka log in front turns that burst into a buffer — [queue-based load levelling](../patterns/distributed/resilience/load-leveling.md) — so many ingestion workers can consume in parallel, and [sharding](../patterns/distributed/routing/sharding.md) the indexes by keyword spreads the appends across Redis instances instead of hot-spotting one. **Likes** are worse: far more frequent, and each one is a score update. Two tactics compound. First, [batch](../patterns/concurrency/batching.md) likes over a short window — 500 likes on a viral post in 30 seconds collapse into one `+500` — though this does nothing for a post that gets one like a minute all day. Second, and more powerful, only write the count at milestones: persist at 1, 2, 4, 8, … (powers of two or ten) rather than on every increment, turning 1,000 writes into ten. The stored count is now deliberately approximate — labelled something like `approxLikes` so nobody mistakes it for exact — but ordering stays roughly right (10k likes still outranks 1). To return N precise results you over-fetch the top N×2 from the likes index, ask the Like service for each post's exact current count, and re-rank on the fresh numbers. Approximate storage, precise final answer — a common shape in information retrieval.
 
+Likes are stored approximately, so the answer is made exact at the end.
+
+```mermaid caption="How does approximate stored like counts still produce a precise top N?"
+sequenceDiagram
+    autonumber
+    participant S as Search service
+    participant L as Likes index
+    participant K as Like service
+    S->>L: top N x 2 by approxLikes
+    L-->>S: 2N post ids
+    S->>K: exact current like count per post
+    K-->>S: exact counts
+    S->>S: re-rank on fresh counts
+    S-->>S: keep top N
+```
+
 ### 5 · Serving reads and storing 3.6&nbsp;PB
 
 Two economies close the design. On **reads**, the no-personalization decision pays off: identical queries have identical answers, and a minute of staleness is allowed, so results are cacheable. A [distributed cache](../patterns/caching/distributed-cache.md) in front of the Search service serves repeated queries with a TTL (time to live) under one minute — checked first, populated on [miss](../patterns/caching/cache-aside.md) — so guaranteed-fresh-enough results never re-touch the index. Layering a [content delivery network (CDN)](../patterns/distributed/routing/cdn.md) in front and setting `cache-control` on the `/search` response pushes hits to the edge, returning in tens of milliseconds versus the hundreds a full origin round trip costs; this is the standard [scaling-reads](../themes/scaling-reads.md) playbook. On **storage**, most of the 3.6&nbsp;PB is dead weight — nobody searches most keywords, and no one scrolls millions of results deep. So cap each index entry at roughly 1k–10k IDs instead of storing every match, which cuts size by orders of magnitude, and run a periodic job over search analytics to evict rarely-searched keywords from Redis into cheap [object storage](../patterns/distributed/routing/object-storage.md) such as Simple Storage Service (S3) or R2. Queries hit Redis first and fall back to the cold tier with a latency penalty — exactly the hot/cold split the completeness requirement allows.

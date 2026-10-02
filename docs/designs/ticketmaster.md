@@ -134,6 +134,27 @@ When tickets drop, one event page gets hammered by thousands of simultaneous ref
 
 For a hugely popular event the seat map goes stale the instant it loads — fans keep clicking seats that are already gone. Server-Sent Events can push seat-map changes the moment a seat is taken, which helps moderately busy events; for a genuine frenzy the map fills faster than anyone can act, and pushing updates only makes the churn more disorienting. The better answer is often the simpler, less-technical one: a **virtual waiting queue** in front of the Booking Service. On requesting the booking page a user is placed in a Redis sorted set ordered by arrival, given a live position over SSE, and admitted in controlled batches as capacity frees up; admitted sessions are marked in an `admitted:{eventId}` set and everyone else is turned away at the door. This is [queue-based load levelling](../patterns/distributed/resilience/load-leveling.md) — the spike is smoothed into a steady, survivable trickle, and the booking path only ever sees a calm crowd.
 
+The queue admits fans in batches while everyone else waits at the door:
+
+```mermaid caption="How does a virtual waiting queue turn an on-sale spike into a trickle the Booking Service can survive?"
+sequenceDiagram
+    autonumber
+    participant F as Fan
+    participant B as Booking Service
+    participant R as Redis
+    F->>B: request booking page
+    B->>R: add to sorted set, ordered by arrival
+    B-->>F: live position over SSE
+    loop as capacity frees
+        B->>R: admit next batch, mark in admitted:{eventId} set
+    end
+    alt fan is in the admitted set
+        B-->>F: admitted to booking
+    else not admitted yet
+        B--xF: turned away at the door
+    end
+```
+
 ### 4 · Making keyword search fast
 
 Naïve search leans on `LIKE '%taylor%'`, which forces a full table scan and cannot meet a 500&nbsp;ms budget. Plain B-tree indexes don't help partial-string matches. The real fix is a search-optimised store: Postgres full-text (`tsvector` + GIN) handles it in-database, but at high volume a dedicated **Elasticsearch** cluster with inverted indexes wins, and it adds typo-tolerant fuzzy matching that SQL struggles with. Elasticsearch is kept in sync with Postgres through [change data capture](../patterns/distributed/coordination/change-data-capture.md) — inserts, updates, and deletes stream across for near-real-time freshness. To shave repeated queries further, cache popular non-personalised result sets (keyed by search parameters, with a TTL) and push them to a [content delivery network (CDN)](../patterns/distributed/routing/cdn.md) so identical searches are answered close to the user; because the same query yields the same results for everyone, edge caching is safe here in a way it never is on the personalised booking path.

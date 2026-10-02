@@ -105,9 +105,7 @@ class Order {
   total: number;
 
   constructor(row: { id?: number; customerId: number; total: number }) {
-    this.id = row.id;
-    this.customerId = row.customerId;
-    this.total = row.total;
+    Object.assign(this, row);
   }
 
   static async find(id: number): Promise<Order> {

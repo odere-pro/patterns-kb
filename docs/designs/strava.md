@@ -139,6 +139,24 @@ The extension is that friends follow an activity as it happens, not just its sum
 - **Push is over-engineering here.** The tempting answer is a real-time tier — WebSockets or SSE (server-sent events) plus a pub/sub broadcast — but two facts make plain polling the better tool. Updates are predictable: the next one is known to land within 2–5&nbsp;seconds, unlike chat where a message can arrive at any instant. And precision doesn't matter: a few seconds of lag is fine for a spectator. So the watcher's phone simply polls the same endpoint on the same cadence, offset a couple of seconds for latency.
 - **Smart buffering.** Deliberately display the position one or two intervals behind (5–10&nbsp;seconds) and interpolate between points, turning a jerky sequence of jumps into smooth continuous motion — trading a little real-time accuracy for a live-stream feel and absorbing network jitter for free.
 
+The two phones meet only at the Activity Service:
+
+```mermaid caption="How does a friend watch live with plain polling and still see smooth motion?"
+sequenceDiagram
+    autonumber
+    participant A as Athlete phone
+    participant S as Activity Service
+    participant W as Watcher phone
+    loop every 2-5s
+        A->>S: location ping (persisted, shown to watchers)
+    end
+    loop same cadence, offset a couple of seconds
+        W->>S: poll the same endpoint
+        S-->>W: latest points
+    end
+    W->>W: show position 5-10s behind, interpolate between points
+```
+
 ### 4 · A leaderboard of top athletes
 
 Ranking athletes by distance for an activity type, filterable by country, region or city.

@@ -101,7 +101,6 @@ interface PoolOptions<T> {
 class ObjectPool<T> {
   private readonly idle: T[] = [];
   private live = 0;
-
   constructor(private readonly opts: PoolOptions<T>) {}
 
   acquire(): T {
@@ -120,11 +119,7 @@ class ObjectPool<T> {
   // Borrow, run, and always return — even if the work throws.
   use<R>(work: (obj: T) => R): R {
     const obj = this.acquire();
-    try {
-      return work(obj);
-    } finally {
-      this.release(obj);
-    }
+    try { return work(obj); } finally { this.release(obj); }
   }
 }
 ```

@@ -126,9 +126,7 @@ class Controller {
 const model = new Model();
 const view = { render: (s: State) => console.log(`count: ${s.count}`) };
 model.onChange((s) => view.render(s));
-
-const controller = new Controller(model);
-controller.handle("increment"); // view logs "count: 1"
+new Controller(model).handle("increment"); // view logs "count: 1"
 ```
 
 ## In the wild

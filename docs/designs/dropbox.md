@@ -173,6 +173,22 @@ sequenceDiagram
     end
 ```
 
+The download path is where the signed URL is issued and then checked.
+
+```mermaid caption="How does a download get authorized, and what stops a leaked signed URL from living long?"
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant FS as File Service
+    participant CDN as CDN
+    C->>FS: request download
+    FS->>FS: check shares table (ACL)
+    FS-->>C: signed URL, expires in about five minutes
+    C->>CDN: GET signed URL
+    CDN->>CDN: validate signature, expiry, any restriction
+    CDN-->>C: file bytes
+```
+
 ## Limitations & trade-offs
 <!--meta block=tradeoffs-->
 

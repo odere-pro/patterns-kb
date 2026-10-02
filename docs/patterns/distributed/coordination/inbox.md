@@ -148,34 +148,23 @@ async function onVendorCallback(tx: Transaction, cb: VendorCallback) {
   );
   if (claimed.rows.length === 0) return;   // duplicate — no-op
 
-  // Same transaction as the claim: the dedupe key, the flow transition
-  // and the client webhook event commit together, or none of them do.
-  await tx.query(
-    "update flow set state = $1 where id = $2",
-    [nextState(cb), cb.flowId],
-  );
+  // Same transaction as the claim: dedupe key, flow transition and
+  // client webhook event commit together, or none of them do.
+  await tx.query("update flow set state = $1 where id = $2",
+    [nextState(cb), cb.flowId]);
   await tx.query(
     `insert into outbox (id, flow_id, topic, payload, published)
      values ($1, $2, $3, $4, false)`,
     [randomUUID(), cb.flowId, `persona.${cb.step}`, JSON.stringify(cb.result)],
   );
 }
-
-// Commit first, then ack the delivery in hand.
-async function onDelivery(db: Db, delivery: Delivery<VendorCallback>) {
-  await db.transaction((tx) => onVendorCallback(tx, delivery.body));
-  // Crash before this line? The vendor retries, the insert collides,
-  // and the flow does not advance twice.
-  await delivery.ack();
+// Commit first, then ack. Crash before the ack? The vendor retries, the
+// insert collides, and the flow does not advance twice.
+async function onDelivery(db: Db, d: Delivery<VendorCallback>) {
+  await db.transaction((tx) => onVendorCallback(tx, d.body));
+  await d.ack();
 }
-
-// Cleanup job: age out inbox rows once the deduplication window has passed
-async function cleanupInbox(db: Db, retentionDays: number) {
-  await db.query(
-    "delete from inbox where received_at < now() - make_interval(days => $1)",
-    [retentionDays],
-  );
-}
+// cleanupInbox: delete inbox rows older than the deduplication window.
 ```
 
 ## In the wild

@@ -105,22 +105,15 @@ class User {
   ) {}
 }
 
-interface UserRow {
-  id: number;
-  full_name: string;
-  email: string;
-}
-
+interface UserRow { id: number; full_name: string; email: string }
 class UserMapper {
   constructor(private readonly db: Database) {}
-
   async find(id: number): Promise<User | null> {
     const row = await this.db.queryOne<UserRow>(
       "SELECT id, full_name, email FROM users WHERE id = ?", [id],
     );
     return row ? new User(row.id, row.full_name, row.email) : null;
   }
-
   async save(user: User): Promise<void> {
     await this.db.execute(
       "UPDATE users SET full_name = ?, email = ? WHERE id = ?",
@@ -128,14 +121,10 @@ class UserMapper {
     );
   }
 }
-
 // Caller never sees a column name.
 const mapper = new UserMapper(db);
 const user = await mapper.find(42);
-if (user) {
-  user.email = "new@example.com";
-  await mapper.save(user);
-}
+if (user) { user.email = "new@example.com"; await mapper.save(user); }
 ```
 
 ## In the wild

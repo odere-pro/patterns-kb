@@ -38,7 +38,7 @@ The second is the size of the substrate. A scheduler, a registry, a mesh control
 
 The third is where the failure now lives. Platform behaviour becomes application behaviour: a liveness probe that is fractionally too aggressive turns a slow start into a restart loop, and an autoscaler tuned on the wrong signal amplifies a load spike instead of absorbing it. These are configuration bugs that present as application outages.
 
-The fourth is portability. The image and the process model travel; the operators, the mesh policy, the ingress and the identity binding do not. Adopting the platform is cheap and leaving it is not, so the useful question is not whether you are locked in but which layer you would have to rewrite.
+The fourth is portability. The image and the process model travel; the operators, the mesh policy, the ingress and the identity binding do not. Adopting the platform is cheap and leaving it is not, so the useful question is not whether you are locked in but which layer you would have to rewrite. State is the part that cannot be disposable, and [Data Platform](./data-platform.md) covers choosing the stores that hold it.
 
 ## The tour
 <!--meta block=tour-->

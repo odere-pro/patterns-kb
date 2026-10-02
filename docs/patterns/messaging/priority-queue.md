@@ -125,13 +125,8 @@ sequenceDiagram
 
 ```typescript summary="TypeScript — a shared pool that drains high before low, with aging to bound the wait"
 type Job = { id: string; enqueuedAt: number }
-
 const AGING_THRESHOLD_MS = 60_000
-
-interface Queue {
-  receive(): Promise<Job | null>
-  send(job: Job): Promise<void>
-}
+interface Queue { receive(): Promise<Job | null>; send(job: Job): Promise<void> }
 
 // One pass of the shared-pool loop: always offer the high queue first, and
 // only fall through to low when high has nothing left to give.
@@ -156,7 +151,6 @@ async function promoteAged(low: Queue, high: Queue, now: number): Promise<number
     promoted += 1
   }
 }
-
 ```
 
 ## In the wild

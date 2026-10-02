@@ -117,8 +117,7 @@ abstract class Actor {
     if (this.draining) return;         // already processing
     this.draining = true;
     while (this.mailbox.length > 0) {
-      const msg = this.mailbox.shift()!;
-      await this.receive(msg);         // one message at a time
+      await this.receive(this.mailbox.shift()!); // one message at a time
     }
     this.draining = false;
   }

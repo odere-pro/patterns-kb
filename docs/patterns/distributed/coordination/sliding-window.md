@@ -124,13 +124,10 @@ sequenceDiagram
 
 ```typescript summary="TypeScript — a weighted sliding counter: two numbers per key, whatever the traffic"
 class SlidingWindowCounter {
-  private previous = 0;      // the completed window's total
-  private current = 0;       // the in-progress window's total
-  private windowStart = 0;   // when the in-progress window opened
-
+  private previous = 0;                    // the completed window's total
+  private current = 0, windowStart = 0;     // in-progress total; when it opened
   constructor(private readonly windowMs: number) {}
-
-  /** Age the counters forward to `now`. One step back is still weighted; two is gone. */
+  // Age the counters forward to `now`. One step back is still weighted; two is gone.
   private roll(now: number): void {
     const elapsed = now - this.windowStart;
     if (elapsed < this.windowMs) return;
@@ -139,7 +136,7 @@ class SlidingWindowCounter {
     this.windowStart = now - (elapsed % this.windowMs);
   }
 
-  /** Estimated arrivals in [now - windowMs, now]. */
+  // Estimated arrivals in [now - windowMs, now].
   count(now = Date.now()): number {
     this.roll(now);
     // How much of the previous window is still inside the sliding one.
@@ -147,20 +144,14 @@ class SlidingWindowCounter {
     return this.previous * overlap + this.current;
   }
 
-  /** Record an arrival if the window still has room. */
   tryAdd(limit: number, now = Date.now()): boolean {
     if (this.count(now) >= limit) return false;
-    this.current += 1;
-    return true;
+    this.current += 1; return true;
   }
 }
-
-// 100 per minute, measured back from now rather than from the top of the minute.
-// 100 arrivals at 10:00:59 leave the previous window ~98% inside the sliding one
-// a second later, so the burst at 10:01:00 is refused instead of forgiven.
-const window = new SlidingWindowCounter(60_000);
-const admitted = window.tryAdd(100);
-
+// new SlidingWindowCounter(60_000).tryAdd(100): 100 arrivals at 10:00:59 leave the
+// previous window ~98% inside the sliding one a second later, so a burst at
+// 10:01:00 is refused, not forgiven.
 ```
 
 ## In the wild

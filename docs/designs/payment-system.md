@@ -117,6 +117,27 @@ A static API key sent on every request is a good-not-great answer — sniff it o
 
 Card data should never touch the merchant's servers — that is a PCI-DSS requirement, not a nicety, and every server it touches becomes an attack surface the merchant is liable for. An iframe served from our own domain collects the card directly, so the browser's same-origin policy keeps merchant JavaScript out of it. Better still, the SDK encrypts the card with our public key the moment it is entered, before it leaves the device; the matching private key lives in a hardware security module server-side, and HTTPS then carries data that is already encrypted. The layers are the point — a single compromised iframe still does not expose the number.
 
+The gateway's three rejections, in the order a request meets them:
+
+```mermaid caption="How does the API gateway decide a request is really from the merchant and not a replay?"
+sequenceDiagram
+    autonumber
+    participant M as Merchant server
+    participant G as API gateway
+    M->>M: sign method, path, body, timestamp, nonce (HMAC-SHA256, private secret)
+    M->>G: request with signature, timestamp, nonce in headers
+    G->>G: recompute signature from the public key's secret
+    alt signature mismatch
+        G--xM: reject
+    else timestamp outside 5-15 minute window
+        G--xM: reject
+    else nonce seen before
+        G--xM: reject (replay)
+    else all checks pass
+        G->>G: authenticated, request goes on
+    end
+```
+
 ### 2 · Never losing a transaction record
 
 Losing a payment record is a legal event: PCI-DSS, SOX and financial auditors want the full sequence of every attempt, success and failure — not just the current row, but who changed what and when, to defend chargebacks and reconstruct account state.

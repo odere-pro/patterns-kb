@@ -97,7 +97,7 @@ The two mechanisms are worth keeping distinct even though they overlap. A canary
 <!--meta polarity=con-->
 
 - **Every flag doubles the paths through the code**, and combinations multiply — three flags are eight configurations, and the tests cover two.
-- **Flags outlive their features**. Left in place they become permanent conditionals nobody dares remove because nobody knows what depends on them.
+- **Flags outlive their features**. Left in place they become permanent conditionals nobody dares remove (the [lava flow](../../../hazards/lava-flow.md) pattern) because nobody knows what depends on them.
 - **The flag store becomes something** the system depends on, and how much depends on it is set by where the value is read.
 - **A change with no deployment** leaves no deployment record, so the flip has to be audited deliberately or an incident timeline will not show it.
 - **Polled values are eventually consistent across the fleet**, so for one poll interval some instances run the new path and some the old — visible whenever a user's two requests land on different instances.

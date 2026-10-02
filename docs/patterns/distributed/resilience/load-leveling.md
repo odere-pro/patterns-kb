@@ -128,15 +128,10 @@ class LevelingQueue {
   constructor(private readonly maxDepth = 10_000) {}
 
   enqueue(task: Task): void {
-    if (this.buffer.length >= this.maxDepth) {
-      throw new Error("queue full — shed this request");
-    }
+    if (this.buffer.length >= this.maxDepth) throw new Error("queue full — shed this request");
     this.buffer.push(task); // absorbs the burst, doesn't process it
   }
-
-  dequeue(): Task | undefined {
-    return this.buffer.shift();
-  }
+  dequeue(): Task | undefined { return this.buffer.shift(); }
 }
 
 // Producer: a client onboards a batch of personas. Accept, enqueue, answer now.
