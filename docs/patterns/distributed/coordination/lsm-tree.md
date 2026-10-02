@@ -208,18 +208,19 @@ class LsmTree {
 
 - [Bloom Filter](./bloom-filter.md) — A per-SSTable Bloom filter skips files that can't hold the key, taming read amplification
 - [Unique ID Generation](./unique-id-generation.md) — Insertion key order drives how much work compaction has to do
+- [Inverted Index](./inverted-index.md) — The same segment-and-merge idea underlies the term-to-document lists of a search index
 
 **Composed of**
 
-- [Write-Ahead Log](./write-ahead-log.md) — Every write is appended to a WAL before the memtable, so a crash loses nothing
+- [Write-Ahead Log](./write-ahead-log.md) — Every write is appended to a write-ahead log (WAL) before the memtable, so a crash loses nothing
 
 **Demonstrated by**
 
-- [Metrics & Monitoring](../../../designs/metrics-monitoring.md) — a relentless append-only metric workload is exactly what an LSM engine is built to absorb
-- [Tinder](../../../designs/tinder.md) — the durable swipe store leans on the commit-log/memtable/SSTable write amplification LSM trees are built for
+- [Metrics & Monitoring](../../../designs/metrics-monitoring.md) — a relentless append-only metric workload is exactly what an log-structured merge (LSM) engine is built to absorb
+- [Tinder](../../../designs/tinder.md) — the durable swipe store leans on the commit-log/memtable/SSTable write amplification log-structured merge (LSM) trees are built for
 
 **Implemented by**
 
-- [Databases](../../../capabilities/databases.md) — Keyspaces, managed Cassandra and Bigtable are LSM stores: you size the cluster and the engine owns memtables and compaction.
+- [Databases](../../../capabilities/databases.md) — Keyspaces, managed Cassandra and Bigtable are log-structured merge (LSM) stores: you size the cluster and the engine owns memtables and compaction.
 
 <!-- relationships:end -->

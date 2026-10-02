@@ -16,18 +16,17 @@ A reverse proxy forwards a request under the backend's own host name instead of 
 ## What it is
 <!--meta block=description-->
 
-A [reverse proxy](../patterns/distributed/routing/reverse-proxy.md) ends the client's connection and opens a new one to the backend, and it must decide what host name that second request carries. **Host header rewriting** is the choice to replace the browser's host with the backend's own address. The request still arrives and the page still renders, so the change looks harmless — until something in the application asks what domain it is serving and gets the wrong answer.
-
-The rewrite is usually not a mistake but a workaround. A managed hosting platform routes by host name and will refuse a request for a domain it has not been told about, so the quickest way to make the proxy work is to send the platform's default address instead. Some proxies do it by default, and one setting turns it on. Nothing errors: the backend answers normally, and the damage appears only in the values it generates from the host — a `Location` header, a link in an email, a cookie's `Domain` attribute, an identity provider's redirect uniform resource identifier (URI).
-
-It is worth separating from its neighbours. Trusting the host in a security decision is a different bug — the client sets that header, so it was never trustworthy, whether or not a proxy rewrote it. And losing the original scheme is a related but distinct failure: the proxy terminates Transport Layer Security (TLS) and the backend sees plain HTTP, which is the usual cause of an endless HTTP-to-HTTPS redirect loop and of session cookies shipping without their secure flag. Both travel with this one, because both come from the same second connection, and an application behind a proxy has to be told about all three — host, scheme and client address — or it will confidently describe a world it cannot see.
+Host header rewriting is a reverse proxy replacing the domain the browser asked for with the backend's own address before forwarding. You recognise it by symptoms that look unrelated: users logged out at random, redirects landing on a backend domain, a sign-in provider rejecting its callback. The page still renders, so nothing fails loudly. The defining trait is that the application builds cookies and links from a host the user never typed.
 
 ## Explained
 <!--meta block=explain-->
 
-Host header rewriting is a reverse proxy, the server that receives browser traffic and forwards it to your application, replacing the domain the browser asked for with the application's own address. The request still arrives and the page still renders, so nothing looks wrong. But the application builds cookies, redirects and absolute links from the host it sees, so it now issues them for the wrong domain. The browser drops a cookie set for the backend's domain, so users are logged out at random and the server sees a first-time visitor. A redirect that names the backend sends the browser around the proxy, which skips any firewall or rate limit that lives there. It usually starts as a shortcut, since a hosting platform refuses a domain it has not been told about and the override makes the refusal disappear. Preserve the original host instead, and register your real domain with the platform, usually by adding a text record to your DNS. Where preserving is impossible, forward the host in the X-Forwarded-Host header and make your framework trust it only from known proxy addresses. Then check the Location header, the cookie domain and the sign-in redirect address.
+Host header rewriting is a [reverse proxy](../patterns/distributed/routing/reverse-proxy.md), the server that receives browser traffic and forwards it to your application, replacing the domain the browser asked for with the application's own address. The request still arrives and the page still renders, so nothing looks wrong. But the application builds cookies, redirects and absolute links from the host it sees, so it issues them for the wrong domain. The browser drops a cookie set for the backend's domain, so users are logged out at random. A redirect that names the backend sends the browser around the proxy and skips any firewall or rate limit there. It usually starts as a shortcut, since a hosting platform refuses a domain it has not been told about. Preserve the original host instead, and register your real domain with the platform. Where preserving is impossible, forward the host in the X-Forwarded-Host header and make your framework trust it only from known proxy addresses.
 
-**Example.** A shop runs at shop.example.com, and the proxy forwards to app-7.hosting.example, the platform's default address. The proxy sends that address as the host. After sign-in the application sets a cookie for app-7.hosting.example, the browser never returns it to shop.example.com, and every later request looks anonymous. The sign-in provider also rejects the callback, because only https<!-- -->://shop.example.com/callback is registered. Three symptoms share one setting. The fix is to register shop.example.com with the platform, then switch off the override. The cost is a verification record in DNS and a certificate for the public name on the backend.
+- **Domain setup.** You add a verification record in DNS and a certificate for the public name on the backend.
+- **Trusted proxies.** If you forward the host in a header, list the proxy addresses your framework trusts, or clients can spoof it.
+
+**Example.** A shop runs at shop.example.com, and the proxy forwards to app-7.hosting.example, the platform's default address. The proxy sends that address as the host. After sign-in the application sets a cookie for app-7.hosting.example, the browser never returns it to shop.example.com, and every later request looks anonymous. The sign-in provider also rejects the callback, because only https<!-- -->://shop.example.com/callback is registered. Three symptoms share one setting. The fix is to register shop.example.com with the platform, then switch off the override.
 
 ## How it happens
 <!--meta block=causes-->
@@ -70,5 +69,9 @@ Verify it rather than assuming it. Request the site through the proxy and check 
 - [Reverse Proxy](../patterns/distributed/routing/reverse-proxy.md) — Configure the proxy to pass the incoming host through rather than picking it from the backend address
 - [API Gateway](../patterns/distributed/routing/api-gateway.md) — Check the origin host header setting on the gateway; blank usually means preserve, and preserve is what you want
 - [Gatekeeper](../patterns/distributed/routing/gatekeeper.md) — A leaked backend address is only exploitable while the backend still answers requests that did not come through the edge
+
+**Threatens**
+
+- [Load Balancer](../patterns/distributed/routing/load-balancer.md) — Host rewriting at the balancer breaks cookies and redirects behind it
 
 <!-- relationships:end -->

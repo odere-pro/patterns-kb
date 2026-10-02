@@ -192,8 +192,8 @@ migrated.add("/api/invoices");
 **Combines with**
 
 - [API Gateway](../routing/api-gateway.md) — Route slices old-vs-new at the gateway
-- [Anti-Corruption Layer](../../ddd/acl.md) — An ACL shields new code from the legacy model
-- [Micro-Frontends](../../frontend/micro-frontends.md) — Micro-frontends are a vehicle for strangling a legacy UI incrementally
+- [Anti-Corruption Layer](../../ddd/acl.md) — An anticorruption layer (ACL) shields new code from the legacy model
+- [Micro-Frontends](../../frontend/micro-frontends.md) — Micro-frontends are a vehicle for strangling a legacy user interface (UI) incrementally
 - [Golden Master](../../testing/golden-master.md) — Golden files prove a migrated capability still matches
 - [Wire Tap](../../messaging/wire-tap.md) — Shadow the real flow into the replacement before routing users to it
 - [Design for Evolution](../../../principles/design-for-evolution.md) — The fig is the route from the system you have to the one you want
@@ -214,5 +214,9 @@ migrated.add("/api/invoices");
 - [Big Ball of Mud](../../../hazards/big-ball-of-mud.md) — Replace the mud incrementally instead of a rewrite
 - [Boat Anchor](../../../hazards/boat-anchor.md) — Retire dead legacy slice by slice
 - [Distributed Monolith](../../../hazards/distributed-monolith.md) — Splitting the core first is how a decomposition produces services that still ship together.
+
+**Exposed to**
+
+- [Lava Flow](../../../hazards/lava-flow.md) — Can fall into lava flow when the old system lingers unowned when the cutover is never finished
 
 <!-- relationships:end -->

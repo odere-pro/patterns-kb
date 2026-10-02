@@ -16,20 +16,16 @@ Compiles both the old and the new behaviour into the same build and picks betwee
 ## What it is
 <!--meta block=description-->
 
-Two things get bundled together that have nothing to do with each other: putting code on a machine, and letting users see what it does. Bundle them and every consequence follows. A half-finished feature has to live on a long-running branch until it is ready, and the merge is a fight. A feature that turns out to be wrong can only be withdrawn by shipping again. And a dependency that starts misbehaving at midnight can only be switched off by whoever can run a build.
-
-A **feature flag** separates the two. Both behaviours ship in the same build, and a condition at the branch point reads a value from somewhere that can be changed at runtime. Deploy the code with the flag off and nothing about the system's behaviour changes. Turn the flag on later, for everyone or for a chosen few, and the new path lights up without touching a machine.
-
-The flags people call by the same name do quite different jobs, and confusing them is where the trouble starts. A **release toggle** hides unfinished work and should be deleted the week the feature ships. A **kill switch** disables an expensive or fragile path under load and is meant to live for years. An **experiment toggle** splits users into groups to measure a difference. An **entitlement toggle** encodes which plan a customer is on and is really product configuration wearing a flag's clothes. Only the first is genuinely temporary, and treating them all as temporary is why flag cleanup never happens.
-
-Evaluation is where the design decisions are. The value can be baked into configuration and read at startup, which is trivial and needs a restart to change. It can be polled into memory on an interval, which is the usual answer: changes take effect within the interval, and the service keeps working when the flag store is unreachable because it still holds the last value it saw. Or it can be fetched per request, which is instant and makes the flag store a hard dependency on the request path — a new way for the whole system to go down.
-
-Every flag doubles the number of paths through the code, and they multiply rather than add. Three interacting flags describe eight configurations and your test suite almost certainly covers two of them. That is the real cost, and it is paid in defects that appear only in one combination nobody assembled deliberately. The discipline that keeps it survivable is an expiry on every release toggle, a named owner, and removal treated as part of the feature rather than as cleanup somebody will get to.
+A feature flag separates putting code on a machine from letting users see what it does. Both behaviours ship in one build, and a condition reads a value you can change at runtime. Flags do different jobs: release toggles hide unfinished work and should be deleted, kill switches live for years, experiment and entitlement toggles are product logic. Evaluation can be at startup, polled or per request. Every flag multiplies the paths you must test.
 
 ## Explained
 <!--meta block=explain-->
 
-A feature flag is a condition in your code that reads a value you can change while the system runs, so you can put code on a machine and decide separately who sees what it does. Without it, a half-finished feature lives on a long branch whose merge is a fight, a wrong feature can be withdrawn only by shipping again, and a failing dependency at midnight can be switched off only by someone who can run a build. Choose it when the unit of risk is a behaviour, not a build; for a whole release, a router switch or a canary is the better tool, and the two combine. The cost is combinations, and it is the main reason flags go bad: every flag doubles the paths through your code, so three flags make eight configurations your tests do not cover. Counter it when you create the flag: give each release flag an owner and an expiry date that fails the build rather than warns, and count removal as part of the feature being done. A flip leaves no deployment record, so write flag changes into the same timeline as deploys. A value read on a timer reaches instances at different moments, so one user can see both behaviours for one interval.
+A feature flag is a condition in your code that reads a value you can change while the system runs, so you can put code on a machine and decide separately who sees what it does. Without it, a half-finished feature lives on a long branch whose merge is a fight, a wrong feature can be withdrawn only by shipping again, and a failing dependency at midnight can be switched off only by someone who can run a build. Choose it when the unit of risk is a behaviour, not a build; for a whole release, a router switch or a canary is the better tool, and the two combine.
+
+- **Flag combinations.** Every flag doubles code paths, so three make eight untested configurations; give each release flag an owner and a build-failing expiry.
+- **Invisible changes.** A flip leaves no deployment record, so write flag changes into the same timeline as deploys.
+- **Uneven reads.** A value read on a timer reaches instances at different moments, so one user can see both behaviours for one interval.
 
 **Example.** The new checkout ships in the same build as the old, behind the flag new_checkout, off. At 11:00 you turn it on for 5% of 40,000 daily users, 2,000 people. At 11:20 errors rise, you turn it off, and every instance follows within its 30 s refresh. When the flag store is down, instances keep the last value they read. The cost is the flag itself: it carries an owner and an expiry two weeks after full rollout, and the old checkout code is deleted then, because three forgotten flags like it would leave eight untested configurations.
 
@@ -253,6 +249,7 @@ export const RECOMMENDATIONS = defineFlag({
 - [Canary Release](./canary-release.md) — A percentage rule ramps one behaviour without a new deployment
 - [Strangler Fig](../coordination/strangler-fig.md) — The flag is the switch that sends a slice to the replacement
 - [Load Shedding](../resilience/load-shedding.md) — A kill switch sheds an expensive path deliberately, before the server has to
+- [Rolling Deployment](./rolling-deployment.md) — Decouples enabling a feature from the roll that carries its code
 
 **Alternative to**
 
@@ -261,5 +258,9 @@ export const RECOMMENDATIONS = defineFlag({
 **Requires**
 
 - [External Configuration Store](../coordination/external-configuration-store.md) — Where flags live once more than one instance has to agree on them
+
+**Exposed to**
+
+- [Boat Anchor](../../../hazards/boat-anchor.md) — Can fall into boat anchor when flags nobody removes after rollout become permanent dead branches
 
 <!-- relationships:end -->

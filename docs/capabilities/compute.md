@@ -125,7 +125,7 @@ Two constraints settle the shape before price gets a vote. Regional quota comes 
 - [Blue-Green Deployment](../patterns/distributed/routing/blue-green-deployment.md) — Deployment slots and managed rollouts do the swap for you.
 - [Canary Release](../patterns/distributed/routing/canary-release.md) — Weighted traffic splitting across revisions is built into the managed runtimes.
 - [Container Orchestration](../patterns/distributed/coordination/container-orchestration.md) — Managed Kubernetes is this control loop rented by the hour: you declare the desired state, the service reconciles it.
-- [Big Compute](../patterns/architecture/big-compute.md) — Batch and HPC schedulers acquire the cores, run the job and release them, which is the whole shape of this.
+- [Big Compute](../patterns/architecture/big-compute.md) — Batch and high-performance computing (HPC) schedulers acquire the cores, run the job and release them, which is the whole shape of this.
 - [Workflow Orchestration](../patterns/distributed/coordination/workflow-orchestration.md) — Step Functions and Durable Functions persist each step, so a crash resumes instead of restarting.
 
 <!-- relationships:end -->

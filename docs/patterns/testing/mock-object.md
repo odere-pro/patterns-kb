@@ -16,16 +16,17 @@ A test double pre-loaded with the exact calls it expects to receive — right me
 ## What it is
 <!--meta block=description-->
 
-A **mock object** is a test double that is programmed, before the code under test runs, with the calls it expects to receive: which method, with what arguments, how many times. As the system under test executes, the mock checks each incoming call against that script. When the test asks it to `verify()` — either explicitly or automatically, depending on the framework — it confirms every expected call actually happened. Any mismatch, an unexpected call, a wrong argument, a missing call, fails the test immediately, usually naming exactly which expectation broke.
-
-It resolves a specific gap in state-based testing: some collaborators have no return value or state change to read back afterward. Sending an email, publishing a message, writing an audit-log entry, charging a card through a gateway — the observable result of the operation is the call itself, not something you can query once it's over. A mock lets the test assert on that interaction directly, instead of inferring it indirectly through side effects that may be slow, external, or simply invisible from inside a test.
-
-That makes Mock Object the pattern of behavior verification rather than state verification — the distinction Martin Fowler drew out of Steve Freeman and Nat Pryce's early work on jMock. A stub or a fake lets a test check the final state of the world; a mock checks the conversation that produced it. That precision is also the pattern's chief risk: a mock encodes not just what the collaborator should accomplish, but exactly how the code under test talks to it, and the two are easy to conflate.
+A mock object is a test double programmed before the code runs with the calls it expects: which method, which arguments, how many times. It fails the test on an unexpected, wrong or missing call. It resolves the gap in state-based testing for collaborators with nothing to read back afterwards, such as sending an email or charging a card, where the call itself is the result. It verifies behaviour, where a stub or fake lets a test check state.
 
 ## Explained
 <!--meta block=explain-->
 
-A mock object is a test double loaded before the test runs with the calls it should receive, which method, with which arguments, how many times, and it fails the test when the code makes a different call or leaves one out. Use it when the outcome you care about is a call and nothing else shows it, such as sending an email, publishing a message or charging a card. Choose it over a stub or fake, which let you check the final state, when there is no state to read afterwards. It costs four things. It ties the test to how the code calls its collaborator, so mock only at the edge of your system, where the call is the result. Over-specific expectations make a harmless refactor break many tests, so expect only what matters. Mocking simple value objects adds nothing, so use real ones. And it proves a call happened, not that the real effect was right, so keep one test against the real service.
+A mock object is a test double loaded before the test runs with the calls it should receive, which method, with which arguments, how many times, and it fails the test when the code makes a different call or leaves one out. Use it when the outcome you care about is a call and nothing else shows it, such as sending an email, publishing a message or charging a card. Choose it over a stub or fake, which let you check the final state, when there is no state to read afterwards.
+
+- **Coupling to calls.** The test is tied to how code calls its collaborator; mock only at the system edge, where the call is the result.
+- **Over-specified.** Tight expectations make a harmless refactor break many tests; expect only what matters.
+- **Needless mocks.** Mocking simple value objects adds nothing; use real ones.
+- **Call, not effect.** It proves a call happened, not that the real effect was right; keep one test against the real service.
 
 **Example.** A refund service must call gateway.refund with payment pay_7 and 2,500 cents exactly once. A retry bug makes it call twice, so the customer gets 5,000 cents back instead of 2,500. State shows nothing, because the gateway returns success both times. A mock expecting one call fails on the second, naming the extra call. The cost arrives when the team batches refunds into one call per hour: customers are still refunded correctly, but 14 tests that expected one call per refund now fail and must be rewritten to expect the batch.
 

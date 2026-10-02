@@ -16,11 +16,7 @@ Parts of any system will fail — disks, networks, dependencies, deploys. Resili
 ## The question
 <!--meta block=description-->
 
-At any real scale, failure stops being an edge case and becomes a certainty. Disks fail, networks drop packets, dependencies slow to a crawl, deploys go wrong, and sooner or later some downstream service simply stops answering. Resilience is not about preventing that — you can't, not completely — it is about designing so a single failure degrades the system instead of taking the whole thing down with it.
-
-The real question a resilient system has to answer is "what happens next." Does a hung call tie up every thread waiting on it? Does a caller keep hammering a dependency that's already down, making its recovery harder? Does a lost message disappear, or a redelivered one get processed twice? Every one of those is a decision, and the patterns in this theme are the vocabulary for making it on purpose rather than by accident, at 3am, under load.
-
-Resilience patterns work at every point in a call's path: bounding how long you'll wait, deciding whether to try again, deciding when to stop trying, containing the damage when you can't, and cleaning up whatever partial state a failure leaves behind.
+At scale, failure is a certainty: disks fail, networks drop packets, dependencies slow to a crawl, deploys go wrong. Resilience does not prevent that; it designs so one failure degrades the system instead of taking it down. Does a hung call tie up every thread? Does a caller hammer a dependency that is already down? Does a redelivered message run twice? Decide each on purpose, not at 3am under load.
 
 ## Explained
 <!--meta block=explain-->

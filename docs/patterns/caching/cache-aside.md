@@ -194,6 +194,21 @@ async function updateUser(id: string, patch: Partial<User>): Promise<void> {
 
 <!-- fluency:end -->
 
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **What stays stale after a write, and for how long?**
+>
+> The cache entry, from the write to the source until it is invalidated or expires, see [con 3](cache-aside.md#tradeoffs-con-3).
+
+> **What happens when a hot key expires under load?**
+>
+> Many readers miss at once and all hit the source, because the pattern has no herd protection, see [con 4](cache-aside.md#tradeoffs-con-4).
+
+> **Why does a cache outage degrade gracefully here?**
+>
+> Reads fall through to the source, slower but still correct, see [pro 3](cache-aside.md#tradeoffs-pro-3).
+
 ## How it relates
 <!--meta block=relationships-->
 
@@ -209,6 +224,7 @@ async function updateUser(id: string, patch: Partial<User>): Promise<void> {
 - [Index Table](../distributed/coordination/index-table.md) — The same bargain at a different layer: a copy built from its source that can lag it
 - [External Configuration Store](../distributed/coordination/external-configuration-store.md) — The caching layer a configuration client puts in front of a remote store
 - [Refresh-Ahead](./refresh-ahead.md) — Add refresh-ahead when one expiring hot key would send a burst of misses to the source
+- [Content Enricher](../messaging/content-enricher.md) — Each lookup an enricher makes is a read worth caching, so most messages skip the data source
 
 **Alternative to**
 
@@ -223,6 +239,15 @@ async function updateUser(id: string, patch: Partial<User>): Promise<void> {
 
 - [Stale Cache](../../hazards/stale-cache.md) — Invalidate the key on write, so the next read reloads the current value
 - [No Caching](../../hazards/no-caching.md) — The usual first answer when the same unchanged value is fetched on every request
+
+**Exposed to**
+
+- [Cache Stampede](../../hazards/cache-stampede.md) — Can fall into cache stampede when a miss makes each caller rebuild the value, so concurrent misses on a hot key all hit the source
+- [Dual-Write Inconsistency](../../hazards/dual-write-inconsistency.md) — Can fall into dual write inconsistency when the app updates the store and then the cache with separate calls, so a failed second call leaves a stale entry
+- [Hot Key](../../hazards/hot-key.md) — Can fall into hot key when one popular key lives on a single cache node, and every reader goes to it
+- [Race Condition](../../hazards/race-condition.md) — Can fall into race condition when a read that reloaded an old value can re-cache it just after a write's invalidation
+- [Thundering Herd](../../hazards/thundering-herd.md) — Can fall into thundering herd when entries written together expire together, so every miss recomputes at once
+- [Metastable Failure](../../hazards/metastable-failure.md) — Can fall into metastable failure when a cold cache after a flush sends every read to the database, which can then never refill it
 
 **Demonstrated by**
 

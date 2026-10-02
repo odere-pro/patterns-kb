@@ -15,18 +15,17 @@ Sequences computations whose results carry extra context — absence, failure, a
 ## What it is
 <!--meta block=description-->
 
-A **monad** is a generic wrapper type, `M<T>`, equipped with two operations: `of` (or `return`), which lifts a plain value into the wrapped context, and `bind` (also called `flatMap` or `chain`), which takes a function `T -> M<U>` and sequences it against an existing `M<T>` — running the function, then flattening the result — without the caller ever manually unwrapping the value. Three laws (left identity, right identity, associativity) guarantee that chains built this way compose the same regardless of how they're grouped or refactored.
-
-The problem it resolves is threading extra context — a value that might be absent, a step that might fail, a computation that hasn't resolved yet, an operation that yields several results — through a sequence of steps without repeating the same boilerplate at every one. Written by hand, that's a null check after every call, a `try/catch` around every risky step, a pyramid of nested callbacks, or a nested loop per extra list. `bind` captures that boilerplate exactly once per context and lets ordinary functions compose through it uniformly.
-
-The pattern shows up everywhere in mainstream code, even where the word never does. A `Promise` is a monad: `.then` is `bind`, `Promise.resolve` is `of`, and the chain short-circuits on rejection the same way `Maybe` short-circuits on `None`. An array's `.flatMap` is `bind` for the List monad. `Result`/`Either` types thread an error value instead of throwing one. Optional chaining (`?.`) is a syntax-level, single-field approximation of the same idea.
-
-Every monad is also a [Functor](./functor.md) — it can `map` a plain function over the wrapped value — but a functor alone can't flatten a nested wrapper (`M<M<T>>` back to `M<T>`), which is exactly what happens when a step itself returns a wrapped value. That flattening is the extra structure `bind` adds, and it's the difference between mapping over context and sequencing through it.
+A monad is a wrapper type with two operations: `of`, which lifts a plain value into the wrapper, and `bind` (also `flatMap`), which runs a function that returns a wrapper and flattens the result. It carries context such as absence, failure or delay through a sequence of steps without a null check, try/catch or callback at each one. Promise, array `flatMap` and Result types are everyday monads.
 
 ## Explained
 <!--meta block=explain-->
 
-A monad is a wrapper with a bind step that runs the next function only if the earlier steps worked, and merges the results so wrappers do not nest. The wrapper carries a context such as "might be missing", "might have failed with an error" or "arrives later". You write each step as a function that returns a wrapped result, bind joins them, and the first failure skips the rest and reaches the end. Choose it over nested if-checks or try and catch when several steps can fail in the same way and the first failure should stop everything. It costs four things. The word puts people off, so call it by its job, such as a result chain. Long chains hide the flow, so keep them short and use async and await or do-notation where the language has it. Stacking wrappers, a Promise of a Result of an Option, gets awkward, so pick one wrapper per layer. A failure at the end shows no path, so add context to each error message.
+A monad is a wrapper with a bind step that runs the next function only if the earlier steps worked, and merges the results so wrappers do not nest. The wrapper carries a context such as "might be missing", "might have failed with an error" or "arrives later". You write each step as a function that returns a wrapped result, bind joins them, and the first failure skips the rest and reaches the end. Choose it over nested if-checks or try and catch when several steps can fail in the same way and the first failure should stop everything.
+
+- **Off-putting name.** The word puts people off, so call it by its job, such as a result chain.
+- **Hidden flow.** Long chains hide the flow, so keep them short and use async and await or do-notation where the language has it.
+- **Stacked wrappers.** A Promise of a Result of an Option gets awkward, so pick one wrapper per layer.
+- **Bare failures.** A failure at the end shows no path, so add context to each error message.
 
 **Example.** Charging an order takes three steps: parse the request, find the user, charge the card. Each can fail. Written with if-checks, that is 3 nested ifs and 3 error branches. As a chain of Result steps, it is three bind calls and one error handler at the end. If the user is not found, the charge step never runs and the error "no such user" reaches the handler. The cost is that this error arrives with no record of which call failed, so each step adds its own label, such as "find user: no such user".
 

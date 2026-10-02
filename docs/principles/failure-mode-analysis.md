@@ -16,16 +16,19 @@ Walk every component and every dependency, write down each way it can fail — s
 ## What it says
 <!--meta block=description-->
 
-Before you build it, walk the system one component and one dependency at a time, and write down every way each can fail. Not only that it is down: a dependency can answer slowly, answer for half the keys, answer with stale data, answer with wrong data, or accept a write and lose it. For each mode decide two things now — how you will detect it, and what the system will do about it. That list of decisions is the deliverable.
-
-This is method, and it pairs with the stance in [Design for Self-Healing](./self-healing.md): that page says recover, this one says from what. It is also not a document. A failure-mode table that ends its life on a wiki page has produced nothing, because the real output is a set of changes — an alert that did not exist, a timeout with an argued value, a dependency demoted from required to optional. The table is the working that got you there.
+Before you build, walk the system one component and one dependency at a time and write down every way each can fail: not only down, but slow, stale, wrong, partial or lossy. For each mode decide now how you will detect it and what the system will do. The deliverable is those decisions, not a table. It pairs with [Design for Self-Healing](./self-healing.md): that page says recover, this one says from what.
 
 ## Explained
 <!--meta block=explain-->
 
-Failure mode analysis means that before you build, you walk the system one part and one dependency at a time and write down every way each can fail, then decide how you will detect it and what the system will do. Down is the easy mode. A dependency can also answer slowly, answer for half the keys, serve stale or wrong data, or accept a write and lose it, and those are the ones that hurt. Choose it over waiting for incidents to teach you when the path matters enough, because the output is a set of changes: an alert that did not exist, a timeout with an argued value, a dependency moved from required to optional. It has four costs. The analysis can turn into a document, so judge a pass by what it changed. Invented probabilities multiplied together give false precision, so rank in coarse bands and measure real rates where they matter. Depth costs the same hours anywhere, so spend it where the path is worth it. And a mitigation nobody has run is a guess, so inject each fault you claimed to handle and check that the alert fires.
+Failure mode analysis means that before you build, you walk the system one part and one dependency at a time and write down every way each can fail, then decide how you will detect it and what the system will do. Down is the easy mode. A dependency can also answer slowly, answer for half the keys, serve stale or wrong data, or accept a write and lose it, and those are the ones that hurt. Choose it over waiting for incidents to teach you when the path matters enough, because the output is a set of changes: an alert that did not exist, a timeout with an argued value, a dependency moved from required to optional.
 
-**Example.** A team plans an order service that calls a payment API, a stock database and an identity provider. The walk lists modes, not just down: payment slow, stock reads stale, certificate expired. Three changes come out. Payment gets a 3 s timeout and 2 retries, after the team argues the value from the API's usual 400 ms answer. Stale stock gets an alert when the oldest cached value passes 60 s. The certificate gets a 30-day expiry warning. Then they inject each fault in a test environment, and the stock alert never fires because it was wired to the wrong metric. The cost is two days at a whiteboard, spent on the revenue path and not on the admin tool.
+- **The analysis can turn into a document.** Judge a pass by what it changed in the design, not by the table.
+- **Invented probabilities multiplied together give false precision.** Rank in coarse bands and measure real rates where they matter.
+- **Depth costs the same hours anywhere.** Spend it on the paths worth it, not on the admin tool.
+- **A mitigation nobody has run is a guess.** Inject each fault you claimed to handle and check that the alert fires.
+
+**Example.** A team plans an order service that calls a payment API, a stock database and an identity provider. The walk lists modes, not just down: payment slow, stock reads stale, certificate expired. Three changes come out. Payment gets a 3 s timeout and 2 retries, after the team argues the value from the API's usual 400 ms answer. Stale stock gets an alert when the oldest cached value passes 60 s. The certificate gets a 30-day expiry warning. Then they inject each fault in a test environment, and the stock alert never fires because it was wired to the wrong metric. The cost is two days at a whiteboard.
 
 ## Why it helps
 <!--meta block=rationale-->

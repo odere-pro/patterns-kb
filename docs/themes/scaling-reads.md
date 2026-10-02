@@ -15,14 +15,16 @@ The read-path scaling ladder — climb from one database up through indexing and
 ## The question
 <!--meta block=description-->
 
-Read-heavy is the normal shape of a successful product. One tweet is read by thousands, one listing browsed by hundreds, one video watched billions of times against a trickle of uploads — read-to-write ratios start around 10:1 and climb past 100:1 for content-heavy apps. That imbalance is a physics problem before it is a software one: CPU, memory and disk I/O have hard ceilings, and past them no amount of cleverness in a query makes a single database serve more reads. Scaling reads is the ladder you climb once one database can no longer keep up with how often the same data is asked for.
-
-The discipline is to climb it in order, cheapest rung first — most of the pain in practice comes from jumping straight to a [distributed cache](../patterns/caching/distributed-cache.md) before exhausting the simpler fixes underneath it. First do less work inside the database: index the columns you filter and sort on, denormalize the joins that dominate, precompute aggregates into materialized views, and where the store has no secondary indexes, build one yourself as an [Index Table](../patterns/distributed/coordination/index-table.md). Then scale the database horizontally: read replicas to multiply copies, then sharding when the dataset itself outgrows one node. Only then reach outward for caching — an application cache for the hot keys, and a CDN to serve shared responses from the edge. This theme is that ladder specifically for reads; its write-path twin, [Scaling Writes](./scaling-writes.md), climbs a different one.
+Read-heavy is the normal shape of a successful product, with read-to-write ratios from 10:1 past 100:1. CPU, memory and disk I/O have hard ceilings, so past them no query tuning makes one database serve more reads. This theme is the ladder for that case, cheapest rung first: less work inside the database, then more copies and slices of it, then caching in memory and at the edge.
 
 ## Explained
 <!--meta block=explain-->
 
-Scaling reads means serving the same data to more people without sending every request to your one database. Read-heavy is the normal shape: ratios start near 10 reads per write and pass 100. You climb a ladder and take the cheapest rung first. Do less work inside the database: index the columns you filter on, store joined data together, and keep precomputed results in a table. Then add read replicas, which are extra copies of the database that serve reads. Split the data across machines only when the dataset outgrows one. Reach for a cache, which keeps answers in memory, last, because it adds staleness and new failure modes. Each rung costs something. Replicas lag, so decide how many seconds old a read may be. A cache needs invalidation, so give entries a time limit or a version in the key. When a hot entry expires, every reader misses at once and floods the database, so let one request rebuild it while the rest wait. One key so popular that one cache node cannot hold it needs copies under several key names.
+Scaling reads means serving the same data to more people without sending every request to your one database. Read-heavy is the normal shape: ratios start near 10 reads per write and pass 100. You climb a ladder and take the cheapest rung first. Do less work inside the database: index the columns you filter on, store joined results in a [materialized view](../patterns/distributed/coordination/materialized-view.md), or build your own [index table](../patterns/distributed/coordination/index-table.md). Then add [replicas](../patterns/distributed/coordination/replication.md), which are extra copies that serve reads, and [shard](../patterns/distributed/routing/sharding.md) only when the dataset outgrows one machine. Reach for a cache ([cache-aside](../patterns/caching/cache-aside.md) in the app, a [CDN](../patterns/distributed/routing/cdn.md) at the edge) last, because it adds staleness and new failure modes.
+
+- **Replica lag.** Replicas trail the primary. Decide how many seconds old a read may be.
+- **Invalidation.** A cache serves stale data. Give entries a time limit or a version in the key.
+- **Stampede on expiry.** A hot entry expiring makes every reader miss at once. Let one request rebuild it while the rest wait.
 
 **Example.** A listing page takes 20,000 reads a second. The primary serves 4,000, so 4 replicas plus the primary cover it, at the price of reads a few seconds old. A cache with a 90% hit rate would instead leave 2,000 reads a second for the database. Then the hottest listing expires while 10,000 readers a second want it. A rebuild takes 200 ms, so 2,000 requests miss together and hit the database at once. If one request per app server rebuilds and the others wait, 20 servers send 20 queries, not 2,000.
 
@@ -62,6 +64,10 @@ The first rung is to do less work per read. A materialized view precomputes an e
 
 When the store has no secondary index for the field you filter on, a second table keyed by that field turns a full scan into two cheap lookups. You pay in storage and in keeping it in step with the data, and you own that staleness.
 
+### [Inverted Index](../patterns/distributed/coordination/inverted-index.md) {#tour-inverted-index}
+
+Reads for a keyword never scan the documents. The index lists the documents for each term, so the read touches only those lists and write cost is paid once at indexing time.
+
 ### [Replication](../patterns/distributed/coordination/replication.md) {#tour-replication}
 
 When one primary can no longer serve the read volume — a rough interview trigger is somewhere around 50k–100k reads/sec on a well-indexed database — copy it. Leader–follower replication sends every write to the primary and spreads reads across read-only followers, so read capacity grows with the number of copies (and a follower can be promoted on failover). The catch is replication lag: an asynchronous follower can be seconds stale, so a user may not see their own just-written change — the classic trade of synchronous consistency against asynchronous speed.
@@ -72,11 +78,11 @@ Replicas multiply reads, but every copy still holds the whole dataset. Sharding 
 
 ### [Cache-Aside](../patterns/caching/cache-aside.md) {#tour-cache-aside}
 
-Real read traffic is wildly skewed — millions hit the same viral post, thousands the same product page — so the same rows get re-fetched endlessly. A cache-aside layer checks an in-memory store first and falls back to the database on a miss, populating the cache on the way back; hot data stays resident at sub-millisecond latency while cold data expires by TTL. The hard part is invalidation — short TTLs as a safety net, plus active invalidation ([write-through](../patterns/caching/write-through.md), versioned keys) for data that must stay fresh.
+Real read traffic is wildly skewed — millions hit the same viral post, thousands the same product page — so the same rows get re-fetched endlessly. A cache-aside layer checks an in-memory store first and falls back to the database on a miss, populating the cache on the way back; hot data stays resident at sub-millisecond latency while cold data expires by time to live (TTL). The hard part is invalidation — short TTLs as a safety net, plus active invalidation ([write-through](../patterns/caching/write-through.md), versioned keys) for data that must stay fresh.
 
 ### [CDN](../patterns/distributed/routing/cdn.md) {#tour-cdn}
 
-The last rung pushes the cache out to the user. A CDN caches read-heavy responses — modern ones cache API responses and query results, not just static assets — at edge locations near the client, so a request is served nearby instead of round-tripping to a distant origin, and origin load drops sharply for shared content. It only pays off for data shared across users; personal, per-requester data gets no hit-rate benefit and should not be cached at the edge.
+The last rung pushes the cache out to the user. A content delivery network (CDN) caches read-heavy responses — modern ones cache application programming interface (API) responses and query results, not just static assets — at edge locations near the client, so a request is served nearby instead of round-tripping to a distant origin, and origin load drops sharply for shared content. It only pays off for data shared across users; personal, per-requester data gets no hit-rate benefit and should not be cached at the edge.
 
 <!-- tour:end -->
 

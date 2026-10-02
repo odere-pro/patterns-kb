@@ -15,16 +15,16 @@ A central registry you ask for a service by name or type — it hands back a sha
 ## What it is
 <!--meta block=description-->
 
-A **service locator** is a central object that holds references to shared services — usually keyed by interface, type, or name — and hands one back when a caller asks for it. Instead of constructing its collaborators or receiving them through its constructor, a class calls `locator.get(PaymentGateway)` at the point of use.
-
-The problem it resolves is **decoupling callers from concrete implementations and from wiring**. Code that only knows an interface no longer needs to know which class implements it, how it is built, or how long it lives. All of that moves into one place you configure at startup, so you can swap a real implementation for a stub, a cache, or a different backend without touching the callers.
-
-The force in tension is **explicitness**. A located dependency is hidden inside a method call rather than declared in a signature, so the class's real requirements no longer show up in its API. That is exactly why the pattern is contested: it buys flexibility at the cost of dependencies you can no longer see.
+A service locator is a central registry that holds shared services, keyed by interface, type or name, and hands one back when a caller asks, as in `locator.get(PaymentGateway)`. Callers know only the interface, and one startup place picks the implementation. The price is that a class's real dependencies no longer show in its signature.
 
 ## Explained
 <!--meta block=explain-->
 
-A service locator is a central registry that your code asks for a shared service by type or name, for example \`locator.get(PaymentGateway)\`, instead of building it or receiving it in a constructor. Callers know only the interface, and one place at startup decides which class answers. Choose it only where you do not own construction: a framework, a plugin host or a legacy call site creates your objects and there is no constructor to pass anything through. Where you do own it, dependency injection, which hands the objects in from outside, gives the same freedom without these costs. A class's needs vanish from its signature, so pass the locator in rather than using a global one, and tests can substitute it. A missing registration fails at the moment of the call, so resolve every key at startup before traffic arrives. The registry attracts unrelated services and turns into a god object, one class that does everything, so cap and review the key list or split it by module.
+A service locator is a central registry that your code asks for a shared service by type or name, for example \`locator.get(PaymentGateway)\`, instead of building it or receiving it in a constructor. Callers know only the interface, and one place at startup decides which class answers. Choose it only where you do not own construction: a framework, a plugin host or a legacy call site creates your objects and there is no constructor to pass anything through. Where you do own it, dependency injection, which hands the objects in from outside, gives the same freedom without these costs.
+
+- **Hidden needs.** A class's needs vanish from its signature, so pass the locator in rather than using a global one, and tests can substitute it.
+- **Late failure.** A missing registration fails at the moment of the call, so resolve every key at startup before traffic arrives.
+- **God object.** The registry attracts unrelated services, so cap and review the key list or split it by module.
 
 **Example.** A plugin host creates your ReportPlugin with no arguments, so it cannot receive a database. The plugin calls locator.get(Database) when it runs. A teammate renames the registration to Db, and nothing fails until a user runs a report and gets an error. A startup check that resolves all 12 keys the plugins use would fail the boot instead. In tests, you pass a locator holding a fake database, so the plugin runs without a real one. Had the locator been a global, every test would first have had to set it up.
 
@@ -188,6 +188,10 @@ const stamp = locator.get(CLOCK).now();
 
 **Often confused with**
 
-- [Singleton](../creational/singleton.md) — Both hand back a shared instance; DI is usually better
+- [Singleton](../creational/singleton.md) — Both hand back a shared instance; dependency injection (DI) is usually better
+
+**Exposed to**
+
+- [Static Cling](../../../hazards/static-cling.md) — Can fall into static cling when a static registry lookup hides dependencies behind a call that cannot be swapped
 
 <!-- relationships:end -->

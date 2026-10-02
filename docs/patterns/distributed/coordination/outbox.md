@@ -230,6 +230,21 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
 
 <!-- fluency:end -->
 
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **Which failure does the outbox remove?**
+>
+> The dual write, where the database commits but the broker publish is lost, see [pro 1](outbox.md#tradeoffs-pro-1).
+
+> **Why must consumers of an outbox be idempotent?**
+>
+> Delivery is at least once, so a relay retry can replay an event, see [con 2](outbox.md#tradeoffs-con-2).
+
+> **What grows without bound if you forget it?**
+>
+> The outbox table, unless a job archives or deletes published rows, see [con 4](outbox.md#tradeoffs-con-4).
+
 ## How it relates
 <!--meta block=relationships-->
 
@@ -247,7 +262,7 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
 - [Functional Partitioning](../routing/functional-partitioning.md) — Publishing across a functional boundary is the case it exists for: two stores, one atomic write
 - [Web-Queue-Worker](../../architecture/web-queue-worker.md) — The front-end-writes-then-enqueues sequence is the classic place this gap opens.
 - [Publish-Subscribe](../../messaging/pubsub.md) — The outbox makes publishing atomic with the write
-- [CQRS](../../architecture/cqrs.md) — The relay that drains an outbox is how a CQRS read model stays fed without a lost event
+- [CQRS](../../architecture/cqrs.md) — The relay that drains an outbox is how a command query responsibility segregation (CQRS) read model stays fed without a lost event
 - [Event-Carried State Transfer](../../messaging/event-carried-state-transfer.md) — An outbox is the safe way to emit state-carrying events.
 
 **Alternative to**
@@ -266,9 +281,13 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
 
 - [Dual-Write Inconsistency](../../../hazards/dual-write-inconsistency.md) — Removes the second write, so nothing is lost in the gap
 
+**Exposed to**
+
+- [Retry Storm](../../../hazards/retry-storm.md) — Can fall into retry storm when a relay that republishes after a failure floods a recovering broker
+
 **Demonstrated by**
 
-- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — committing a KYC flow's state transition and its client webhook event in one transaction, so a crash can never separate what happened from what the client is told
+- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — committing a know your customer (KYC) flow's state transition and its client webhook event in one transaction, so a crash can never separate what happened from what the client is told
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — a case study where the pattern's guarantee is kept without its table — an append-only record with a client-visible flag and a per-flow cursor is the relay's whole queue
 
 <!-- relationships:end -->

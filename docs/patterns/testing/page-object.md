@@ -16,18 +16,17 @@ Wraps a UI screen's structure and interactions behind one class with a single te
 ## What it is
 <!--meta block=description-->
 
-A **Page Object** is a class that models one screen — or one meaningful piece of a screen — of the application under test. It owns the locators for that screen's elements and exposes them as intention-revealing methods: `login(email, password)`, `addToCart()`, `submitOrder()`. Test code calls those methods; it never touches a CSS selector or an XPath directly. Fowler first wrote the pattern up as Window Driver, and the name we use now spread through the Selenium project — which is why it says page when the unit is usually a region.
-
-The page object exposes state and actions, and the test owns the checking. Keep assertions out of it — the one accepted exception is a check in the constructor that the expected screen actually loaded, because everything the object offers afterwards depends on that being true.
-
-The force it resolves is **brittleness through duplication**. Without it, every test that needs the login form embeds its own copy of the selectors and the click sequence. The moment a designer renames a field's id or a developer restructures the form, every one of those tests breaks in the same way, and someone has to hunt down and fix each copy. Locators and tests are two concerns tangled into one file, and neither can change independently of the other.
-
-Page Object separates them. The screen's structure lives in exactly one place; the test only expresses intent. When the UI changes, one page object is updated and every test that depends on it is fixed at once — the tests themselves never needed to know how the click happened, only that it did.
+A page object is a class that models one screen, or one meaningful part of it, in a user-interface test. It owns the locators and exposes intention-revealing methods such as login(email, password); tests call those methods and never touch a selector. It resolves brittleness through duplication: when a field is renamed, one page object changes and every test is fixed at once. The object exposes state and actions, and the test owns the assertions.
 
 ## Explained
 <!--meta block=explain-->
 
-A page object is a class that models one screen, or one meaningful part of it, in a user-interface test. It holds the selectors, which are the strings that find each field and button, and the click sequences, and offers methods that say what the user does, such as login(email, password). The test calls those methods and does its own checking. Without it, every test that needs the login form carries its own copy of the selectors, so when a designer renames a field, every one of those tests fails for a reason unrelated to what it tests. Choose it over selectors written in each test when more than a few tests touch the same screen. It costs four things. It is a layer to keep in step with the UI, so skip it for a tiny suite. One object for the whole screen turns into a dumping ground, so split it by meaningful part. Driving setup through screens is slow, so seed data directly. And it does not fix timing, so use proper waits underneath.
+A page object is a class that models one screen, or one meaningful part of it, in a user-interface test. It holds the selectors, which are the strings that find each field and button, and the click sequences, and offers methods that say what the user does, such as login(email, password). The test calls those methods and does its own checking. Without it, every test that needs the login form carries its own copy of the selectors, so when a designer renames a field, every one of those tests fails for a reason unrelated to what it tests. Choose it over selectors written in each test when more than a few tests touch the same screen.
+
+- **Extra layer.** It must be kept in step with the UI; skip it for a tiny suite.
+- **Dumping ground.** One object for a whole screen bloats; split it by meaningful part.
+- **Slow setup.** Driving setup through screens is slow; seed data directly.
+- **Timing.** It does not fix timing; use proper waits underneath.
 
 **Example.** A suite of 60 UI tests each types into the field with id email. A designer renames it to user-email, and all 60 tests fail. With a LoginPage object holding that selector, you make one edit and all 60 pass again. Each test also logs in through the form, 8 seconds each, 60 times 8 is 480 seconds, 8 minutes. Seeding the logged-in session directly takes 0.2 seconds, so the suite spends 12 seconds on setup. The cost is the page object itself, which the team must keep up to date for every screen change.
 

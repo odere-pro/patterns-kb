@@ -178,13 +178,15 @@ class CustomerAcl {
 **Combines with**
 
 - [Hexagonal](../architecture/hexagonal.md) — Adapters often carry an anti-corruption layer
-- [Strangler Fig](../distributed/coordination/strangler-fig.md) — An ACL shields new code from the legacy model
-- [Message Translator](../messaging/message-translator.md) — Translation is the ACL's core job
-- [Bounded Context](./bounded-context.md) — An ACL guards a context's boundary
+- [Strangler Fig](../distributed/coordination/strangler-fig.md) — An anticorruption layer (ACL) shields new code from the legacy model
+- [Message Translator](../messaging/message-translator.md) — Translation is the anticorruption layer (ACL)'s core job
+- [Bounded Context](./bounded-context.md) — An anticorruption layer (ACL) guards a context's boundary
 - [Adapter](../gof/structural/adapter.md) — Adapters implement the translation
 - [Postel's Law](../../principles/postels-law.md) — Contains liberal acceptance in a single translating boundary
-- [API Versioning](../distributed/routing/api-versioning.md) — Versioning an API is the same translation problem pointed outward: the old contract is the foreign model
+- [API Versioning](../distributed/routing/api-versioning.md) — Versioning an application programming interface (API) is the same translation problem pointed outward: the old contract is the foreign model
 - [Design for Evolution](../../principles/design-for-evolution.md) — The layer stops an external change from becoming an internal one
+- [Context Map](./context-map.md) — The context map shows which borders need an anticorruption layer
+- [Canonical Data Model](../messaging/canonical-data-model.md) — An anticorruption layer (ACL) can translate a legacy model into the canonical one
 
 **Composed of**
 

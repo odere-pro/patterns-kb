@@ -15,16 +15,16 @@ A one-dimensional index cannot preserve two-dimensional adjacency, so "what is n
 ## The question
 <!--meta block=description-->
 
-Proximity search means querying by location rather than by id or exact value: the nearest available driver, restaurants within two kilometres, friends near me right now. It is a recurring system-design problem — "design Uber", "design Yelp", "find nearby" — and it is harder than it looks, because the index you already trust quietly fails at it.
-
-A range query on one sorted column — users aged 20 to 25 — is cheap on a B-tree: the keys are physically ordered and packed onto adjacent disk pages, so the answer is one seek and a short sequential read. Distance is not like that. It depends on latitude and longitude **jointly**. Index latitude alone and you select a horizontal band across the whole planet; a composite `(lat, lon)` index still orders primarily by the first column and only tie-breaks on the second, so it is effectively still a one-dimensional sort — the band it returns holds millions of unranked rows, and you are back to computing distance on every one. The root cause is unavoidable: **a one-dimensional sort order cannot preserve two-dimensional adjacency**. Two points next to each other on the map can land far apart in the index.
-
-So there are two families of answers — build a data structure that natively understands two dimensions (a spatial tree), or flatten location into a single sortable key an ordinary index can use (an encoded cell). And there is one rule that holds no matter which you pick: the spatial index never returns the final answer. It shrinks "scan everything" down to a small candidate set; exact distance or geometry math on that set produces the real result. **You always post-filter.**
+Proximity search queries by location: the nearest driver, restaurants within two kilometres, friends nearby. The index you already trust fails at it, because a one-dimensional sort order cannot keep two-dimensional neighbours adjacent. Two families answer it, a spatial tree or a location encoded as one sortable key, and both only narrow the candidates, so you always finish with exact distance math.
 
 ## Explained
 <!--meta block=explain-->
 
-Proximity search finds the things nearest a point, such as drivers within 1 km, and an ordinary index cannot do it. An index sorts on one value, and a location has two, latitude and longitude, so points that are neighbours on the map can sit far apart in the sort, and a range on one of them returns a band across the planet. There are two fixes. Choose a spatial tree, an index that nests boxes inside bigger boxes, when you store shapes such as delivery zones and ask whether a point is inside one. Choose an encoded cell, which turns a location into one short key for its grid square, when you store points that move constantly, because an update is one small key write. Two costs apply to both. The index only narrows the search to candidates, so finish with an exact distance calculation on them. A point near the edge of its square has neighbours in the next squares, so scan the surrounding ring of 9 squares, not one. Encoded cells hold points only, so shapes still need a tree.
+Proximity search finds the things nearest a point, such as drivers within 1 km, and an ordinary index cannot do it. An index sorts on one value, and a location has two, so points that are neighbours on the map can sit far apart in the sort. There are two fixes. Choose a spatial tree, an index that nests boxes inside bigger boxes, when you store shapes such as delivery zones and ask whether a point is inside one. Choose an encoded cell, which a [geohash](../patterns/distributed/routing/geohash.md) makes by turning a location into one short key for its grid square, when you store points that move constantly, because an update is one small key write. Large sets spread across machines by [sharding](../patterns/distributed/routing/sharding.md) on that key. Without either, you compute distance on every row.
+
+- **Candidates, not answers.** The index only narrows the search. Finish with an exact distance calculation on the candidates.
+- **Edge misses.** A point near the edge of its square has neighbours in the next squares. Scan the ring of 9 squares, not one.
+- **Points only.** Encoded cells hold points, not shapes. Keep a spatial tree for zones and polygons.
 
 **Example.** A ride app tracks 200,000 drivers who report every 4 s, which is 50,000 writes a second. Each write replaces one key holding the driver cell. A rider asks for drivers within 1 km. The app scans the rider cell and its 8 neighbours, about 20 drivers per cell, so 180 candidates, and computes exact distance on those 180, not on 200,000. A dispatcher also asks whether a pickup is inside an airport zone, a polygon, which an encoded cell cannot answer, so that query goes to a spatial index in PostGIS.
 
@@ -58,6 +58,10 @@ flowchart TB
 ### [Geohash](../patterns/distributed/routing/geohash.md) {#tour-geohash}
 
 The encoded-cell answer. Flatten each point to a short, prefix-sortable key so nearest-neighbour becomes a range scan on the B-tree or sorted set you already have — at the cost of scanning the 3×3 ring of neighbouring cells and post-filtering by exact distance. Its cheap single-key writes make it the natural home for constantly moving points, and S2 and H3 are the same idea with uniform-area or hexagonal cells.
+
+### [Trie](../patterns/distributed/coordination/trie.md) {#tour-trie}
+
+A prefix tree finds every cell or term that starts with a given prefix by walking one path. Paired with a geohash, the shared prefix means the same neighbourhood.
 
 ### [Materialized View](../patterns/distributed/coordination/materialized-view.md) {#tour-materialized-view}
 

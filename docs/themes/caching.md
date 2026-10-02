@@ -15,14 +15,16 @@ Caching trades a little storage and some staleness for a large speed win. The de
 ## The question
 <!--meta block=description-->
 
-A cache is a bet that the same data will be asked for again soon, and that a copy kept somewhere faster is worth the cost of keeping it. The economics are stark: reading from memory takes roughly a hundred nanoseconds, reading from an SSD-backed database takes about a millisecond, and a round trip across a continent takes hundreds of milliseconds. Caching exists to collapse whichever of those gaps is hurting — but every copy it keeps is a second source of truth that can drift, go stale, or evaporate at the worst moment.
-
-That makes "add a cache" three decisions wearing one name. **Where** does the copy live relative to the request — inside the process, in a shared store, at the network edge, on the client device? **How** do reads and writes flow through it — does the application manage the cache by hand, or does the cache manage the store; do writes wait for durability or return the instant they land? And **what** gets thrown out when memory fills — the least recently used, the least frequently used, or simply whatever has aged past its time-to-live? Conflating these is how teams cache a consistency problem, or reach for a fancy write strategy when a plain read cache would have done.
+A cache is a bet that the same data will be asked for again soon, and that a copy kept somewhere faster is worth keeping. Memory reads take about 100 ns, database reads 1 ms, a cross-continent trip hundreds of ms. But every copy is a second source of truth that can drift or vanish. So "add a cache" is three decisions: where the copy lives, how reads and writes flow through it, and what is evicted when memory fills.
 
 ## Explained
 <!--meta block=explain-->
 
-A cache keeps a copy of data somewhere faster than where it normally lives, so repeated reads skip the slow trip. Without one, every read pays the full cost of the database, about a millisecond, or of a distant server, hundreds of milliseconds, and the source falls over when traffic grows. Each copy is also a second version of the truth that can go stale, so you decide three things. Where it lives: in your process (fastest, but each copy of your service holds its own), in a shared store such as Redis (one extra network hop, one view for all), or at the network edge near the user. How writes flow: fill the cache after a miss, which is the safe default, or write to cache and store together when a read must never be stale. What leaves when memory is full: the entry unused longest, the least often read, or whatever passed its expiry time. The costs are staleness and stampedes. Bound staleness with an expiry time, and when a popular entry expires, let one request refill it or refresh it just before it expires, so a crowd of requests does not hit the source together.
+A cache keeps a copy of data somewhere faster than where it normally lives, so repeated reads skip the slow trip. Without one, every read pays the full cost of the database, about a millisecond, or of a distant server, hundreds of milliseconds, and the source falls over when traffic grows. Each copy is also a second version of the truth that can go stale, so you decide three things. Where it lives: [in your process](../patterns/caching/in-process-cache.md) (fastest, but each copy of your service holds its own), in a [shared store](../patterns/caching/distributed-cache.md) such as Redis (one extra network hop, one view for all), or at the [network edge](../patterns/distributed/routing/cdn.md) near the user. How writes flow: fill the cache after a miss ([cache-aside](../patterns/caching/cache-aside.md)), the safe default, or write to cache and store together ([write-through](../patterns/caching/write-through.md)) when a read must never be stale. What leaves when memory is full: the entry unused longest, the least often read, or whatever passed its expiry time.
+
+- **Staleness.** A copy can lag its source, so bound it with an expiry time you can defend to users.
+- **Stampedes.** When a popular entry expires a crowd hits the source together, so let one request refill it or \[refresh it ahead\](../patterns/caching/refresh-ahead.md).
+- **Extra hop.** A shared store adds a network hop per read, so keep the hottest entries in process if that hop matters.
 
 **Example.** A product page gets 1,000 reads a second and the database answers in 5 ms. A shared cache with 90% hits sends only 100 reads a second to the database, a tenfold cut. Entries expire after 60 s, so a price change can show up to a minute late, which is the price you pay. One hot product takes 300 reads a second. When its entry expires and refilling takes 50 ms, about 15 requests reach the database at once. With a rule that only one request refills while the others wait, it is 1. The cache holds 100,000 of 1 million products and drops the least recently used.
 
@@ -81,7 +83,7 @@ Acknowledges a write the moment it lands in the cache and flushes it to the stor
 
 ### [Refresh-Ahead](../patterns/caching/refresh-ahead.md) {#tour-refresh-ahead}
 
-Instead of waiting for a [hot key](../hazards/hot-key.md) to expire and miss, a background reload refreshes it just before its TTL runs out, so the entry never actually goes cold under load. It's the direct antidote to a popular key expiring and triggering a stampede.
+Instead of waiting for a [hot key](../hazards/hot-key.md) to expire and miss, a background reload refreshes it just before its time to live (TTL) runs out, so the entry never actually goes cold under load. It's the direct antidote to a popular key expiring and triggering a stampede.
 
 ### [CDN](../patterns/distributed/routing/cdn.md) {#tour-cdn}
 

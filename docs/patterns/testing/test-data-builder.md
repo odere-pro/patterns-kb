@@ -15,16 +15,17 @@ Builds a fully valid instance of a domain object through a chain of readable `wi
 ## What it is
 <!--meta block=description-->
 
-A **test data builder** is a small class dedicated to constructing one kind of domain object for tests. It starts from a complete, valid instance — every required field already filled with a sensible default — and exposes fluent `withX()` methods that override one field at a time. A terminal `build()` (often reached through a readable entry point like `anOrder()`) assembles the final object. The test only calls the overrides that matter to its scenario; everything else is already correct.
-
-The force it resolves is that most domain objects are bigger than any single test cares about. A real `Order` or `Invoice` might have a dozen required fields, but a given test is usually exercising one of them — a status, a discount, a missing address. Constructing the whole object inline, in every test, duplicates that ceremony everywhere and couples every test file to the constructor's exact shape. Add a required field to the domain type and every hand-rolled test fixture breaks at once.
-
-The builder absorbs that coupling into one place. Change the constructor, the validation rules, or the defaults, and only the builder needs updating — the tests that call `withStatus(...)` don't change at all. It is also a deliberate alternative to Object Mother, the older approach of writing one static factory method per named scenario (`anExpiredInvoice()`, `aPaidInvoice()`...): builders let a test compose whatever combination of fields it needs without the factory method count growing combinatorially.
+A test data builder is a small class that constructs one kind of domain object for tests. It starts from a complete, valid default and offers fluent withX() methods that override one field at a time, with build() assembling the result. It resolves the coupling of every test to the constructor's full shape: change the constructor or defaults and only the builder changes. It is the alternative to Object Mother, whose factory methods multiply with each scenario.
 
 ## Explained
 <!--meta block=explain-->
 
-A test data builder is a small class that builds one kind of domain object for tests. It starts from a complete, valid default with every required field filled in, and offers methods such as withStatus that change only the fields a test cares about. A real order may have a dozen required fields, while a test looks at one, and building it by hand in every test ties all tests to the full constructor. Choose it over calling the constructor directly, or over a fixed set of premade objects, when tests vary different fields of a large object, because each test then shows only what is different. It costs four things. It is test-support code to write and keep right, so build one only for objects used in many tests. Defaults can hide which field matters, so name every override a test depends on. A builder shared between tests leaks overrides, so create a new one per test and copy on build. And defaults that drift from production data give false coverage, so check them against real samples.
+A test data builder is a small class that builds one kind of domain object for tests. It starts from a complete, valid default with every required field filled in, and offers methods such as withStatus that change only the fields a test cares about. A real order may have a dozen required fields, while a test looks at one, and building it by hand in every test ties all tests to the full constructor. Choose it over calling the constructor directly, or over a fixed set of premade objects, when tests vary different fields of a large object, because each test then shows only what is different.
+
+- **Support code.** It is test code to write and keep right; build one only for objects used in many tests.
+- **Hidden defaults.** Defaults can hide which field matters; name every override a test depends on.
+- **Shared state.** A builder shared between tests leaks overrides; create a new one per test and copy on build.
+- **Drift.** Defaults that drift from production data give false coverage; check them against real samples.
 
 **Example.** An Order has 12 required fields and 80 tests construct it directly. A new required field, currency, makes all 80 fail to compile. With a builder that supplies a default currency, you add one line and the 80 tests are untouched. A test of cancelled orders reads anOrder().withStatus(cancelled), with nothing else on the page. The cost shows when the default status is paid, and a test about shipping passes only because paid is the default, so a reader cannot tell. The fix is to state withStatus(paid) in that test.
 

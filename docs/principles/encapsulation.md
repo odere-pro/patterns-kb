@@ -16,16 +16,15 @@ The object that holds a piece of state is the only thing allowed to change it, a
 ## What it says
 <!--meta block=description-->
 
-Hide state behind operations. An object keeps its data private and publishes verbs that are meaningful in the domain, so every change goes through code that can refuse it — and an invariant spanning several fields has exactly one owner rather than being re-checked by every caller.
-
-At module scope the same rule is called information hiding, and it is older than object orientation: publish the interface, hide the decisions most likely to change. Both forms make the same trade — callers depend on what a thing does rather than on how it stores anything, so the representation can change without a caller changing.
-
-Two consequences are easy to miss. Construction is part of the boundary: an object should either come into existence valid or not come into existence, which puts validation in the constructor rather than in whoever remembers to call it. And a collection handed out by reference hands out the invariant with it — exposing an internal list means anything holding it can add an item the owner would have rejected, so the honest surface is a read-only view plus add and remove operations.
+Hide state behind operations. An object keeps its data private and publishes verbs meaningful in the domain, so every change passes through code that can refuse it and an invariant spanning several fields has one owner. At module scope the same rule is information hiding: publish the interface, hide the decisions likely to change. Construction is part of the boundary, and a collection handed out by reference hands out the invariant with it.
 
 ## Explained
 <!--meta block=explain-->
 
-Encapsulation means an object keeps its data private and offers operations named for what the domain does, so every change goes through code that can refuse it. A rule that spans several fields then has one owner, instead of being rechecked, or forgotten, by every caller. The same idea at module level is information hiding: publish the interface and hide the decisions most likely to change, so the storage can change without a caller changing. Choose it over public fields when an object has rules to protect, and have the constructor refuse to build an invalid object. Hand out read-only views of collections, since a list given out by reference lets anyone add an item the owner would reject. Do not apply it to a data-transfer object, whose whole job is to carry fields across a boundary. The common cost is ceremony, a getter and setter for every private field, which leaves state as reachable as before. The counter-move is to name operations after domain actions like cancel() and applyDiscount(), and to prefer immutability, where nothing can change so nothing needs guarding.
+Encapsulation means an object keeps its data private and offers operations named for what the domain does, so every change goes through code that can refuse it. A rule that spans several fields then has one owner, instead of being rechecked, or forgotten, by every caller. The same idea at module level is information hiding: publish the interface and hide the decisions most likely to change, so the storage can change without a caller changing. Choose it over public fields when an object has rules to protect, and have the constructor refuse to build an invalid object. Hand out read-only views of collections, since a list given out by reference lets anyone add an item the owner would reject. Do not apply it to a data-transfer object, whose whole job is to carry fields across a boundary.
+
+- **Ceremony leaves state as reachable as before.** A getter and setter for every field protects nothing. Name operations after domain actions like cancel().
+- **Guarding mutable state takes effort.** Prefer immutability where you can: nothing can change, so nothing needs guarding.
 
 **Example.** An Order has a public list of items and a public total. One screen adds an item without updating the total, another sets a negative quantity, and an invoice shows 80 dollars for a 100-dollar basket. The team makes the fields private, builds an Order only with at least one item, and exposes addItem(sku, qty) and cancel(). addItem rejects a quantity of 0 or less and recomputes the total, and items() returns a read-only view. The rule now has one owner, so a bug in it can live in one place. The cost is that the JSON mapper needs a constructor to build Orders, so the team keeps a plain OrderDto with public fields for the API response.
 
@@ -70,6 +69,8 @@ Two real costs to weigh rather than deny. Serialization and mapping tooling gene
 - [Value Object](../patterns/ddd/value-object.md) — Validate at construction is this principle applied to a small immutable type
 - [Law of Demeter](./law-of-demeter.md) — Asking an object to act rather than reaching through it follows directly from hiding its state
 - [Command-Query Separation](./command-query-separation.md) — Queries expose state safely while commands guard how it changes.
+- [Hyrum's Law](./hyrums-law.md) — Hiding internals leaves less for callers to depend on
+- [Make Illegal States Unrepresentable](./make-illegal-states-unrepresentable.md) — Hiding the fields behind checked construction keeps every instance valid
 
 **Prevents**
 

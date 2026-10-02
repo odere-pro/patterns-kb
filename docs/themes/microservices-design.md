@@ -14,16 +14,16 @@ Drawing the boundaries is the first half of the job. The second half is three qu
 ## The question
 <!--meta block=description-->
 
-Suppose the boundaries are right. Every call that used to be a function call is now a network call that can time out, be refused, or be answered twice. Every client has to find its way to the right service and prove who the user is on the way. And the join you used to write in one query now spans two databases owned by two teams, neither of which will give you a connection string. None of that is a boundary problem — it is the design work the [microservices](../patterns/architecture/microservices.md) style hands you once the boundaries are settled.
-
-Three questions carry the theme. How do services talk to each other, and does the caller wait? How do clients reach them, without learning your topology or repeating your authentication check in every service? Instances come and go, so a caller needs [Service Discovery](../patterns/distributed/routing/service-discovery.md) to find the ones running now instead of a hard-coded address. And how does data stay usable when each service owns its own store?
-
-One constraint drives most of the answers: two services must not share a schema. Share one and every change to a column has to be coordinated across every service that reads it, and independent deployment — the reason you decomposed at all — is gone. Sharing a physical database server is fine; sharing tables is what couples you. That constraint is also what makes polyglot persistence natural, because a service that stores documents and a service that needs referential integrity no longer have to agree.
+Once service boundaries are right, every function call becomes a network call that can time out or arrive twice, clients must find services and prove who the user is, and a join now spans two databases. Three questions carry the theme: how services talk and whether the caller waits, how clients reach them, and how data stays usable. One rule drives the answers: services never share a schema.
 
 ## Explained
 <!--meta block=explain-->
 
-Once you split a system into services, three problems arrive. Function calls become network calls that can time out or be answered twice, clients must find the right service and prove who the user is, and a join across two services spans two databases you cannot query together. The rule behind most answers is that two services never share tables, because then every column change needs both teams and you lose independent releases. For each call ask whether the caller needs the answer. If it does, call the other service and wait, with a timeout and a circuit breaker, a gate that stops calls to a service known to be failing. If others merely observe that something happened, publish an event to a broker, a middleman that holds messages. That lets you add a subscriber without touching the sender, and the sender keeps working while a consumer is down. You pay in duplicate messages, so make consumers safe to repeat, in extra delay when queues back up, and in one more system to run. For a query that needs data from two services, keep a copy fed by their events and accept that it lags.
+Once you split a system into services, three problems arrive. Function calls become network calls that can time out or be answered twice, clients must find the right service and prove who the user is, and a join across two services spans two databases you cannot query together. The rule behind most answers is that two services never share tables, because then every column change needs both teams and you lose independent releases. For each call ask whether the caller needs the answer. If it does, call the other service and wait, with a timeout and a [circuit breaker](../patterns/distributed/resilience/circuit-breaker.md), a gate that stops calls to a service known to be failing. If others merely observe that something happened, publish an [event](../patterns/ddd/domain-event.md) to a broker, a middleman that holds messages. That lets you add a subscriber without touching the sender. For a query that needs data from two services, keep a copy fed by their events.
+
+- **Duplicates.** Events can arrive twice, so make consumers safe to repeat.
+- **Delay and upkeep.** Queues add delay when they back up, and a broker is one more system to run, so watch queue depth.
+- **Lagging copies.** A copy built from events lags the source, so show its age or accept a few seconds of delay.
 
 **Example.** Placing an order calls payment, which must answer, so it is a synchronous call with a 2 s timeout. It then publishes OrderPlaced for email, warehouse and analytics. If those three were called in a chain at 100, 150 and 200 ms, the customer would wait 450 ms. With events they wait only for payment, about 100 ms, and the warehouse can be down for an hour and catch up. The cost is that the warehouse may receive OrderPlaced twice, so it checks the order number first. A sales dashboard needs customer and order data, so it reads a copy built from events, a few seconds behind.
 
@@ -72,7 +72,7 @@ flowchart TD
 
 ### [API Gateway](../patterns/distributed/routing/api-gateway.md) {#tour-api-gateway}
 
-Exposing services straight to clients hands every client your topology and repeats your authentication check in every service. A gateway intercepts the traffic instead: it routes each request to the right service, aggregates a fan-out into one response, and offloads the cross-cutting work — TLS termination, authentication, rate limiting, caching, logging. The rule that matters most is negative. Keep business rules out of it, or the gateway becomes a shared dependency and couples the services through the thing that was meant to decouple them.
+Exposing services straight to clients hands every client your topology and repeats your authentication check in every service. A gateway intercepts the traffic instead: it routes each request to the right service, aggregates a fan-out into one response, and offloads the cross-cutting work — transport layer security (TLS) termination, authentication, rate limiting, caching, logging. The rule that matters most is negative. Keep business rules out of it, or the gateway becomes a shared dependency and couples the services through the thing that was meant to decouple them.
 
 ### [Backend-for-Frontend](../patterns/distributed/routing/bff.md) {#tour-bff}
 
@@ -80,7 +80,7 @@ One gateway serving a mobile app, a web app and a partner integration compromise
 
 ### [Ambassador](../patterns/distributed/routing/ambassador.md) {#tour-ambassador}
 
-Every service needs retries, timeouts, circuit breaking, TLS and metrics on its outbound calls. Written as a library, that logic is duplicated once per language your teams chose and upgraded on each team's schedule. An ambassador is a proxy sharing the service's host and lifecycle: the service dials a local address and the proxy does the real talking, so the policy becomes configuration rather than a dependency in every build. Deployed as a [Sidecar](../patterns/distributed/routing/sidecar.md), it is one proxy process per service instance.
+Every service needs retries, timeouts, circuit breaking, transport layer security (TLS) and metrics on its outbound calls. Written as a library, that logic is duplicated once per language your teams chose and upgraded on each team's schedule. An ambassador is a proxy sharing the service's host and lifecycle: the service dials a local address and the proxy does the real talking, so the policy becomes configuration rather than a dependency in every build. Deployed as a [Sidecar](../patterns/distributed/routing/sidecar.md), it is one proxy process per service instance.
 
 ### [Health Endpoint Monitoring](../patterns/distributed/resilience/health-endpoint.md) {#tour-health-endpoint}
 
@@ -92,7 +92,7 @@ Instances get whatever address the platform hands out and a rolling deploy repla
 
 ### [Service Mesh](../patterns/distributed/routing/service-mesh.md) {#tour-service-mesh}
 
-Run those proxies everywhere and configure them centrally and you have a mesh: load balancing on observed latency or outstanding request count rather than at random, layer-7 routing on path, host header or API version, bounded retries with a timeout, circuit breaking on configured thresholds, metrics on request volume and latency and error rate, [tracing](../patterns/distributed/resilience/distributed-tracing.md) information added at each hop, and mutual TLS between services. None of it is free — every request now traverses a proxy, every node runs extra processes, and the cluster configuration becomes something you operate. Load test before adopting.
+Run those proxies everywhere and configure them centrally and you have a mesh: load balancing on observed latency or outstanding request count rather than at random, layer-7 routing on path, host header or application programming interface (API) version, bounded retries with a timeout, circuit breaking on configured thresholds, metrics on request volume and latency and error rate, [tracing](../patterns/distributed/resilience/distributed-tracing.md) information added at each hop, and mutual transport layer security (TLS) between services. None of it is free — every request now traverses a proxy, every node runs extra processes, and the cluster configuration becomes something you operate. Load test before adopting.
 
 ### [API Versioning](../patterns/distributed/routing/api-versioning.md) {#tour-api-versioning}
 

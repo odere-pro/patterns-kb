@@ -16,12 +16,17 @@ A photo and video sharing platform where people post media, follow each other, a
 ## Understanding the problem
 <!--meta block=description-->
 
-Instagram lets a user publish a photo or video with a caption, follow other people, and see a chronological feed of everything the accounts they follow have posted. The surface is small, but the load is not: half a billion people open it every day, each refreshing a feed several times, while posting only occasionally. That asymmetry — read-heavy by orders of magnitude, with heavy binary payloads on top — is what decides the architecture. The two hard problems are **assembling a feed fast enough** and **delivering media fast enough**, everywhere on earth. Everything else follows from getting those two right.
+Instagram lets a user post a photo or video, follow accounts and see a chronological feed of what those accounts posted. Half a billion people open it daily and refresh often but post rarely, with heavy media on top. The two hard problems are assembling a feed fast enough and delivering media fast enough everywhere, and the page walks through both.
 
 ## Explained
 <!--meta block=explain-->
 
-Instagram builds each follower's feed when someone posts, not when the follower reads: a background worker adds the new post's id to a stored list for every follower, and a read slices that list. Media never passes through your servers; the client uploads straight to object storage and viewers download from edge caches near them. Size the two loads separately: about 150,000 feed requests a second against about 1,200 posts a second, and media is the storage bill. Choose building on write over assembling at read time because one refresh would otherwise need about 100 parallel batch reads. It costs three things. An account with 200 million followers would trigger 200 million writes, so above a follower threshold skip the fan-out and merge those few accounts' posts in at read time, and retune that threshold as the network grows. That leaves two feed paths and slower reads for anyone who follows many giants. Feeds sit in Redis, so run it with persistence and automatic failover, and rebuild a lost feed from the posts database. A new post may take up to 2 minutes to appear.
+Instagram builds each follower's feed when someone posts, not when the follower reads: a background worker adds the new post's id to a stored list for every follower, and a read slices that list. Media never passes through your servers; the client uploads straight to object storage and viewers download from edge caches near them. Size the two loads separately: about 150,000 feed requests a second against about 1,200 posts a second, and media is the storage bill. Choose building on write over assembling at read time because one refresh would otherwise need about 100 parallel batch reads.
+
+- **Celebrity fan-out.** An account with 200 million followers means 200 million writes, so above a threshold merge its posts at read time.
+- **Two feed paths.** The threshold leaves two paths and slower reads for people who follow many giants, so retune it as the network grows.
+- **Feed store loss.** Feeds sit in Redis, so run it with persistence and failover and rebuild a lost feed from the posts database.
+- **Delay.** A new post may take up to 2 minutes to appear, which the availability goal accepts.
 
 **Example.** A user follows 1,000 accounts that each post about 10 times a day, so one refresh would gather about 10,000 candidate posts; at 150,000 refreshes a second that cannot work. Instead, an ordinary author with 500 followers causes 500 list writes in the background. A celebrity with 200 million followers is over a 100,000 threshold, so no list is written, and at read time the follower's page merges that celebrity's latest posts with the stored list. Media is 100 million posts a day x 2 MB = 200 TB a day.
 
@@ -211,8 +216,8 @@ flowchart TB
 - [CDN](../patterns/distributed/routing/cdn.md) — media is fronted by edge caches so photos and videos are served from a location near each viewer
 - [Sharding](../patterns/distributed/routing/sharding.md) — post metadata is partitioned by user id with a composite time-ordered sort key for chronological reads
 - [Competing Consumers](../patterns/messaging/competing-consumers.md) — a fleet of fan-out workers drains the post queue in parallel, each prepending the new post id to one follower's feed
-- [Least Privilege](../patterns/security/least-privilege.md) — The follower id comes from the session or JWT, never the request body, so a caller cannot write follow edges for someone else
+- [Least Privilege](../patterns/security/least-privilege.md) — The follower id comes from the session or JSON Web Token (JWT), never the request body, so a caller cannot write follow edges for someone else
 - [API Gateway](../patterns/distributed/routing/api-gateway.md) — Clients hit a gateway that routes, authenticates and rate limits before the Post, Feed and Follow services
-- [Load Balancer](../patterns/distributed/routing/load-balancer.md) — Every service tier autoscales horizontally behind a load balancer on CPU and memory pressure
+- [Load Balancer](../patterns/distributed/routing/load-balancer.md) — Every service tier autoscales horizontally behind a load balancer on central processing unit (CPU) and memory pressure
 
 <!-- relationships:end -->

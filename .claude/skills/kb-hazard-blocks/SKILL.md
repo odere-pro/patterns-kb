@@ -5,11 +5,13 @@ description: "Write or review any block of a hazard page: description, causes, c
 
 # The blocks of a hazard page
 
-Six blocks, fixed order, no optional ones:
+Seven blocks, fixed order, only `selfcheck` optional:
 
 ```
-description  explain  causes  cost  mitigation  relationships
+description  explain  causes  cost  mitigation  selfcheck*  relationships
 ```
+
+`selfcheck` (optional) is three blockquotes, each one bold question of at most 25 words and an answer of at most 60 words that links a `#element-id` it rests on (KB-016).
 
 `explain` is the **kb-explain** skill; `relationships` is **kb-edit** (`kb.mjs link` writes
 both sides of a `prevents-hazard` / `mitigated-by` edge); the diagrams are **diagram-draw**.

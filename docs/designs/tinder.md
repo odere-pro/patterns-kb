@@ -16,7 +16,7 @@ A swipe-and-match feed shows one nearby person at a time; swipe right to like, l
 ## Understanding the problem
 <!--meta block=description-->
 
-The product is deceptively small: a stack of nearby profiles, a right-or-left swipe on each, and a match when two people swipe right on each other. The difficulty is that the two hard requirements pull in opposite directions. Producing the stack means filtering millions of profiles by preference and physical distance, yet it has to land on screen in under 300&nbsp;ms. The match, meanwhile, has to be strongly consistent: the instant the second of two people swipes right, that person must be told — no missed match, no duplicate — and this holds across billions of swipes a day. Everything else — photos, chat, paid boosts — is deliberately set aside so the design can concentrate on the feed and the swipe, which are where the engineering actually lives.
+A swipe-based matching app shows a stack of nearby profiles and notifies two people when both swipe right. Two requirements pull apart: the stack must load in under 300 ms from millions of profiles filtered by preference and distance, and a match must be strongly consistent across billions of swipes a day. The page walks through the feed and the swipe.
 
 ## Explained
 <!--meta block=explain-->

@@ -1,7 +1,7 @@
 # patterns-kb — the Software Design Atlas
 
-A cross-linked reference of **234 software design patterns, 41 design case studies, 51
-themes, 41 hazards, 31 principles, 10 cloud capabilities and 10 product comparisons — 418
+A cross-linked reference of **255 software design patterns, 41 design case studies, 51
+themes, 45 hazards, 36 principles, 10 cloud capabilities and 10 product comparisons — 448
 pages in all**, written to be learned from: every page answers the same questions in the
 same order, and every page says how it relates to its neighbours.
 

@@ -15,16 +15,16 @@ Builds a new object by copying a fully-formed example — cloning a configured i
 ## What it is
 <!--meta block=description-->
 
-The **Prototype** pattern creates new objects by copying an existing instance — the prototype — rather than instantiating a class directly. Each object knows how to clone itself, so the client asks an example for a copy and gets a ready-made object of the right concrete type without naming that type at all.
-
-It resolves two forces. First, **construction can be expensive**: an object that took a database read, a parse, or heavy computation to assemble is far cheaper to duplicate than to rebuild. Second, the **concrete class is often unknown at compile time** — the client holds a prototype it was handed and wants another like it, without a growing tangle of `if`/`switch` on type.
-
-The usual alternative — a factory subclass per product variant — creates a parallel class hierarchy that shadows the products themselves. Prototype collapses that: register a few pre-configured example instances and clone the one you need, adding or removing variants at runtime by changing the set of prototypes.
+The prototype pattern creates a new object by copying an existing one. The client asks an example for a clone and gets the right concrete type without naming its class. It fits objects that are costly to build, such as after a database read or a parse, and cases where the class is known only at run time. It replaces a factory subclass per variant.
 
 ## Explained
 <!--meta block=explain-->
 
-A prototype creates a new object by copying an existing one, so the client asks an example object for a copy and gets the right type back without naming its class. Keep a few pre-built examples, clone the one you need, and add or drop variants at run time by changing that set. Choose it over a constructor or a factory when building from scratch is expensive, such as a database read or a heavy parse, or when the concrete class is known only at run time. Where construction is cheap and explicit, a constructor tells the reader more than a clone call. The cost is copy rules. Every type must copy itself correctly, and a field added later is easy to forget. A shallow copy, one that shares inner objects with the original, causes bugs far from the clone, so copy inner objects too and test that changing the clone leaves the original alone. A clone also inherits whatever state the example has drifted into, so keep the examples unchanged.
+A prototype creates a new object by copying an existing one, so the client asks an example object for a copy and gets the right type back without naming its class. Keep a few pre-built examples, clone the one you need, and add or drop variants at run time by changing that set. Choose it over a constructor or a factory when building from scratch is expensive, such as a database read or a heavy parse, or when the concrete class is known only at run time. Where construction is cheap and explicit, a constructor tells the reader more than a clone call.
+
+- **Copy rules.** Every type must copy itself, and a new field is easy to forget. Test that changing a clone leaves the original alone.
+- **Shallow copies.** A copy that shares inner objects causes bugs far from the clone, so copy inner objects too.
+- **Drifted examples.** A clone inherits whatever state the example has drifted into, so keep the examples unchanged.
 
 **Example.** A game spawns goblins. Building one loads a model and balance numbers and takes 40 ms. A goblin prototype is built once and each spawn clones it in about 1 ms, so 50 goblins cost 90 ms (40 + 50) instead of 2,000 ms. The first version of the clone copies the goblin but shares its loot list. Goblin 1 picks up a sword and all 50 goblins now carry it. The fix is to copy the list inside the clone. A test that changes a clone's loot and checks the prototype's loot is unchanged would have caught it.
 

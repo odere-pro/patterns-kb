@@ -220,4 +220,8 @@ async function twoPhaseCommit(tx: string, parts: Participant[], log: DecisionLog
 
 - [Dual-Write Inconsistency](../../../hazards/dual-write-inconsistency.md) — Commits both writes atomically, so a crash between them cannot leave the stores disagreeing.
 
+**Exposed to**
+
+- [Deadlock](../../../hazards/deadlock.md) — Can fall into deadlock when participants holding locks while waiting on the coordinator can wait in a cycle
+
 <!-- relationships:end -->

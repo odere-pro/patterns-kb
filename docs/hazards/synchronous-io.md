@@ -16,16 +16,17 @@ A thread issues an I/O call and then waits, holding its stack and its memory but
 ## What it is
 <!--meta block=description-->
 
-**Synchronous I/O** blocks the calling thread until the operation completes — a read from a store, a call to a remote service, a message taken from a queue, a write to a file. During the wait the thread does nothing and cannot be given to anyone else, because its stack is mid-call. That is affordable when the wait is microseconds and the callers are few. It stops being affordable when the wait is a network round-trip and the process is meant to serve thousands of concurrent requests: the threads are all present, all idle, and all unavailable.
-
-The distinctive symptom is a saturated system that is not busy. Processor utilization sits low while the request queue grows and new arrivals wait for a thread rather than for the work; latency stays flat and then goes vertical at the point where every worker is blocked. A thread dump taken at that moment is the proof — nearly every worker parked on the same call. It also spreads: a single blocking call buried inside a library blocks whatever calls it, so an otherwise asynchronous path is only as non-blocking as its most synchronous link.
+Synchronous I/O blocks the calling thread until a read, a remote call or a queue take completes, and the thread can serve no one else meanwhile. You see a saturated system that is not busy: CPU stays low, requests queue, and a thread dump shows nearly every worker parked on the same call. The defining trait is that the waiting, not the work, uses up the threads, so one blocking call inside a library makes a whole async path blocking.
 
 ## Explained
 <!--meta block=explain-->
 
-Synchronous I/O makes the calling thread wait, doing nothing, until a read, a remote call or a queue message completes. The thread cannot serve anyone else meanwhile, because its stack is mid-call. That is fine when waits are microseconds and callers few. When waits stretch to milliseconds and callers number thousands, you run out of threads long before you run out of processor. The telltale is a saturated system that is not busy: the processor is low, requests queue and a thread dump shows nearly every worker parked on the same call. The request must wait for its answer, but the thread need not, so release the thread. Choose non-blocking calls over a bigger pool of threads, since each thread costs memory and scheduling and a larger pool only moves the ceiling. A reactor, a few threads waiting on many sources and handling each event as it is ready, holds tens of thousands of open calls on a handful of workers. It costs clarity, since the straight-line code becomes continuations and stack traces stop showing the path, so carry a correlation id explicitly. Run unavoidable blocking libraries on a separate bounded pool, or they stall the event thread. The bottleneck moves downstream, so cap that too.
+Synchronous I/O makes the calling thread wait, doing nothing, until a read, a remote call or a queue message completes, and the thread cannot serve anyone else meanwhile. That is fine when waits are microseconds and callers few. When waits reach milliseconds and callers reach thousands, you run out of threads long before you run out of processor, so the system is saturated but not busy. The request must wait for its answer, but the thread need not. Choose non-blocking calls over a bigger pool, since each thread costs memory and scheduling and a larger pool only moves the ceiling. A [reactor](../patterns/concurrency/reactor.md) (a few threads waiting on many sources, handling each event as it is ready) holds tens of thousands of open calls on a handful of workers, and a [future](../patterns/concurrency/future-promise.md) names the pending answer. Run unavoidable blocking libraries on a separate bounded pool, a [bulkhead](../patterns/distributed/resilience/bulkhead.md), so they cannot stall the event thread.
 
-**Example.** A service has 200 request threads, and each request blocks 200 ms on a database call. It can finish 200 / 0.2 = 1,000 requests a second. Traffic reaches 1,200 a second, which needs 1,200 x 0.2 = 240 threads, so requests queue and the processor sits near 5%. If the database slows to 1 s, capacity falls to 200 a second. With non-blocking calls on 4 event threads, 240 calls in flight are just 240 small records, and the threads stay free. The cost is that stack traces no longer show who called whom, and the database now receives all 1,200 a second.
+- **Clarity.** Straight-line code becomes continuations and stack traces stop showing the path, so carry a correlation id explicitly.
+- **Moved bottleneck.** Unblocked threads send more concurrent calls downstream, so cap in-flight calls and set a deadline on each.
+
+**Example.** A service has 200 request threads, and each request blocks 200 ms on a database call. It finishes 200 / 0.2 = 1,000 requests a second. Traffic reaches 1,200 a second, which needs 240 threads, so requests queue while the processor sits near 5%. If the database slows to 1 s, capacity falls to 200 a second. With non-blocking calls on 4 event threads, 240 calls in flight are just 240 small records, and the threads stay free. The database now receives all 1,200 a second, so cap it.
 
 ## How it happens
 <!--meta block=causes-->
@@ -77,5 +78,12 @@ Not every call should change. An operation that is genuinely short and uncontend
 
 - [Reactor](../patterns/concurrency/reactor.md) — A few threads wait on many I/O sources at once, so concurrency stops being capped by thread count
 - [Future / Promise](../patterns/concurrency/future-promise.md) — Name the pending answer so the request can wait without its thread waiting too
+- [Proactor](../patterns/concurrency/proactor.md) — Starting I/O without waiting for it keeps the loop thread free to serve other work
+
+**Threatens**
+
+- [Thread Pool](../patterns/concurrency/thread-pool.md) — A fixed pool of worker threads runs out when each one parks on a blocking call
+- [Active Object](../patterns/concurrency/active-object.md) — A scheduler thread that blocks on one call stalls every queued method request
+- [Scatter-Gather](../patterns/messaging/scatter-gather.md) — The gather step ties up a thread per outstanding branch while it waits for replies
 
 <!-- relationships:end -->

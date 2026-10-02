@@ -16,18 +16,17 @@ One familiar tool, framework, or pattern gets reached for on every problem — n
 ## What it is
 <!--meta block=description-->
 
-A **golden hammer** is a favored tool, language, library, or design pattern that a team applies to every problem regardless of whether it's the right fit. The name comes from the aphorism: to someone who only has a hammer, everything looks like a nail. Abraham Kaplan set that down in 1964 as the law of the instrument, Maslow gave it its familiar wording two years later, and it arrived in the software literature as a named anti-pattern in 1998. It differs from genuine standardization — a deliberate choice to accept one tool's trade-offs across many cases — in that a golden hammer is a reflex, not a decision. No one re-evaluates the fit; the tool is simply what gets reached for.
-
-You recognize it by the mismatch between the tool's sweet spot and the problem's actual shape: a workflow engine driving a single boolean flag, a [message queue](../patterns/messaging/message-queue.md) standing in for a function call inside one process, an ORM (object-relational mapper)'s full query builder wrapped around one hardcoded statement, a favorite design pattern showing up in corners of the codebase that never needed indirection. Ask why, and the answer is "that's what we used last time," not a requirement the tool actually satisfies.
-
-It usually starts from a genuine win. The tool solved a real problem well once, the team got fluent in it, and that fluency quietly became the default lens for every problem that followed — whether or not the new problem shares anything with the old one.
+A **golden hammer** is a favourite tool a team applies to every problem because it is the one they know, not because it fits. You recognise it in simple problems solved with heavy machinery, such as a message queue for one write, and in design talks where nobody names an alternative. The defining trait is the missing decision, not the tool: the same tool chosen after comparing a second candidate is no hammer.
 
 ## Explained
 <!--meta block=explain-->
 
-A golden hammer is a favourite tool that a team applies to every problem, whether or not it fits. It starts with a real win: the tool solved something well, the team became fluent, and fluency became the default lens. It then seals itself, because each use makes the team faster with this tool and no faster with anything else. Simple problems get heavy machinery, such as a message queue for one write, and every problem inherits the tool's failures and running cost. The failure is the missing decision, not the tool, so the counter is a procedure. Before settling, someone names a second candidate and says in one sentence why it loses. If nobody can name one, you have found the problem. Put the tool behind an interface your own code owns, so replacing it later is one implementation, not a rewrite. Try the alternative on a real slice of work for a week, because the argument is usually about fluency and only use settles it. Keep a short list of defaults, each with the boundary where it stops applying, and review it on a fixed schedule, not when a project is late.
+A golden hammer is a favourite tool that a team applies to every problem, whether or not it fits. It starts with a real win: the tool solved something well, the team became fluent, and fluency became the default lens. It then seals itself, because each use makes the team faster with this tool and no faster with anything else. Simple problems get heavy machinery, such as a message queue for one write, and every problem inherits the tool's failures and running cost. The failure is the missing decision, not the tool, so the counter is a procedure. Before settling, someone names a second candidate and says in one sentence why it loses. If nobody can name one, you have found the problem. Put the tool behind an interface your own code owns, so replacing it later is one implementation, not a rewrite. Try the alternative on a real slice of work for a week, because use settles what argument cannot.
 
-**Example.** A team that runs Kafka well needs to save 5 settings changes a day from an admin screen. Out of habit they publish each change to a topic, and a consumer service writes it to the database, so two extra processes need deployment, monitoring and on-call. Asked for a second candidate, someone says a direct database write in the same request does the job. A one-week trial on this one screen confirms it. The team keeps Kafka for cases with a second consumer or over 1,000 events a second, and the cost is a settings-store interface and one more line in the defaults list.
+- **Decision time.** Naming a second candidate adds a short meeting; cap it at one sentence per loser.
+- **Extra interface.** The wrapper is code to maintain; wrap only tools that touch many call sites.
+
+**Example.** A team that runs Kafka well needs to save 5 settings changes a day from an admin screen. Out of habit they publish each change to a topic, and a consumer service writes it to the database, so two extra processes need deployment, monitoring and on-call. Asked for a second candidate, someone says a direct database write in the same request does the job. A one-week trial on this one screen confirms it. The team keeps Kafka for cases with a second consumer or over 1,000 events a second.
 
 ## How it happens
 <!--meta block=causes-->
@@ -76,5 +75,11 @@ Someone has to own the defaults, or the reflex owns them. Keep a short written l
 **Mitigated by**
 
 - [Microkernel / Plugin](../patterns/architecture/microkernel.md) — A plug-in per need resists forcing one tool everywhere
+
+**Threatens**
+
+- [Microservices](../patterns/architecture/microservices.md) — The style gets applied to every system regardless of fit
+- [Event Sourcing](../patterns/architecture/event-sourcing.md) — The history log gets used where a plain table would do
+- [CQRS](../patterns/architecture/cqrs.md) — The read and write split gets adopted by habit in simple create-read-update-delete apps
 
 <!-- relationships:end -->

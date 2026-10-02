@@ -199,7 +199,7 @@ bus.emit("OrderPlaced", { orderId: "o-42", total: 4999 });
 
 **Combines with**
 
-- [Domain Event](../ddd/domain-event.md) — Domain events are the currency of EDA
+- [Domain Event](../ddd/domain-event.md) — Domain events are the currency of event-driven architecture (EDA)
 - [Event Sourcing](./event-sourcing.md) — Sourced events can also drive reactions
 - [Design for Evolution](../../principles/design-for-evolution.md) — Events let new behaviour attach without editing what emits them
 
@@ -209,6 +209,6 @@ bus.emit("OrderPlaced", { orderId: "o-42", total: 4999 });
 
 **Demonstrated by**
 
-- [CamelCamelCamel](../../designs/camelcamelcamel.md) — replacing full-table poll scans with per-event who-cares reaction is the event-driven shift that meets the sub-hour alert SLA
+- [CamelCamelCamel](../../designs/camelcamelcamel.md) — replacing full-table poll scans with per-event who-cares reaction is the event-driven shift that meets the sub-hour alert service level agreement (SLA)
 
 <!-- relationships:end -->

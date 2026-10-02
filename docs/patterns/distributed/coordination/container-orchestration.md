@@ -257,7 +257,7 @@ setInterval(() => reconcile(readDeclaration(), observeCluster(), engine), 5_000)
 
 **Prevents**
 
-- [Noisy Neighbour](../../../hazards/noisy-neighbour.md) — Per-container CPU and memory limits give the scheduler a stated share to enforce for each workload
+- [Noisy Neighbour](../../../hazards/noisy-neighbour.md) — Per-container central processing unit (CPU) and memory limits give the scheduler a stated share to enforce for each workload
 
 **Implemented by**
 

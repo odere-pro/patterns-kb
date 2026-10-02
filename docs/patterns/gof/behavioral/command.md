@@ -16,16 +16,16 @@ Packages a request — the action, its target, and its arguments — into a stan
 ## What it is
 <!--meta block=description-->
 
-A **command** turns a request into a first-class object. Instead of calling a method directly, you define a small interface — usually a single `execute()` — and wrap each operation in a concrete class that binds its receiver (the object that does the real work) together with any arguments. The invoker holds a command and triggers it without knowing, or caring, what it actually does.
-
-The forces it resolves come from needing to issue a request while decoupled from when, where, and by whom it runs. A button should fire "some action" without hard-wiring which one. An operation may need to be queued, scheduled, retried, sent across a wire, or reversed. A plain method call can't be stored, deferred, or undone — it happens once and is gone.
-
-By reifying the call as data, Command lets you treat operations the way you treat any other object: put them in a list, keep a history, serialize them, replay them. The invoker and the receiver never meet.
+A command turns a request into an object. A small interface, usually one `execute()`, wraps each operation together with its receiver (the object that does the work) and arguments, and an invoker triggers it without knowing what it does. Because the call is now data, you can queue, schedule, retry, serialize, log, replay or undo it, which a plain method call, made once and gone, cannot.
 
 ## Explained
 <!--meta block=explain-->
 
-A command wraps one operation as an object that holds the thing to act on, the arguments and an \`execute()\` method. The caller triggers it without knowing what it does, and because the call is now data you can queue it, save it, send it to another machine, log it or reverse it. Choose it over passing a plain function when the operation must outlive the moment of its call, for example to undo or replay it. If you need none of that, a function does the same work with no extra type. The first cost is volume: one class per action inflates the type count, so let simple actions share one class that takes a parameter. The second is lost context, because the code that queued a command is not on the stack when it runs, so store who asked and when inside the command. The third is undo: each command must save enough state to reverse itself, and that save goes stale when the receiver gains a field nobody added, so test every command by running it, then its undo, and comparing the results.
+A command wraps one operation as an object that holds the thing to act on, the arguments and an \`execute()\` method. The caller triggers it without knowing what it does, and because the call is now data you can queue it, save it, send it to another machine, log it or reverse it. Choose it over passing a plain function when the operation must outlive the moment of its call, for example to undo or replay it. If you need none of that, a function does the same work with no extra type.
+
+- **Class volume.** One class per action inflates the type count, so let simple actions share one class that takes a parameter.
+- **Lost context.** The code that queued a command is not on the stack when it runs, so store who asked and when inside it.
+- **Stale undo.** Saved undo state goes stale when the receiver changes, so test every command by running it, then its undo.
 
 **Example.** A text editor records each edit as a command. You type "hello " (6 characters) and "world" (5), so the history holds two commands and the text is 11 characters long. Undo pops the last command, which removes 5 characters and leaves "hello ". Later a developer adds a cursor position to the document. Undo still restores the text but leaves the cursor at position 11, past the end of a 6-character text, and nothing fails until a user types. A test that runs the command, then its undo, and compares the whole document before and after catches it. The cost is that each of your edit kinds needs its own class and its own undo.
 

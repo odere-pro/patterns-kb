@@ -16,14 +16,16 @@ When the network splits, a distributed data store can keep answering or keep eve
 ## The question
 <!--meta block=description-->
 
-Every distributed system spanning more than one machine eventually faces a moment the network drops messages between its nodes — a **partition**. In that moment a node holding your data has two honest choices: answer the request with what it knows (and risk being out of date), or refuse to answer until it can confirm agreement with its peers. The CAP theorem says you cannot escape this choice — you can only decide, in advance, which way you'll fall.
-
-CAP names three properties: **Consistency** (every read sees the most recent write), **Availability** (every request gets a non-error response), and **Partition tolerance** (the system keeps working despite dropped messages between nodes). Eric Brewer's theorem, proven by Gilbert and Lynch, states you can guarantee at most two of the three at once.
+When the network drops messages between nodes, a partition, a node holding your data has two choices: answer with what it knows and risk being out of date, or refuse until it can confirm with its peers. CAP says you can guarantee at most two of Consistency (every read sees the latest write), Availability (every request gets a non-error response) and Partition tolerance (the system works despite dropped messages), so you decide in advance which way to fall.
 
 ## Explained
 <!--meta block=explain-->
 
-The CAP theorem says that when a network split cuts your database copies off from each other, each copy must either answer with what it knows, which may be out of date, or refuse to answer until it can confirm with the others. You cannot have both, so you decide in advance which way to fall. Splits happen on every real network, so the real choice is between the two. Choose the refusing side (consistent, called consistency and partition tolerance (CP)) when a wrong answer costs more than an error, as with a ledger or a unique username. Choose the answering side (available, called AP) when a stale answer is acceptable, as with a shopping cart or a feed. The costs have counter-moves. A refusing system returns errors during the split, so let the side holding a majority of copies keep serving and only the minority refuse. An answering system lets two sides accept conflicting writes, so define a merge rule or a compensating action in advance. When the network is healthy you get both properties, and even then keeping copies in step costs round trips, which is the trade the PACELC extension describes.
+The CAP theorem says that when a network split cuts your database copies ([replication](../patterns/distributed/coordination/replication.md)) off from each other, each copy must either answer with what it knows, which may be out of date, or refuse to answer until it can confirm with the others ([quorum](../patterns/distributed/coordination/quorum-consensus.md)). You cannot have both, so you decide in advance which way to fall. Splits happen on every real network, so the real choice is between the two. Choose the refusing side (consistent, called consistency and partition tolerance, CP) when a wrong answer costs more than an error, as with a ledger or a unique username. Choose the answering side (available, called AP) when a stale answer is acceptable, as with a shopping cart or a feed.
+
+- **Refusals.** A refusing system returns errors during the split, so let the side holding a majority of copies keep serving.
+- **Conflicts.** An answering system lets two sides accept conflicting writes, so define a merge rule or a compensating action in advance.
+- **Normal-time latency.** With a healthy network you get both, but keeping copies in step costs round trips (the PACELC trade), so pick consistency per operation.
 
 **Example.** A bank keeps a balance of 100 in data centres A and B, and the link between them drops for 10 minutes. As CP, B sees it cannot reach a majority and refuses withdrawals, so B customers get errors for 10 minutes and the balance stays correct. As AP, both sides accept an 80 withdrawal. When the link returns, the balance is 100 - 80 - 80 = -60, so you must add a rule, such as an overdraft fee or reversing the second withdrawal. A shopping cart in the same split would just merge both item lists, which is why carts suit AP and ledgers suit CP.
 
@@ -60,23 +62,23 @@ The durable, ordered record replicas ship and replay to converge. It is the mech
 
 ### [Replication](../patterns/distributed/coordination/replication.md) {#tour-replication}
 
-The copies whose agreement CAP is about. Synchronous replication leans CP; asynchronous replication leans AP and low latency but risks stale reads.
+The copies whose agreement consistency, availability, partition tolerance (CAP) is about. Synchronous replication leans consistency-first (CP); asynchronous replication leans availability-first (AP) and low latency but risks stale reads.
 
 ### [Quorum & Consensus](../patterns/distributed/coordination/quorum-consensus.md) {#tour-quorum-consensus}
 
-The dial itself. Requiring a majority to agree before a write counts is how a CP store trades availability for a single, agreed truth. Tuning read/write quorum sizes moves you along the C/A spectrum.
+The dial itself. Requiring a majority to agree before a write counts is how a consistency-first (CP) store trades availability for a single, agreed truth. Tuning read/write quorum sizes moves you along the C/A spectrum.
 
 ### [Leader Election](../patterns/distributed/coordination/leader-election.md) {#tour-leader-election}
 
-Funnelling writes through one elected leader gives a clean, consistent order — a CP move that becomes unavailable if the leader is partitioned away until a new one is chosen.
+Funnelling writes through one elected leader gives a clean, consistent order — a consistency-first (CP) move that becomes unavailable if the leader is partitioned away until a new one is chosen.
 
 ### [Saga](../patterns/distributed/coordination/saga.md) {#tour-saga}
 
-An AP answer for multi-service transactions: proceed optimistically, then reconcile with compensating steps — eventual consistency instead of a [distributed lock](../patterns/distributed/coordination/distributed-lock.md).
+An availability-first (AP) answer for multi-service transactions: proceed optimistically, then reconcile with compensating steps — eventual consistency instead of a [distributed lock](../patterns/distributed/coordination/distributed-lock.md).
 
 ### [Gossip Protocol](../patterns/distributed/coordination/gossip-protocol.md) {#tour-gossip-protocol}
 
-Peer-to-peer state spreading that always accepts updates and converges over time — an AP building block for membership and eventually-consistent state.
+Peer-to-peer state spreading that always accepts updates and converges over time — an availability-first (AP) building block for membership and eventually-consistent state.
 
 <!-- tour:end -->
 

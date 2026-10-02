@@ -14,16 +14,18 @@ Serving more requests, faster, without the cost growing in step: spread work acr
 ## The question
 <!--meta block=description-->
 
-Every system that gets used enough eventually hits the same wall: the same query, the same computation, the same object, done again and again for every request. The naive answer is more hardware — but a bigger machine or a bigger fleet only postpones the wall if the underlying work is still repeated in full each time. Performance as a theme is the discipline of not doing that: do the work once and reuse the result, do the work closer to the requester, or don't do the work at all if you can rule it out cheaply.
-
-That reframes "make it faster" into three separate questions. Where is the load concentrated, and can it be spread across more machines? What is recomputed on every request that didn't actually change, and can it be cached or precomputed instead? And where is memory or allocation itself the bottleneck, independent of any network call? Each question points at a different family of patterns, and conflating them is how teams end up caching a problem that was actually a routing problem, or scaling out a problem that was actually a memory-churn problem.
+Every system that gets used enough hits the same wall: the same query, computation or object is produced again for every request. More hardware only postpones the wall if the work is still repeated in full. This theme splits make it faster into three questions: where load concentrates, what is recomputed without having changed, and where memory churn itself is the bottleneck.
 
 ## Explained
 <!--meta block=explain-->
 
-Performance work means not repeating work: do it once and reuse the result, do it closer to the user, or rule it out cheaply. Start by finding which of three bottlenecks you have, because each needs a different fix. Concentrated load is spread across machines with a load balancer. Repeated computation is saved with a cache, which keeps an answer so the next request skips the work, or a precomputed table. Memory pressure is cut by reusing objects instead of making new ones. Every fix spends something. A cache trades freshness for speed, because a cached answer is a bet that nothing changed, so give each entry a time limit that you can defend. A precomputed table trades storage and upkeep for fast reads, so assign an owner who keeps it in step with its source. A reused object can leak state between callers, so reset it on return. Spreading load must survive a changing machine pool, so place keys with consistent hashing, which moves only the keys nearest a changed machine, not most of them. More hardware alone only postpones the wall.
+Performance work means not repeating work: do it once and reuse the result, do it closer to the user, or rule it out cheaply. Start by finding which of three bottlenecks you have, because each needs a different fix. Concentrated load is spread across machines with a [load balancer](../patterns/distributed/routing/load-balancer.md). Repeated computation is saved with a [cache](../patterns/caching/cache-aside.md), which keeps an answer so the next request skips the work, or a [precomputed table](../patterns/distributed/coordination/materialized-view.md). Memory pressure is cut by reusing objects with an [object pool](../patterns/gof/extra/object-pool.md) instead of making new ones. Place cache keys with [consistent hashing](../patterns/distributed/routing/consistent-hashing.md), which moves only the keys nearest a changed machine, not most of them. More hardware alone only postpones the wall.
 
-**Example.** A product page takes 2,000 reads a second, each a 20 ms database query, so 40 queries run at once. A cache with a 90% hit rate and a 60 s limit cuts that to 200 queries a second, 4 at once, and a price can be up to 60 s old. The cache runs on 5 machines placed by key number modulo 5. Adding a sixth remaps about 5 of every 6 keys, 83%, so most entries miss at once. With consistent hashing it remaps about 1 in 6, 17%, so the database sees a small bump, not a flood.
+- **Stale answers.** A cached answer is a bet that nothing changed. Give each entry a time limit you can defend.
+- **Upkeep.** A precomputed table costs storage and a refresh job. Assign an owner who keeps it in step with its source.
+- **Leaked state.** A reused object can carry state between callers. Reset it when it returns to the pool.
+
+**Example.** A product page takes 2,000 reads a second, each a 20 ms database query, so 40 queries run at once. A cache with a 90% hit rate and a 60 s limit cuts that to 200 queries a second, 4 at once, and a price can be up to 60 s old. The cache runs on 5 machines placed by key number modulo 5. Adding a sixth remaps about 83% of keys, so most entries miss at once. With consistent hashing it remaps about 17%, so the database sees a small bump, not a flood.
 
 ## The trade-space
 <!--meta block=tradespace-->
@@ -79,7 +81,7 @@ Maps keys and nodes onto the same ring, so adding or removing a node only reshuf
 
 ### [Object Pool](../patterns/gof/extra/object-pool.md) {#tour-object-pool}
 
-Keeps a set of costly-to-construct objects — connections, threads, buffers — ready to hand out and reuse instead of allocating and discarding one per request. It trades a little bookkeeping for the allocation and GC cost it removes.
+Keeps a set of costly-to-construct objects — connections, threads, buffers — ready to hand out and reuse instead of allocating and discarding one per request. It trades a little bookkeeping for the allocation and garbage collection (GC) cost it removes.
 
 ### [Flyweight](../patterns/gof/structural/flyweight.md) {#tour-flyweight}
 

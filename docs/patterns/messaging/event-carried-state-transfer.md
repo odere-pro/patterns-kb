@@ -97,11 +97,6 @@ sequenceDiagram
 - **Data is copied everywhere** — each copy is storage to pay for, and a privacy deletion has to reach every consumer through a delete event.
 - **Order and duplicates matter** — a redelivered or reordered event can overwrite newer data, so you add a version check and a consumer that tolerates repeats.
 
-### Cons
-<!--meta polarity=con-->
-
-- TODO.
-
 ## When to use it
 <!--meta block=usage-->
 
@@ -220,6 +215,7 @@ export function shippingAddress(customerId: string) {
 **Alternative to**
 
 - [Event Sourcing](../architecture/event-sourcing.md) — Here the owner keeps its table and events are copies sent out, not the record of truth.
+- [Content Enricher](./content-enricher.md) — Puts the needed data in the event itself, so a consumer needs no lookup
 
 **Often confused with**
 

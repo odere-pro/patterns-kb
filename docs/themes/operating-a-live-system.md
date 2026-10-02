@@ -14,15 +14,7 @@ The work a running system needs that no release plan contains — rotations, bac
 ## The question
 <!--meta block=description-->
 
-A system that is never touched still changes. Keys expire, quotas are reached, a message arrives that nothing can process, a dependency starts refusing traffic, and demand falls overnight and returns at eight. None of this is a release, none of it appears in a backlog, and all of it has to happen while the system keeps serving.
-
-The whole discipline reduces to one rule: every change goes through the same automated path as a deployment, and nothing is done by hand on a live machine. A manual change is invisible to everyone who was not present, it is undone by the next deployment, and it cannot be reviewed, reversed or repeated. The work is therefore to make each of these routine changes something a pipeline or a running process can perform.
-
-Most of them can be made to happen on their own. Capacity follows demand from a signal rather than from a person watching a graph. Periodic maintenance runs on a clock instead of in someone's calendar. Work that failed by never happening is found by a process that scans for it rather than by a customer complaint. Automating these is not only about effort — an unattended action happens at three in the morning too.
-
-A few genuinely need a person, and those are the ones worth rehearsing. Messages that failed every retry need someone to look, decide and replay them. A restore from backup needs a decision nobody should automate. Raising a quota needs a request to somebody outside the system. Each of these is a procedure that will be run under pressure by whoever is on call, which is exactly why it should be written down and practised while nothing is wrong.
-
-Rotation is the operation that most often causes the outage it was meant to prevent, and its difficulty is proportional to how widely the credential is shared. A secret held inside one disposable unit needs no rotation at all, because the unit will be replaced before the secret matters. A secret every component holds needs a coordinated sequence — introduce the new one, restart everything that caches it, retire the old one — and each step has to be verified across the whole fleet before the next begins.
+A system nobody touches still changes: keys expire, quotas fill, a message nothing can process arrives, demand drops overnight and returns at eight. None of it is a release, and all of it happens while the system serves. Run every change through the same automated path as a deployment, never a hand edit nobody can review or repeat. Automate what a signal or a clock can do, and rehearse the rest.
 
 ## Explained
 <!--meta block=explain-->

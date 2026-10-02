@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AREA_BOOST,
+  CASE_STUDY_DAMP,
   CATEGORY_BONUS,
   DESCRIPTION_WEIGHTS,
   EXACT_BONUS,
@@ -406,9 +407,39 @@ describe('rankItems — the rule', () => {
       const covered = study('one slow dependency blocks my threads and the pool runs dry');
       expect(order([brushed, pattern])).toEqual(['cb', 'logger']);
       expect(order([covered, pattern])[0]).toBe('logger');
-      const damped = (rankFacts([brushed], q)[0] as { score: number }).score;
+      const damped = (rankFacts([brushed, pattern], q).find((r) => r.item.id === 'logger') as { score: number }).score;
       const full = (rankFacts([{ ...brushed, categories: ['pattern'] }], q)[0] as { score: number }).score;
-      expect(damped).toBeCloseTo(full * 0.5, 5);
+      // The pattern leads, so the case study is scaled by DESIGN_DAMP and CASE_STUDY_DAMP both.
+      expect(damped).toBeCloseTo(full * 0.5 * CASE_STUDY_DAMP, 5);
+    });
+
+    describe('CASE_STUDY_DAMP', () => {
+      const own = study('one slow dependency blocks my threads and the pool runs dry');
+      const score = (list: Facts[], query: string, id: string): number => (rankFacts(list, query).find((s) => s.item.id === id) as { score: number }).score;
+
+      it('scales a case study by it when the best item is not a case study', () => {
+        const lone = { ...own, id: 'lone', categories: ['pattern'] };
+        const weak = facts({ id: 'weak', title: 'Weak', categories: ['pattern'], solves: ['my thread pool is exhausted'] });
+        const strong = facts({ id: 'strong', title: 'Strong', categories: ['pattern'], solves: ['one slow dependency blocks my threads and the pool runs dry', 'one slow dependency blocks my threads'], tags: ['threads'], description: 'slow dependency blocks threads' });
+        const undamped = score([own], q, 'logger');
+        expect(rankFacts([strong, own, weak], q)[0]?.item.id).toBe('strong');
+        expect(score([strong, own, weak], q, 'logger')).toBeCloseTo(undamped * CASE_STUDY_DAMP, 5);
+        expect(score([lone], q, 'lone')).toBeCloseTo(undamped, 5);
+      });
+
+      it('leaves case studies alone when the best item is a case study', () => {
+        const weak = facts({ id: 'weak', title: 'Weak', categories: ['pattern'], solves: ['my thread pool is exhausted'] });
+        const other = { ...own, id: 'other', title: 'Other' };
+        const got = rankFacts([weak, own, other], q);
+        expect(got[0]?.item.categories).toContain('case study');
+        expect(score([weak, own, other], q, 'logger')).toBeCloseTo(score([own], q, 'logger'), 5);
+      });
+
+      it('does not apply to a lookup of two words', () => {
+        const pat = facts({ id: 'pat', title: 'Zed', categories: ['pattern'], tags: ['thread'] });
+        const cs = facts({ id: 'cs', title: 'Zed Study', categories: ['case study'], tags: ['thread'] });
+        expect(score([pat, cs], 'zed thread', 'cs')).toBeCloseTo(score([cs], 'zed thread', 'cs'), 5);
+      });
     });
   });
 });

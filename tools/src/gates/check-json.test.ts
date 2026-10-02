@@ -18,6 +18,7 @@ import {
   expectMisuse,
   expectPass,
   makeSandbox,
+  PERMISSIONS_ENFORCED,
   REPO_ROOT,
   type Sandbox,
 } from '../lib/sandbox.js';
@@ -197,7 +198,8 @@ describe('named files', () => {
     }
   });
 
-  it('skips a file it cannot read, rather than crashing the whole run', async () => {
+  // Root ignores file modes, so the permission failure this test needs cannot be produced.
+  it.skipIf(!PERMISSIONS_ENFORCED)('skips a file it cannot read, rather than crashing the whole run', async () => {
     // A file can pass `statSync().isFile()` and still fail the read that
     // follows it — permission denied is the ordinary, reproducible case, but
     // the guard is for anything a stat cannot see coming.

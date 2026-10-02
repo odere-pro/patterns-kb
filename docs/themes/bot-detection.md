@@ -15,14 +15,16 @@ Separating genuine users from automated, malicious accounts on a social platform
 ## The question
 <!--meta block=description-->
 
-Bots create fake accounts, spray friend requests and messages, and spread duplicate or harmful content. The task is to tell automated, malicious activity apart from genuine users on a platform with roughly 500&nbsp;million daily actives — framed as binary classification of each account, feeding an enforcement decision.
-
-Three things make it hard, and they drive every later choice. It is **adversarial**: bot signatures shift constantly, and the most visible signals are the easiest to fake. It is **high-prevalence but label-starved**: unremediated bots could be half of all actions, yet ground-truth labels come from manual investigators who can review only hundreds of accounts a week. And **false positives are expensive**: wrongly restricting a real user suppresses legitimate engagement and generates costly appeals.
+Bots create fake accounts, spray friend requests and messages, and spread harmful content. The task is to tell automated, malicious activity from genuine users among roughly 500 million daily actives, framed as binary classification of each account feeding an enforcement decision. Three things make it hard: bot signatures shift constantly, labels come from investigators who review only hundreds of accounts a week, and wrongly restricting a real user is expensive.
 
 ## Explained
 <!--meta block=explain-->
 
-Bot detection scores every account for the chance that it is automated and malicious, then acts on that score in steps. A cheap first model drops the obviously real accounts, which cuts the heavy model's work by 80 to 90 percent. The heavy model looks at two things: the account's connections, which expose bots acting together, and its last 200 or so actions, which expose inhuman rhythm. Judge the system by harm avoided, not by bots caught, because raw catches ignore real users wrongly restricted. Labels are scarce, since investigators review only hundreds of accounts a week, so learn from unlabelled data first and then fine-tune on a few thousand trusted labels. Enforcement is graduated: remove an account only when confident, and limit or demote it below that, so a wrong call stays cheap to reverse. It costs three things. Scores must be recalibrated on every release so removal volume stays steady. Effective enforcement hides the behaviour you need to learn from, so keep a random holdout that lets known bots run. And each extra point of recall wrongly restricts more real users, who then appeal.
+Bot detection scores every account for the chance that it is automated and malicious, then acts on that score in steps. A cheap first model drops the obviously real accounts, which cuts the heavy model's work by 80 to 90 percent. The heavy model looks at two things: the account's connections, which expose bots acting together, and its last 200 or so actions, which expose inhuman rhythm. Both are turned into [embeddings](../patterns/ml/embeddings.md) and [engineered features](../patterns/ml/feature-engineering.md). Judge the system by harm avoided, not by bots caught, because raw catches ignore real users wrongly restricted ([evaluation](../patterns/ml/evaluation.md)). Labels are scarce, since investigators review only hundreds of accounts a week, so learn from unlabelled data first and then fine-tune on a few thousand trusted labels. Enforcement is graduated: remove an account only when confident, and limit or demote it below that, so a wrong call stays cheap to reverse.
+
+- **Recalibration.** Scores shift on every release, so recalibrate each time to keep removal volume steady.
+- **Hidden signal.** Effective enforcement hides the behaviour you need to learn from, so keep a random holdout that lets known bots run.
+- **Appeals.** Each extra point of recall wrongly restricts more real users, who then appeal, so set the removal threshold against appeal cost.
 
 **Example.** The platform has 500 million daily active accounts. The cheap filter sets aside 80 to 90 percent of them, so the heavy model scores only 50 to 100 million. Investigators review perhaps 500 accounts a week, about 0.0001 percent of 500 million, which is why training leans on unlabelled data. An account with a high confidence score is removed; one with a middling score has its friend requests limited. A small random holdout of flagged bots is left running for a while, which costs some bot harm and keeps the training data honest.
 
@@ -60,7 +62,7 @@ The **model** choice rejects the tempting single content-heavy mega-model — bo
 
 ### [Embeddings](../patterns/ml/embeddings.md) {#tour-embeddings}
 
-The graph branch is an inductive GNN (GraphSAGE) that embeds an account from its neighbourhood, so new accounts get a vector without retraining. It is pretrained self-supervised on the social graph — masking attributes and dropping edges — to tell a tight community apart from a star-shaped follow-farm.
+The graph branch is an inductive graph neural network (GNN) (GraphSAGE) that embeds an account from its neighbourhood, so new accounts get a vector without retraining. It is pretrained self-supervised on the social graph — masking attributes and dropping edges — to tell a tight community apart from a star-shaped follow-farm.
 
 ### [Feature Engineering](../patterns/ml/feature-engineering.md) {#tour-feature-engineering}
 
@@ -72,7 +74,7 @@ Each branch is pretrained self-supervised on abundant unlabelled data, then fine
 
 ### [Evaluation](../patterns/ml/evaluation.md) {#tour-evaluation}
 
-Offline metrics are Precision@Recall90, PR-AUC, and impact-weighted variants; online tests use importance sampling to measure a sub-1% prevalence class without astronomical sample sizes, plus a maintained red-team set of sophisticated evasion patterns.
+Offline metrics are Precision@Recall90, precision-recall (PR)-area under the curve (AUC), and impact-weighted variants; online tests use importance sampling to measure a sub-1% prevalence class without astronomical sample sizes, plus a maintained red-team set of sophisticated evasion patterns.
 
 <!-- tour:end -->
 

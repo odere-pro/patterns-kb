@@ -174,7 +174,7 @@ catalog
 - [ML System Design](../../themes/ml-system-design.md) — The default representation for categorical, graph, and text signals {#fluency-ml-system-design}
 - [Harmful Content](../../themes/harmful-content.md) — Inductive user embeddings capture creator risk, reusable across the platform {#fluency-harmful-content}
 - [Bot Detection](../../themes/bot-detection.md) — Inductive graph embeddings place an account by its network position {#fluency-bot-detection}
-- [Video Recommendations](../../themes/video-recommendations.md) — Two-tower embeddings drive candidate generation and ANN retrieval {#fluency-video-recommendations}
+- [Video Recommendations](../../themes/video-recommendations.md) — Two-tower embeddings drive candidate generation and approximate nearest neighbour (ANN) retrieval {#fluency-video-recommendations}
 
 <!-- fluency:end -->
 
@@ -194,6 +194,6 @@ catalog
 
 **Enables**
 
-- [Retrieval-Augmented Generation](./rag.md) — The retrieval step of a RAG pipeline is the most common reason to build an embedding index
+- [Retrieval-Augmented Generation](./rag.md) — The retrieval step of a retrieval-augmented generation (RAG) pipeline is the most common reason to build an embedding index
 
 <!-- relationships:end -->

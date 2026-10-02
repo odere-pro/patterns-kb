@@ -15,14 +15,15 @@ The delivery framework for the applied-ML system design interview: turn an ambig
 ## The question
 <!--meta block=description-->
 
-An interviewer opens with a vague, high-level prompt — "design a recommendation system", "build a fraud detector" — and the job is to turn it into a working ML system under time pressure. This is the applied-ML analogue of the [system design interview](./system-design-interview.md): the goal is not a perfect design in forty-five minutes, but a structured walk that demonstrates you can make reasonable tradeoffs.
-
-What separates a strong answer is navigation: framing the business goal before the ML objective, choosing informative data with a hypothesis for each signal, designing a model that is effective and efficient, and connecting it to production with an evaluation strategy that ties back to the business. The single most common failure is jumping to a model before framing the problem it should solve.
+An interviewer gives a vague prompt such as a recommendation system or a fraud detector, and you must turn it into a working ML system in about 45 minutes. The goal is a structured walk with sound tradeoffs, not a perfect design. Frame the business goal before the ML objective, choose data with a reason for each signal, design the model, and evaluate against the business. The commonest failure is naming a model first.
 
 ## Explained
 <!--meta block=explain-->
 
-An ML system design question gives you a vague prompt, such as a fraud detector, and 45 minutes to turn it into a working system. The method is a fixed walk with a time budget per phase, so you do not spend the whole time on a model. First frame the problem: state the business goal, then the ML goal it becomes, such as classifying a payment as fraud or ranking items. These differ, so say where. A fraud model should weigh a 5,000 payment far above a 5 one. Then sketch the whole flow, choose data signals with a reason for each, start with a simple baseline model, and only then describe a more complex one. Finish with how you will measure it. Offline metrics are cheap but may not predict real results, so confirm with an A/B test, where part of the live traffic sees the new model, on a business measure. Adding model complexity costs training, serving time and upkeep, so justify each step by what it gains. The most common failure is naming a model before framing the problem.
+An ML system design question gives you a vague prompt, such as a fraud detector, and 45 minutes to turn it into a working system. The method is a fixed walk with a time budget per phase, so you do not spend the whole time on a model. First frame the problem: state the business goal, then the ML goal it becomes, such as classifying a payment as fraud or ranking items. These differ, so say where. A fraud model should weigh a 5,000 payment far above a 5 one. Then sketch the whole flow, choose data signals with a reason for each, start with a simple baseline model, and only then describe a more complex one. Finish with how you will measure it. Offline metrics are cheap but may not predict real results, so confirm with an A/B test, where part of the live traffic sees the new model, on a business measure. The most common failure is naming a model before framing the problem.
+
+- **Complexity price.** A complex model costs training, serving time and upkeep, so justify each step by what it gains over the baseline.
+- **Offline gap.** Offline metrics may not predict live results, so confirm with an A/B test on a business measure.
 
 **Example.** For a fraud detector, a 45-minute plan runs: framing 6 minutes, sketch 3, data 10, model 10, evaluation 7. That leaves 9 for deep dives such as new cardholders with no history. The business goal is cutting fraud losses while declining at most 1 in 200 good payments. The ML goal is a fraud probability weighted by amount. The baseline is logistic regression on amount, country and device age, and the next step is boosted trees, which cost more to serve. Offline you check precision at a fixed recall, then an A/B test measures money lost.
 
@@ -63,7 +64,7 @@ Model capacity against available data, regularisation, and drift — the questio
 
 ### [Evaluation](../patterns/ml/evaluation.md) {#tour-evaluation}
 
-Design offline metrics that predict online results and tie back to the business objective; strong ML-metric performance with no business impact is not valued. Each system type — classification, recommender, search, generative — needs its own evaluation strategy.
+Design offline metrics that predict online results and tie back to the business objective; strong machine learning (ML)-metric performance with no business impact is not valued. Each system type — classification, recommender, search, generative — needs its own evaluation strategy.
 
 <!-- tour:end -->
 

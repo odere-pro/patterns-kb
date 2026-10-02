@@ -16,20 +16,16 @@ Classifies each unit of queued work by how much it matters, and serves the impor
 ## What it is
 <!--meta block=description-->
 
-A plain [Message Queue](./message-queue.md) serves work in the order it arrived, which is a statement that every item is worth the same. That is rarely true. A password-reset email and a monthly analytics export share one channel, and when ten thousand exports land at nine in the morning the reset waits behind all of them.
-
-A priority queue breaks the tie differently. The producer classifies each message — this is urgent, this can wait — and consumers take the urgent class first. Nothing about the work changes; only the order it is offered in.
-
-Two mechanisms give you that ordering, and they fail differently. **One queue with a priority field** asks the broker to sort, which is simple and only works if your broker actually supports it. **One queue per class** puts the ordering in the routing instead, which every broker supports and which lets you also give each class its own consumers.
-
-The consumer topology is the real decision. Give each queue its own dedicated pool and the classes are isolated: a jam in the low queue cannot slow the high one, and you can size each pool against its own target. Share one pool across the queues and you get simplicity plus a hard guarantee that high always beats low — bought with the pattern's signature failure, **starvation**, where low-priority work under sustained load is delayed indefinitely and in principle never runs.
-
-What the pattern does not do is absorb load. Priority reorders an overload; it does not shrink it. If the arrival rate can exceed what the consumers can drain, you still need [Queue-Based Load Leveling](../distributed/resilience/load-leveling.md) underneath — priority decides who suffers first, buffering decides whether anyone has to.
+A priority queue serves urgent messages before the rest: the producer classifies each message, and consumers take the urgent class first. Only the order changes, not the work. It stops a password reset waiting behind thousands of exports. It reorders an overload and does not shrink it, so it needs buffering underneath.
 
 ## Explained
 <!--meta block=explain-->
 
-A priority queue serves urgent messages before the rest: the producer marks each message urgent or deferrable, and consumers take the urgent class first. The work stays the same; only the order it is offered in changes. You build it as one queue with a priority field, which needs a broker that sorts, or as one queue per class, which every broker supports and which lets each class have its own consumers. Choose it over a plain queue when a password reset must not wait behind 10,000 report exports. Priority reorders an overload and does not shrink it, so keep a buffering queue underneath if arrivals can exceed what consumers drain. It costs three things. Under steady urgent load a shared pool never reaches the low queue (starvation), so promote messages as they age or reserve a share of capacity for the low class. Every caller will mark its work urgent, so keep a written rule for each class and a time target for the urgent one. And queues multiply with classes, so use two or three.
+A priority queue serves urgent messages before the rest: the producer marks each message urgent or deferrable, and consumers take the urgent class first. The work stays the same; only the order it is offered in changes. You build it as one queue with a priority field, which needs a broker that sorts, or as one queue per class, which every broker supports and which lets each class have its own consumers. Choose it over a plain queue when a password reset must not wait behind 10,000 report exports. Priority reorders an overload and does not shrink it, so keep a buffering queue underneath if arrivals can exceed what consumers drain.
+
+- **Starvation.** Under steady urgent load a shared pool never reaches the low queue. Promote aging messages or reserve capacity for the low class.
+- **Priority inflation.** Every caller will mark its work urgent. Keep a written rule for each class and a time target for the urgent one.
+- **Queue count.** Queues multiply with classes, so use two or three.
 
 **Example.** Ten workers finish 10 one-second jobs a second. Password resets (high) arrive at 4 a second and exports (low) at 8 a second, 12 in all, so the pool is 2 a second short. Resets are served at once and exports get the other 6 a second, so the export backlog grows by 2 a second: 1,200 waiting after 10 minutes. Priority did not remove the overload, it chose who waits. Promoting any export that has waited over 60 s bounds its delay, and adding 2 workers closes the gap, since 12 workers finish 12 a second.
 
@@ -242,6 +238,10 @@ async function promoteAged(low: Queue, high: Queue, now: number): Promise<number
 **Prevents**
 
 - [Head-of-Line Blocking](../../hazards/head-of-line-blocking.md) — A priority lane stops a stuck bulk item from blocking urgent work.
+
+**Exposed to**
+
+- [Starvation](../../hazards/starvation.md) — Can fall into starvation when low-priority items are never served while high-priority work keeps arriving
 
 **Demonstrated by**
 

@@ -15,11 +15,7 @@ Traffic never arrives at a steady pace — a flash sale, a viral post, or a retr
 ## The question
 <!--meta block=description-->
 
-Every system is sized for some steady-state load, and every system eventually sees a request rate that blows past it — a marketing push, a cron job firing every client at once, a cascading [retry storm](../hazards/retry-storm.md) after an upstream blip. The question this theme answers: what happens in the seconds that follow, before anyone can add capacity by hand?
-
-There are exactly three honest answers. **Absorb** the burst — buffer the work and drain it at a rate the system can actually sustain. **Shed** it — refuse the excess outright so that whatever gets through still succeeds cleanly. Or **scale** — add capacity so the surge becomes the new steady state. Each has a cost: absorbing trades latency, shedding trades completeness, scaling trades time (nothing provisions instantly).
-
-A spike also has a habit of finding the weakest link first. Whichever component saturates — a connection pool, a downstream API, a single-threaded worker — determines how the failure shows up elsewhere. So handling spikes is not only about surviving the extra volume; it's about containing the damage to the one component that couldn't keep up.
+Every system is sized for a steady load and eventually sees a rate far past it: a marketing push, every client firing a cron job at once, a retry storm after an upstream blip. What happens in the seconds before anyone can add capacity by hand? Three answers exist. Absorb the burst in a buffer, which trades latency. Shed the excess, which trades completeness. Scale, which trades time. The weakest link saturates first, so contain the damage there.
 
 ## Explained
 <!--meta block=explain-->
@@ -70,7 +66,7 @@ Requests join a queue of fixed size and leave at a fixed rate, so a burst become
 
 ### [Autoscaling](../patterns/distributed/routing/autoscaling.md) {#tour-autoscaling}
 
-Add capacity as the surge builds. A load signal — CPU, queue depth, request rate — triggers new instances so throughput grows with demand; because it's never instant, it's a complement to absorbing and shedding during ramp-up, not a substitute for them.
+Add capacity as the surge builds. A load signal — central processing unit (CPU), queue depth, request rate — triggers new instances so throughput grows with demand; because it's never instant, it's a complement to absorbing and shedding during ramp-up, not a substitute for them.
 
 ### [Backpressure](../patterns/concurrency/backpressure.md) {#tour-backpressure}
 

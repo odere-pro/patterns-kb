@@ -33,6 +33,28 @@ export function rmTree(target: string): void {
   fs.rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }
 
+/**
+ * Whether this process is held to file modes: a file chmodded 000 cannot be read.
+ * A root user ignores modes, so a test that needs a permission failure cannot
+ * produce one there and skips on this flag; a non-root run (CI) still exercises it.
+ */
+export const PERMISSIONS_ENFORCED: boolean = (() => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'perm-probe-'));
+  const file = path.join(dir, 'f');
+  try {
+    fs.writeFileSync(file, 'x');
+    fs.chmodSync(file, 0o000);
+    try {
+      fs.readFileSync(file);
+      return false;
+    } catch {
+      return true;
+    }
+  } finally {
+    rmTree(dir);
+  }
+})();
+
 export interface Captured {
   readonly status: number;
   readonly out: string;

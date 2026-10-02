@@ -17,14 +17,15 @@ Every piece of knowledge — a rule, a formula, a fact about the domain — shou
 ## What it says
 <!--meta block=description-->
 
-Every piece of knowledge must have a single, unambiguous, authoritative representation within a system. Coined by Andy Hunt and Dave Thomas in The Pragmatic Programmer, DRY is often misremembered as “never write the same code twice” — but its subject is knowledge, not text.
-
-A business rule, a validation constraint, a magic constant, the shape of a database row: each should be defined once, and every other place that needs it should refer back to that one definition rather than restate it. Two lines of code that happen to look alike are not the target; two places that both encode the same fact are.
+Every piece of knowledge must have a single, unambiguous, authoritative representation within a system. Coined by Andy Hunt and Dave Thomas in The Pragmatic Programmer, DRY is often misremembered as “never write the same code twice” — but its subject is knowledge, not text. Two lines that happen to look alike are not the target; two places that both encode the same fact are, and each should refer back to one definition.
 
 ## Explained
 <!--meta block=explain-->
 
-DRY means every fact your system relies on, such as a tax rate, a validation rule or a list of database columns, is written down in one place, and everything else points to it. When a fact lives in two places, the copies agree only until someone edits one, and then the system holds two answers with no test looking at the gap. Apply it to knowledge, not to text: two blocks that look alike but exist for different reasons are not duplication. Choose it over leaving copies alone when the copies must change together. Choose repetition over a shared helper when they change for different reasons, because merging them ties two owners to one change schedule. Overdone, it costs a shared function bent by flags and parameters to serve every caller, and the next change for one caller quietly breaks another. The counter-move is to wait: tolerate the repeat twice, unify on the third, and only when the shared code has a single reason to change. A computed copy, such as a cache, is fine as long as it is generated and never written by hand.
+DRY means every fact your system relies on, such as a tax rate, a validation rule or a list of database columns, is written down in one place, and everything else points to it. When a fact lives in two places, the copies agree only until someone edits one, and then the system holds two answers with no test looking at the gap. Apply it to knowledge, not to text: two blocks that look alike but exist for different reasons are not duplication. Choose it over leaving copies alone when the copies must change together. Choose repetition over a shared helper when they change for different reasons, because merging them ties two owners to one change schedule. A computed copy, such as a cache, is fine as long as it is generated and never written by hand.
+
+- **A shared function bends under flags.** A change for one caller quietly breaks another. Tolerate the repeat twice and unify on the third.
+- **A merge couples owners.** Unify only when the shared code has a single reason to change, or the shared helper becomes the wrong abstraction.
 
 **Example.** A shop's checkout holds 20% VAT as 0.2 in a pricing file, and its invoice template hard-codes 0.20. The rate moves to 22%, checkout is updated, and 400 invoices go out with the old rate. One named constant read by both fixes it. The same team then merges two address validators because they look alike: the US form needs a 5-digit ZIP and the UK form a postcode. The merged function takes a country flag and 3 more parameters, and a UK change breaks US signups. Two small validators, each with its own tests, were cheaper: they look alike but change for different reasons.
 
@@ -64,10 +65,15 @@ So wait for the knowledge to actually repeat — a common heuristic is to tolera
 **Combines with**
 
 - [Vertical Slice](../patterns/architecture/vertical-slice.md) — The maxim a slice layout relaxes on purpose, and the judgement it hands back to the team
+- [Rule of Three](./rule-of-three.md) — The wait avoids merging two things that only look alike
+
+**Prevents**
+
+- [Shotgun Surgery](../hazards/shotgun-surgery.md) — Keeps each rule in one place, so a change to it is made once
 
 **Demonstrated by**
 
-- [Connect Four](../designs/connect-four.md) — Replacing four near-identical checker classes with one parameterised loop is DRY doing real work
+- [Connect Four](../designs/connect-four.md) — Replacing four near-identical checker classes with one parameterised loop is don't repeat yourself (DRY) doing real work
 - [File System](../designs/file-system.md) — duplication is removed both by a shared base class and by a single path-parsing entry point
 - [BookMyShow](../designs/bookmyshow.md) — one source of truth replaces two structures whose disagreement would double-sell a seat
 

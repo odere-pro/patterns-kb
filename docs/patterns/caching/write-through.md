@@ -212,4 +212,8 @@ class WriteThroughCache<K, V> {
 
 - [Stale Cache](../../hazards/stale-cache.md) — Write the cache and store together, so a read after a write can't be stale
 
+**Exposed to**
+
+- [Dual-Write Inconsistency](../../hazards/dual-write-inconsistency.md) — Can fall into dual write inconsistency when the cache and store are written by two calls with no shared transaction
+
 <!-- relationships:end -->

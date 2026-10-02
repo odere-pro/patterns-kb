@@ -196,5 +196,13 @@ class InMemoryUserRepository implements Repository<User> {
 - [Entity](../ddd/entity.md) — Fetches entities by the identity that defines them
 - [Identity Map](./identity-map.md) — A repository keeps one object per row by consulting the identity map.
 - [Specification](./specification.md) — A repository can accept a specification as its query.
+- [Query Object](./query-object.md) — A repository often takes a query object for open-ended searches
+
+**Exposed to**
+
+- [Chatty I/O](../../hazards/chatty-io.md) — Can fall into chatty io when a repository that loads per item or per field makes one query per row
+- [Extraneous Fetching](../../hazards/extraneous-fetching.md) — Can fall into extraneous fetching when a generic repository returns whole entities when callers need two fields
+- [Leaky Abstraction](../../hazards/leaky-abstraction.md) — Can fall into leaky abstraction when it presents a collection but hides queries, latency and failures
+- [N+1 Query](../../hazards/n-plus-1-query.md) — Can fall into n plus 1 query when per-entity fetches inside a loop multiply queries
 
 <!-- relationships:end -->

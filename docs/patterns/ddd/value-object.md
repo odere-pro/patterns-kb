@@ -183,6 +183,7 @@ a === b;     // false — different objects, and that's fine
 - [Lens / Optics](../functional/lens-optics.md) — Nested replacements get a reusable, composable path
 - [Encapsulation](../../principles/encapsulation.md) — Its constructor check is encapsulation at the smallest useful scale
 - [Specification](../enterprise/specification.md) — A rule object is a value object that answers one question.
+- [Make Illegal States Unrepresentable](../../principles/make-illegal-states-unrepresentable.md) — A value object checks its rules once, at construction, so every instance is valid
 
 **Part of**
 
@@ -196,6 +197,7 @@ a === b;     // false — different objects, and that's fine
 **Prevents**
 
 - [Partial Object](../../hazards/partial-object.md) — Its validate-at-construction rule is what stops a half-filled instance existing
+- [Primitive Obsession](../../hazards/primitive-obsession.md) — Gives a concept such as money or an email address its own type, so its rules travel with it
 
 **Demonstrated by**
 

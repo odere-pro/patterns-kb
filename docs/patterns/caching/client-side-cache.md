@@ -191,6 +191,10 @@ function writeCached<V>(key: string, value: V, ttlMs: number): void {
 
 - [No Caching](../../hazards/no-caching.md) — Stops a repeated read at the client, so it never reaches the source at all
 
+**Exposed to**
+
+- [Stale Cache](../../hazards/stale-cache.md) — Can fall into stale cache when copies on devices cannot be invalidated centrally
+
 **Demonstrated by**
 
 - [Tinder](../../designs/tinder.md) — a client-side cache absorbs the read-your-own-writes gap without a server-side cache to maintain

@@ -16,16 +16,16 @@ Lets every instance of a class share the same underlying state, so callers const
 ## What it is
 <!--meta block=description-->
 
-A **monostate** is a class whose every instance shares one and the same state. You still write `new` and get back distinct objects, but all of their data lives in static (class-level) storage, so reading or writing through any instance touches the one shared copy. Two objects that look independent are, in effect, two windows onto a single set of values.
-
-The force it resolves is the same one [Singleton](../creational/singleton.md) answers — "there should really be only one of this thing" — but without Singleton's most awkward consequences. Singleton advertises its single-ness in the type: callers must go through a global `getInstance()`, the constraint leaks into every call site, and the class is hard to subclass or hand around polymorphically. Monostate keeps the single-ness but hides it. Callers use plain construction and plain method calls; the sharing is an implementation detail behind the interface.
-
-So the observable behaviour is "one object" while the mechanism is "many shells over one state." That transparency is the whole appeal — and, because it is hidden global mutable state wearing the costume of an ordinary object, also the whole danger.
+A monostate is a class whose instances all share one set of state, held in static fields. Callers use plain construction and method calls, yet every object reads and writes the same values. It gives singleton behavior without a global `getInstance()`, but it is hidden global mutable state in the costume of an ordinary object.
 
 ## Explained
 <!--meta block=explain-->
 
-A monostate is a class whose instances all share one set of data, held in class-level (static) fields, so any two objects you create read and write the same values. Callers use plain construction and plain method calls, and the sharing stays hidden. Choose it over a singleton only when you must retrofit sharing onto a class whose callers you cannot edit, because they keep writing new. Otherwise pass the shared object in as a parameter, which keeps the sharing visible. The hiding is the whole cost. Two objects that look independent overwrite each other's values, and nothing at the call site warns you. The shared fields also survive from one test to the next, so reset them before every test case. Concurrent writers need the same locking as any shared data, so guard the fields with a lock. And nothing limits how many empty shells you allocate, so reuse one object where you can.
+A monostate is a class whose instances all share one set of data, held in class-level (static) fields, so any two objects you create read and write the same values. Callers use plain construction and plain method calls, and the sharing stays hidden. Choose it over a singleton only when you must retrofit sharing onto a class whose callers you cannot edit, because they keep writing new. Otherwise pass the shared object in as a parameter, which keeps the sharing visible.
+
+- **Hidden sharing.** Objects that look independent overwrite each other, and nothing at the call site warns you. Pass one object in where you can.
+- **Test leakage.** Static fields survive from one test to the next, so reset them before every test case.
+- **Concurrent writes.** Concurrent writers need the same locking as any shared data, so guard the fields with a lock.
 
 **Example.** A Settings class stores the theme in a static field. Code in the sidebar calls new Settings() and sets the theme to dark. Code in the editor calls its own new Settings() and reads dark, though it never set it. The editor's tests pass alone, but after a sidebar test the editor sees dark and fails. The fix inside the class is a reset method that every test calls first. The fix at the root is to create one Settings and pass it into both, so the sharing shows in the code.
 

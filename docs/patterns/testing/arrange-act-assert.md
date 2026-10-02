@@ -16,18 +16,17 @@ Set up the state a test needs, perform the one action under test, then check the
 ## What it is
 <!--meta block=description-->
 
-**Arrange-Act-Assert** is a way of shaping the body of a test, not a library or a framework. Arrange builds the inputs, fixtures, and preconditions the test needs. Act calls the single behavior under test — ideally one line. Assert checks that what happened matches what was expected. Nothing else belongs in the test body, and the three sections appear in that order, every time.
-
-The force it resolves is that tests are read far more often than they are written, usually by someone who is not the author and is trying to understand what broke. A test that interleaves setup, invocation, and checking forces the reader to trace control flow to find out what's actually being verified. AAA fixes the shape in advance: a reader can jump straight to the middle line to see what's under test, and to the tail to see what's expected of it.
-
-It also gives a test a built-in completeness check. A test with no real Act is testing nothing; a test with no real Assert is just running code without checking anything. Because the three parts are named and ordered, a missing or padded-out section is visible on sight, not just on close reading.
-
-Bill Wake named the convention in 2001, so it predates most of today's testing frameworks — it applies equally to xUnit-family tests, integration tests, and BDD (behavior-driven development)-style specs, which just rename the same three steps.
+Arrange-Act-Assert is a way to shape a test body, not a library: arrange builds inputs and preconditions, act calls the single behaviour under test, assert checks the result, always in that order. Tests are read far more than written, so a fixed shape shows a reader what is under test and what is expected, and exposes a missing act or assert. Bill Wake named it in 2001.
 
 ## Explained
 <!--meta block=explain-->
 
-Arrange-Act-Assert is a way to lay out a test body in three visible parts, in order: arrange builds the inputs and starting state, act calls the one behaviour under test, and assert checks the result. Tests are read far more often than written, usually by someone trying to learn what broke, and a test that mixes setup, calls and checks makes that reader trace the flow line by line. Choose it over a free-form test whenever more than one line of setup is involved, because a failure then points at a part: bad setup, a wrong call or a wrong result. A test with no real act or no real assert is also easy to spot. It costs four things. An assert block can grow to check many unrelated things, so test one behaviour and assert one outcome. Long arrange sections repeat across tests, so move them into a helper or builder. Catching a thrown error joins act and assert, so treat the call wrapped in the expectation as the act. And cleanup has no part of its own, so give it a named fixture.
+Arrange-Act-Assert is a way to lay out a test body in three visible parts, in order: arrange builds the inputs and starting state, act calls the one behaviour under test, and assert checks the result. Tests are read far more often than written, usually by someone trying to learn what broke, and a test that mixes setup, calls and checks makes that reader trace the flow line by line. Choose it over a free-form test whenever more than one line of setup is involved, because a failure then points at a part: bad setup, a wrong call or a wrong result. A test with no real act or no real assert is also easy to spot.
+
+- **Bloated assert.** An assert block can grow to check many unrelated things, so test one behaviour and assert one outcome.
+- **Repeated arrange.** Long setup repeats across tests, so move it into a helper or builder.
+- **Fused act.** Catching a thrown error joins act and assert, so treat the call wrapped in the expectation as the act.
+- **No cleanup slot.** Cleanup has no part of its own, so give it a named fixture.
 
 **Example.** A transfer test is written as 12 interleaved lines: create an account, check it, create another, move 30, check, move again, check. It fails at line 9, and you must read all 9 lines to learn which step is wrong. Rewritten, arrange creates accounts holding 100 and 50, act moves 30 once, and assert expects 70 and 80. A failure now names the assert and the one act above it. The cost is that the 6-line arrange block repeats across 40 transfer tests, 240 lines, so it moves into one makeAccounts helper.
 

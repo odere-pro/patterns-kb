@@ -16,9 +16,7 @@ No client should be forced to depend on methods it does not use. Split a fat, ge
 ## What it says
 <!--meta block=description-->
 
-“Clients should not be forced to depend on methods they do not use.” The I in SOLID, named by Robert C. Martin. Where a single interface serves many callers, each caller is coupled not just to the methods it invokes but to every method the interface declares — so the interface should be broken up along the lines of who uses what.
-
-It grew out of a concrete problem: Martin was consulting on the software for a Xerox printer, where one enormous `Job` class had accreted every operation the machine could perform and every task called it directly. A client that only wanted to staple was nonetheless bound to printing, faxing, and the rest. The fix was to place narrow, role-specific interfaces — a staple job, a print job — in front of the one class, so each client saw only its own slice.
+“Clients should not be forced to depend on methods they do not use.” The I in SOLID, named by Robert C. Martin. A caller of a wide interface is coupled to every method it declares, not just those it calls, so split the interface by who uses what. Martin met it on a Xerox printer: one Job class held every operation, so a client that only stapled was bound to printing and faxing too.
 
 ## Explained
 <!--meta block=explain-->
@@ -46,6 +44,24 @@ Shape interfaces around the caller, not the implementer:
 
 The rule of thumb: if you can name two clients that would never both use the same subset of methods, that is two interfaces.
 
+## In code
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — one wide interface every client drags around, then role-sized ones"
+// Before: the stapling client is bound to print and fax too.
+interface Job { print(): void; fax(): void; staple(): void }
+function finish(job: Job) { job.staple(); }
+
+// After: each client declares only its slice; one class still serves all.
+interface Stapler { staple(): void }
+interface Printer { print(): void }
+interface Fax { fax(): void }
+class Machine implements Stapler, Printer, Fax {
+  staple() {} print() {} fax() {}
+}
+function finish(s: Stapler) { s.staple(); }               // a test double needs one method
+```
+
 ## Taken too far
 <!--meta block=overreach-->
 
@@ -64,8 +80,8 @@ So let the split be driven by an observed difference in how clients use the type
 
 - [Single Responsibility Principle](./single-responsibility.md) — One responsibility, applied to an interface: keep unrelated client roles from sharing one contract.
 - [Dependency Inversion Principle](./dependency-inversion.md) — Those small role interfaces are exactly the abstractions high-level policy should depend on.
-- [DTO](../patterns/enterprise/dto.md) — A DTO names the narrow shape one caller needs, so it does not depend on the full record
-- [Backend-for-Frontend](../patterns/distributed/routing/bff.md) — Each client type gets its own backend surface instead of one wide API serving all of them
+- [DTO](../patterns/enterprise/dto.md) — A data transfer object (DTO) names the narrow shape one caller needs, so it does not depend on the full record
+- [Backend-for-Frontend](../patterns/distributed/routing/bff.md) — Each client type gets its own backend surface instead of one wide application programming interface (API) serving all of them
 
 **Prevents**
 

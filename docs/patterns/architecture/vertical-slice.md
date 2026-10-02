@@ -207,9 +207,10 @@ app.post("/orders", async (httpReq, httpRes) => {
 
 **Combines with**
 
-- [CQRS](./cqrs.md) — Asymmetric slices are CQRS arriving as a consequence of the filing
+- [CQRS](./cqrs.md) — Asymmetric slices are command query responsibility segregation (CQRS) arriving as a consequence of the filing
 - [Don't Repeat Yourself (DRY)](../../principles/dry.md) — Deliberately relaxed between slices: duplication is accepted to keep them independent
-- [REPR](./repr.md) — REPR is what the slice's transport edge looks like when the endpoint is its own class
+- [REPR](./repr.md) — Request-endpoint-response (REPR) is what the slice's transport edge looks like when the endpoint is its own class
+- [Rule of Three](../../principles/rule-of-three.md) — A slice layout accepts duplication between slices, and the rule says when to pull it out
 
 **Alternative to**
 
@@ -222,5 +223,6 @@ app.post("/orders", async (httpReq, httpRes) => {
 **Prevents**
 
 - [Big Ball of Mud](../../hazards/big-ball-of-mud.md) — Filing by feature keeps a change inside one folder instead of spreading it everywhere
+- [Shotgun Surgery](../../hazards/shotgun-surgery.md) — Groups the code of one feature together, so a change to the feature stays inside its slice
 
 <!-- relationships:end -->

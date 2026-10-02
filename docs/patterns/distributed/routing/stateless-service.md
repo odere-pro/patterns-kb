@@ -15,16 +15,17 @@ Holds no client session state in its own memory between requests — everything 
 ## What it is
 <!--meta block=description-->
 
-A **stateless service** processes each request without relying on any client-specific state left over in its own memory from earlier requests. Whatever context a request needs — the caller's identity, their shopping cart, a workflow's progress — either travels with the request (a token, request parameters) or is fetched from and written back to a shared external store. The process itself is interchangeable and disposable.
-
-The force it resolves is the **coupling between a client and one specific instance**. When a server keeps session state in local memory, that client must return to the same instance every time (sticky sessions), and if the instance dies the state dies with it. That single fact blocks horizontal scaling, complicates load balancing, makes rolling deploys lossy, and turns [autoscaling](./autoscaling.md) into a data-migration problem. Push the state out and any instance can serve any request.
-
-"Stateless" is about instance-local, cross-request state — not a total absence of state. The state still exists; it has simply been relocated somewhere shared and durable. The service becomes a pure function of (request + external state), which is exactly what makes it cheap to add, remove, and replace instances.
+A stateless service keeps no client-specific state in its own memory between requests. What a request needs, such as the caller's identity or cart, travels with it in a token or is read from a shared external store. Any instance can then serve any request, which makes adding, removing and replacing instances cheap. The state is relocated, not removed.
 
 ## Explained
 <!--meta block=explain-->
 
-A stateless service keeps nothing about a client in its own memory between requests, so any copy of it can answer any request. What a request needs, such as who the caller is or what is in the cart, travels with the request in a token or is read from a shared store and written back. Without that, a server holding a session in memory forces the client to return to the same copy, called a sticky session, and when that copy dies the session dies with it. That blocks scaling out, makes rolling deploys drop sessions and turns removing a copy into a data move. Choose it over sticky sessions when you will run several copies behind a load balancer or add and remove them automatically. The state does not vanish: it moves somewhere shared and lasting. It costs four things. Every request pays a trip to the store, so cache values that rarely change. The store becomes a shared dependency and bottleneck, so replicate it and watch its latency. Big tokens bloat every request and hit cookie size limits, so carry an ID and keep the rest in the store. And long-lived connections or large in-memory data do not fit, so keep those as separate stateful parts.
+A stateless service keeps nothing about a client in its own memory between requests, so any copy of it can answer any request. What a request needs, such as who the caller is or what is in the cart, travels with the request in a token or is read from a shared store and written back. Without that, a server holding a session in memory forces the client to return to the same copy, called a [sticky session](sticky-session.md), and when that copy dies the session dies with it. That blocks scaling out, makes rolling deploys drop sessions and turns removing a copy into a data move. Choose it over sticky sessions when you will run several copies behind a load balancer or add and remove them automatically. The state does not vanish: it moves somewhere shared and lasting.
+
+- **Store round trip.** Every request pays a trip to the store, so cache values that rarely change.
+- **Shared dependency.** The store becomes a bottleneck and a single point of failure, so replicate it and watch its latency.
+- **Heavy tokens.** Big tokens bloat every request and hit cookie size limits, so carry an ID and keep the rest in the store.
+- **Poor fit.** Long-lived connections and large in-memory data do not fit, so keep those as separate stateful parts.
 
 **Example.** A cart service runs 3 copies for 10,000 active shoppers, so about 3,333 per copy, and a deploy restarts the copies one at a time. With carts in each copy's memory, every restart wipes about 3,333 carts, 10,000 over the deploy. With carts in a shared store, no cart is lost and any copy answers any shopper. The cost is that each request spends about 2 ms reading the cart and up to 2 ms writing it back, so 500 requests a second make up to 1,000 store operations a second on a dependency that now must stay up.
 

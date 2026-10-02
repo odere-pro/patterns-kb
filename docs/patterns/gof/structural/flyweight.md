@@ -16,16 +16,16 @@ Pulls the identical, unchanging part of an object out into a single shared insta
 ## What it is
 <!--meta block=description-->
 
-A **flyweight** is an object whose state is split in two: an intrinsic part that is shared and never changes — a glyph's shape, a tree's mesh and texture, a particle's sprite — and an extrinsic part that varies per use, like screen position or colour. The intrinsic part lives in one shared instance; the extrinsic part is passed in by the caller each time the object is operated on.
-
-The problem it resolves is **memory blowup at scale**. A document with a million characters, a forest with a million trees, a simulation with a million particles — if every logical object carried a full copy of its heavy invariant data, you would exhaust memory long before the model was interesting. Most of that data is identical from object to object.
-
-Flyweight collapses those duplicates. Instead of a million `TreeKind` objects you keep one per distinct look, and each tree becomes a lightweight `(x, y)` pair pointing at a shared kind. A factory owns the shared pool and hands back an existing instance whenever the same intrinsic state is requested again.
+A flyweight splits an object's state into a shared part that never changes, such as a glyph shape or a tree mesh, and a per-use part the caller passes in, such as position or colour. A factory keeps one shared instance per distinct value. It prevents memory blowup when millions of objects carry identical heavy data.
 
 ## Explained
 <!--meta block=explain-->
 
-A flyweight splits an object's data in two: the part that never changes and is the same for many objects, which lives in one shared copy, and the part that differs per use, which the caller passes in each time. A factory hands out the shared copy, so a million objects hold a small reference instead of a million full copies. Choose it only when objects number in the millions and memory is the limit, because it turns a cost per object into a cost per distinct value. Below a few thousand objects, a plain array is simpler. The first cost is the interface: every operation takes the varying data as parameters, which spreads through call chains that should not know about it, so keep it in one small context object. The second is mutability: one write to the shared part corrupts every user at once, so make it read-only. The third is CPU spent on lookups, so measure before and after.
+A flyweight splits an object's data in two: the part that never changes and is the same for many objects, which lives in one shared copy, and the part that differs per use, which the caller passes in each time. A factory hands out the shared copy, so a million objects hold a small reference instead of a million full copies. Choose it only when objects number in the millions and memory is the limit, because it turns a cost per object into a cost per distinct value. Below a few thousand objects, a plain array is simpler.
+
+- **Interface.** Every operation takes the varying data as parameters, spreading through call chains. Keep it in one small context object.
+- **Mutability.** One write to the shared part corrupts every user at once, so make it read-only.
+- **CPU.** Factory lookups cost time, so measure before and after.
 
 **Example.** A forest has 1,000,000 trees of 5 kinds, and each kind has a 2 MB mesh and texture. Without sharing that is 2 TB. With a flyweight there are 5 shared kinds, 10 MB, and each tree is a reference to its kind plus x and y, about 16 bytes, so 16 MB for the trees: 26 MB in all. The cost is that draw now needs x and y passed in, and a developer who changes a mesh colour changes it for every tree of that kind.
 

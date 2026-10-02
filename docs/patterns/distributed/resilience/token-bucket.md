@@ -242,6 +242,6 @@ if (!bucket.tryConsume()) throw new Error("429 Too Many Requests");
 
 **Implemented by**
 
-- [Networking](../../../capabilities/networking.md) — API Gateway throttling and Envoy's local rate-limit filter expose the bucket directly, so rate and burst are the two knobs you actually set.
+- [Networking](../../../capabilities/networking.md) — Application programming interface (API) Gateway throttling and Envoy's local rate-limit filter expose the bucket directly, so rate and burst are the two knobs you actually set.
 
 <!-- relationships:end -->

@@ -16,16 +16,17 @@ Two or more holders each hold one lock and wait for a lock another holds — a c
 ## What it is
 <!--meta block=description-->
 
-A deadlock is a standoff. Two threads — or two transactions — each hold a lock the other needs, and each is waiting for the other to let go first, so neither ever does. Thread A holds lock 1 and blocks waiting for lock 2; Thread B holds lock 2 and blocks waiting for lock 1. Both are now parked forever, and anyone who later needs either lock joins the pile-up behind them. Nothing is running, nothing has thrown an error, and nothing will ever move again on its own.
-
-The classic picture is a seat swap: Alice moves from 7A to 12B while Bob simultaneously moves from 12B to 7A. Alice's thread locks 7A and reaches for 12B; Bob's thread locks 12B and reaches for 7A. Each holds exactly what the other is waiting on — a closed loop of dependency with no exit. It is the mirror image of a [race condition](./race-condition.md): a race does too much at once and corrupts the result, while a deadlock does nothing at all and stalls permanently.
+A deadlock is a standoff: two threads or transactions each hold a lock the other needs and wait for the other to let go, so neither ever moves. You recognize it when nothing runs, nothing throws, and every request touching either lock queues behind the pair while CPU sits near zero. It is the mirror of a race condition: a race does too much at once, a deadlock does nothing forever.
 
 ## Explained
 <!--meta block=explain-->
 
-A deadlock is a standoff where two tasks each hold a lock the other needs and each waits for the other to let go, so neither ever moves. A lock is a marker that lets one task at a time change a piece of data. Nothing crashes and nothing logs an error, and everyone who later needs either lock queues up behind the pair until a whole thread pool is frozen. You build one by taking many small locks to win back concurrency, then letting operations that need two of them grab them in whatever order their input arrives. A race condition does too much at once; a deadlock does nothing forever. Prevent it by always taking locks in one fixed order, such as the lower ID first, so no loop can form. Keep critical sections short and make no network call while holding a lock. Add a timeout on acquiring a lock, so a hang becomes an error you can retry. A database already picks a victim and aborts it, so treat that abort as a normal retry. The deeper cure is to share no locks: give each piece of state one owner and pass messages.
+A deadlock is a standoff where two tasks each hold a lock the other needs and each waits for the other to let go, so neither ever moves. A lock is a marker that lets one task at a time change a piece of data. Nothing crashes and nothing logs an error, and everyone who later needs either lock queues up behind the pair until a whole thread pool is frozen. You build one by taking many small locks to win back concurrency, then letting operations that need two of them grab them in whatever order their input arrives. Prevent it by always taking locks in one fixed order, such as the lower ID first, so no loop can form. Keep critical sections short and make no network call while holding a lock. Add a timeout on acquiring a lock, so a hang becomes an error you can retry. The deeper cure is to share no locks: give each piece of state one owner and pass messages ([actor model](../patterns/concurrency/actor-model.md)).
 
-**Example.** A bank service runs transfers on a pool of 8 threads, locking the source account and then the destination. Transfer 17 to 42 locks 17 and waits for 42. At the same moment, 42 to 17 locks 42 and waits for 17. Two threads are stuck for good, and every request touching either account joins them. After 4 such pairs, all 8 threads are held and the service answers nothing while CPU sits near zero. The fix is to lock the lower account number first, so both transfers ask for 17 before 42 and one simply waits. A 2 s lock timeout stays as a backstop, and its price is a retry for a slow but healthy transfer.
+- **Retry duty.** A database picks a victim and aborts it, and a lock timeout fails slow but healthy work, so callers must retry.
+- **Ordering discipline.** Fixed lock order only holds if every code path follows it, so enforce it in one helper.
+
+**Example.** A bank service runs transfers on a pool of 8 threads, locking the source account and then the destination. Transfer 17 to 42 locks 17 and waits for 42. At the same moment, 42 to 17 locks 42 and waits for 17. Two threads are stuck for good, and every request touching either account joins them. After 4 such pairs, all 8 threads are held and the service answers nothing while CPU sits near zero. The fix is to lock the lower account number first, so both transfers ask for 17 before 42 and one simply waits. A 2 s lock timeout stays as a backstop.
 
 ## How it happens
 <!--meta block=causes-->
@@ -80,5 +81,12 @@ The deeper escape is to **not share the locks at all**: confine each piece of st
 - [Thread Confinement](../patterns/concurrency/thread-confinement.md) — No shared locks to acquire in conflicting orders, so no cycle can form
 - [Minimize Coordination](../principles/minimize-coordination.md) — Removing shared locks removes the cycle rather than managing it
 - [Lock-Free](../patterns/concurrency/lock-free.md) — Remove the locks entirely and the hold-and-wait precondition disappears
+
+**Threatens**
+
+- [Mutex](../patterns/concurrency/mutex.md) — Two tasks taking two mutexes in different orders wait on each other forever
+- [Pessimistic Locking](../patterns/distributed/coordination/pessimistic-locking.md) — Row locks taken in inconsistent order across transactions form a wait cycle
+- [Monitor Object](../patterns/concurrency/monitor-object.md) — Nested monitor calls take locks in whatever order the call chain dictates
+- [Two-Phase Commit](../patterns/distributed/coordination/two-phase-commit.md) — Participants holding locks while waiting on the coordinator can wait in a cycle
 
 <!-- relationships:end -->

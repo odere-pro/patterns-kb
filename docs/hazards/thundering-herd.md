@@ -15,18 +15,17 @@ One event releases every waiter at once — a lock unlocks, a lease expires, a s
 ## What it is
 <!--meta block=description-->
 
-A **thundering herd** is what happens when many waiters are released at the same instant and all rush the same resource. The original form is an operating-system one: every process blocked on the same listening socket is woken when a single connection arrives, one of them accepts it, and the rest wake up, find nothing to do, and go back to sleep — the wake-ups cost real CPU and scheduling work, and all but one of them bought nothing. The shape generalizes to anything with waiters: a lock released, a lease or token expiring, a dependency coming back after an outage.
-
-You recognize it as a spike in concurrency rather than in traffic. Arrivals per second look ordinary over a minute and impossible over the second that matters, because the crowd was accumulated while it was blocked and then delivered all at once. The winners are served normally; the rest either wait, fail, or repeat work that someone else is already doing. And it tends to repeat on a rhythm — everyone served together holds a value that expires together, so the herd re-forms on the same clock.
-
-A [cache stampede](./cache-stampede.md) is the cache-specific case of this, where the shared resource is one expensive value that every misser tries to recompute. A [retry storm](./retry-storm.md) is the failure-driven cousin: the herd there is synchronized by an outage and re-forms itself, rather than by a single release event.
+A thundering herd is many waiters released at the same instant who all rush one resource, such as a lock freed, a lease expired or a dependency back after an outage. You see a spike in concurrency, not in traffic: a minute looks ordinary, one second looks impossible. The defining trait is synchronization, not volume: the crowd built up while blocked, and it re-forms on the same clock.
 
 ## Explained
 <!--meta block=explain-->
 
-A thundering herd is many waiters released at the same instant who all rush the same resource. Crowds build up while callers are blocked, then one event lets them go together, so the resource sees the depth of the queue instead of the normal arrival rate. Winners are served, and the rest wait, fail or repeat work someone else is already doing. It shows as a spike in concurrency, not in traffic: a minute looks ordinary and one second looks impossible. The deeper cause is that systems synchronize themselves, since clients that start together stay together and values written together expire together. Decide first whether it hurts: fifty aligned pollers on a database that serves thousands can be ignored. Where it hurts, wake one waiter instead of all of them, or put a gate in front that admits a fixed number at a time. Spread expiries, schedules and reconnect delays over a random window. Where all the waiters want the same answer, let one do the work and hand its result to the others, which is request coalescing. That costs a wait for the followers, so give the shared computation a timeout. After an outage, ramp traffic back in steps, since recovery is when the herd is biggest.
+A thundering herd is many waiters released at the same instant who all rush the same resource. The crowd builds while callers are blocked, then one event lets it go, so the resource sees the depth of the queue instead of the normal arrival rate. Winners are served, and the rest wait, fail or repeat work someone else is already doing. The deeper cause is that systems synchronize themselves: clients that start together stay together, and values written together expire together. Decide first whether it hurts, since fifty aligned pollers on a database serving thousands can be ignored. Where it hurts, wake one waiter instead of all, or put a gate in front that admits a fixed number at a time. Spread expiries, schedules and reconnect delays over a random window. Where all waiters want the same answer, let one do the work and hand its result to the others, which is [request coalescing](../patterns/distributed/resilience/request-coalescing.md). After an outage, ramp traffic back in steps, since recovery is when the herd is biggest. The cache form is a [cache stampede](cache-stampede.md).
 
-**Example.** A hot cache entry gets 2,000 requests a second and takes 500 ms to rebuild from the database. When it expires, every request in the next 0.5 s misses, so 2,000 x 0.5 = 1,000 rebuilds start together against a database that handles 100 at a time. With coalescing, the first request rebuilds and the other 999 wait on its result, so the database sees 1 query. Adding random jitter to the expiry time keeps all hot entries from expiring together. The cost is that waiters can wait up to 500 ms, and if the first rebuild fails, all 1,000 fail with it, so cap the wait.
+- **Follower wait.** Coalesced waiters wait for the one rebuild, and share its failure, so cap the wait with a timeout.
+- **Slower recovery.** Ramping traffic in steps lengthens an outage, so size the steps from what the resource can serve warm.
+
+**Example.** A hot cache entry gets 2,000 requests a second and takes 500 ms to rebuild from the database. When it expires, every request in the next 0.5 s misses, so 1,000 rebuilds start together against a database that handles 100 at a time. With coalescing, the first request rebuilds and the other 999 wait on its result, so the database sees 1 query. Random jitter on the expiry keeps hot entries from expiring together. Waiters can wait up to 500 ms, and if the rebuild fails all 1,000 fail with it.
 
 ## How it happens
 <!--meta block=causes-->
@@ -87,5 +86,12 @@ Recovery deserves its own plan, because that is when the herd is largest and the
 - [Queue-Based Load Leveling](../patterns/distributed/resilience/load-leveling.md) — A queue absorbs the burst; consumers drain at their own rate
 - [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — Bounds arrivals when the crowd cannot be gated at the resource
 - [Request Coalescing](../patterns/distributed/resilience/request-coalescing.md) — Let the first arrival do the work and hand its result to everyone who arrived behind it
+
+**Threatens**
+
+- [Cache-Aside](../patterns/caching/cache-aside.md) — Entries written together expire together, so every miss recomputes at once
+- [Circuit Breaker](../patterns/distributed/resilience/circuit-breaker.md) — A fleet shares one cooldown, so every half-open trial call lands in the same instant
+- [Retry with Backoff](../patterns/distributed/resilience/retry-backoff.md) — Clients that fail together retry together unless the delay is jittered
+- [Lease](../patterns/distributed/coordination/lease.md) — Leases granted together expire together, and the holders all renew in the same instant
 
 <!-- relationships:end -->

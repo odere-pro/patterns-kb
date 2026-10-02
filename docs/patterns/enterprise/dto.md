@@ -191,11 +191,11 @@ app.get("/users/:id", async (req, res) => {
 
 **Combines with**
 
-- [Service Layer](./service-layer.md) — Services accept and return DTOs at the boundary
+- [Service Layer](./service-layer.md) — Services accept and return data transfer objects (DTOs) at the boundary
 - [Backend-for-Frontend](../distributed/routing/bff.md) — Each client type gets a payload shaped for its screen, not the domain
 - [API Versioning](../distributed/routing/api-versioning.md) — One transfer object per published version keeps the domain model out of the wire contract
 - [REPR](../architecture/repr.md) — A per-operation request and response pair is where these earn their keep
-- [Interface Segregation Principle](../../principles/interface-segregation.md) — A DTO is segregation applied to data: each caller sees only the fields its role uses
+- [Interface Segregation Principle](../../principles/interface-segregation.md) — A data transfer object (DTO) is segregation applied to data: each caller sees only the fields its role uses
 
 **Often confused with**
 
@@ -205,5 +205,11 @@ app.get("/users/:id", async (req, res) => {
 
 - [Extraneous Fetching](../../hazards/extraneous-fetching.md) — An explicit payload shape stops a read from carrying every column the record happens to have
 - [Partial Object](../../hazards/partial-object.md) — Giving each context its own carrier is what keeps one type from serving five contracts badly
+
+**Exposed to**
+
+- [Anemic Domain Model](../../hazards/anemic-domain-model.md) — Can fall into anemic domain model when field-only data transfer object (DTO) classes are easily reused as the domain model, and the rules then live elsewhere
+- [Shotgun Surgery](../../hazards/shotgun-surgery.md) — Can fall into shotgun surgery when each transfer shape copies the same fields, so one change touches every copy
+- [Primitive Obsession](../../hazards/primitive-obsession.md) — Can fall into primitive obsession when flat primitive fields carry money, ids and statuses with no validation
 
 <!-- relationships:end -->

@@ -16,12 +16,16 @@ An ad click aggregator turns a firehose of raw clicks into per-minute metrics ad
 ## Understanding the problem
 <!--meta block=description-->
 
-An ad click aggregator records every click on an ad and rolls those clicks up so advertisers can see how a campaign is performing and where their money is going. The click itself is trivial — track it, then redirect the user to the advertiser's site. The engineering lives in the shape of the load: at peak, clicks arrive around **10,000 per second**, while the advertiser side is a handful of dashboards refreshing a few times a minute. This is a data-processing problem, not a product, and it is the textbook case of the write-heavy playbook covered by the [Scaling Writes](../themes/scaling-writes.md) theme. Two forces set every downstream decision: ingest must never drop a click, and a raw event store can never be queried fast enough — the totals have to be computed before anyone asks for them.
+An ad click aggregator records every click on an ad, redirects the user, and rolls the clicks up so advertisers can see how a campaign performs. The click is trivial. The load is not: about 10,000 clicks a second arrive at peak, while advertisers refresh a few dashboards a few times a minute. This page walks through ingest that never drops a click and totals computed before anyone asks.
 
 ## Explained
 <!--meta block=explain-->
 
-An ad click aggregator counts every click ahead of time, so advertisers read finished totals instead of scanning raw events. Each ad link points at your server, which checks the click's signed impression id, drops duplicates, appends the click to a durable queue split by ad, and only then redirects. A stream job folds the queue into one total per ad per minute inside a column-oriented store built for sums over millions of rows. Choose it over one table and a GROUP BY query when writes outnumber reads by about a thousand to one and advertisers are billed on the numbers; the plain table stays cheaper and correct until both stop holding. It costs three things. Two paths now produce the same number, a fast live one and a slow recount from the raw log, so make the recount the authority, correct the live totals from it, and alert on the size of each correction. Minute totals make a year-long query slow, so roll them into daily and weekly totals before the first advertiser asks. A viral ad floods one queue split, so add a random suffix to the key of known-popular ads only, and add the pieces back together on write.
+An ad click aggregator counts every click ahead of time, so advertisers read finished totals instead of scanning raw events. Each ad link points at your server, which checks the click's signed impression id, drops duplicates, appends the click to a durable queue split by ad, and only then redirects. A stream job folds the queue into one total per ad per minute inside a column-oriented store built for sums over millions of rows. Choose it over one table and a GROUP BY query when writes outnumber reads by about a thousand to one and advertisers are billed on the numbers; the plain table stays cheaper and correct until both stop holding.
+
+- **Two paths.** A live count and a slow recount from the raw log can disagree, so make the recount the authority and alert on corrections.
+- **Slow long ranges.** Minute totals make a year-long query slow, so roll them into daily and weekly totals before the first advertiser asks.
+- **Hot ad.** A viral ad floods one queue split, so add a random suffix to popular ads keys and sum the pieces on write.
 
 **Example.** At peak your service takes 10,000 clicks a second. A viral ad draws 4,000 of them, but one queue shard accepts about 1,000 records a second, so three quarters of its clicks back up. You salt that ad's key into 8 suffixes, so each shard sees 500 a second, and the stream job sums the 8 sub-totals into one minute total. The cost is 8 pieces to recombine for one ad. A year of that campaign is 525,600 minute totals; after the nightly rollup it is 365 daily rows, so the dashboard answers in milliseconds.
 
@@ -211,7 +215,7 @@ sequenceDiagram
 
 **Demonstrates**
 
-- [CQRS](../patterns/architecture/cqrs.md) — the write path ingests and aggregates clicks while a separate OLAP model answers advertiser queries
+- [CQRS](../patterns/architecture/cqrs.md) — the write path ingests and aggregates clicks while a separate online analytical processing (OLAP) model answers advertiser queries
 - [Idempotency](../patterns/messaging/idempotency.md) — a signed impression id checked against a Redis set makes each click count exactly once despite retries and double-taps
 - [Materialized View](../patterns/distributed/coordination/materialized-view.md) — advertisers read pre-aggregated (ad_id, minute) rollups instead of scanning raw events on demand
 - [Sharding](../patterns/distributed/routing/sharding.md) — the click stream is partitioned by ad_id so shards aggregate in parallel, with key-salting for hot ads

@@ -15,14 +15,16 @@ Growing capacity with load without rewriting the system — by cloning what can 
 ## The question
 <!--meta block=description-->
 
-Every system that succeeds eventually meets a load it wasn't built for. The first instinct is to buy a bigger machine — more CPU, more RAM, a faster disk. That works for a while, and it's the cheapest fix available, but it has a ceiling: there's a biggest machine you can buy, it costs more per unit of capacity as it grows, and it's a single point of failure no matter how large it is. Scalability, as a theme, is what you reach for once vertical scaling stops being enough — the discipline of adding more machines instead of a bigger one, and structuring the system so that adding machines actually produces more capacity.
-
-That structuring is the hard part. A machine can only be added freely to help with compute if no other machine depends on state only it holds — which is why statelessness underlies almost everything else here. Data is harder still: you can clone a stateless request handler trivially, but you cannot clone a [single source of truth](../principles/dry.md) without deciding how the clones stay in sync, or partition it without deciding which node owns which slice. Scalability is the theme that answers "how do I add capacity" separately for compute (clone it, spread requests across the clones) and for data (split it, replicate it, or both) — and how to do either without the coordination overhead eating the gains.
+Every system that succeeds meets a load it was not built for. A bigger machine works for a while, then hits a ceiling: the biggest machine you can buy, rising cost per unit of capacity, and a single point of failure. This theme covers adding machines instead, separately for compute (clone it and spread requests) and for data (split it, replicate it, or both), without coordination overhead eating the gain.
 
 ## Explained
 <!--meta block=explain-->
 
-Scalability means adding machines instead of buying a bigger one, and structuring the system so each added machine really adds capacity. Ask two questions first: what are you scaling, compute or data, and along which axis, request volume, dataset size or the mix of reads and writes. Compute is the easy half once your service keeps no user state in memory: put a load balancer in front, and let an autoscaler add or remove copies as demand moves. Data splits at a fork. If reads dominate, replication, which keeps extra copies, multiplies read capacity. If writes or dataset size dominate, you must split the data itself across machines, called sharding, and then decide which machine owns which slice. Choose the wrong axis and the new machines do nothing, since a copy of a write-heavy store must still apply every write. The costs are real. Copies lag behind the original, so set how stale a read may be. Shards need rebalancing when you add one. Queue consumers must not process the same item twice. Otherwise the bottleneck only moves to the coordination layer.
+Scalability means adding machines instead of buying a bigger one, and structuring the system so each added machine really adds capacity. Ask first what you are scaling, compute or data, and which load dominates: request volume, dataset size, or reads against writes. Compute is the easy half once your service keeps no user state in memory (a [stateless service](../patterns/distributed/routing/stateless-service.md)): put a [load balancer](../patterns/distributed/routing/load-balancer.md) in front and let [autoscaling](../patterns/distributed/routing/autoscaling.md) add or remove copies. If reads dominate on the data side, [replication](../patterns/distributed/coordination/replication.md) multiplies read capacity. If writes or dataset size dominate, [sharding](../patterns/distributed/routing/sharding.md) splits the data across machines. Choose the wrong axis and the new machines do nothing, since a copy of a write-heavy store must still apply every write.
+
+- **Lagging copies.** Replicas trail the primary. Decide how stale a read may be and route sensitive reads to the primary.
+- **Rebalancing.** Adding a shard moves data. Place keys with consistent hashing so only a small share moves.
+- **Cross-shard queries.** A query spanning shards must ask all of them. Choose a shard key that keeps common queries on one.
 
 **Example.** A database primary handles 3,000 operations a second. Traffic is 9,000 reads and 300 writes a second. Three read replicas give 4 machines, 12,000 reads of capacity, and the single primary still copes with 300 writes. Months later writes reach 4,000 a second. Replicas do not help, because each must apply all 4,000. Two shards split writes to 2,000 each, which fits. The costs arrive too: a read served by a replica can be seconds old, and a query that spans both shards must now ask both.
 
@@ -62,7 +64,7 @@ Statelessness is what lets you add instances freely: if a request can land on an
 
 ### [Autoscaling](../patterns/distributed/routing/autoscaling.md) {#tour-autoscaling}
 
-Watches a signal — CPU, queue depth, request latency — and resizes the fleet to match it, so you pay for the capacity you're using instead of provisioning year-round for a peak that shows up twice a year.
+Watches a signal — central processing unit (CPU), queue depth, request latency — and resizes the fleet to match it, so you pay for the capacity you're using instead of provisioning year-round for a peak that shows up twice a year.
 
 ### [Sharding](../patterns/distributed/routing/sharding.md) {#tour-sharding}
 

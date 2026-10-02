@@ -16,7 +16,7 @@ An online judge lets an engineer read a coding problem, write a solution in the 
 ## Understanding the problem
 <!--meta block=description-->
 
-The product is a coding-interview trainer: browse a catalogue of problems, open one and code a solution in any of several languages, submit it and get graded against hidden test cases within a few seconds, and — during a contest — watch a [leaderboard](./top-k.md) update in near real time. The scale is modest by system-design standards (a few hundred thousand users, roughly four thousand problems), so browsing and storage are non-events. Almost every interesting decision collapses onto a single question: how do you take a stranger's program and run it without handing them your servers?
+A coding-interview trainer lets users browse problems, write a solution, get graded against hidden tests within seconds, and watch a contest leaderboard update. Scale is modest, so browsing and storage are non-events. The hard question is how to run a stranger's program without handing them your servers; the page walks through sandboxed execution and the leaderboard.
 
 ## Explained
 <!--meta block=explain-->
@@ -205,10 +205,10 @@ sequenceDiagram
 - [Object Pool](../patterns/gof/extra/object-pool.md) — warm language containers are kept ready and reused across submissions instead of cold-starting one per job
 - [Competing Consumers](../patterns/messaging/competing-consumers.md) — a worker fleet pulls submissions off the queue, each grabbing the next job as its capacity frees up
 - [Queue-Based Load Leveling](../patterns/distributed/resilience/load-leveling.md) — the submission queue absorbs a contest's spike and drains it at the fleet's sustainable rate
-- [Autoscaling](../patterns/distributed/routing/autoscaling.md) — each language-specific container pool grows and shrinks on CPU utilization to track contest load
+- [Autoscaling](../patterns/distributed/routing/autoscaling.md) — each language-specific container pool grows and shrinks on central processing unit (CPU) utilization to track contest load
 - [Materialized View](../patterns/distributed/coordination/materialized-view.md) — the live leaderboard is a Redis sorted set updated on each accepted submission, not recomputed per poll
 - [Least Privilege](../patterns/security/least-privilege.md) — the sandbox is stripped to a read-only filesystem, no network, capped CPU/memory, and a seccomp syscall whitelist
-- [Bulkhead](../patterns/distributed/resilience/bulkhead.md) — each submission runs in its own disposable container so a crash or hang can't take the API server or other jobs down
+- [Bulkhead](../patterns/distributed/resilience/bulkhead.md) — each submission runs in its own disposable container so a crash or hang can't take the application programming interface (API) server or other jobs down
 - [Timeout / Deadline](../patterns/distributed/resilience/timeout-deadline.md) — a hard per-test-case timeout kills a runaway or infinite-loop submission and keeps grading inside the ~5-second result target
 
 <!-- relationships:end -->

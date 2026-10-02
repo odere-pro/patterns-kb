@@ -255,6 +255,6 @@ def wall_clock(cores, serial=0.05, work=1.0, per_exchange=0.002):
 
 **Implemented by**
 
-- [Compute](../../capabilities/compute.md) — Batch and HPC schedulers acquire the cores, run the job and release them, which is the whole shape of this.
+- [Compute](../../capabilities/compute.md) — Batch and high-performance computing (HPC) schedulers acquire the cores, run the job and release them, which is the whole shape of this.
 
 <!-- relationships:end -->

@@ -16,9 +16,7 @@ Prefer to build an object's behavior out of smaller collaborating objects it hol
 ## What it says
 <!--meta block=description-->
 
-“Favor object composition over class inheritance.” It is one of the two design principles the Gang of Four name outright in the introduction to Design Patterns (1994), alongside “program to an interface, not an implementation.” When you need a class to gain some behavior, the default move is to have an object that provides it, not to be a subclass that inherits it.
-
-The two are ways of reusing code. Inheritance reuses a parent by extending it; composition reuses a collaborator by holding a reference and forwarding work to it. The principle says the second should be your reflex, and inheritance the exception you reach for only when a genuine, stable is-a relationship earns it.
+“Favor object composition over class inheritance” is one of two principles the Gang of Four name in the introduction to Design Patterns (1994), beside “program to an interface.” Inheritance reuses a parent by extending it; composition reuses a collaborator by holding a reference and forwarding work to it. Make the second your reflex, and keep inheritance for a genuine, stable is-a relationship.
 
 ## Explained
 <!--meta block=explain-->
@@ -47,6 +45,24 @@ Reach for has-a before is-a:
 - When you catch a subclass reaching into `protected` internals of its parent, that is coupling asking to become composition.
 
 The test: if the relationship is really “a Circle is a Shape” and always will be, inherit. If it is “this object uses a sorting strategy,” hold one.
+
+## In code
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — a subclass per variation, and one object holding a swappable collaborator"
+// Before: each export format needs a subclass, and formats cannot be mixed with other variation.
+class Report { render() { return "data"; } }
+class CsvReport extends Report { render() { return super.render() + ",csv"; } }
+class PdfReport extends Report { render() { return super.render() + ",pdf"; } }
+
+// After: the report holds a format and delegates to it.
+interface Format { encode(data: string): string }
+class Report2 {
+  constructor(private format: Format) {}
+  render() { return this.format.encode("data"); }
+}
+new Report2({ encode: d => d + ",csv" });   // swap the format without a new subclass
+```
 
 ## Taken too far
 <!--meta block=overreach-->

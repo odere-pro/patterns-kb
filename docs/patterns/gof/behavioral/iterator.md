@@ -189,6 +189,6 @@ const titles = [...playlist];   // ["Come Together", "Dreams"]
 
 **Often confused with**
 
-- [Aggregate](../../ddd/aggregate.md) — The DDD aggregate is a consistency boundary, not the collection being walked — the two share only a name
+- [Aggregate](../../ddd/aggregate.md) — The domain-driven design (DDD) aggregate is a consistency boundary, not the collection being walked — the two share only a name
 
 <!-- relationships:end -->

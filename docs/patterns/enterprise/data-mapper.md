@@ -202,6 +202,7 @@ if (user) {
 - [Repository](./repository.md) — Repositories sit on top of a data mapper
 - [Unit of Work](./unit-of-work.md) — Mappers write what the change-tracker decided must be written
 - [Identity Map](./identity-map.md) — The mapper registers each object it builds in the identity map.
+- [Query Object](./query-object.md) — A data mapper executes the query object and builds the result objects
 
 **Alternative to**
 
@@ -210,5 +211,12 @@ if (user) {
 **Prevents**
 
 - [Anemic Domain Model](../../hazards/anemic-domain-model.md) — A persistence-free domain object is free to carry real behaviour
+
+**Exposed to**
+
+- [Chatty I/O](../../hazards/chatty-io.md) — Can fall into chatty io when lazy loading in the mapper fires a query per association
+- [Extraneous Fetching](../../hazards/extraneous-fetching.md) — Can fall into extraneous fetching when the mapper loads full rows and objects by default
+- [Leaky Abstraction](../../hazards/leaky-abstraction.md) — Can fall into leaky abstraction when object access hides the SQL, so cost and failures show through
+- [N+1 Query](../../hazards/n-plus-1-query.md) — Can fall into n plus 1 query when lazy loading hides the per-row query behind field access
 
 <!-- relationships:end -->

@@ -15,18 +15,17 @@ Places a dedicated checkpoint between untrusted input and business logic, so not
 ## What it is
 <!--meta block=description-->
 
-An **intercepting validator** is a checkpoint placed in front of business logic that inspects every incoming request before it is allowed to proceed. Rather than trusting each handler to check its own inputs, the pattern factors validation out into one or more validator objects — often chained, one per concern — that a controller or filter invokes before dispatching to the real work. A request that fails any rule is rejected on the spot, with the offending data never touching domain code.
-
-The force it resolves is that **input from outside the trust boundary is never safe to assume**. Form fields, query parameters, headers, uploaded files, and API payloads are all attacker-controlled, and injection, overflow, and malformed-data bugs live in the gap between "the code expects X" and "nothing checked that it got X." Scattering ad hoc checks across every handler is how that gap opens: some paths validate thoroughly, some skip a field, some duplicate a rule that later drifts out of sync.
-
-Intercepting Validator centralizes that responsibility instead of duplicating it. Validation rules live in one place, run against every request through the same choke point, and are testable and auditable independent of the business logic they protect. It is the pattern behind request-level filters, middleware validation stacks, and the validator layer in frameworks like Struts and Java EE's Core Security Patterns catalog.
-
-Its cost is an added layer that every request pays for, and rules that must be kept honest against what the logic downstream actually expects — a validator that's stale or too lax gives a false sense of safety.
+An intercepting validator is a checkpoint in front of business logic that inspects every incoming request before it proceeds. Validation is factored into one or more validator objects, often chained one per concern, that a controller or filter invokes before dispatching. A request that fails any rule is rejected on the spot, so attacker-controlled input never reaches domain code, and the rules live in one place that is testable and auditable apart from the logic they protect.
 
 ## Explained
 <!--meta block=explain-->
 
-An intercepting validator is a checkpoint in front of your business logic that runs a chain of rules on every incoming request and rejects bad input before any handler sees it. Form fields, query parameters, headers and uploads all come from outside your control, so a handler that trusts them is open to injected commands, oversized values and malformed data. Choose it over checks written inside each handler when many endpoints take input, because a rule added once applies everywhere and every rejection is logged in one place. It costs three things. Every request pays for the chain, so keep rules cheap and ordered with the quickest first. Rules drift from what the logic really expects, producing wrongly rejected requests or wrongly accepted ones, so test them against the handlers they guard. And passing the gate does not make input safe further on, so still use parameterised queries, which send values apart from the command text, and encode output. Keep each rule small and separate, or the chain becomes a second program full of special cases.
+An intercepting validator is a checkpoint in front of your business logic that runs a chain of rules on every incoming request and rejects bad input before any handler sees it. Form fields, query parameters, headers and uploads all come from outside your control, so a handler that trusts them is open to injected commands, oversized values and malformed data. Choose it over checks written inside each handler when many endpoints take input, because a rule added once applies everywhere and every rejection is logged in one place.
+
+- **Per-request overhead.** Every request pays for the chain; keep rules cheap and run the quickest first.
+- **Rule drift.** Rules diverge from what the logic expects, rejecting good input or passing bad; test them against the handlers they guard.
+- **False safety.** Passing the gate does not make input safe downstream; still use parameterised queries and encode output.
+- **Rule sprawl.** One big rule set becomes a second program of special cases; keep each rule small and separate.
 
 **Example.** A signup form takes a username that must match 3 to 20 letters, digits or underscores. An attacker sends admin'-- hoping to cut off the rest of a login query. The validator rejects it with a 400 before any database call. A search box, however, must accept free text, quotes included, so it passes the validator. The parameterised query is what stops an injection there: the value reaches the database as data, never as part of the command. The cost appears when product decides usernames may contain a dot: you must change both the rule and the handler that assumed no dots.
 
@@ -204,6 +203,6 @@ function handleSignup(raw: unknown) {
 
 **Implemented by**
 
-- [Networking](../../capabilities/networking.md) — A managed WAF applies rule sets to every request before it reaches the application, so the checks exist even on the endpoint whose handler forgot them.
+- [Networking](../../capabilities/networking.md) — A managed web application firewall (WAF) applies rule sets to every request before it reaches the application, so the checks exist even on the endpoint whose handler forgot them.
 
 <!-- relationships:end -->

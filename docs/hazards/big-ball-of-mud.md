@@ -16,18 +16,17 @@ No discernible architecture at all — every module can reach every other one, a
 ## What it is
 <!--meta block=description-->
 
-A **Big Ball of Mud** is a system built entirely by expedience: haphazardly structured, sprawling, and held together by whatever got a ticket closed. The name is Brian Marick's; Foote and Yoder wrote the pattern up in their 1997 PLoP paper, precisely because most real systems look like this — not the layered diagrams in the design doc, but a shantytown of one-off fixes, duct tape, and code nobody quite dares delete.
-
-You recognize it by what it lacks: no layer a change can stay inside. The UI queries the database directly. Business rules live in a controller, a cron job, and a database trigger simultaneously. Global mutable state is the de facto integration mechanism. Module and package boundaries exist on paper but nothing enforces them, so anything can import anything, and eventually does.
-
-It is not the same failure as [Spaghetti Code](./spaghetti-code.md), though the two keep company. Spaghetti code is tangled control flow inside a function or a class. A Big Ball of Mud is the same disease at the scale of the whole system — the tangle runs between layers, services, and domains, not just between statements.
+A big ball of mud is a system built by expedience, with no boundary a change can stay inside. You recognize it when the UI queries the database directly, one business rule lives in a controller, a cron job and a trigger, and anything can import anything. It is Spaghetti Code at the scale of the whole system: the tangle runs between layers, services and domains, not just between statements.
 
 ## Explained
 <!--meta block=explain-->
 
-A big ball of mud is a system with no enforced boundaries: any part can call or change any other, so a change in one place can break something far away. It grows one rushed fix at a time. The quick fix ships, the tidy one takes a week, and each shortcut adds a link that costs weeks to remove later. Delivery is measured and structure is not, so no review catches it. The cost is that coupling, not line count, sets the price of each change, so speed falls while headcount rises and new hires need months to become useful. Choose by economics. If the system earns and rarely changes, freeze it behind one stable entrance and stop investing. If it changes often, strangle it: send one slice of work at a time to new code behind a front door, so the old system keeps earning while it shrinks. Reserve a full rewrite for a platform that is dead underneath, because a stalled rewrite leaves you two balls of mud. Either way, make each boundary a build check that fails a merge, since a rule in a wiki loses to a deadline, and give every boundary an owner.
+A big ball of mud is a system with no enforced boundaries: any part can call or change any other, so a change in one place can break something far away. It grows one rushed fix at a time. The quick fix ships, the tidy one takes a week, and each shortcut adds a link that costs weeks to remove later. Delivery is measured and structure is not, so no review catches it. Choose by economics. If the system earns and rarely changes, freeze it behind one stable entrance and stop investing. If it changes often, strangle it with the [strangler fig](../patterns/distributed/coordination/strangler-fig.md): send one slice of work at a time to new code behind a front door, so the old system keeps earning while it shrinks. Reserve a full rewrite for a platform that is dead underneath, because a stalled rewrite leaves you two balls of mud. Make each boundary a build check that fails a merge, since a rule in a wiki loses to a deadline.
 
-**Example.** A shop has 10 engineers shipping 20 features a quarter. After three years it has 30 engineers and ships 25, so output per engineer fell from 2 to under 1. The order code is touched in every release, and a tax change now edits 9 files across 4 modules. The team gives orders one entrance, moves callers onto it as they pass, and adds a continuous integration (CI) check that fails any import reaching past it. They count cross-boundary imports each month: 400 at the start, 310 after a quarter. The cost is that this work takes about 15% of each sprint, which they list as its own roadmap line, not hidden in feature estimates.
+- **Falling speed.** Coupling, not line count, sets the price of each change, so speed falls as headcount rises and new hires need months.
+- **Boundary upkeep.** Each boundary needs an owner and a slice of every sprint, so list that work on the roadmap.
+
+**Example.** A shop has 10 engineers shipping 20 features a quarter. After three years it has 30 engineers and ships 25, so output per engineer fell from 2 to under 1. A tax change now edits 9 files across 4 modules. The team gives orders one entrance, moves callers onto it as they pass, and adds a continuous integration (CI) check that fails any import reaching past it. They count cross-boundary imports each month: 400 at the start, 310 after a quarter. The work takes about 15% of each sprint, which they list as its own roadmap line.
 
 ## How it happens
 <!--meta block=causes-->
@@ -79,6 +78,10 @@ Boundaries hold only while someone is accountable for them. Give each seam an ow
 
 <!-- GENERATED by gen-relations from docs/data/relations.json. Do not edit this block. -->
 
+**Combines with**
+
+- [Lava Flow](./lava-flow.md) — Layers of code no one understands are the mass a big ball of mud is made of
+
 **Often confused with**
 
 - [Distributed Monolith](./distributed-monolith.md) — A distributed monolith usually has a tidy diagram — the problem is where the lines fall, not that they are missing.
@@ -92,5 +95,9 @@ Boundaries hold only while someone is accountable for them. Give each seam an ow
 - [Separation of Concerns](../principles/separation-of-concerns.md) — Clear concern boundaries are precisely what the mud has dissolved
 - [Design for Evolution](../principles/design-for-evolution.md) — Deliberate seams are exactly what the mud grew in the absence of
 - [Vertical Slice](../patterns/architecture/vertical-slice.md) — Filing by feature keeps a change inside one folder instead of spreading it everywhere
+
+**Threatens**
+
+- [Microservices](../patterns/architecture/microservices.md) — A tangled system split without untangling it becomes a distributed mess
 
 <!-- relationships:end -->

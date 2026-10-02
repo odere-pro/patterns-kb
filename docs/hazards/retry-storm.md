@@ -16,18 +16,17 @@ A failure makes every caller try again at the same moment, so a service that was
 ## What it is
 <!--meta block=description-->
 
-A **retry storm** is what happens when a dependency starts failing and every caller responds the same way at the same instant: by trying again. One user request becomes three attempts, each hop in the chain multiplies the one above it, and the service that was struggling now receives several times the traffic it already could not serve. Each retry is individually reasonable — most transient failures do clear on a second attempt — and collectively they are a load test aimed at a service that is already down.
-
-You recognize it by the shape of the traffic. Request rate at the failing dependency climbs while traffic entering the system is flat or falling, so the number that matters is calls per user request, not calls per second. The outage outlives its cause: the packet loss cleared minutes ago and the errors continue. And every recovery is brief — capacity comes back, the waiting retries consume it in seconds, and the service falls over again, in a sawtooth that repeats until someone turns the callers off.
-
-It is close kin to a [thundering herd](./thundering-herd.md), and the two usually arrive together. A herd is synchronized by one external event — a lock released, an entry expiring, a service coming back. A retry storm is synchronized by the failure itself and then feeds itself, because each round of failures is what produces the next round of attempts.
+A retry storm is what happens when a dependency starts failing and every caller tries again at the same instant, so the struggling service receives several times the traffic it already could not serve. You recognise it by the traffic shape: calls at the dependency climb while user traffic is flat, and the outage outlives its cause. It is close kin to a [thundering herd](./thundering-herd.md), but the failure itself synchronises the callers and each round feeds the next.
 
 ## Explained
 <!--meta block=explain-->
 
-A retry storm is what happens when a dependency starts failing and every caller tries again at the same moment, so the struggling service receives several times the traffic it could not serve in the first place. Each retry is sensible alone. But attempts multiply down a chain, since three tries at each of two layers makes nine calls for one user request. And clients that failed together wait the same time and return together. The outage outlives its cause: the first fault clears, yet the amplified load keeps the failures going. Watch calls per user request, not calls per second, because user traffic is flat while the dependency's traffic climbs. Make each attempt later than the last by growing the delay exponentially, add random jitter so clients stop returning together, and cap the attempts. Pick one layer to retry at and turn retries off in the others. Cap retries as a share of successful traffic, a retry budget, which costs you the rare transient failure that a second try would have saved. Let the dependency refuse excess calls cheaply instead of queueing them.
+A retry storm is what happens when a dependency starts failing and every caller tries again at the same moment, so the struggling service receives several times the traffic it could not serve in the first place. Each retry is sensible alone. But attempts multiply down a chain, since three tries at each of two layers makes nine calls for one user request, and clients that failed together wait the same time and return together. The outage outlives its cause: the fault clears, yet the amplified load keeps the failures going. Watch calls per user request, not calls per second. Make each attempt later than the last with exponential delay, add random jitter, and cap attempts, as [retry with backoff](../patterns/distributed/resilience/retry-backoff.md) does. Pick one layer to retry at. Stop retries outright while the dependency is down with a [circuit breaker](../patterns/distributed/resilience/circuit-breaker.md).
 
-**Example.** A dependency handles 1,000 calls a second and normally gets 200 a second, one per user request. A gateway and a service behind it each try 3 times, so one user request becomes 9 calls. A 5 s blip fails everything and the load jumps to 200 x 9 = 1,800 a second. That exceeds 1,000, so failures continue after the blip ends. Retrying only at the gateway, 3 attempts with jittered backoff, gives 200 x 3 = 600 a second at worst, under the limit, so the dependency recovers. The cost is that the service layer's own transient errors surface to the gateway instead of healing locally.
+- **Lost recoveries.** A retry budget caps retries as a share of successful traffic, and drops a rare transient failure a second try would have saved.
+- **Errors surface higher.** Retrying at one layer means lower layers pass transient errors up instead of healing locally.
+
+**Example.** A dependency handles 1,000 calls a second and normally gets 200 a second, one per user request. A gateway and a service behind it each try 3 times, so one user request becomes 9 calls. A 5 s blip fails everything and the load jumps to 200 x 9 = 1,800 a second. That exceeds 1,000, so failures continue after the blip ends. Retrying only at the gateway, 3 attempts with jittered backoff, gives 200 x 3 = 600 a second at worst, under the limit, so the dependency recovers.
 
 ## How it happens
 <!--meta block=causes-->
@@ -90,5 +89,10 @@ The dependency has a move of its own. Refuse excess work quickly and cheaply ins
 - [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — The dependency refuses excess cheaply instead of queueing it
 - [Fault Injection](../patterns/distributed/resilience/fault-injection.md) — The multiplication only shows up when something is actually failing
 - [Fallacies of Distributed Computing](../principles/fallacies-of-distributed-computing.md) — The first fallacy is how a retry storm starts.
+
+**Threatens**
+
+- [Saga](../patterns/distributed/coordination/saga.md) — Each step's retries and its compensations multiply load on a service that is already failing
+- [Outbox](../patterns/distributed/coordination/outbox.md) — A relay that republishes after a failure floods a recovering broker
 
 <!-- relationships:end -->

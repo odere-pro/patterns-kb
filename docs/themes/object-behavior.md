@@ -14,9 +14,7 @@ Behaviour tends to change faster than structure. These patterns let an object va
 ## The question
 <!--meta block=description-->
 
-A method that branches on a type or a mode grows a case every time the business adds one. A class that calls five neighbours directly cannot change without touching all five. An operation you want to add to a class hierarchy means editing every class in it. Each of these is the same pressure, behaviour that varies, landing in a place that was written to be fixed.
-
-The vocabulary is small. The **context** is the object that needs the work done. A **handler** is an object that deals with a request or passes it on. A **colleague** is one of several objects whose interactions are centralised in one place. A **grammar** is the set of rules of a small language. A **snapshot** is a saved copy of an object's state that you can restore later.
+A method that branches on a type grows a case each time the business adds one. A class that calls five neighbours cannot change without touching all five. A new operation on a class hierarchy means editing every class in it. Each is behaviour that varies, landing in code written to be fixed. A **handler** deals with a request or passes it on. A **snapshot** is restorable saved state.
 
 ## Explained
 <!--meta block=explain-->

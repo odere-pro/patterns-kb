@@ -14,9 +14,7 @@ Functional design builds a program from values that never change and functions t
 ## The question
 <!--meta block=description-->
 
-A program full of mutable objects makes every function a suspect: any call might change something another part is relying on. The functional answer is to stop editing values and to build bigger behaviour by joining smaller functions, so you can read a piece alone and trust it.
-
-The vocabulary the page uses is small. An **immutable** value never changes after it is made, and an update returns a new value. A **pure** step returns the same output for the same input and changes nothing else. **Composition** joins functions so that one's output is the next one's input. A **wrapper** is a type such as an optional value or a promise that holds a value in some context. A **lens** is a value that reads and replaces one field of a nested structure.
+A program full of mutable objects makes every function a suspect: any call might change something another part relies on. The functional answer stops editing values and builds bigger behaviour by joining smaller functions, so you read a piece alone and trust it. An **immutable value** never changes; an update returns a new one. A **pure step** returns the same output for the same input and changes nothing else.
 
 ## Explained
 <!--meta block=explain-->

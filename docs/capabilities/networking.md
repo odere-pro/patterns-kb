@@ -16,16 +16,15 @@ The software-defined network a cloud hands you — an address space of your own,
 ## What the cloud gives you here
 <!--meta block=description-->
 
-Every cloud sells you a private network before it sells you anything to put in it: an address range you choose, cut into subnets, each with a firewall and a route table. Nothing inside answers the internet until you attach a way in — a [Load Balancer](../patterns/distributed/routing/load-balancer.md), a global edge, or an [API Gateway](../patterns/distributed/routing/api-gateway.md). The names change on every provider and the pieces do not, so most of the mapping below is mechanical.
-
-Two things differ in kind rather than in name. The first is what a subnet is: on AWS it lives in exactly one Availability Zone, so spanning three zones means three subnets; on Azure and Google Cloud a subnet covers the whole region and its machines can sit in different zones. Port an AWS drawing literally and you fragment the target network into segments it never needed.
-
-The second is the firewall model. AWS layers stateful security groups on the interface with stateless network ACLs (access control lists) at the subnet edge, so return traffic is automatic in one and hand-written in the other. Azure has one stateful layer, attachable to a subnet or an interface, plus application security groups so a rule can name a workload instead of an address range. A rule set does not translate: work out from scratch what the target denies, not only what it allows.
-
+Every cloud sells you a private network before it sells you anything to put in it: an address range you choose, cut into subnets, each with a firewall and a route table. Nothing inside answers the internet until you attach a [Load Balancer](../patterns/distributed/routing/load-balancer.md) or an [API Gateway](../patterns/distributed/routing/api-gateway.md). The names change and the pieces do not, so most mapping is mechanical. Two things differ in kind: what a subnet spans, and how firewall layers work.
 ## Explained
 <!--meta block=explain-->
 
-A cloud network is a private address range you choose, cut into subnets, each with its own firewall and routing, with nothing reachable from the internet until you attach a way in, such as a load balancer. Plan the address ranges before the first subnet exists and leave room for the company you have not bought yet, because two networks with overlapping ranges can never be joined and renumbering a live network is the costliest mistake on offer. Choose a transit hub, one central joining point, over direct links once you have more than three or four networks, because direct links are not passed along and a full mesh grows as n squared. The hub is metered, so accept that. Every managed box on the path, such as address translation for outbound calls, balancers and private endpoints, bills for the hours it exists and usually for the gigabytes it carries, so private traffic still reaches your invoice. Counter it with placement: keep chatty services in one zone and network, and cache what is read often. Subnet scope and firewall layering differ between providers, so port the intent, not the configuration, and test the deny paths before cutover.
+A cloud network is a private address range you choose, cut into subnets, each with its own firewall and routing, with nothing reachable from the internet until you attach a way in, such as a load balancer. Plan the address ranges before the first subnet exists and leave room for the company you have not bought yet, because two networks with overlapping ranges can never be joined and renumbering a live network is the costliest mistake on offer. Choose a transit hub, one central joining point, over direct links once you have more than three or four networks, because direct links are not passed along and a full mesh grows as n squared.
+
+- **The hub is metered** Each attachment bills by the hour and by the gigabyte carried, so keep chatty services within one network.
+- **Managed boxes bill for existing** Address translation, balancers and private endpoints bill per hour and per gigabyte, so keep chatty services together and cache reads.
+- **Subnet scope and firewall layering differ by provider** Port the intent, not the configuration, and test the deny paths before cutover.
 
 **Example.** A company has 5 networks, each linked directly to every other: 5 times 4 divided by 2, or 10 links. An acquisition makes 6 networks, which is 15 links, and at 10 networks it is 45. Joined through a hub, each network has one attachment, so 10 networks need 10. The hub's cost is that each attachment bills by the hour and by the gigabyte carried. Worse, the acquired network uses the same 10.0.0.0/16 range as yours, so it cannot join either way until one side is renumbered.
 
@@ -111,7 +110,7 @@ The bill for a cloud network is mostly for the boxes that are not machines. Outb
 
 **Combines with**
 
-- [Gatekeeper](../patterns/distributed/routing/gatekeeper.md) — The WAF and the gateway are where this sits in a cloud network.
+- [Gatekeeper](../patterns/distributed/routing/gatekeeper.md) — The web application firewall (WAF) and the gateway are where this sits in a cloud network.
 
 **Generalizes**
 
@@ -120,10 +119,10 @@ The bill for a cloud network is mostly for the boxes that are not machines. Outb
 **Implements**
 
 - [Load Balancer](../patterns/distributed/routing/load-balancer.md) — Layer-4 and layer-7 balancers are the pattern sold as a managed endpoint.
-- [API Gateway](../patterns/distributed/routing/api-gateway.md) — Managed API gateways front your services with auth, quotas and routing already built.
+- [API Gateway](../patterns/distributed/routing/api-gateway.md) — Managed application programming interface (API) gateways front your services with auth, quotas and routing already built.
 - [CDN](../patterns/distributed/routing/cdn.md) — The global edge network is this pattern, priced per gigabyte served.
 - [Reverse Proxy](../patterns/distributed/routing/reverse-proxy.md) — The managed layer-7 balancer is a reverse proxy you configure rather than run.
-- [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — Gateway quotas and WAF rate rules apply this at the edge, before your code runs.
+- [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — Gateway quotas and web application firewall (WAF) rate rules apply this at the edge, before your code runs.
 - [Sticky Session](../patterns/distributed/routing/sticky-session.md) — Balancer affinity pins a caller to one backend without your code holding the mapping.
 - [Intercepting Validator](../patterns/security/intercepting-validator.md) — A web application firewall is the choke point for request shape, sitting ahead of your code.
 - [API Routing](../patterns/distributed/routing/api-routing.md) — A managed gateway matches host and path and forwards to the backing service, as configuration rather than code.

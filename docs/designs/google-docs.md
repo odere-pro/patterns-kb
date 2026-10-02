@@ -16,12 +16,16 @@ A collaborative editor lets many people type into one document at the same time 
 ## Understanding the problem
 <!--meta block=description-->
 
-A browser-based document editor where several people edit the same text at once, watch each other's changes land in real time, and see where everyone's cursor is. Treat the content as plain text — no tables or images — so the hard part is not rendering but agreement: with edits flying in from many keyboards over an unreliable network, every participant must end up looking at the same document. That is a consistency problem wearing a text-editor costume, and it is solved by an editing algorithm (operational transformation), a bidirectional transport (WebSockets), and a way to spread both across a fleet without losing the guarantee.
+A browser document editor where several people edit the same plain text at once and see each other's changes and cursors live. Rendering is not the hard part; agreement is, because edits arrive from many keyboards over an unreliable network and every participant must end up with the same document. The page walks through an editing algorithm (operational transformation), a two-way transport (WebSockets) and spreading both across many servers.
 
 ## Explained
 <!--meta block=explain-->
 
-Google Docs keeps one server in charge of each document. Every editor's connection lands on that server, which puts all edits in one order, rewrites each edit to fit the edits ahead of it (operational transformation), saves it to a log and passes it on. Every screen then ends with the same text. The cap of 100 editors per document means no single document is busy, so the hard part is the number of open connections, not the edit rate. Choose this over a design where edits merge in any order (a conflict-free replicated data type (CRDT), which gives every character a permanent id) when you already need a central server and no offline editing. The merge-anywhere design only adds memory that grows for ever. The costs are these. Your own keystroke must show before the server answers, so the same rewrite also runs in the browser. Adding or removing a server forces its documents to move and their editors to reconnect, so spread documents with a hash ring to move only a slice. A log that grows for ever slows every new joiner, so compact old edits into one.
+Google Docs keeps one server in charge of each document. Every editor's connection lands on that server, which puts all edits in one order, rewrites each edit to fit the edits ahead of it (operational transformation), saves it to a log and passes it on, so every screen ends with the same text. The cap of 100 editors per document means no single document is busy; the hard part is the number of open connections, not the edit rate. Choose this over letting edits merge in any order (a conflict-free replicated data type, which gives every character a permanent id) when you already need a central server and no offline editing, because the merge-anywhere design adds memory that grows for ever.
+
+- **Double logic.** Your own keystroke must show before the server answers, so the same rewrite also runs in the browser.
+- **Moving documents.** Adding a server moves documents and reconnects editors, so spread documents with a hash ring to move only a slice.
+- **Growing log.** A log that grows for ever slows every new joiner, so compact old edits into one.
 
 **Example.** Five million editors hold open connections, 20,000 per server, so you need 250 servers. One document has 100 editors at 3 edits a second each, which is 300 a second, easy for its one owner. You type at position 4 and see it at once. Meanwhile a colleague's 3-character insert at position 0 reached the server first. The server shifts your edit to position 7, then sends it on, so both screens agree. The cost shows up if that document reaches 2 million logged edits: each new joiner replays all of them until compaction collapses the log into one insert.
 
@@ -203,6 +207,6 @@ Every operation lives forever by default, and a hot document can reach millions 
 - [Consistent Hashing](../patterns/distributed/routing/consistent-hashing.md) — documents are assigned to owning Document Service instances via a ZooKeeper-backed hash ring so adding or removing a server reshuffles only a slice
 - [Sticky Session](../patterns/distributed/routing/sticky-session.md) — every WebSocket for one document is pinned to the single server that owns and orders that document
 - [Materialized View](../patterns/distributed/coordination/materialized-view.md) — compaction collapses a document's long operation history into a precomputed snapshot under a new version marker
-- [API Gateway](../patterns/distributed/routing/api-gateway.md) — A CRUD service behind an API gateway creates document metadata and hands back an id before editing starts
+- [API Gateway](../patterns/distributed/routing/api-gateway.md) — A create, read, update, delete (CRUD) service behind an application programming interface (API) gateway creates document metadata and hands back an id before editing starts
 
 <!-- relationships:end -->

@@ -198,11 +198,11 @@ class TodoPresenter {
 
 **Combines with**
 
-- [Test Spy](../testing/test-spy.md) — A recording stand-in for the view proves the presenter without a UI
+- [Test Spy](../testing/test-spy.md) — A recording stand-in for the view proves the presenter without a user interface (UI)
 
 **Variant of**
 
-- [MVC](./mvc.md) — MVP swaps the controller for a presenter over a passive view
+- [MVC](./mvc.md) — Model-view-presenter (MVP) swaps the controller for a presenter over a passive view
 
 **Often confused with**
 

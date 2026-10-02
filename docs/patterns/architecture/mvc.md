@@ -190,8 +190,10 @@ controller.handle("increment"); // view logs "count: 1"
 
 **Combines with**
 
-- [Separation of Concerns](../../principles/separation-of-concerns.md) — MVC is separation of concerns applied to a user interface.
+- [Separation of Concerns](../../principles/separation-of-concerns.md) — Model-view-controller (MVC) is separation of concerns applied to a user interface.
 - [Observer](../gof/behavioral/observer.md) — The model-to-view refresh in the classic form is an Observer registration and nothing more
+- [Front Controller](../enterprise/front-controller.md) — The single entry point that hands each request to its controller
+- [Convention over Configuration](../../principles/convention-over-configuration.md) — Model-view-controller (MVC) frameworks use naming rules to connect the three parts
 
 **Alternative to**
 
@@ -199,11 +201,11 @@ controller.handle("increment"); // view logs "count: 1"
 
 **Has variant**
 
-- [MVP](./mvp.md) — MVP swaps the controller for a presenter over a passive view
-- [MVVM](./mvvm.md) — MVVM binds the view to a view-model
+- [MVP](./mvp.md) — Model-view-presenter (MVP) swaps the controller for a presenter over a passive view
+- [MVVM](./mvvm.md) — Model-view-view-model (MVVM) binds the view to a view-model
 
 **Specializes**
 
-- [Layered / N-Tier](./layered.md) — MVC is a layering of UI concerns
+- [Layered / N-Tier](./layered.md) — Model-view-controller (MVC) is a layering of user interface (UI) concerns
 
 <!-- relationships:end -->

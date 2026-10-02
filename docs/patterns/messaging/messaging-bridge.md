@@ -16,20 +16,16 @@ A component connected to two messaging infrastructures at once, pulling from one
 ## What it is
 <!--meta block=description-->
 
-Nobody chooses to run two message brokers. You inherit them — an acquisition arrives with its own stack, or an on-premises system built a decade ago now needs to feed a service running in a cloud that speaks a different queue. Both halves work. Neither can hear the other.
-
-The reflex is to bolt HTTP onto both sides, and it is worse than it looks. You modify two working systems, add a client to one and a handler to the other, and retest and redeploy both. You now host an endpoint that has to be secure and highly available. And you have replaced a durable, at-least-once channel with a synchronous call over a link that drops, so you write retry logic that the queues were already doing for you.
-
-A bridge leaves both systems alone. It is a process holding a connection to each infrastructure: it receives from a queue on one side and sends to a queue on the other, and it does not touch the payload. The sender is configured to put certain messages on a particular local queue — as far as it is concerned, that is just another destination. The receiver takes delivery on its own infrastructure in the way it always has.
-
-Because the transfer is queue to queue, you keep the delivery guarantee rather than replacing it, and you get a migration path for free: endpoints move from the old broker to the new one when their team is ready, not all on one weekend.
-
-The catch is that a bridged route offers the **intersection** of two feature sets, never the union. Anything one broker has and the other lacks is unavailable across the bridge, and limits clamp to whichever side is smaller — a 4 MB message limit on one and 64 KB on the other means the route carries 64 KB.
+Two message brokers that cannot hear each other, one from an acquisition or an older on-premises system, still need to exchange messages. A messaging bridge is a process holding a connection to each broker. It receives from a queue on one side and sends to a queue on the other, leaving the payload and both systems untouched. A bridged route offers only the features both brokers share.
 
 ## Explained
 <!--meta block=explain-->
 
-A messaging bridge is a process that holds a connection to two separate message brokers, receives from a queue on one and sends to a queue on the other, and leaves the payload untouched. Neither existing system changes, because each sees an ordinary local queue. Because the transfer is queue to queue, you keep durable at-least-once delivery, where bolting HTTP onto both sides would trade it for a synchronous call over a link that drops. Choose it when two systems already talk by messages on brokers that cannot talk to each other and changing either is expensive. It costs three things. The route offers only what both brokers support, and each limit clamps to the smaller, so a 4 MB limit on one side and 64 KB on the other carries 64 KB. No transaction spans two brokers, so a crash after the send and before the settle delivers twice; make the receiver idempotent, meaning safe to run twice. And a retry count dead-letters good messages during an outage, so pause forwarding with a circuit breaker (a gate that stops calls after repeated failures) instead.
+A messaging bridge is a process that holds a connection to two separate message brokers, receives from a queue on one and sends to a queue on the other, and leaves the payload untouched. Neither existing system changes, because each sees an ordinary local queue. Because the transfer is queue to queue, you keep durable at-least-once delivery, where bolting HTTP onto both sides would trade it for a synchronous call over a link that drops. Choose it when two systems already talk by messages on brokers that cannot talk to each other and changing either is expensive.
+
+- **Feature intersection.** The route offers only what both brokers support, and each limit clamps to the smaller, so check message sizes first.
+- **Double delivery.** No transaction spans two brokers, so a crash between send and settle delivers twice; make the receiver safe to run twice.
+- **Outage dead-lettering.** A retry count dead-letters good messages during an outage, so pause forwarding with a circuit breaker instead.
 
 **Example.** A bridge relays 200 messages a second from an on-premises broker to a cloud broker. The cloud side goes down for 10 minutes, which is 200 x 600 = 120,000 messages. With a 5-attempt retry limit, each message burns its attempts in seconds and the lot is dead-lettered. With a breaker, forwarding pauses, the source queue holds all 120,000, and they drain when the far side returns. A message of 100 KB can never cross a 64 KB route, so check sizes before you rely on the bridge.
 

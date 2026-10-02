@@ -37,6 +37,40 @@ test('home-to-page', { tag: '@tablet' }, async ({ page, kb }) => {
   await expect(current).toHaveAttribute('aria-current', 'page');
 });
 
+test('start-here', async ({ page, kb }) => {
+  const { tracks, track, stage, total } = site.startHere;
+  await kb.visit(site.home);
+  const region = page.getByRole('region', { name: 'Start here' });
+  await expect(region).toBeVisible();
+
+  // Four to six tracks, in the order the data file gives them.
+  const titles = region.getByRole('heading', { level: 3 });
+  const count = await titles.count();
+  expect(count).toBeGreaterThanOrEqual(4);
+  expect(count).toBeLessThanOrEqual(6);
+  await expect(titles).toHaveText(tracks.map((t) => t.label));
+
+  // A track's steps are its themes, in order, each a link to the theme's page.
+  const mine = region.getByRole('listitem').filter({ has: page.getByRole('heading', { name: track, exact: true }) });
+  const steps = mine.getByRole('link');
+  const mineTrack = tracks.find((t) => t.label === track);
+  const stepLabels = mineTrack?.steps ?? [];
+  await expect(steps).toHaveText(stepLabels);
+  const landed = await kb.follow(steps.first());
+  expect(landed.route).toBe(mineTrack?.routes[0]);
+  await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toHaveText(stepLabels[0] as string);
+  await kb.visit(site.home);
+
+  // Practicing a page the track walks moves the track's count.
+  await expect(mine.getByText(/\d+ of \d+ practiced/)).toHaveText(`0 of ${total} practiced`);
+  await kb.visit(stage.route);
+  const check = page.getByRole('main').getByRole('button', { name: `Practiced: ${stage.title}` });
+  await check.click();
+  await expect(check).toHaveAttribute('aria-pressed', 'true');
+  await kb.visit(site.home);
+  await expect(mine.getByText(/\d+ of \d+ practiced/)).toHaveText(`1 of ${total} practiced`);
+});
+
 test('sidebar', { tag: '@tablet' }, async ({ kb }) => {
   const { page: from, sibling } = site.walk;
   await kb.visit(from.route);

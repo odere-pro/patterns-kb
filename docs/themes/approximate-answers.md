@@ -14,9 +14,7 @@ A sketch answers one question about a huge set or stream from a fixed, small amo
 ## The question
 <!--meta block=description-->
 
-An exact answer about a very large set needs memory that grows with the set. Is this key in a set of billions? How often has this URL been seen? How many distinct users visited today? Keeping every key just to answer one of those is often more than the question is worth.
-
-A **sketch** is a fixed-size summary built from hash functions that answers one such question approximately. A **hash** scrambles a key into a number that looks random but is repeatable. The three questions are membership (is it in the set), frequency (how many times) and cardinality (how many distinct). Each sketch fits one of them and is wrong in a known direction.
+An exact answer about a very large set needs memory that grows with the set. Is this key in a set of billions? How often was this URL seen? How many distinct users came today? A sketch is a fixed-size summary built from hash functions (repeatable scramblers of a key into a number) that answers one question approximately: membership, frequency or cardinality. Each sketch is wrong in a known direction.
 
 ## Explained
 <!--meta block=explain-->

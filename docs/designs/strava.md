@@ -16,12 +16,16 @@ A fitness tracker records a run or a ride — GPS route, distance, elapsed time 
 ## Understanding the problem
 <!--meta block=description-->
 
-Scoped to running and cycling, the app has to start a workout, track its route and stats while it runs, save it, and let friends see the result. What makes it interesting is where the requirements point. Athletes run through canyons, tunnels and dead zones, so tracking cannot depend on the network; and the numbers on their wrist have to be exactly right, updating every second, not a few seconds behind a round trip. Both constraints resolve to a single decision — treat the client as a first-class participant that records the whole activity itself. Modern phones have the sensors, storage and compute to do it, and once they do, the backend has almost nothing left to do but accept a finished file. That inversion is the spine of the design.
+A running and cycling app starts a workout, tracks route and stats while it runs, saves it and shows it to friends. Tracking must work in dead zones and update every second, so the phone records the whole activity itself and the backend accepts a finished file. The page walks through that inversion and what it costs.
 
 ## Explained
 <!--meta block=explain-->
 
-A workout tracker lets the phone record the whole activity itself, using its own sensors and storage with no network, then uploads the finished route in one batch. The athlete's live stats come from local data, so they update every second and survive tunnels, and the server only accepts finished files. Choose this when the client can hold the truth and few people read a live activity; for spectators, poll on the known 2 to 5 second cadence and show a position 5 to 10 seconds behind, smoothed by interpolation, instead of running a push tier. It costs three things. A dead battery loses whatever was not saved, so save the buffer to the phone every 10 seconds, accepting up to 10 seconds lost, or sync in the background when a connection appears. Storage, not request rate, is the real limit, at about 550 TB of routes a year, so split by completion date and move old years to object storage. And the hard bugs now sit on the phone, so make the upload chunked, resumable and safe to repeat, with the server discarding points it already has.
+A workout tracker lets the phone record the whole activity itself, using its own sensors and storage with no network, then uploads the finished route in one batch. The athlete's live stats come from local data, so they update every second and survive tunnels, and the server only accepts finished files. Choose this when the client can hold the truth and few people read a live activity. For spectators, poll on the known 2 to 5 second cadence and show a position 5 to 10 seconds behind, smoothed by interpolation, instead of running a push tier.
+
+- **Lost buffer.** A dead battery loses unsaved points, so save the buffer to the phone every 10 seconds and accept up to 10 seconds lost.
+- **Storage.** Storage, not request rate, is the limit at about 550 TB a year, so split by completion date and archive old years.
+- **Phone bugs.** Hard bugs now sit on the phone, so make uploads chunked, resumable and safe to repeat, with the server discarding known points.
 
 **Example.** A 30-minute run with a GPS point every 3 seconds makes 1,800 / 3 = 600 points. Sending each as it happens is 600 requests; recording locally sends 1 upload, so backend writes drop about 600 times. At about 24 bytes a point that is about 15 KB a run. For 100 million runs a day, 36.5 billion a year, that is about 550 TB a year. If the battery dies at minute 20, you lose at most the last 10 seconds of points.
 
@@ -200,7 +204,7 @@ sequenceDiagram
 
 **Demonstrates**
 
-- [Write-Behind](../patterns/caching/write-behind.md) — the phone accepts each GPS write locally and flushes to the system of record only when the activity ends
+- [Write-Behind](../patterns/caching/write-behind.md) — the phone accepts each Global Positioning System (GPS) write locally and flushes to the system of record only when the activity ends
 - [Batching](../patterns/concurrency/batching.md) — a whole activity's ~600-point trace uploads in one request on completion instead of a point every few seconds
 - [Client-Side Cache](../patterns/caching/client-side-cache.md) — the activity lives in an on-device buffer persisted to local storage, so tracking and live stats never need the network
 - [Event Sourcing](../patterns/architecture/event-sourcing.md) — active time is computed by summing a STARTED/PAUSED/RESUMED status log rather than mutating an elapsed counter

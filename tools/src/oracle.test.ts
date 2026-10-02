@@ -37,6 +37,10 @@ import {
   gatesTree,
   harnessTree,
   glossaryTree,
+  HEADER,
+  json,
+  row,
+  structureFileJson,
   inboxTree,
   inboxEntry,
   KIND_BODY,
@@ -82,6 +86,7 @@ import { spec as relationsGate } from './gates/check-relations.js';
 import { spec as genPrerequisites, REFERENCE as PREREQ_REFERENCE } from './gen/gen-prerequisites.js';
 import { spec as genRelations } from './gen/gen-relations.js';
 import { spec as genTours } from './gen/gen-tours.js';
+import { TRACKS_FILE } from './lib/tracks.js';
 import { frontmatterMany } from './lib/frontmatter.js';
 import { STATUSES } from './lib/page-block.js';
 import { markers } from './lib/generated.js';
@@ -104,6 +109,18 @@ function tourOrderTree(s: Sandbox, stages: string[]): void {
   s.write('docs/data/learning-paths.json', JSON.stringify({ profiles: [{ id: 'tour', label: 'Tour', stages: stages.map(route) }] }, null, 2));
 }
 import { capture, makeSandbox, REPO_ROOT, type Captured, type Sandbox } from './lib/sandbox.js';
+
+/** Six published theme pages, each a learning-paths profile, and four tracks, the first walking `firstTrack`. */
+function tracksTree(s: Sandbox, firstTrack: string[]): void {
+  const slugs = ['t1', 't2', 't3', 't4', 't5', 't6'];
+  const rows = slugs.map((slug) => row('themes', slug));
+  const track = (id: string, themes: string[]): Record<string, unknown> => ({ id, label: id, blurb: `${id} blurb`, themes });
+  s.write('docs/data/site-structure.json', structureFileJson({ themes: rows }));
+  s.write('docs/data/learning-paths.json', learningPathsJson(slugs.map((id) => ({ id, label: id, stages: [] })), null));
+  for (const r of rows) s.write(r.source, `---\ntitle: ${r.slug}\nstatus: stable\n---\n\n# ${r.slug}\n`);
+  const tiers = Object.fromEntries(slugs.map((slug) => [slug, 'core']));
+  s.write(TRACKS_FILE, json({ ...HEADER, tracks: [track('a', firstTrack), track('b', ['t2', 't3', 't4']), track('c', ['t3', 't4', 't5']), track('d', ['t4', 't5', 't6'])], tiers }));
+}
 import { drive, shellQuote, type DriverIo } from './run-gates.js';
 
 /** Replace `from` with `to` in a sandbox file, failing loudly when the fixture no longer holds `from`. */
@@ -434,6 +451,11 @@ describe('kb.gates', () => {
       'learning-paths': {
         clean: (s) => learningTree(s),
         plant: (s) => learningTree(s, [{ id: 'starting', label: 'Starting', stages: ['/patterns/gone.html'] }], null),
+      },
+      // Four tracks over six published theme pages; the plant stages a theme with no page.
+      tracks: {
+        clean: (s) => tracksTree(s, ['t1', 't2', 't3']),
+        plant: (s) => tracksTree(s, ['t1', 't2', 'ghost']),
       },
       // A theme's tour holds a page after its prerequisite; the plant swaps the two stages.
       'tour-order': {

@@ -16,16 +16,17 @@ Stands in for a real collaborator and answers every call with a fixed, precomput
 ## What it is
 <!--meta block=description-->
 
-A **test stub** is a test double that replaces a real collaborator during a test and hands back pre-arranged, "canned" answers whenever the system under test (SUT) calls it. It doesn't matter what arguments it receives or how many times it's invoked — the stub just answers, indifferent to the call itself.
-
-The force it resolves is **indirect input**. The SUT often can't produce the scenario you want to exercise on its own: the real collaborator is slow, remote, non-deterministic, or simply incapable of returning the specific edge case your test needs — a [stale cache](../../hazards/stale-cache.md) entry, an empty result set, an account with a negative balance. Swapping in a stub gives you a direct lever on that input, so the test controls exactly what the SUT sees.
-
-It is deliberately the least capable member of the test-double family. A stub asserts nothing about how it was used — that job belongs to a Mock Object or a Test Spy. It exists purely to make the SUT's own logic observable, by feeding it data the real dependency won't reliably give you.
+A test stub is a test double that replaces a real collaborator and returns pre-arranged answers whenever the system under test calls it, whatever the arguments and however often. It resolves indirect input: the real collaborator is slow, remote, random or cannot return the edge case the test needs, such as a stale cache or an empty result. A stub asserts nothing about its own use; that is the job of a mock or spy.
 
 ## Explained
 <!--meta block=explain-->
 
-A test stub is a test double that returns the same prepared answers whenever your code calls it, whatever the arguments and however many times. It lets you feed the code under test a situation you could not otherwise produce, because the real collaborator is slow, remote, random, or cannot return the awkward case you need, such as a stale cache or an expired token. Choose it over a fake, which keeps real working state, when one fixed answer is enough, and over the real dependency when that is slow or unpredictable. It costs four things. A stub checks nothing about how it was used, so a caller that stops calling it still passes: add a spy when the call must happen. Canned data drifts from what the real service now returns, so back it with a contract test. Stubbing part of what you are testing makes the test check your own canned value, so draw the boundary first. And one stub per scenario multiplies, so make a single stub that takes the answer as a parameter.
+A test stub is a test double that returns the same prepared answers whenever your code calls it, whatever the arguments and however many times. It lets you feed the code under test a situation you could not otherwise produce, because the real collaborator is slow, remote, random, or cannot return the awkward case you need, such as a stale cache or an expired token. Choose it over a fake, which keeps real working state, when one fixed answer is enough, and over the real dependency when that is slow or unpredictable.
+
+- **No usage check.** A caller that stops calling the stub still passes; add a spy when the call must happen.
+- **Drift.** Canned data diverges from what the real service returns; back it with a contract test.
+- **Self-testing.** Stubbing part of what you test checks your own canned value; draw the boundary first.
+- **Multiplication.** One stub per scenario piles up; make one stub that takes the answer as a parameter.
 
 **Example.** A pricing function converts euros using an exchange-rate service. A stub returns 1.10, so 100 euros must give 110.00 dollars, and the test runs in 1 ms with no network. A second stub throws a timeout, to test the fallback to yesterday's rate, which the real service rarely produces on demand. The cost: the real service starts returning the rate as the string 1.10, the stubs still return a number, and both tests stay green while production breaks. A contract test against the real service would catch it.
 

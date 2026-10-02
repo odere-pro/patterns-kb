@@ -16,18 +16,17 @@ Builds complex behavior out of small, single-purpose functions, chaining each on
 ## What it is
 <!--meta block=description-->
 
-A **pipeline** builds a larger transformation out of smaller ones. Given unary functions `f`, `g`, and `h`, the composition `pipe(f, g, h)` is the function `x => h(g(f(x)))` — a value flows through each stage in turn, and every stage's output becomes the next stage's input.
-
-The force it resolves is **reading order versus execution order**. Nested calls like `h(g(f(x)))` read inside-out, right to left — the opposite of the sequence in which they actually run — and every added stage burrows one parenthesis deeper. A pipeline reorders the identical computation left to right so the code reads in the order it executes, and adding, removing, or reordering a stage becomes a one-line edit instead of an unwrap-and-rewrap of nested parens.
-
-It composes cleanly because each stage is small and single-purpose. A pipeline of unary, pure functions is trivial to build generically — reduce over an array of functions, feeding each result into the next — and just as trivial to test, since every stage can be exercised standalone with no shared state to fake or reset.
-
-The same idea shows up at every scale: Unix shells pipe stdout into stdin across processes, stream libraries pipe buffers through transforms, and FP libraries name it `pipe` (left to right) or `compose` (right to left) for the identical chain read in opposite directions.
+A pipeline builds a larger transformation from smaller ones: `pipe(f, g, h)` is `x => h(g(f(x)))`, with each stage's output feeding the next. It resolves the clash between reading order and execution order, because nested calls read inside out. Stages are small and pure, so you add, remove or reorder one in a single line and test each alone.
 
 ## Explained
 <!--meta block=explain-->
 
-A pipeline builds behavior by passing a value through a list of small functions, where each takes the previous one's output. Data moves left to right, each stage does one job, and you can test each stage alone. Choose it over one large function, or over nested calls such as f(g(h(x))) that read inside out, when the work is a clear sequence of transformations. It costs four things. The middle values are hidden, so add a tap stage that logs the value and passes it on. Every stage must agree on the shape of what it passes, so add a small adapter stage where two do not match. Type inference over many generic stages gets slow and confusing, so type each stage and keep a pipe to about six. Branches, side effects and errors do not fit a straight line, so wrap values in a result type or split the pipeline in two.
+A pipeline builds behavior by passing a value through a list of small functions, where each takes the previous one's output. Data moves left to right, each stage does one job, and you can test each stage alone. Choose it over one large function, or over nested calls such as f(g(h(x))) that read inside out, when the work is a clear sequence of transformations.
+
+- **Hidden middle values.** You cannot see values between stages, so add a tap stage that logs the value and passes it on.
+- **Shape agreement.** Every stage must agree on the shape it passes, so add a small adapter stage where two do not match.
+- **Slow typing.** Type inference over many generic stages gets slow and confusing, so type each stage and keep a pipe to about six.
+- **Straight line only.** Branches, side effects and errors do not fit, so wrap values in a result type or split the pipeline.
 
 **Example.** A pipeline cleans a price from a CSV: trim, parse, add 20% VAT, format with two decimals. The input " 50 " becomes "50", then 50, then 60, then "60.00". A row reads "5O" with a letter O, and the output is "NaN". The pipeline gives no hint which of 4 stages failed. Adding a tap after each stage shows that the parse stage produced NaN, and the VAT and format stages only passed it on. The fix is a check in the parse stage. The cost is that the check needs an error path, and a plain straight line cannot hold one without a result type.
 

@@ -15,9 +15,7 @@ The write-path scaling ladder — climb from a single primary through a write-op
 ## The question
 <!--meta block=description-->
 
-Scaling writes is the harder half of scaling. Reads have well-worn tools — replicas, caches, the edge — that all lean on the same trick of serving many copies of data that rarely changes. Writes have no such shortcut: every write must land somewhere durable and ordered, often under contention, and you cannot make a write faster by copying it more. When an interviewer escalates "and how does it scale?", the write path is usually where the design strains first, because bursty, high-throughput, high-contention writes resist the copy-it strategy that saves the read path.
-
-So the ladder is about reducing the throughput any single component must sustain. First make one server go further — confirm with quick back-of-envelope math that you are actually against a physical wall (modern hardware handles more than most guesses), and pick a store whose engine matches the write pattern before adding nodes. Then partition the writes across shards so no one node owns the whole stream, splitting by column where access patterns differ. Then absorb bursts with a queue and shed the writes that don't matter. Finally, batch many small writes into fewer large ones, and aggregate hierarchically when only the totals matter. This theme is that ladder specifically for writes; its read-path twin, [Scaling Reads](./scaling-reads.md), climbs a different one.
+Scaling writes is the harder half of scaling. Reads lean on serving many copies of data that rarely changes; every write must land somewhere durable and ordered, often under contention, and copying it more does not make it faster. So the ladder reduces the throughput any one component sustains: one server first, then shards, then a queue that absorbs bursts and sheds the unimportant, then batching and hierarchical aggregation. Scaling Reads climbs a different ladder.
 
 ## Explained
 <!--meta block=explain-->
@@ -55,9 +53,9 @@ flowchart TB
 
 The default move when writes outgrow a single primary. Sharding partitions the data across nodes by key, so if one server sustains 1,000 writes/sec, ten shards approach 10,000 — the multi-node fleet hidden behind one logical database. Everything rides on the partition key: hash a primary identifier and load spreads evenly; pick something skewed like raw country and one shard melts while another idles. Weigh reads too — the write path is cheap to shard, but if reads must fan out across every shard the per-request overhead can eat the win.
 
-### [LSM-Tree](../patterns/distributed/coordination/lsm-tree.md) {#tour-lsm-tree}
+### [log-structured merge tree (LSM tree)](../patterns/distributed/coordination/lsm-tree.md) {#tour-lsm-tree}
 
-Before adding nodes, consider a storage engine built for writes. An LSM-tree turns random in-place updates into sequential appends to an in-memory table that is flushed and later compacted, so a disk that struggles with scattered B-tree updates streams writes fast — the reason a log-structured store can sustain an order of magnitude more writes than a comparable relational one on the same hardware. The trade is on the read side: a lookup may have to check and merge several on-disk files, so you spend read latency to buy write throughput — worth it exactly when the workload is write-dominated.
+Before adding nodes, consider a storage engine built for writes. An log-structured merge (LSM)-tree turns random in-place updates into sequential appends to an in-memory table that is flushed and later compacted, so a disk that struggles with scattered B-tree updates streams writes fast — the reason a log-structured store can sustain an order of magnitude more writes than a comparable relational one on the same hardware. The trade is on the read side: a lookup may have to check and merge several on-disk files, so you spend read latency to buy write throughput — worth it exactly when the workload is write-dominated.
 
 ### [Unique ID Generation](../patterns/distributed/coordination/unique-id-generation.md) {#tour-unique-id-generation}
 
@@ -73,7 +71,7 @@ Every individual write carries fixed overhead — a round trip, transaction setu
 
 ### [CQRS](../patterns/architecture/cqrs.md) {#tour-cqrs}
 
-When the write path and the read path pull in genuinely different directions, give them separate models. CQRS splits the command side from the query side, so writes land in a store and schema tuned for ingest — normalized, write-optimized, lightly indexed — while a separate read model is projected for queries, each scaled on its own. It is the heavier option, buying independent write scaling at the price of two models to keep in sync and the eventual consistency between them, so it earns its place when the load shapes are truly divergent rather than merely large.
+When the write path and the read path pull in genuinely different directions, give them separate models. Command query responsibility segregation (CQRS) splits the command side from the query side, so writes land in a store and schema tuned for ingest — normalized, write-optimized, lightly indexed — while a separate read model is projected for queries, each scaled on its own. It is the heavier option, buying independent write scaling at the price of two models to keep in sync and the eventual consistency between them, so it earns its place when the load shapes are truly divergent rather than merely large.
 
 <!-- tour:end -->
 

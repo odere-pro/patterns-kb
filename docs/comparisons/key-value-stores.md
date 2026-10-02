@@ -16,16 +16,15 @@ Redis, Valkey, Memcached, Dragonfly, DynamoDB and Cassandra side by side — whi
 ## What this compares
 <!--meta block=description-->
 
-Every store here answers the same question fast: give me the value filed under this key. They buy that speed by giving up the query power of a [relational database](../capabilities/databases.md) — no joins, no ad-hoc filters, and often no way in except the key you wrote.
-
-One line splits the field, and you pick a side before you pick a product. An in-memory cache store holds a copy of something you can compute again, so losing all of it costs a slow hour rather than a customer's data. A durable key-value database is the record itself, so losing it is an incident. Redis, Valkey, Memcached and Dragonfly sit on the first side; DynamoDB and Cassandra on the second.
-
-Two questions decide the rest: what the license commits you to, which turned real in 2024 and has not settled, and who gets paged when the node fills up. What follows compares the six on durability, data model, scaling shape, license and who operates them, so a [distributed cache](../patterns/caching/distributed-cache.md) and a system of record never get chosen the same way.
-
+Every store here answers one question fast: give me the value filed under this key. The speed costs you joins and ad-hoc filters. One line splits the field. A [distributed cache](../patterns/caching/distributed-cache.md) holds a copy you can recompute, so losing it costs a slow hour, while a durable key-value database is the record, so losing it is an incident. License terms, which turned real in 2024, and who gets paged when the node fills decide the rest.
 ## Explained
 <!--meta block=explain-->
 
-A key-value store answers one question fast: give me the value filed under this key. It gets that speed by giving up joins and ad-hoc filters. Pick a side before you pick a product. An in-memory cache holds a copy of something you can compute again, so losing it costs a slow hour, not a customer's data. A durable key-value database is the record itself, so losing it is an incident. Default to a managed cache running an open engine, because the same binary can run on your own machines if the terms or the bill change. Take Redis when you use its richer data types, and Memcached when a plain cache is the whole job. Cross to the durable side the moment the store becomes the record. Three costs follow. License terms changed in 2024 and have not settled, so read them before you depend on an engine. A cache that restarts empty sends every read to the database, so warm it or size the database for it. And a managed durable store ties you to one vendor, so budget on requests and keep the access patterns written down.
+A key-value store answers one question fast: give me the value filed under this key. It gets that speed by giving up joins and ad-hoc filters. Pick a side before you pick a product. An in-memory cache holds a copy of something you can compute again, so losing it costs a slow hour, not a customer's data. A durable key-value database is the record itself, so losing it is an incident. Default to a managed cache running an open engine, because the same binary can run on your own machines if the terms or the bill change. Take Redis when you use its richer data types, and Memcached when a plain cache is the whole job. Cross to the durable side the moment the store becomes the record.
+
+- **License terms changed in 2024 and have not settled** Read them before you depend on an engine.
+- **A cache that restarts empty sends every read to the database** Warm it or size the database for it.
+- **A managed durable store ties you to one vendor** Budget on requests and keep the access patterns written down.
 
 **Example.** A cache fronts a database. Traffic is 1,000 reads a second and the hit rate is 90 percent, so the database sees 100 reads a second and handles up to 300. The cache node restarts empty. For the next minutes every read misses, so the database sees up to 1,000 a second, over three times its limit, and slows for everyone. Warming the cache from a list of hot keys before it takes traffic, or capping the rate of misses sent to the database, keeps the load under 300. The cost is that restart now takes a longer, planned step.
 

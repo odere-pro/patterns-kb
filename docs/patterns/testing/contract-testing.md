@@ -16,18 +16,17 @@ Records what a consumer actually depends on from a provider's responses, then re
 ## What it is
 <!--meta block=description-->
 
-A **contract test** checks one narrow thing: that calls against your test double return the same shape as calls against the real service would. It is a separate, small test set alongside the ordinary tests, and it cares about structure rather than particular values.
-
-The force it resolves is **why teams keep a full end-to-end suite they do not want**. Consumer tests run against a [stub](./test-stub.md), which is fast and needs no network — and a stub is a snapshot of an interface that keeps moving. Nothing notices when the provider renames a field, so an end-to-end suite gets kept purely as the thing that would catch it, and then grows slow and flaky across services owned by different teams.
-
-The move that makes it useful is **where the expectations get checked**. The consumer's recorded interactions become an artifact, published to a shared store; the provider's build fetches it and replays each request against the real implementation. A failure names which consumer breaks and on which field, in the pipeline of the team making the change — before it ships, rather than after.
-
-The cadence is deliberately different from ordinary tests. Contract verification runs on the **provider's** change rhythm rather than the consumer's, and a failure should raise a reconciliation task rather than simply breaking a build — because the correct resolution is sometimes a conversation about whether the consumer's expectation was reasonable. That also names the boundary of the pattern: it works only in a closed community where the consumers are known and their pipelines reachable. A public API with anonymous callers cannot enumerate its consumers, so it needs a versioned schema and a deprecation policy instead.
+A contract test checks that calls against your test double return the same shape as calls against the real service. The consumer's recorded interactions are published to a shared store and the provider's build replays them against the real implementation, so a renamed field fails the provider's pipeline before release. It works only where consumers are known and reachable; a public API needs versioned schemas instead.
 
 ## Explained
 <!--meta block=explain-->
 
-A contract test records which requests a consumer sends and which response shape it relies on, and the provider's own build replays those requests against the real service. It stops teams from testing against a stub, a stand-in that answers with canned data, that goes stale when the real service changes. Without it, the provider renames a field, every consumer test still passes against its old stub, and the break appears only in production. A failed replay names the consumer and the field before release. Choose it over a full end-to-end suite when you know your consumers and can reach their pipelines, because it is faster and points to the cause. It costs four things. It checks shape, not behaviour, so keep a few tests for meaning. Recorded expectations rot when a consumer stops using a field, so verify only against what consumers have deployed. A broker, the shared store for the recordings, must be run and kept available. And a failure needs a conversation between two teams, so treat it as a task, not just a red build. It cannot serve a public API with unknown callers.
+A contract test records which requests a consumer sends and which response shape it relies on, and the provider's own build replays those requests against the real service. It stops teams from testing against a stub, a stand-in that answers with canned data, that goes stale when the real service changes. Without it, the provider renames a field, every consumer test still passes against its old stub, and the break appears only in production. A failed replay names the consumer and the field before release. Choose it over a full end-to-end suite when you know your consumers and can reach their pipelines, because it is faster and points to the cause. It cannot serve a public API with unknown callers.
+
+- **Shape only.** It checks structure, not behaviour, so keep a few tests for meaning.
+- **Rotting expectations.** A consumer that stops using a field keeps blocking changes, so verify only against what consumers have deployed.
+- **Broker upkeep.** The broker, the shared store for the recordings, must be run and kept available.
+- **Two-team failures.** A failure needs a conversation between two teams, so treat it as a task, not just a red build.
 
 **Example.** A customer service has three consumers. The billing consumer records GET /customers/42 and expects id, email and tier in the reply. The customer team renames tier to plan and runs its build. Replaying billing's recorded request finds no tier, so the build fails, naming billing, before release. Without it, billing's tests stay green against its stub and checkout breaks at night. The cost shows when billing stops using email but never updates its contract: the customer team is still held to returning a field no one reads, until someone deletes that expectation.
 
@@ -198,6 +197,7 @@ verifyProvider({
 
 - [API Versioning](../distributed/routing/api-versioning.md) — The other answer to changing a published contract, and the right one when callers are unknown
 - [Fake Object](./fake-object.md) — A verified contract is what makes a lightweight in-memory stand-in trustworthy
+- [Hyrum's Law](../../principles/hyrums-law.md) — Consumer-driven tests record what callers depend on, making hidden dependencies visible
 
 **Requires**
 

@@ -16,16 +16,15 @@ Five engines that answer the same question — which documents match this text, 
 ## What this compares
 <!--meta block=description-->
 
-A search engine is a second copy of your data, shaped for one question: which documents match this text, and in what order. Reach for one when a `LIKE` scan in your [database](../capabilities/databases.md) gets slower with every row and still returns matches in no useful order. The five contenders differ less in what they can find than in how much tuning they expose, how much cluster you must operate, and what their license allows.
-
-Two of them share a lineage and a fight. Elasticsearch left Apache-2.0 in 2021 for the Server Side Public License and the Elastic License, and AWS forked the last Apache-licensed release, 7.10.2, as OpenSearch. Since August 2024 Elasticsearch is triple-licensed under AGPLv3, ELv2 and SSPLv1, restoring its OSI-approved status; OpenSearch has been governed since September 2024 by the OpenSearch Software Foundation under the Linux Foundation. Both are open source again, so choose between them on ecosystem and governance, not permission.
-
-Whichever engine you pick, the index is a projection: a read-optimized copy of records another store owns, which you keep in sync yourself. That makes it a [materialized view](../patterns/distributed/coordination/materialized-view.md) with a query language on top, and it inherits the same failure. Every write to the source has to reach the index, and when one does not, search returns confident stale answers that nothing in the engine will flag.
-
+A search engine is a second copy of your data, shaped for one question: which documents match this text, and in what order. Reach for one when a LIKE scan in your [database](../capabilities/databases.md) slows with every row. The five contenders differ in tuning exposed, cluster you operate, and license. The index is a projection you keep in sync yourself, and a write that never reaches it leaves search returning confident stale answers.
 ## Explained
 <!--meta block=explain-->
 
-A search engine is a second copy of your data, shaped for one question: which documents match this text, and in what order. Reach for one when scanning with LIKE in your database slows with every row and returns matches in no useful order. Try your database's own full-text search first and keep it until relevance demands more, since it adds no system to run and no copy to keep in step. Move on when someone asks for typo tolerance, per-field boosts or facet counts. Choose OpenSearch or Elasticsearch for Lucene-grade control and wider analytics, and a single-binary engine such as Meilisearch or Typesense for product search-as-you-type over a catalogue you can size. Both big engines are open source again, so choose between them on ecosystem and governance. Three costs follow. The index is a copy another store owns, so a write that never reaches it leaves search returning confident stale answers, which you counter with a periodic comparison against the source. A cluster has heap, shards and node roles to run, so buy it managed unless you have the team. And an in-memory engine is capped by RAM, so measure your corpus first.
+A search engine is a second copy of your data, shaped for one question: which documents match this text, and in what order. Reach for one when scanning with LIKE in your database slows with every row and returns matches in no useful order. Try your database's own full-text search first and keep it until relevance demands more, since it adds no system to run and no copy to keep in step. Move on when someone asks for typo tolerance, per-field boosts or facet counts. Choose OpenSearch or Elasticsearch for Lucene-grade control and wider analytics, and a single-binary engine such as Meilisearch or Typesense for product search-as-you-type over a catalogue you can size. Both big engines are open source again, so choose between them on ecosystem and governance.
+
+- **The index is a copy another store owns** A write that never reaches it leaves stale answers, so compare it against the source periodically.
+- **A cluster has heap, shards and node roles to run** Buy it managed unless you have the team.
+- **An in-memory engine is capped by RAM** Measure your corpus first.
 
 **Example.** A shop has 100,000 products and 2,000 price changes a day. A sync bug loses 0.5 percent of them, which is 10 a day. After 30 days, 300 products show a wrong price in search, and nothing flags it. A nightly job compares each product's price and update time in the index against the database and re-indexes the mismatches, which holds the stale count to at most 10. The cost is a job that reads all 100,000 rows each night, plus an alert that fires when the mismatch count rises.
 
@@ -81,5 +80,6 @@ Take Solr when you already run it. It is mature, permissively licensed and good 
 **Implements**
 
 - [Materialized View](../patterns/distributed/coordination/materialized-view.md) — Every engine here keeps a projection of records another store owns, and you own the sync
+- [Inverted Index](../patterns/distributed/coordination/inverted-index.md) — Lucene-based engines and the index inside a database such as PostgreSQL (GIN, the Generalized Inverted Index) are ready-made inverted indexes
 
 <!-- relationships:end -->

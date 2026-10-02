@@ -15,18 +15,16 @@ Arranges objects into part-whole trees behind a single interface, so a leaf and 
 ## What it is
 <!--meta block=description-->
 
-The **Composite** pattern arranges objects into tree structures to represent part-whole hierarchies. A common Component interface is implemented by two kinds of object: leaves, which are individual, indivisible elements, and composites, which are containers holding a list of child components — each of which may itself be a leaf or another composite. Client code calls the same operations on both.
-
-The force it resolves is the endless branching that appears when "a single thing" and "a group of things" have different types. Without a shared interface, every operation that touches the structure has to ask `is this one item or a collection?`, cast accordingly, and hand-roll the recursion — logic that multiplies with every new operation and every level of nesting.
-
-Composite pushes the recursion into the objects. A composite implements each operation by iterating its children and forwarding the call, letting results fold back up the tree; a leaf simply does the work directly. Because both expose one interface, depth becomes invisible to the caller — the same line of code sums one file or a whole directory tree.
-
-The catch is where child management lives. Put `add` and `remove` on the shared interface and callers stay uniform but leaves inherit methods that make no sense; keep them on the composite alone and you regain type safety but lose the very uniformity that made the pattern attractive.
+A composite gives leaves and containers one shared interface, so a container forwards each call to its children and callers treat a single item and a whole tree alike. It removes the item-or-collection branching and hand-rolled recursion from every operation over a part-whole structure such as folders, menus or an org chart. The open question is where add and remove live: on the shared interface or on the container only.
 
 ## Explained
 <!--meta block=explain-->
 
-A composite gives single items and groups of items one shared interface. A group holds a list of children, each either a single item or another group, and forwards every call to them. Callers make the same call on a file or on a whole folder and never see how deep the tree goes, so each operation is written once. Choose it when the data truly is a part-whole tree, such as folders, menus or an org chart, and callers have no business steering the descent. For a flat list, a node type is wasted. The first cost is a lie in the shared interface: if it carries an add-child method, single items inherit methods that mean nothing, which moves type errors from compile time to run time. Keep add-child on the group type only, and accept one cast where you build the tree. Second, a very deep or accidentally looping tree overflows the stack or never returns, so refuse repeats and cap the depth. Limiting which children a group accepts is awkward, so check it in the add method.
+A composite gives single items and groups of items one shared interface. A group holds a list of children, each either a single item or another group, and forwards every call to them. Callers make the same call on a file or on a whole folder and never see how deep the tree goes, so each operation is written once. Choose it when the data truly is a part-whole tree, such as folders, menus or an org chart, and callers have no business steering the descent. For a flat list, a node type is wasted.
+
+- **Interface lie.** A shared add-child gives single items meaningless methods and moves type errors to run time. Keep it on the group type only.
+- **Deep or looping trees.** A very deep or accidentally cyclic tree overflows the stack or never returns. Refuse repeats and cap the depth.
+- **Child limits.** Restricting which children a group accepts is awkward, so check it in the add method.
 
 **Example.** A folder tree has 3 folders and 5 files of 10, 20, 30, 40 and 50 KB. Calling size() on a file returns its own size, and on a folder it returns the sum of its children's size(). Calling size() on the root returns 150 KB in one line, however deep the nesting. A bug then adds the root into one of its own subfolders, and size() recurses until the stack overflows. The fix is to make add() refuse any child that already contains the parent. The cost is walking part of the tree on every add.
 

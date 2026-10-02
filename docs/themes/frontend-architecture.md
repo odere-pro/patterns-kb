@@ -14,16 +14,16 @@ A frontend is not a page — it is a program that renders. As it grows from one 
 ## The question
 <!--meta block=description-->
 
-A single button is trivial. A thousand of them, wired to shared state, fetched from a dozen endpoints, styled by two teams and shipped on independent schedules, is an architecture — and it fails in the same ways any system does: responsibilities blur, state mutates from everywhere, and the build becomes a place teams collide. Frontend frameworks change every few years; the questions underneath them do not. This theme is about those questions, and the fact that the answers are mostly patterns you already know under other names.
-
-Reason about a frontend on three axes, chosen independently. The first is component responsibility: within the component tree, what does each piece own — does it fetch data or only render it, does it hold behavior or receive it? The second is state and dependency flow: how does a value get from where it lives to the component that needs it, and how does a change propagate back without becoming untraceable? The third is composition scale: how the whole UI is assembled, from a shared vocabulary of building blocks up to independently deployed slices owned by different teams.
-
-The classic UI-architecture triad — [model-view-controller (MVC)](../patterns/architecture/mvc.md), [MVP](../patterns/architecture/mvp.md), and especially [model-view-viewmodel (MVVM)](../patterns/architecture/mvvm.md) — sits underneath all three axes: they are the original attempts to separate what the user sees from the data behind it, and modern reactive frameworks (React, Vue, Svelte) are essentially MVVM with the binding done for you. The patterns in this tour are the finer-grained moves you make inside that separation.
+A thousand buttons wired to shared state, fetched from a dozen endpoints and shipped by several teams fail like any system: responsibilities blur and builds collide. Reason about three independent axes: what each component owns, how state and dependencies flow, and how the whole UI is composed, from shared building blocks to separately deployed slices. MVC, MVP and MVVM underlie all three, and the patterns here are finer moves inside them.
 
 ## Explained
 <!--meta block=explain-->
 
-Frontend architecture is the set of choices that keep a large UI changeable as it grows from a button into thousands of parts. Judge your pain on three axes, because a fix for one does not help another. The first is what each component owns. A component that both fetches and draws cannot be tested without a network, so split it into one that fetches and one that only draws, at the cost of more files. The second is how a value travels. Passing it through five components that do not use it is fixed by a provider that publishes it to a whole subtree. State changed from everywhere is fixed by one store where changes flow one way, from action to update to screen, at the cost of ceremony for each change. The third is how the whole is assembled. A shared set of building blocks keeps screens consistent, and splitting the app into slices that different teams deploy alone ends a shared build queue, at the cost of duplicate libraries and agreements between teams. For a small app with one team, local state and props are enough. Name the axis before you reach for a pattern.
+Frontend architecture is the set of choices that keep a large UI changeable as it grows from a button into thousands of parts. Judge your pain on three axes, because a fix for one does not help another. The first is what each component owns. A component that both fetches and draws cannot be tested without a network, so split it into a [container](../patterns/frontend/container-presentational.md) that fetches and a view that only draws. The second is how a value travels. Passing it through five components that do not use it is fixed by a [provider](../patterns/frontend/provider.md) that publishes it to a whole subtree. State changed from everywhere is fixed by one store where changes flow one way, as in [flux](../patterns/frontend/flux.md). The third is how the whole is assembled. A shared set of building blocks keeps screens consistent, and [micro-frontends](../patterns/frontend/micro-frontends.md), slices that different teams deploy alone, end a shared build queue. For a small app with one team, local state and props are enough.
+
+- **More files.** Splitting fetching from drawing adds files, so split only components you must test alone.
+- **Ceremony.** One-way state flow adds steps to every change, so keep local state local.
+- **Duplicate code.** Slices may each bundle their own framework copy and need agreements between teams, so share the framework and agree on contracts.
 
 **Example.** A team of 5 has a product list that fetches and draws in one file. To test it they need a live server. They split it into a container that fetches and a view that takes data as input, and test the view with fake data in milliseconds. That is 2 files, not 1. A theme colour passes through 5 layers, so they add a provider. Later 4 teams share one 25-minute build and a Thursday release. They split into 4 slices, each shipped alone. The cost is that each slice may bundle its own copy of the framework, so they share one.
 
@@ -57,11 +57,11 @@ State and its rules, rendering, and input handling each get their own home, so a
 
 ### [MVP](../patterns/architecture/mvp.md) {#tour-mvp}
 
-The view does no deciding: it renders what the presenter sets and reports clicks back. A recording fake in place of the view lets you test the whole presenter with no UI framework loaded.
+The view does no deciding: it renders what the presenter sets and reports clicks back. A recording fake in place of the view lets you test the whole presenter with no user interface (UI) framework loaded.
 
 ### [MVVM](../patterns/architecture/mvvm.md) {#tour-mvvm}
 
-The foundation the rest sits on. A view-model exposes state and commands, and the view binds to it declaratively, so you describe what the UI should show rather than imperatively poking the DOM. Every modern reactive framework is a MVVM engine with the binding automated — which is why the finer patterns below are all moves made inside this separation.
+The foundation the rest sits on. A view-model exposes state and commands, and the view binds to it declaratively, so you describe what the user interface (UI) should show rather than imperatively poking the document object model (DOM). Every modern reactive framework is a model-view-view-model (MVVM) engine with the binding automated — which is why the finer patterns below are all moves made inside this separation.
 
 ### [Container / Presentational](../patterns/frontend/container-presentational.md) {#tour-container-presentational}
 
@@ -69,7 +69,7 @@ The first-axis move. A container owns data-fetching and side effects; a presenta
 
 ### [Render Props](../patterns/frontend/render-props.md) {#tour-render-props}
 
-Responsibility split applied to behavior instead of data. A component holds some state — a toggle, mouse position, a subscription — and calls a function you give it to render the result, so one piece of logic drives wildly different UIs. Hooks are the modern form of the same inversion; the idea is [strategy](../patterns/gof/behavioral/strategy.md) for rendering.
+Responsibility split applied to behavior instead of data. A component holds some state — a toggle, mouse position, a subscription — and calls a function you give it to render the result, so one piece of logic drives wildly different user interfaces (UIs). Hooks are the modern form of the same inversion; the idea is [strategy](../patterns/gof/behavioral/strategy.md) for rendering.
 
 ### [Provider](../patterns/frontend/provider.md) {#tour-provider}
 
@@ -85,7 +85,7 @@ The mechanism under all of the above. Reactivity — signals, subscriptions, a c
 
 ### [Composite](../patterns/gof/structural/composite.md) {#tour-composite}
 
-The composition axis, at the level of the tree itself. A component and a tree of components present the same interface, so a parent renders its children without caring whether each is a leaf or another whole subtree. This uniformity is what makes a UI a tree you can compose without special cases — and the structural basis for atomic design.
+The composition axis, at the level of the tree itself. A component and a tree of components present the same interface, so a parent renders its children without caring whether each is a leaf or another whole subtree. This uniformity is what makes a user interface (UI) a tree you can compose without special cases — and the structural basis for atomic design.
 
 ### [Atomic Design](../patterns/frontend/atomic-design.md) {#tour-atomic-design}
 
@@ -97,7 +97,7 @@ Composition at the largest scale. When one build is a bottleneck several teams f
 
 ### [Backend-for-Frontend](../patterns/distributed/routing/bff.md) {#tour-bff}
 
-Where the frontend meets the network. Rather than every client bending one general-purpose API to its needs, each frontend gets a thin backend that shapes exactly the data it renders. It pairs naturally with micro-frontends — a slice and its BFF ship together — and keeps client-specific concerns out of the shared services behind it.
+Where the frontend meets the network. Rather than every client bending one general-purpose application programming interface (API) to its needs, each frontend gets a thin backend that shapes exactly the data it renders. It pairs naturally with micro-frontends — a slice and its backend for frontend (BFF) ship together — and keeps client-specific concerns out of the shared services behind it.
 
 <!-- tour:end -->
 

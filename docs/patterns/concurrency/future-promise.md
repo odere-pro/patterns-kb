@@ -204,6 +204,9 @@ price.resolve(100);                           // fires the whole chain
 - [Thread Pool](./thread-pool.md) — Submitting work returns a future
 - [Reactor](./reactor.md) — The loop resolves futures as events arrive
 - [Fan-In](../messaging/fan-in.md) — all/race combinators join many pending results into one
+- [Active Object](./active-object.md) — The future is how an active object hands back results without making the caller wait
+- [Fork-Join](./fork-join.md) — A future is how a join waits for the result of a forked piece
+- [Proactor](./proactor.md) — A future can be resolved by a proactor's completion event
 
 **Specializes**
 

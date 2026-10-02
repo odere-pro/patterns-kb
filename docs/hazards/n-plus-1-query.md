@@ -16,16 +16,17 @@ A request loads a list of N parent rows, then issues one more query for each row
 ## What it is
 <!--meta block=description-->
 
-An **N+1 query** is a request that fetches a list of N parent rows with a single query, then issues one more query for every parent to load its related child — so displaying N items costs 1 + N queries where one or two would do. The name is the arithmetic: 1 query for the parents, N for the children. Picture an endpoint returning 100 events, each with its venue: the code loads the 100 events in one query, then loops and looks up each event's venue individually — 100 more queries, 101 in total.
-
-What makes it insidious is that it is rarely written on purpose. A lazy-loading ORM (object-relational mapper) or a per-item resolver makes the extra queries invisible — reading `event.venue` inside a loop looks like a field access, not a network round-trip to the database. And it hides during development, where the result set is tiny: five rows means six queries, imperceptible. The same code path meets a production-sized list of ten thousand rows and quietly becomes ten thousand and one queries, and the request that was instant in testing now times out.
+An **N+1 query** is a request that loads a list with one query, then runs one more query per row to fetch related data, so N items cost 1 + N queries. You recognise it when page time grows with row count, and a query log shows the same statement repeating with different ids. It hides in development, where five rows are fast. The defining trait is a query issued inside a loop.
 
 ## Explained
 <!--meta block=explain-->
 
-An N+1 query is a request that loads a list of N rows with one query, then runs one more query for each row to fetch its related data, so N items cost 1 + N queries when one or two would do. It is rarely written on purpose. A lazy-loading ORM, a library that fetches related rows only when you touch them, makes reading event.venue inside a loop look like a field access, not a trip to the database. It hides in development, where five rows means six quick queries, and appears in production, where the same code meets hundreds of rows and the page time grows with the row count. Collapse the child queries into one. A batching loader gathers the keys requested during one tick and runs one query for all of them. A join or eager load fetches parents and children together. Pick a join when one place owns the read, and batching when many places ask for the parents. When one shape is read far more than it changes, precompute it as a materialized view, a stored result that is refreshed on a schedule. A review rule fails on the next caller, so make the data layer raise an error on any unplanned lazy load.
+An N+1 query is a request that loads a list of N rows with one query, then runs one more query for each row to fetch its related data, so N items cost 1 + N queries when one or two would do. It is rarely written on purpose. A lazy-loading ORM, a library that fetches related rows only when you touch them, makes reading event.venue inside a loop look like a field access, not a trip to the database. It hides in development, where five rows means six quick queries, and appears in production, where the same code meets hundreds of rows and the page time grows with the row count. Collapse the child queries into one. A batching loader gathers the keys requested during one tick and runs one query for all of them. A join or eager load fetches parents and children together. Pick a join when one place owns the read, and batching when many places ask. When one shape is read far more than it changes, precompute it as a [materialized view](../patterns/distributed/coordination/materialized-view.md).
 
-**Example.** An endpoint returns 100 events with their venues. Each query costs 2 ms, so the lazy version runs 1 + 100 = 101 queries, 202 ms. With 5 test rows it ran 6 queries, 12 ms, and nobody noticed. At 50 requests a second, production sends 5,050 queries a second. A batched version runs one query for the events and one for the venues with a list of their keys, 2 queries and about 4 ms. The cost is that the keys now travel in one large list, so cap its size, and strict loading will fail the tests where someone brings the loop back.
+- **Large key lists.** Batching sends all keys in one list, so cap its size.
+- **Strict loading.** Making unplanned lazy loads raise an error fails tests where the loop returns, which is the point.
+
+**Example.** An endpoint returns 100 events with their venues. Each query costs 2 ms, so the lazy version runs 1 + 100 = 101 queries, 202 ms. With 5 test rows it ran 6 queries, 12 ms, and nobody noticed. At 50 requests a second, production sends 5,050 queries a second. A batched version runs one query for the events and one for the venues with a list of their keys, 2 queries and about 4 ms.
 
 ## How it happens
 <!--meta block=causes-->
@@ -68,11 +69,18 @@ Fixing today's loop is not the same as preventing tomorrow's. Most data-access l
 
 **Specializes**
 
-- [Chatty I/O](./chatty-io.md) — One instance of a wider failure that also covers per-field HTTP APIs and per-record file writes
+- [Chatty I/O](./chatty-io.md) — One instance of a wider failure that also covers per-field HTTP application programming interfaces (APIs) and per-record file writes
 
 **Mitigated by**
 
 - [Batching](../patterns/concurrency/batching.md) — Coalesce the per-item fetches into one batched, keyed query — the DataLoader move
 - [Materialized View](../patterns/distributed/coordination/materialized-view.md) — Precompute the joined shape so the N follow-up queries disappear entirely
+
+**Threatens**
+
+- [Data Mapper](../patterns/enterprise/data-mapper.md) — Lazy loading hides the per-row query behind field access
+- [Repository](../patterns/enterprise/repository.md) — Per-entity fetches inside a loop multiply queries
+- [Lazy Initialization](../patterns/gof/extra/lazy-initialization.md) — Loading related data on first touch fires one query per row
+- [API Gateway](../patterns/distributed/routing/api-gateway.md) — Composing a response by calling a backend per item repeats the pattern across services
 
 <!-- relationships:end -->

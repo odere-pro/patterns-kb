@@ -12,7 +12,7 @@ source: docs/data/gates.json
 
 # Check gates
 
-A **check gate** is one automatic answer to "is this still true?". There are 45 of them,
+A **check gate** is one automatic answer to "is this still true?". There are 46 of them,
 and every one keeps the same contract: exit 0 with one summary line, exit 1 with one
 finding per line on stderr, exit 2 on misuse.
 
@@ -79,7 +79,7 @@ left to tell you.
 | [Harness routes](#harness-routes) | `make` · `validate.yml` | Every harness file the folder list says to read routes to a live path: each repo-relative link resolves against the linking file, and a path untracked by design is named only beside the command that makes it exist — scratch space such as tmp/ never; every shell command a harness file or CLAUDE.md layer names (any line of a shell fence; a known program in an unlabelled fence or code span) is on permissions.allow or on the prompt-kept list with its reason; and no allow entry lets a write run with no prompt. |
 | [Page frontmatter](#frontmatter) | `make` · `validate.yml` | Every markdown file under docs/ opens with the block its regime asks for: a page declares title, description, area, owner, tags and status, each once and no key outside the page block, each value inside its closed list, its title equal to its H1 and its tags an inline list; status has no default, so a draft never passes for a finished page; a dated record carries no block; an exercise only the exercise keys. |
 | [Page shape](#docs-style) | `make` · `validate.yml` | Every published page keeps the page shape, PAGE-001 to PAGE-008 of docs/reference/page-rules.md but PAGE-007: an intro before the first H2, headings to H3, one H1, a description of at most 160 characters on one line, no raw URL in prose, and at most one Next steps footer, last, holding one link. |
-| [KB page shape](#kb-shape) | `make` · `validate.yml` | Every page keeps the KB's own rules, KB-001 to KB-015 of docs/reference/page-rules.md: it sits where its structure row says under a slug of its own, and a kind page's blocks, suffixes, section facts, ids, sketch languages, explain block and KB keys follow docs/data/content-model.json. |
+| [KB page shape](#kb-shape) | `make` · `validate.yml` | Every page keeps the KB's own rules, KB-001 to KB-016 of docs/reference/page-rules.md: it sits where its structure row says under a slug of its own, and a kind page's blocks, suffixes, section facts, ids, sketch languages, explain block and KB keys follow docs/data/content-model.json. |
 | [Docs map](#docs-map) | `make` · `validate.yml` | Every page under docs/ is one link from docs/README.md, or two through a hub it links, and every .md link on the map and on those hubs lands on a page that exists. Only the map and docs/CLAUDE.md are exempt. |
 | [Docs map in sync](#map-fresh) | `make` · `validate.yml` | The page table inside docs/README.md is the structure file's areas and pages in reading order, rendered by tools/src/gen/gen-map.ts, and cannot be hand-edited away from it. |
 | [Diagrams parse](#mermaid-parse) | `make` · `validate.yml` | Every mermaid fence in the markdown under docs/ parses with the mermaid the site build draws with, so a broken diagram fails in seconds here rather than as a placeholder a reader finds, or minutes into make site-build. |
@@ -92,6 +92,7 @@ left to tell you.
 | [Product registry](#products) | `make` · `validate.yml` | Every vendor documentation link in docs/data/products.json is named by a mapping cell in its own provider's column of a capability page, is https, and points at documentation rather than a homepage. Whether each URL still answers is make products, which needs the network. |
 | [Relations closed and paired](#relations) | `make` · `validate.yml` | Every typed edge in docs/data/relations.json joins two published pages with one of the closed verbs in docs/data/content-model.json, written once from the first verb of its pair with both sides' notes; no pair carries a verb family twice or both ways round, and every custom group heading, group_order pin and mapped table row resolves. |
 | [Learning paths resolve](#learning-paths) | `make` · `validate.yml` | Every stage in docs/data/learning-paths.json is a route docs/data/site-structure.json produces, spelled exactly, and no stage is a page that declares status draft; every profile and tour note is a closed record, a profile names the page its tour renders on, and no note sits on a route its profile does not stage. |
+| [Tracks resolve](#tracks) | `make` · `validate.yml` | Every Start-here track in docs/data/tracks.json is a closed record of 3 to 6 themes, each a learning-paths profile id whose theme page is published and not a draft, 4 to 6 tracks in all with unique ids; every tier is intro, core or advanced on a published slug, and every theme a track lists has one. |
 | [Tour order holds](#tour-order) | `make` · `validate.yml` | In every theme's tour (a profile's stages in docs/data/learning-paths.json), a page comes after each page it requires: for every prerequisite edge in docs/data/relations.json whose two pages are both stages of one profile, the required page has the lower stage index. |
 | [Prerequisite graph holds](#prerequisites) | `make` · `validate.yml` | docs/data/prerequisites.json is a graph a reader can follow: no cycle in what to read first, every id and route resolved, every related pair listed both ways, every record reached by an edge or a learning-path stage, and no stable page requiring a draft one. |
 | [Prerequisite graph in sync](#prerequisites-fresh) | `make` · `validate.yml` | docs/data/prerequisites.json and docs/reference/prerequisites.md are byte for byte what tools/src/gen/gen-prerequisites.ts builds from docs/data/relations.json, the pages' titles and descriptions and the structure file: the relations file's second form, held equal to it both ways, so a hand edit to either output, or an edge change without the rebuild, is stale. |
@@ -108,7 +109,7 @@ left to tell you.
 | [Site accessibility floor](#site-accessibility) | `make` · `validate.yml` | Every built page holds the accessibility floor markup can answer without a browser (spec kb.noise.accessibility, static-floor): a language on the root, one h1 with no heading before it, aria references that resolve, options inside a listbox, an alt on every image, a name on every graphic that is not hidden, an outline on every hub, a focus ring on every kb control, and page text that is not mostly chrome (80 percent, with a reasoned allowlist that ships empty, and a measured warning band from 70 percent whose page count may not rise above the bandMax in docs/data/allow/site-a11y.json). |
 | [Site accessibility in a browser](#site-axe) | `make` · `validate.yml` | Every built page, opened from disk in headless Chromium in both themes, has no WCAG 2.1 A or AA violation axe-core finds, contrast above all (spec kb.noise.accessibility, browser-floor). The waiver list ships empty; with no browser installed the gate opens nothing, says so and exits 0, unless KB_REQUIRE_BROWSER=1 is set (CI's site job sets it), when the missing browser is a finding. |
 | [Site size budget](#site-budget) | `make` · `validate.yml` | The built site stays inside the sizes it was measured at: any page's HTML raw and gzipped, a tighter raw bound on a page that is not a case study and on a hub, the bundle, the search payload and the manifest raw and gzipped, the blocking stylesheets of a page, the gzipped bytes before a page's first render, and the files a page asks for. Every number is in the BUDGETS constant of tools/src/gates/check-site-budget.ts beside the value it was set from. |
-| [Site reader flows](#site-e2e) | `make` · `validate.yml` | What a reader does on the built site works in a real browser, from disk and from a server, at a desktop and a phone width: home to a hub to a page, the sidebar, search, the theme, favourites, practiced marks, hub filters, the prerequisite card, mentioned-by and next steps, the draft chip, the stack map page and its sidebar link, diagrams, code sketches and copy, the keyboard path and the phone menu. Its own run place after make site-build, never inside it; the skipped flows are pinned to docs/data/allow/site-e2e.json, so a new skip or a stale allowance is a finding; with no browser installed the gate runs nothing, says so and exits 0, unless KB_REQUIRE_BROWSER=1 is set (CI's site job sets it), when the missing browser is a finding. |
+| [Site reader flows](#site-e2e) | `make` · `validate.yml` | What a reader does on the built site works in a real browser, from disk and from a server, at a desktop and a phone width: home to a hub to a page, the Start here tracks, the sidebar, search, the theme, favourites, practiced marks, hub filters, the prerequisite card, mentioned-by and next steps, the draft chip, the stack map page and its sidebar link, diagrams, code sketches and copy, the keyboard path and the phone menu. Its own run place after make site-build, never inside it; the skipped flows are pinned to docs/data/allow/site-e2e.json, so a new skip or a stale allowance is a finding; with no browser installed the gate runs nothing, says so and exits 0, unless KB_REQUIRE_BROWSER=1 is set (CI's site job sets it), when the missing browser is a finding. |
 | [Hook suite (bash)](#tests-bash) | `make` · `validate.yml` | The hooks under .claude/hooks keep their contract: the advisory names a command for each kind of owed work and says nothing otherwise, the guard denies only in command position, and both exit 0 on any input. Proven by tests/**/*.test.sh, run through tests/run.sh. |
 | [Gate suite (vitest)](#tests-vitest) | `make` · `validate.yml` | Every gate, generator and the driver prove pass, fail and misuse in a sandbox, and the suite's coverage stays at or above the floors in tools/vitest.config.ts. |
 
@@ -241,7 +242,7 @@ A protected branch requires the change workflow's gate-holding jobs in
 
 ### <a id="kb-shape"></a>KB page shape
 
-- **Protects:** Every page keeps the KB's own rules, KB-001 to KB-015 of docs/reference/page-rules.md: it sits where its structure row says under a slug of its own, and a kind page's blocks, suffixes, section facts, ids, sketch languages, explain block and KB keys follow docs/data/content-model.json.
+- **Protects:** Every page keeps the KB's own rules, KB-001 to KB-016 of docs/reference/page-rules.md: it sits where its structure row says under a slug of its own, and a kind page's blocks, suffixes, section facts, ids, sketch languages, explain block and KB keys follow docs/data/content-model.json.
 - **Runs:** `make` · `validate.yml` — step `KB page shape`
 - **Needs:** `node` · `bash` · `jq` · `git`
 - **Run it:** `make gate G=check-kb-shape`
@@ -355,6 +356,15 @@ A protected branch requires the change workflow's gate-holding jobs in
 - **Run it:** `make gate G=check-learning-paths`
 - **Fix:** Fix the stage or note the finding names in docs/data/learning-paths.json, and move a stage in the same change as its page's structure row; then run make gen.
 - **Triage:** [docs/reference/triage.md#learning-paths-resolve](triage.md#learning-paths-resolve)
+
+### <a id="tracks"></a>Tracks resolve
+
+- **Protects:** Every Start-here track in docs/data/tracks.json is a closed record of 3 to 6 themes, each a learning-paths profile id whose theme page is published and not a draft, 4 to 6 tracks in all with unique ids; every tier is intro, core or advanced on a published slug, and every theme a track lists has one.
+- **Runs:** `make` · `validate.yml` — step `Tracks resolve`
+- **Needs:** `node` · `bash` · `jq`
+- **Run it:** `make gate G=check-tracks`
+- **Fix:** Fix the track or tier the finding names in docs/data/tracks.json; a theme must be a published, non-draft theme page with a profile in docs/data/learning-paths.json.
+- **Triage:** [docs/reference/triage.md#tracks-resolve](triage.md#tracks-resolve)
 
 ### <a id="tour-order"></a>Tour order holds
 
@@ -502,7 +512,7 @@ A protected branch requires the change workflow's gate-holding jobs in
 
 ### <a id="site-e2e"></a>Site reader flows
 
-- **Protects:** What a reader does on the built site works in a real browser, from disk and from a server, at a desktop and a phone width: home to a hub to a page, the sidebar, search, the theme, favourites, practiced marks, hub filters, the prerequisite card, mentioned-by and next steps, the draft chip, the stack map page and its sidebar link, diagrams, code sketches and copy, the keyboard path and the phone menu. Its own run place after make site-build, never inside it; the skipped flows are pinned to docs/data/allow/site-e2e.json, so a new skip or a stale allowance is a finding; with no browser installed the gate runs nothing, says so and exits 0, unless KB_REQUIRE_BROWSER=1 is set (CI's site job sets it), when the missing browser is a finding.
+- **Protects:** What a reader does on the built site works in a real browser, from disk and from a server, at a desktop and a phone width: home to a hub to a page, the Start here tracks, the sidebar, search, the theme, favourites, practiced marks, hub filters, the prerequisite card, mentioned-by and next steps, the draft chip, the stack map page and its sidebar link, diagrams, code sketches and copy, the keyboard path and the phone menu. Its own run place after make site-build, never inside it; the skipped flows are pinned to docs/data/allow/site-e2e.json, so a new skip or a stale allowance is a finding; with no browser installed the gate runs nothing, says so and exits 0, unless KB_REQUIRE_BROWSER=1 is set (CI's site job sets it), when the missing browser is a finding.
 - **Runs:** `make` · `validate.yml` — step `Site reader flows`
 - **Needs:** `node`
 - **Run it:** `make site-e2e`

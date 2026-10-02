@@ -233,5 +233,7 @@ class Lease {
 **Exposed to**
 
 - [Clock Skew](../../../hazards/clock-skew.md) — A lease needs the two sides to agree on how long a term lasts, which clock drift can break.
+- [Resource Leak](../../../hazards/resource-leak.md) — Can fall into resource leak when a holder that never releases keeps the grant until the lease expires
+- [Thundering Herd](../../../hazards/thundering-herd.md) — Can fall into thundering herd when leases granted together expire together, and the holders all renew in the same instant
 
 <!-- relationships:end -->

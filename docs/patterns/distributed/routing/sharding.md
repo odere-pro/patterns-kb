@@ -16,16 +16,17 @@ Splits a dataset across many independent nodes by a partition key, so each shard
 ## What it is
 <!--meta block=description-->
 
-**Sharding** (horizontal partitioning) splits a dataset into disjoint subsets — shards — and places each one on a different node. A shard key taken from each record (a user ID, a tenant ID, an order ID) decides which shard it lives on. No shard holds the whole dataset, and together the shards hold all of it exactly once.
-
-The force it resolves is a **single-node ceiling**. A dataset can outgrow the disk of any one machine, and write throughput can outgrow what a single primary can absorb, no matter how it's tuned. Vertical scaling — bigger disks, more RAM, faster CPUs — always hits a wall and gets expensive fast. Sharding sidesteps the wall: add another node, give it a slice of the key space, and both storage capacity and write throughput grow with it. Unlike [replication](../coordination/replication.md), which copies the same data everywhere mainly to scale reads and add redundancy, sharding scales by spreading distinct data thinly.
-
-The cost is that the dataset is no longer in one place. A query that used to be a single-node lookup can become a fan-out across shards, and a transaction that used to be local can span two of them. Picking the shard key is the decision that matters most in the whole design — get it wrong and one shard runs hot while the others sit idle, and changing it later means moving live data.
+Sharding splits a dataset into disjoint subsets, called shards, and places each on a different node, chosen by a key taken from each record such as a user, tenant or order ID. It resolves the single-node ceiling: a dataset outgrowing one disk, or writes outgrowing one primary. Adding a node adds both storage and write capacity, at the price of cross-shard queries and a key choice that is hard to undo.
 
 ## Explained
 <!--meta block=explain-->
 
-Sharding splits one big dataset into pieces, called shards, and puts each piece on a different machine, chosen by a key taken from each record such as a user ID. No machine holds everything, and every record lives on exactly one. You need it when the data outgrows one disk or the writes outgrow one primary database (the copy that accepts writes), because a bigger machine always hits a wall and costs more at each step. Adding a machine adds both storage and write capacity. Choose it over replication when writes are the problem, since replication copies the same data everywhere and only adds read capacity. It costs four things. The data is no longer in one place, so a query across many keys fans out to many shards and a transaction over two shards becomes distributed, so design your queries around the key. The shard key is the decision that matters most: a bad one makes one shard hot while others idle, and changing it means moving live data, so choose a key with many evenly used values. Rebalancing moves live data, so copy it first and switch after. And small lookup tables are copied to every shard, so accept brief staleness there.
+Sharding splits one big dataset into pieces, called shards, and puts each piece on a different machine, chosen by a key taken from each record such as a user ID. No machine holds everything, and every record lives on exactly one. You need it when the data outgrows one disk or the writes outgrow one primary database (the copy that accepts writes), because a bigger machine always hits a wall and costs more at each step. Adding a machine adds both storage and write capacity. Choose it over [replication](../coordination/replication.md) when writes are the problem, since replication copies the same data everywhere and only adds read capacity.
+
+- **Scattered queries.** A query across many keys hits every shard and a cross-shard transaction turns distributed, so design queries around one key.
+- **Key choice.** A bad key makes one shard hot and changing it moves live data, so pick a key with many evenly used values.
+- **Rebalancing.** Adding a shard moves live data, so copy it first and switch reads after.
+- **Lookup tables.** Small shared tables are copied to every shard, so accept brief staleness there.
 
 **Example.** A 2 TB orders table outgrows one primary that can take 20,000 writes a second. Shard it by customer ID across 4 machines: each holds 500 GB and takes about 5,000 writes a second, and one customer's orders sit on one shard. Sharding by order date would send every new write to the newest shard, which runs hot while the rest idle. The cost shows when you ask for the top 10 customers by spend, which must query all 4 shards, and when you add a fifth: an even split moves 400 GB onto it while the table stays live.
 
@@ -223,6 +224,10 @@ async function ordersFor(userId: string) {
 
 - [Hot Partition](../../../hazards/hot-partition.md) — A shard key chosen badly piles traffic onto one node
 
+**Exposed to**
+
+- [Hot Key](../../../hazards/hot-key.md) — Can fall into hot key when a sharded cache puts a viral key on exactly one shard
+
 **Demonstrated by**
 
 - [Distributed Cache](../../../designs/design-distributed-cache.md) — shows partitioning turn an unservable dataset into per-node slices that scale by adding nodes
@@ -237,7 +242,7 @@ async function ordersFor(userId: string) {
 - [Strava](../../../designs/strava.md) — time-based sharding keeps hundreds of TB/year queryable by localizing the hot working set
 - [Online Auction](../../../designs/online-auction.md) — auction-keyed sharding is the case where each entity's whole read/write traffic stays on a single shard
 - [Robinhood](../../../designs/robinhood.md) — partitioning by the access key keeps every read and update for an order on a single shard
-- [Payment System](../../../designs/payment-system.md) — the 10k-TPS write pressure is exactly the condition that forces horizontal partitioning of the store
+- [Payment System](../../../designs/payment-system.md) — the 10k-transactions per second (TPS) write pressure is exactly the condition that forces horizontal partitioning of the store
 - [Job Scheduler](../../../designs/job-scheduler.md) — the hot-partition bottleneck is dissolved by spreading writes across a suffixed key space
 - [YouTube](../../../designs/youtube.md) — A video catalogue's metadata is sharded while its bytes live in object storage
 

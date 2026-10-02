@@ -16,16 +16,16 @@ Deploys a helper process in lock-step beside the main application — same host,
 ## What it is
 <!--meta block=description-->
 
-A **sidecar** is a second process or container deployed next to a primary application instance, sharing its host, network namespace, and often its filesystem, but running as its own independent unit — its own process, sometimes its own language and runtime. It isn't a library the app imports; it's a separate deployable that is nonetheless never deployed, scaled, or torn down without its partner. One sidecar instance rides with exactly one app instance, the way a motorcycle sidecar goes wherever the motorcycle goes.
-
-The forces it resolves are **polyglot reuse** and **independent lifecycle**. Concerns like Transport Layer Security (TLS) termination, service discovery, retry logic, log shipping, metrics scraping, or secret rotation apply to almost every service in a fleet regardless of what language it's written in. Building that once as an in-process library means maintaining an implementation per language and re-releasing every service whenever the library changes. Building it once as a sidecar means shipping a single artifact that talks to the app over localhost — the app doesn't link anything, doesn't know the sidecar's language, and doesn't need touching when the sidecar is upgraded.
-
-That locality is the whole point: because the sidecar shares the app's host and network namespace, it can intercept traffic, tail log files, or read local config without a remote call. Kubernetes made the pattern a first-class deployment primitive — a pod is, in effect, a guarantee that its containers are co-scheduled, co-located, and share fate, which is exactly what a sidecar needs and an in-process library never required in the first place.
+A sidecar is a second container deployed next to one application instance, sharing its host and network but running as its own unit, in any language. It carries cross-cutting work such as TLS termination, log shipping or secret rotation, so every service gets it without importing a library and without a release when it changes. It is never deployed or scaled apart from its partner.
 
 ## Explained
 <!--meta block=explain-->
 
-A sidecar is a second container that runs next to your application instance, sharing its host and network, and does a supporting job for it, such as shipping logs, renewing certificates or handling traffic, without any change to the application's code. Without it, the same job is a library, which means one implementation per language and a release of every service whenever the library changes. Choose it when the behaviour must attach to an application you cannot or should not modify, in whatever language it uses, so one artifact upgrades on its own schedule. Prefer a library when only one service needs the behaviour or the host has no spare room. The bill is per instance, not per service: every copy of the application carries a second container to deploy, monitor and patch, and its memory and CPU multiply by fleet size, so give it a small fixed limit and check the total. Start and stop order between the pair is fiddly, so make the application wait for the sidecar's readiness and let it drain on shutdown. Fate is shared both ways: a sick sidecar degrades a healthy application, so give it its own health check and restart policy.
+A sidecar is a second container that runs next to your application instance, sharing its host and network, and does a supporting job for it, such as shipping logs, renewing certificates or handling traffic, without any change to the application's code. Without it, the same job is a library, which means one implementation per language and a release of every service whenever the library changes. Choose it when the behaviour must attach to an application you cannot or should not modify, in whatever language it uses, so one artifact upgrades on its own schedule. Prefer a library when only one service needs the behaviour or the host has no spare room.
+
+- **Per-instance bill.** Each application copy carries a second container whose memory and CPU multiply by fleet size, so give it a small fixed limit.
+- **Start order.** The pair starts and stops in no fixed order, so make the application wait for the sidecar's readiness and drain on shutdown.
+- **Shared fate.** A sick sidecar degrades a healthy application, so give it its own health check and restart policy.
 
 **Example.** A fleet has 120 application instances, each with a 64 MB log-shipping sidecar, so the sidecars hold 7,680 MB, about 7.7 GB. Updating the shipper is one image rollout to 120 instances and touches no application, where a library would mean three services in three languages each shipping a release. If the application starts before the sidecar, its first seconds of logs go nowhere, so you make it write to a local file that the sidecar tails once it is ready.
 
@@ -190,9 +190,9 @@ sidecar.listen(SIDECAR_PORT); // clients talk to the sidecar, not the app direct
 - [Ambassador](./ambassador.md) — An ambassador is often deployed as a sidecar
 - [Reverse Proxy](./reverse-proxy.md) — A mesh data-plane sidecar fronts its app's traffic as a local proxy
 - [Design for Operations](../../../principles/design-for-operations.md) — The sidecar carries the operational concerns the service does not implement
-- [Distributed Tracing](../resilience/distributed-tracing.md) — Telemetry export is a standard companion-process responsibility, alongside TLS and secret rotation
+- [Distributed Tracing](../resilience/distributed-tracing.md) — Telemetry export is a standard companion-process responsibility, alongside transport layer security (TLS) and secret rotation
 - [Container Orchestration](../coordination/container-orchestration.md) — The orchestrator is what guarantees the helper starts, stops and moves with its service.
-- [Service Discovery](./service-discovery.md) — One of the concerns a sidecar takes off the application, alongside retries and mutual TLS
+- [Service Discovery](./service-discovery.md) — One of the concerns a sidecar takes off the application, alongside retries and mutual transport layer security (TLS)
 
 **Part of**
 

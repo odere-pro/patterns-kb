@@ -161,6 +161,7 @@ export default defineConfig({
         './src/components/SectionHub/section-hub.css',
         './src/components/Shield/shield.css',
         './src/components/Sidebar/sidebar.css',
+        './src/components/StartHere/start-here.css',
         './src/components/StackIndex/stack-index.css',
         './src/components/ThemeToggle/theme-toggle.css',
         './src/components/TocTracking/toc-tracking.css',

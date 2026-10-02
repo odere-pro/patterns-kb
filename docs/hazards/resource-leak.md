@@ -16,16 +16,17 @@ A pooled resource or permit — a database connection, a file handle, a semaphor
 ## What it is
 <!--meta block=description-->
 
-A **resource leak** is what happens when a finite, pooled resource — a database connection, a file handle, a semaphore permit, a lock — is acquired but never released. These resources are deliberately limited and expensive: a connection pool might hold five or ten connections created once at startup and reused, because opening a new one costs sockets, memory, and setup time. Every request borrows one and is expected to give it back. A leak is a borrow with no return: the resource is checked out of the pool and simply never comes back, so the count of available resources drops by one, permanently.
-
-The mechanism is almost always a missing release on the error path. Code acquires the resource, does some work, then an exception is thrown — or an early return is taken — before the release call runs, so control jumps straight past it and the resource is orphaned. Unlike most failures there is nothing dramatic to see: the process does not crash, no stack trace is printed, the borrowed handles just vanish from circulation one at a time. It is, for good reason, the very first bug an interviewer probes for in any pooling or concurrency design.
+A resource leak is a limited resource, such as a database connection, file handle, permit or lock, that is acquired and never released. The usual cause is a release skipped by an exception or early return. You recognise it when available resources fall one at a time with no crash and no stack trace, until callers hang. It differs from plain exhaustion because stopping traffic does not bring the resources back.
 
 ## Explained
 <!--meta block=explain-->
 
-A resource leak is a limited, shared resource, such as a database connection, a file handle, a lock or a permit, that is taken and never given back. The cause is almost always a missing release on the error path: code takes the resource, an exception or an early return skips the release call, and the resource is orphaned. Nothing crashes and no error appears, so each leak quietly shrinks the pool until the last one is gone and every caller waits forever. A leak looks like pool exhaustion from outside, but exhaustion recovers when you stop traffic and a leak does not. Choose a structural fix over a convention that every author must remember. Bind the release to the scope with a finally block, a with or using block, or a defer statement, so the error path frees the resource as surely as the normal path, and forgetting cannot be written. Add a timeout on acquiring, so a caller that cannot get a resource fails fast with a visible error instead of hanging. Then add backstops: a check that lent resources are still alive, and a limit on how long one may be held. Each backstop costs something. A hold limit reclaims a slow but legitimate borrower too early.
+A resource leak is a limited, shared resource, such as a database connection, a file handle, a lock or a permit, that is taken and never given back. The cause is almost always a missing release on the error path: an exception or early return skips the release call and the resource is orphaned. Nothing crashes and no error appears, so each leak quietly shrinks the pool until the last one is gone and every caller waits forever. From outside it looks like pool exhaustion, but exhaustion recovers when you stop traffic and a leak does not. Choose a structural fix over a convention every author must remember. Bind the release to the scope with a finally block, a with or using block, or a defer statement, so the error path frees the resource as surely as the normal path. Add a timeout on acquiring, so a caller that cannot get a resource fails fast. An [object pool](../patterns/gof/extra/object-pool.md) or [semaphore](../patterns/concurrency/semaphore.md) can then add backstops.
 
-**Example.** A service has a pool of 10 database connections and takes 20 requests a second. One in a hundred requests hits an error path that skips the release, so 20 x 0.01 = 0.2 connections leak a second. The pool is empty after 10 / 0.2 = 50 s, and from then on every request hangs while the processor idles. Wrapping each use in a with block returns the connection on every path, so the leak rate is zero. A 2 s acquire timeout turns any future leak into a loud error after 2 s, not a silent hang. The cost is that any code passing a connection to another thread must now hand over ownership explicitly.
+- **Early reclaim.** A hold limit takes back a slow but legitimate borrower too soon; set it above your worst honest use.
+- **Ownership handoff.** Scope-bound release breaks when a resource moves to another thread, so pass ownership explicitly.
+
+**Example.** A service has a pool of 10 database connections and takes 20 requests a second. One in a hundred requests hits an error path that skips the release, so 20 x 0.01 = 0.2 connections leak a second. The pool is empty after 10 / 0.2 = 50 s, and every request then hangs while the processor idles. Wrapping each use in a with block returns the connection on every path. A 2 s acquire timeout turns any future leak into a loud error after 2 s, not a silent hang.
 
 ## How it happens
 <!--meta block=causes-->
@@ -71,5 +72,9 @@ Then make the wait survivable. Add an **acquisition timeout** so a caller that c
 - [Object Pool](../patterns/gof/extra/object-pool.md) — Checkout/return discipline and validation reclaim what callers forget to release
 - [Thread Pool](../patterns/concurrency/thread-pool.md) — Bounded, reused, lifecycle-managed workers instead of leak-prone ad-hoc threads
 - [Semaphore](../patterns/concurrency/semaphore.md) — Acquire-with-timeout and a guaranteed release keep permits from draining away
+
+**Threatens**
+
+- [Lease](../patterns/distributed/coordination/lease.md) — A holder that never releases keeps the grant until the lease expires
 
 <!-- relationships:end -->

@@ -14,15 +14,7 @@ How to bundle infrastructure into a unit whose capacity you can measure and whos
 ## The question
 <!--meta block=description-->
 
-Scaling a system one resource at a time works until it does not. You add front-end instances and the database saturates. You add database capacity and the connection pool runs out. You size everything generously and hit an account limit nobody knew existed. Each fix moves the bottleneck somewhere else, and nobody can answer the question the business actually asked: how much more traffic can we take, and what does it cost to be ready for it?
-
-The answer is to stop scaling resources and start scaling a bundle. Group the components that have to grow together into one unit, load-test the unit as a whole, and learn what it serves. Now capacity is arithmetic — demand divided by that number — and growth is deploying another unit rather than reasoning about which resource moves next.
-
-Bundling buys a second thing that has nothing to do with capacity. If the unit is deployed independently, a failure inside it stays inside it, so a corrupted cluster or an exhausted quota affects the users on one unit rather than everyone. That is why the same construct turns up under two names: it is a **scale unit** when you are talking about capacity and a **stamp** when you are talking about the thing the pipeline provisions and destroys.
-
-Making it work forces every resource into one of three tiers. Global resources are shared by every unit and live as long as the system. Regional resources outlive individual units — logs and metrics have to be readable after the unit that emitted them is gone. And the unit's own resources must hold nothing anybody would miss, because the whole value of the arrangement is that you can delete one.
-
-Two mistakes account for most of the disappointment. Sizing each unit for its own peak means a failover moves the outage rather than absorbing it, so the capacity model has to carry spare units rather than spare headroom inside them. And leaving a stateful resource inside the unit quietly removes the ability to destroy it, which is the property everything else was built on — at which point you have paid for the multiplication and kept none of the benefit.
+Scaling one resource at a time works until it does not. Add front ends and the database saturates; add database capacity and the connection pool runs out; each fix moves the bottleneck. Group the components that grow together into one unit, load-test it as a whole, and capacity becomes arithmetic: demand divided by what one unit serves. A failure stays inside its unit. It is a scale unit for capacity and a stamp for provisioning.
 
 ## Explained
 <!--meta block=explain-->

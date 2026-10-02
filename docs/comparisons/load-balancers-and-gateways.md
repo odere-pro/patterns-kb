@@ -16,16 +16,15 @@ Six ways to answer on port 443 in front of your services — a managed cloud bal
 ## What this compares
 <!--meta block=description-->
 
-Whatever answers on port 443 in front of your services does some mix of three jobs: spreading requests over instances, terminating Transport Layer Security (TLS) and routing on host and path, and enforcing who may call and how often. [Load Balancer](../patterns/distributed/routing/load-balancer.md), [Reverse Proxy](../patterns/distributed/routing/reverse-proxy.md) and [API Gateway](../patterns/distributed/routing/api-gateway.md) name those jobs, and every product here does at least two — which is why the category reads as one confusing shelf.
-
-The choice splits on two questions. Who runs it: a managed balancer scales, patches and fails over without you, configured through the same API as the rest of your [networking](../capabilities/networking.md), while a self-run proxy is a process you size, watch and upgrade. And how it learns routes: from a file you reload, or from discovery and a control plane that moves routes while traffic flows.
-
-Policy is the third question, and teams meet it late. A plain proxy balances and routes; a gateway adds authentication, quotas and [rate limiting](../patterns/distributed/resilience/rate-limiter.md) at the edge, so services behind it stop shipping their own copy of that code. You pay one more hop that can fail and one more place that holds configuration.
-
+Whatever answers on port 443 in front of your services does some mix of three jobs: spreading requests over instances, terminating Transport Layer Security (TLS) and routing on host and path, and enforcing who may call and how often. Load balancer, reverse proxy and API gateway name those jobs, and every product here does at least two. Choose on who runs it, how it learns routes, and what policy it enforces at the edge.
 ## Explained
 <!--meta block=explain-->
 
-Whatever answers on port 443 in front of your services does some mix of three jobs: spreading requests over instances, ending the TLS encryption and routing by host and path, and enforcing who may call and how often. The products blur these jobs, so choose on who runs it, how it learns routes, and what policy it enforces. In a public cloud, front your services with the cloud's own balancer first, because it scales, patches and fails over without you. Reach for a self-run proxy only for a feature it lacks, and put that proxy behind the cloud balancer. Choose a gateway over a plain balancer when the job is a front door for outside callers: keys, per-caller quotas and request reshaping, so services behind it stop shipping their own copy. Three costs follow. It is one more hop that can fail, so run at least two copies. It is one more place that holds configuration, so keep the config in version control and review it. And a self-run proxy is a process you size, watch and upgrade, so pick the managed one unless that work buys you something.
+Whatever answers on port 443 in front of your services does some mix of three jobs: spreading requests over instances, ending the TLS encryption and routing by host and path, and enforcing who may call and how often. The products blur these jobs, so choose on who runs it, how it learns routes, and what policy it enforces. In a public cloud, front your services with the cloud's own balancer first, because it scales, patches and fails over without you. Reach for a self-run proxy only for a feature it lacks, and put that proxy behind the cloud balancer. Choose a gateway over a plain balancer when the job is a front door for outside callers: keys, per-caller quotas and request reshaping, so services behind it stop shipping their own copy.
+
+- **It is one more hop that can fail** Run at least two copies.
+- **It is one more place that holds configuration** Keep the config in version control and review it.
+- **A self-run proxy is a process you size, watch and upgrade** Pick the managed one unless that work buys you something.
 
 **Example.** Three instances sit behind a balancer taking 300 requests a second. One crashes. The balancer checks health every 5 seconds and marks an instance down after 2 failed checks, so it keeps sending traffic for about 10 seconds. A third of requests, 100 a second, hit the dead instance, and 10 seconds of that is 1,000 failed requests. A retry on a different instance turns most of those into slower successes. The cost of the retry is extra load on the 2 survivors, now carrying 150 a second each, so keep headroom for it.
 
@@ -79,7 +78,7 @@ Do less first. DNS round-robin, or one reverse proxy on one machine, carries mor
 **Implements**
 
 - [Load Balancer](../patterns/distributed/routing/load-balancer.md) — Every product here is a load balancer first — the comparison is who runs it and at which layer.
-- [API Gateway](../patterns/distributed/routing/api-gateway.md) — Kong and the managed API gateways are this pattern sold as a product; a plain proxy is not.
+- [API Gateway](../patterns/distributed/routing/api-gateway.md) — Kong and the managed application programming interface (API) gateways are this pattern sold as a product; a plain proxy is not.
 - [Reverse Proxy](../patterns/distributed/routing/reverse-proxy.md) — NGINX, HAProxy, Traefik and Envoy are the reverse proxies you would actually deploy.
 - [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — Gateways enforce quotas at the edge, so the services behind stop shipping their own limiter.
 

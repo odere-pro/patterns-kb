@@ -5,11 +5,13 @@ description: "Write or review any block of a principle page: description, ration
 
 # The blocks of a principle page
 
-Seven blocks, fixed order, only `sketch` optional:
+Eight blocks, fixed order, `sketch` and `selfcheck` optional:
 
 ```
-description  explain  rationale  applying  sketch*  overreach  relationships
+description  explain  rationale  applying  sketch*  overreach  selfcheck*  relationships
 ```
+
+`selfcheck` (optional) is three blockquotes, each one bold question of at most 25 words and an answer of at most 60 words that links a `#element-id` it rests on (KB-016).
 
 `explain` is the **kb-explain** skill; `relationships` is **kb-edit** (a principle usually
 `combines-with` a pattern that embodies it, or `prevents-hazard` an anti-pattern it guards

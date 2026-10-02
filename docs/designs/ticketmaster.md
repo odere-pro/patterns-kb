@@ -16,12 +16,16 @@ An event-ticketing platform lets people browse events, search a catalogue, and b
 ## Understanding the problem
 <!--meta block=description-->
 
-A fan opens an event page, sees an interactive seat map with live availability, picks a seat, pays, and walks away holding a confirmed booking. Behind that flow sit three requirements that pull in different directions. Viewing and searching are read-heavy and must stay available — even when a marquee on-sale sends millions of people to one page at the same instant. Buying is the opposite: low volume, bounded by the number of seats in the building, but it demands strict consistency, because selling one seat to two people is the failure the whole system exists to prevent. The interesting engineering lives entirely in that tension — scale the reads, and serialise the one contended write.
+A fan views an event's seat map, picks a seat, pays and gets a confirmed booking. Browsing is read-heavy and must stay up under a marquee on-sale; booking is low-volume but must never sell one seat twice. The page walks through scaling the reads and serialising the one contended write.
 
 ## Explained
 <!--meta block=explain-->
 
-Ticketmaster sells each seat to exactly one buyer while millions of people hit the same event in the same minute. A buyer who picks a seat takes a 10-minute hold on it in Redis, a fast in-memory store, using one atomic set-if-absent call with an expiry. The hold frees itself, so no sweeper has to run on time. The database stays the final judge: when payment confirms, a conditional update lets only one buyer win and the other is refunded. Because of that backstop, a lost hold store hurts the experience but cannot double-sell. Writes are capped by the number of seats, so the load is contention on a few rows, and reads are the volume. Choose a hold with an expiry over a database lock held through checkout, which ties up a connection for minutes. It costs three things. Reads reach hundreds of thousands a second, so cache the event page. A frenzy outruns any seat map, so put a waiting room in front, which admits people in batches and makes everyone wait. And the payment webhook can arrive twice, so key it by booking id.
+Ticketmaster sells each seat to exactly one buyer while millions of people hit the same event in the same minute. A buyer who picks a seat takes a 10-minute hold on it in Redis, a fast in-memory store, using one atomic set-if-absent call with an expiry. The hold frees itself, so no sweeper has to run on time. The database stays the final judge: when payment confirms, a conditional update lets only one buyer win and the other is refunded. So a lost hold store hurts the experience but cannot double-sell. Choose a hold with an expiry over a database lock held through checkout, which ties up a connection for minutes. Writes are capped by seat count, so reads are the volume.
+
+- **Read load.** Reads reach hundreds of thousands a second, so cache the event page.
+- **Frenzy.** A rush outruns any seat map, so put a waiting room in front that admits people in batches, making everyone wait.
+- **Duplicate webhooks.** The payment webhook can arrive twice, so key it by booking id.
 
 **Example.** A 60,000-seat arena draws 10 million users, so at most 60,000 of them, 0.6 percent, can ever book. Two buyers tap seat A1 in the same millisecond. The set-if-absent call succeeds for one and fails for the other. The holder is slow, and the 10-minute hold lapses mid-payment. A second buyer takes the seat and pays. Both confirms reach the database, one conditional update wins, and the loser gets a refund. The cost is that one buyer paid and was refunded, so a waiting room admits people in batches to keep this rare.
 
@@ -190,8 +194,8 @@ sequenceDiagram
 
 **Demonstrates**
 
-- [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) — a Redis TTL lock keyed by ticket ID holds a seat during checkout and self-releases if the buyer walks away
-- [Optimistic Concurrency Control](../patterns/distributed/coordination/optimistic-concurrency-control.md) — the DB confirm is guarded by an OCC check so only one buyer wins a contested seat even after the lock lapses
+- [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) — a Redis time to live (TTL) lock keyed by ticket ID holds a seat during checkout and self-releases if the buyer walks away
+- [Optimistic Concurrency Control](../patterns/distributed/coordination/optimistic-concurrency-control.md) — the database (DB) confirm is guarded by an optimistic concurrency control (OCC) check so only one buyer wins a contested seat even after the lock lapses
 - [Idempotency](../patterns/messaging/idempotency.md) — the Stripe webhook handler dedupes on booking ID because Stripe retries deliveries
 - [Read-Through](../patterns/caching/read-through.md) — event, performer, and static venue data are served from a read-through cache so the read burst rarely reaches Postgres
 - [Queue-Based Load Leveling](../patterns/distributed/resilience/load-leveling.md) — a virtual waiting queue admits fans in controlled batches, smoothing the on-sale spike before it reaches booking

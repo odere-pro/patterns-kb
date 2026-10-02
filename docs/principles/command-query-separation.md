@@ -16,11 +16,7 @@ Every method does one of two things: it changes state and returns nothing, or it
 ## What it says
 <!--meta block=description-->
 
-Bertrand Meyer gave the rule in Object-Oriented Software Construction (1988). A **command** changes the state of an object and returns no value. A **query** returns a value and leaves the state alone. A method that does both, such as `getNextId()` that reads the counter and also increments it, forces the caller to know about the side effect to use the value safely.
-
-The misreading is that every call in the program must follow it. The rule is about the methods you design, and it has known exceptions: `pop()` on a stack and an atomic compare-and-swap both return a value and change state, and for good reasons covered below. Meyer's own view was that these are deliberate, small and documented departures, not a licence.
-
-It is not the [CQRS](../patterns/architecture/cqrs.md) pattern. CQRS (Command Query Responsibility Segregation) takes the same idea and applies it to whole models: separate objects, services or even databases for writes and reads, with the two kept in step. Command-query separation is a rule for a single method, costs nothing to follow and needs no infrastructure. CQRS is an architectural decision with a real price, and you can follow the first in every class without ever adopting the second.
+Bertrand Meyer gave the rule in Object-Oriented Software Construction (1988). A command changes state and returns no value; a query returns a value and leaves state alone. It governs the methods you design, with small documented exceptions such as a stack's pop() or an atomic compare-and-swap. It is not CQRS, which separates whole read and write models; this rule costs nothing and needs no infrastructure.
 
 ## Explained
 <!--meta block=explain-->
@@ -53,6 +49,22 @@ Make the signature say which kind of method it is:
 
 The compact test: if you call the method twice in a row, does the second call give the same answer as the first? If not, it is a command and must return nothing.
 
+## In code
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — a method that reads and writes, and the same job split into a query and a command"
+// Before: one call both advances the counter and returns a value.
+class Ids { private n = 0; getNextId() { return ++this.n; } }
+// Calling it twice gives different answers, so even a "read" is unsafe to repeat.
+
+// After: a query that is safe to repeat, and a command that returns nothing.
+class Ids2 {
+  private n = 0;
+  current(): number { return this.n; }   // query: no side effect
+  advance(): void { this.n += 1; }       // command: no return value
+}
+```
+
 ## Taken too far
 <!--meta block=overreach-->
 
@@ -77,6 +89,6 @@ Treat the rule as a default that earns exceptions, not a law. The cost of a meth
 
 **Often confused with**
 
-- [CQRS](../patterns/architecture/cqrs.md) — CQS is a rule for one method; CQRS applies the idea to whole models.
+- [CQRS](../patterns/architecture/cqrs.md) — Command-query separation (CQS) is a rule for one method; command query responsibility segregation (CQRS) applies the idea to whole models.
 
 <!-- relationships:end -->

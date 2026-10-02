@@ -16,12 +16,7 @@ Six ways to stop every service writing its own login: four self-hosted identity 
 ## What this compares
 <!--meta block=description-->
 
-Pick an identity provider once, and every service you write afterwards delegates login to it. Pick badly and you pay twice to leave: once to move users whose password hashes may never be exportable, again to re-point every application that trusted the old issuer. This page compares four servers you can run yourself — Keycloak, Authentik, Ory and ZITADEL — against the [managed identity](../capabilities/identity.md) your cloud sells and the two vendors who sell nothing else.
-
-All six speak OIDC (OpenID Connect) and OAuth2, so the protocol alone decides nothing. What decides it is the license you inherit, whether the enterprise surface — SAML (Security Assertion Markup Language), directory federation — is there at all, and whether the bill grows with your machines or your user count. Each is a way to buy or build [federated identity](../patterns/distributed/coordination/federated-identity.md), and each becomes the issuer your services' [authentication enforcer](../patterns/security/authentication-enforcer.md) checks tokens against.
-
-The two cost curves cross, and knowing roughly where saves an argument. Self-hosting is fixed infrastructure plus the engineer-days that keep it patched, so it barely moves as users arrive. Managed identity is priced per monthly active user, so a product that succeeds pays more each month for a component that did not change.
-
+Pick an identity provider once, and every service you write delegates login to it. Pick badly and you pay twice to leave: moving users whose password hashes may never export, and re-pointing every application that trusted the old issuer. This page compares four servers you run, the [managed identity](../capabilities/identity.md) your cloud sells and two vendors who sell nothing else. The protocol decides nothing; license, enterprise surface and cost curve do.
 ## Explained
 <!--meta block=explain-->
 

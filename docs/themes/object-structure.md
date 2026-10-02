@@ -14,9 +14,7 @@ Once objects exist, they have to fit together. These patterns wrap, join and sha
 ## The question
 <!--meta block=description-->
 
-Objects rarely arrive in the shape the caller wants. One has an interface that does not match, a subsystem has a dozen classes where the caller wants one call, a hierarchy multiplies every time you add a variation, or a tree must be treated like a single node. Each of these is a wrapping or joining problem, and the patterns differ mainly in intent.
-
-The vocabulary is small. A **client** is the code that calls the object. The **target** is the interface the client expects. An **abstraction** is the interface a client talks to, and an **implementation** is the object it delegates to. A **leaf** is an indivisible element, and a **composite** is a container of children. **Intrinsic state** is the part of an object's data that is shared and never changes.
+Objects rarely arrive in the shape the caller wants: an interface that does not match, a subsystem of a dozen classes where the caller wants one call, a hierarchy that multiplies with every variation, a tree to treat as one node. Each is a wrapping or joining problem, and the patterns differ mainly in intent. A **composite** holds children and is treated as one node. **Intrinsic state** is shared and never changes.
 
 ## Explained
 <!--meta block=explain-->

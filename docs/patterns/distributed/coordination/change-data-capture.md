@@ -205,10 +205,11 @@ async function consume(
 - [Index Table](./index-table.md) — Feeds the worker that keeps hand-built secondary indexes in step with the data
 - [Retrieval-Augmented Generation](../../ml/rag.md) — Feeding an embedding pipeline is a common consumer of the change stream
 - [Materialized View](./materialized-view.md) — A change stream keeps a precomputed view continuously in sync with its source
+- [Inverted Index](./inverted-index.md) — Streams row changes to a search index kept as a second copy of the data
 
 **Alternative to**
 
-- [Outbox](./outbox.md) — Tail the DB's own log instead of writing an events table in the same transaction
+- [Outbox](./outbox.md) — Tail the database (DB)'s own log instead of writing an events table in the same transaction
 
 **Requires**
 
@@ -224,12 +225,12 @@ async function consume(
 
 **Demonstrated by**
 
-- [Google News](../../../designs/google-news.md) — the feed cache is kept fresh by reacting to row-level changes in the article store rather than polling it or waiting on a TTL
+- [Google News](../../../designs/google-news.md) — the feed cache is kept fresh by reacting to row-level changes in the article store rather than polling it or waiting on a time to live (TTL)
 - [Yelp](../../../designs/yelp.md) — the search engine is a read model fed by the store's change stream, never the system of record
-- [Tinder](../../../designs/tinder.md) — the profile-store-to-search-index sync is a CDC pipeline trading a small lag for decoupled writes
-- [Ticketmaster](../../../designs/ticketmaster.md) — syncing a search-optimised store to the system-of-record in near-real time is a canonical CDC pipeline
-- [Payment System](../../../designs/payment-system.md) — the design's whole durability guarantee rests on capturing changes below the application, exactly what CDC provides
-- [CamelCamelCamel](../../../designs/camelcamelcamel.md) — turning price-table writes into a stream of change events is CDC producing events from the log rather than from application code
+- [Tinder](../../../designs/tinder.md) — the profile-store-to-search-index sync is a change data capture (CDC) pipeline trading a small lag for decoupled writes
+- [Ticketmaster](../../../designs/ticketmaster.md) — syncing a search-optimised store to the system-of-record in near-real time is a canonical change data capture (CDC) pipeline
+- [Payment System](../../../designs/payment-system.md) — the design's whole durability guarantee rests on capturing changes below the application, exactly what change data capture (CDC) provides
+- [CamelCamelCamel](../../../designs/camelcamelcamel.md) — turning price-table writes into a stream of change events is change data capture (CDC) producing events from the log rather than from application code
 
 **Implemented by**
 

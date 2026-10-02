@@ -16,12 +16,16 @@ Sellers list an item with a starting price and an end date; buyers place bids th
 ## Understanding the problem
 <!--meta block=description-->
 
-An auction is a write-contention problem wearing a read-heavy costume. Listing an item is rare and boring — validate, store, done. What makes the design is the bid: a single scalar (the current high) that thousands of clients read continuously and that many of them try to overwrite in the same second, where the answer must be exactly right and the losing party must be told so, promptly. Three non-negotiables shape every decision downstream — the high bid is strongly consistent (no two people may both believe they lead), no bid is ever dropped, and the number on the screen is live. Everything below is the cost of honouring those three at once.
+An online auction lets users list an item with a starting price and an end date and bid on it. The hard part is the bid: one number that thousands of clients read and many try to overwrite in the same second. The high bid must be strongly consistent, no bid may be dropped, and the screen must stay live. The page walks through meeting all three.
 
 ## Explained
 <!--meta block=explain-->
 
-An online auction keeps one true highest bid per item while thousands of people try to overwrite it in the same second. Each bid goes first into a durable queue, split by item, so no accepted bid is lost and bids on one item stay in order. A consumer then applies each bid with one guarded update on the item's own row: change the high only if it is still the value this bidder saw. If the guard fails, the bidder retries or is told they lost. Choose this over a lock on the bid rows, because a lock does not stop a new bid being inserted and a hot item turns into a line of stalled requests. It costs three things. The queue adds a few milliseconds before a bid is judged, so show a pending state. A retry happens on each collision, which is rare per item, so cap the retries. Pushing the new high to up to 100 million watchers needs a channel per item that every connection server listens to, so each server relays it to its own watchers. Shard the database by item, so every guarded update stays on one shard.
+An online auction keeps one true highest bid per item while thousands of people try to overwrite it in the same second. Each bid goes first into a durable queue, split by item, so no accepted bid is lost and bids on one item stay in order. A consumer then applies each bid with one guarded update on the item's own row: change the high only if it is still the value this bidder saw. If the guard fails, the bidder retries or is told they lost. Choose this over a lock on the bid rows, because a lock does not stop a new bid being inserted and a hot item turns into a line of stalled requests. Shard the database by item, so every guarded update stays on one shard.
+
+- **Queue delay.** The queue adds a few milliseconds before a bid is judged, so show a pending state.
+- **Retries.** Each collision costs a retry, rare per item, so cap the retries.
+- **Watcher push.** Pushing a new high to up to 100 million watchers needs a channel per item that every connection server listens to, then relays.
 
 **Example.** The peak is about 15,000 bids a second, ten times the average, because bidding bunches into the last minutes. One item sits at $50. Two bids arrive in the same millisecond, $60 and $55, and both read 50. The $60 update changes the row and succeeds. The $55 update finds the high is no longer 50, so it changes zero rows. It re-reads 60, sees 55 does not beat it and rejects the bid at once. The cost is that second read and the few milliseconds the queue added.
 
@@ -216,8 +220,8 @@ sequenceDiagram
 - [Conditional Write](../patterns/distributed/coordination/conditional-write.md) — the winning update lands only WHERE max_bid still equals the value just read, closing the read-then-write race on the high bid
 - [Message Queue](../patterns/messaging/message-queue.md) — every bid is appended to a partitioned Kafka topic and acknowledged before adjudication, so no bid is lost to a crash
 - [Queue-Based Load Leveling](../patterns/distributed/resilience/load-leveling.md) — the queue absorbs an auction's final-minute bid surge so the Bid Service consumes at a steady rate instead of being over-provisioned
-- [Publish-Subscribe](../patterns/messaging/pubsub.md) — an accepted high is published to a per-auction channel so every SSE server, not just the one that judged it, learns the new number
-- [Fan-Out](../patterns/messaging/fan-out.md) — each SSE server pushes the new high to all of its own connected watchers of that auction
+- [Publish-Subscribe](../patterns/messaging/pubsub.md) — an accepted high is published to a per-auction channel so every server-sent events (SSE) server, not just the one that judged it, learns the new number
+- [Fan-Out](../patterns/messaging/fan-out.md) — each server-sent events (SSE) server pushes the new high to all of its own connected watchers of that auction
 - [Sharding](../patterns/distributed/routing/sharding.md) — the auction store is partitioned by auctionId so ~15k writes/sec spread across instances with no cross-shard reads
 - [Stateless Service](../patterns/distributed/routing/stateless-service.md) — the Bid and Auction services hold no per-request state, so an autoscaler can add instances freely under bursty load
 - [Producer-Consumer](../patterns/concurrency/producer-consumer.md) — the API-side producer only appends a bid to Kafka; the Bid Service consumes and adjudicates at its own pace

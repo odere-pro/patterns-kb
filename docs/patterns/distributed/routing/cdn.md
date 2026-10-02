@@ -206,22 +206,26 @@ class EdgeNode {
 - [Client-Side Cache](../../caching/client-side-cache.md) — The edge tier behind the client's own cache
 - [Object Storage](./object-storage.md) — Caches and serves objects that live in an object store, close to the user.
 - [Reverse Proxy](./reverse-proxy.md) — Each edge node is a caching reverse proxy near the user
-- [Storage](../../../capabilities/storage.md) — The origin behind most CDNs is a bucket, not an application server.
+- [Storage](../../../capabilities/storage.md) — The origin behind most content delivery networks (CDNs) is a bucket, not an application server.
 
 **Prevents**
 
 - [No Caching](../../../hazards/no-caching.md) — Absorbs repeat reads of the same content before they reach the origin
 
+**Exposed to**
+
+- [Stale Cache](../../../hazards/stale-cache.md) — Can fall into stale cache when edge copies outlive the origin's change until expiry or purge
+
 **Demonstrated by**
 
 - [Bitly](../../../designs/bitly.md) — Bitly serves its hottest redirects from edge PoPs close to the user
-- [Instagram](../../../designs/instagram.md) — global low-latency media delivery is exactly what a CDN provides, fetching from origin only on a miss
-- [Facebook Post Search](../../../designs/fb-post-search.md) — the design shows a CDN absorbing duplicate search traffic before it reaches the origin
-- [Google News](../../../designs/google-news.md) — pushing thumbnail bytes to the edge so most requests never reach the origin is exactly what a CDN is for
+- [Instagram](../../../designs/instagram.md) — global low-latency media delivery is exactly what a content delivery network (CDN) provides, fetching from origin only on a miss
+- [Facebook Post Search](../../../designs/fb-post-search.md) — the design shows a content delivery network (CDN) absorbing duplicate search traffic before it reaches the origin
+- [Google News](../../../designs/google-news.md) — pushing thumbnail bytes to the edge so most requests never reach the origin is exactly what a content delivery network (CDN) is for
 - [Facebook Live Comments](../../../designs/fb-live-comments.md) — a comment snapshot is cacheable content served from edge locations, offloading the origin entirely under viral load
-- [Dropbox](../../../designs/dropbox.md) — a CDN fixes a single-region blob store being slow for distant users by caching files close to them
-- [YouTube](../../../designs/youtube.md) — serving popular immutable media from the geographic edge is the CDN's defining use
-- [Ticketmaster](../../../designs/ticketmaster.md) — shared, non-personalised query results are exactly the content a CDN can safely cache close to users
+- [Dropbox](../../../designs/dropbox.md) — a content delivery network (CDN) fixes a single-region blob store being slow for distant users by caching files close to them
+- [YouTube](../../../designs/youtube.md) — serving popular immutable media from the geographic edge is the content delivery network (CDN)'s defining use
+- [Ticketmaster](../../../designs/ticketmaster.md) — shared, non-personalised query results are exactly the content a content delivery network (CDN) can safely cache close to users
 
 **Implemented by**
 

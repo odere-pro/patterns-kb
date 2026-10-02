@@ -16,7 +16,7 @@ A payment system lets merchants charge a customer's card without building their 
 ## Understanding the problem
 <!--meta block=description-->
 
-A customer enters card details on a merchant's checkout, the merchant forwards them to us, and we charge the card and report the outcome. The surface is small, but two properties dominate every decision downstream. First, this is money, so every attempt, success and failure has to be recorded durably and auditably — a lost record is a legal problem, not a bug. Second, the actual authorization happens on a payment network we don't own, over links that can time out or drop a response, so the system is fundamentally asynchronous: a "timed out" charge may still be mid-flight. The engineering is less about the request path and more about staying correct in the gap between "we asked" and "we know".
+A merchant forwards a customer's card details, and the system charges the card and reports the outcome. Every attempt must be recorded durably and auditably, and authorization happens on a payment network you do not own, over links that time out or drop responses. The page walks through staying correct in the gap between "we asked" and "we know".
 
 ## Explained
 <!--meta block=explain-->
@@ -185,15 +185,15 @@ stateDiagram-v2
 
 **Demonstrates**
 
-- [Change Data Capture](../patterns/distributed/coordination/change-data-capture.md) — CDC tails the DB write-ahead log so every committed change becomes an event with no reliance on application code remembering to log
-- [Event Sourcing](../patterns/architecture/event-sourcing.md) — the immutable ordered event stream is the source of truth for audit, reconciliation and history, not just the current DB row
+- [Change Data Capture](../patterns/distributed/coordination/change-data-capture.md) — Change data capture (CDC) tails the database (DB) write-ahead log so every committed change becomes an event with no reliance on application code remembering to log
+- [Event Sourcing](../patterns/architecture/event-sourcing.md) — the immutable ordered event stream is the source of truth for audit, reconciliation and history, not just the current database (DB) row
 - [Idempotency](../patterns/messaging/idempotency.md) — a unique constraint on (merchant_id, idempotency_key) makes a retried charge return the existing record instead of charging twice
-- [Materialized View](../patterns/distributed/coordination/materialized-view.md) — audit, analytics, reconciliation and webhook consumers each build their own view off the same event stream without touching the operational DB
+- [Materialized View](../patterns/distributed/coordination/materialized-view.md) — audit, analytics, reconciliation and webhook consumers each build their own view off the same event stream without touching the operational database (DB)
 - [API Gateway](../patterns/distributed/routing/api-gateway.md) — a single gateway authenticates the merchant, rate-limits and routes to the PaymentIntent and Transaction services
-- [Authentication Enforcer](../patterns/security/authentication-enforcer.md) — the gateway verifies an HMAC-SHA256 request signature plus timestamp and nonce before any handler runs
+- [Authentication Enforcer](../patterns/security/authentication-enforcer.md) — the gateway verifies an hash-based message authentication code (HMAC)-SHA256 request signature plus timestamp and nonce before any handler runs
 - [Timeout / Deadline](../patterns/distributed/resilience/timeout-deadline.md) — a bounded timeout on the external network call is treated as a distinct pending state to reconcile, never as a failure
 - [Retry with Backoff](../patterns/distributed/resilience/retry-backoff.md) — webhook delivery to merchant callback URLs retries on failure with exponential backoff (5s, 25s, 125s, up to an hour)
-- [Sharding](../patterns/distributed/routing/sharding.md) — the operational DB is sharded by merchant_id to push past the ~10k writes/sec ceiling of a single node
+- [Sharding](../patterns/distributed/routing/sharding.md) — the operational database (DB) is sharded by merchant_id to push past the ~10k writes/sec ceiling of a single node
 - [Write-Ahead Log](../patterns/distributed/coordination/write-ahead-log.md) — Change data capture tails the database's write-ahead log and publishes every committed change onto an event stream
 
 <!-- relationships:end -->

@@ -16,18 +16,17 @@ One class knows and does almost everything — until every change to the system,
 ## What it is
 <!--meta block=description-->
 
-A **god object** is a single class that accumulates responsibilities until it knows about most of the system and does most of the work: it validates input, talks to the database, applies business rules, formats output, and coordinates every other class in the codebase. It usually starts as an innocent `Application`, `Manager`, or `Context` class and never stops growing, because it's always easier to add one more method to something that already has a thousand than to design a new collaborator.
-
-You recognize it by its gravity. Nearly every other class imports it or is imported by it. Its file is the longest in the repository, often by an order of magnitude, and keeps growing every sprint. Merge conflicts cluster there because unrelated features all touch it. Its constructor takes ten-plus dependencies, or none at all because it just reaches for globals. Unit tests for it require mocking half the system, so people stop writing them and test through slow, brittle end-to-end paths instead.
-
-The defining trait isn't size alone — it's that the class has no single reason to change. Rename it and you'd have to call it "Everything."
+A **god object** is one class that knows about most of the system and does most of the work, built up by individually reasonable additions. You recognise it by its gravity: most classes import it, merge conflicts cluster in its file, and testing it means faking half the system. The defining trait is not length. A long class with one job is only large; a god object holds many unrelated jobs, so a change to one risks the rest.
 
 ## Explained
 <!--meta block=explain-->
 
-A god object is one class that knows about most of the system and does most of the work, such as validating input, talking to the database, applying business rules and coordinating every other class. It usually starts as an innocent Manager or Context class, and it grows because adding one more method to it is always quicker than designing a new class. You spot it by its gravity: most classes import it, its file is the longest in the repository, merge conflicts cluster there, and testing it means faking half the system. The cost is that any change can break something unrelated and two developers on different features edit the same file. Exhortation does not stop it; structure does. Stop it growing first, so every new job gets its own class. Then move one job out at a time, choosing the cut from version history, since methods that change in the same commits belong together. Give each extracted class only the collaborators it needs, and move the state with the job, because a stateless helper leaves every caller coupled as before. The old class may remain as a forwarding facade, so put a removal date on it.
+A god object is one class that knows about most of the system and does most of the work, such as validating input, talking to the database, applying business rules and coordinating every other class. It usually starts as an innocent Manager or Context class, and it grows because adding one more method to it is always quicker than designing a new class. You spot it by its gravity: most classes import it, its file is the longest in the repository, merge conflicts cluster there, and testing it means faking half the system. Any change can break something unrelated. Stop it growing first, so every new job gets its own class. Then move one job out at a time, choosing the cut from version history, since methods that change in the same commits belong together. Move the state with the job, because a stateless helper leaves every caller coupled as before. The old class may remain as a forwarding [facade](../patterns/gof/structural/facade.md).
 
-**Example.** An AppManager class has 6,000 lines and 12 dependencies. In the last quarter, 45 of the 60 commits that touched it changed invoice methods, so invoicing is the first cut. The team creates an InvoiceService holding the invoice state and taking just 2 collaborators, the database and the tax calculator. AppManager keeps forwarding methods for 8 weeks, then they are deleted. Invoice tests drop from 12 fakes to 2, and invoice work stops colliding with other changes. The cost is 8 weeks of two entry points and a migration of every caller, which is why the removal date is written down.
+- **Two entry points.** The facade doubles the surface while it lives, so put a removal date on it.
+- **Caller migration.** Every caller must move to the new class; do it one job at a time.
+
+**Example.** An AppManager class has 6,000 lines and 12 dependencies. In the last quarter, 45 of the 60 commits that touched it changed invoice methods, so invoicing is the first cut. The team creates an InvoiceService holding the invoice state and taking just 2 collaborators, the database and the tax calculator. AppManager keeps forwarding methods for 8 weeks, then they are deleted. Invoice tests drop from 12 fakes to 2, and invoice work stops colliding with other changes.
 
 ## How it happens
 <!--meta block=causes-->
@@ -79,5 +78,10 @@ Expect the old class to survive as a facade that forwards to the new ones. That 
 - [Dependency Injection](../patterns/gof/extra/dependency-injection.md) — Injected collaborators keep one class from owning everything
 - [Single Responsibility Principle](../principles/single-responsibility.md) — One reason to change keeps a class from swelling into the object that does everything
 - [REPR](../patterns/architecture/repr.md) — An operation cannot accumulate onto a shared class if each one has its own
+
+**Threatens**
+
+- [Service Layer](../patterns/enterprise/service-layer.md) — A service layer tends to collect every use case into one manager class
+- [Facade](../patterns/gof/structural/facade.md) — A facade that starts holding state or logic becomes the same class
 
 <!-- relationships:end -->

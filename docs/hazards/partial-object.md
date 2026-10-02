@@ -16,20 +16,17 @@ One class reused across several contexts, each filling in a different subset of 
 ## What it is
 <!--meta block=description-->
 
-A **partial object** is an instance whose contract you cannot read from its type. One class serves several purposes, and each producer populates the part it cares about: a full lookup fills everything, a list view leaves the price out, a discount lookup fills only the discount fields. Every one of them returns the same type, so a caller holding one has no way to know which of its fields mean anything.
-
-The worst property is that **absent and zero become the same value**. A field left at its default is indistinguishable from a field deliberately set to that default, so a total computed over an unpopulated price is not an exception — it is a wrong number, returned confidently, with nothing anywhere flagging it.
-
-You recognise it by a specific question having no answer: which fields am I guaranteed? Nobody can answer it from the signature, so understanding one call means tracing every producer of that type. The defensive consequence follows — null checks spread into code that has no business caring, and each new field multiplies them.
-
-Underneath is a reuse decision that looked like avoiding duplication. Writing a second class for the second use case feels like repeating yourself, so the existing type is widened instead, and each added context makes the populated subset less predictable. That is also why it couples consumers who never meet: a field added for one context appears on every other, so [interface segregation](../principles/interface-segregation.md) is violated through a shared type rather than a shared interface, and a change made for one consumer can break another.
+A partial object is an instance whose contract you cannot read from its type. One class serves several uses, and each producer fills only the part it needs, so a caller cannot tell which fields mean anything. You recognise it by the question "which fields am I guaranteed?" having no answer short of tracing every producer. Its defining trait is that absent and zero look identical, so a missing value becomes a confident wrong number.
 
 ## Explained
 <!--meta block=explain-->
 
-A partial object is an instance whose type does not tell you which of its fields hold real data. One class serves several uses, and each code path that builds it fills in only the part it needs, so a list view leaves out the price and a discount lookup fills only the discount. A field left unfilled reads as zero or empty, which looks the same as a real zero, so a total over a missing price is a confident wrong number, not an error. It grows because a second class feels like repeating yourself, so the existing one is widened, and each new use makes the filled-in part less predictable. Repair it at the type, never at the call site, because a null guard added where the failure surfaced just moves the wrong answer elsewhere. Give each context its own type holding exactly what it guarantees. Require the mandatory fields in the constructor and make them read-only, so an incomplete instance cannot be built. The cost is two similar types and the conversion between them, which is cheaper than an unknowable contract. For a screen-shaped read, return a plain carrier, not the entity.
+A partial object is an instance whose type does not tell you which of its fields hold real data. One class serves several uses, and each code path that builds it fills in only the part it needs, so a list view leaves out the price and a discount lookup fills only the discount. An unfilled field reads as zero or empty, which looks the same as a real zero, so a total over a missing price is a confident wrong number, not an error. It grows because a second class feels like repeating yourself, so the existing one is widened. Repair it at the type, never at the call site: a null guard added where the failure surfaced just moves the wrong answer elsewhere. Give each context its own type holding exactly what it guarantees, and require mandatory fields in the constructor as a [value object](../patterns/ddd/value-object.md) does. For a screen-shaped read, return a [DTO](../patterns/enterprise/dto.md), not the entity.
 
-**Example.** A Product class has name, price and discount. A list finder fills only the name, so price stays 0. A cart of 3 items priced 12.50, 8.00 and 4.50 should total 25.00, but items loaded by the list finder show 0.00, and the checkout charges the wrong amount with no error. Adding a null check at checkout would hide it. The fix is two types: ProductSummary with id and name, and PricedProduct whose constructor demands a price. The total function accepts only PricedProduct, so passing a summary fails to compile. The cost is one extra class and a mapping where the cart loads its items.
+- **More types.** You maintain two similar classes, which costs less than an unknowable contract.
+- **Mapping.** Code must convert between the types where one context hands data to another; keep that in one place.
+
+**Example.** A Product class has name, price and discount. A list finder fills only the name, so price stays 0. A cart of 3 items priced 12.50, 8.00 and 4.50 should total 25.00, but items loaded by the list finder show 0.00, and checkout charges the wrong amount with no error. A null check at checkout would hide it. The fix is two types: ProductSummary with id and name, and PricedProduct whose constructor demands a price. The total function accepts only PricedProduct, so passing a summary fails to compile.
 
 ## How it happens
 <!--meta block=causes-->
@@ -88,5 +85,9 @@ For the query-shaped cases, stop returning the domain type. A read built for a s
 - [DTO](../patterns/enterprise/dto.md) — A purpose-shaped carrier per context beats one wide type with an unknown contract
 - [CQRS](../patterns/architecture/cqrs.md) — Separating the read model from the write model removes the pressure that widened the type
 - [Interface Segregation Principle](../principles/interface-segregation.md) — The coupling here runs through one wide shared type rather than a shared interface
+
+**Threatens**
+
+- [Active Record](../patterns/enterprise/active-record.md) — One wide entity class shared by every query is filled differently per finder
 
 <!-- relationships:end -->

@@ -248,5 +248,6 @@ async function handle(msg: Message) {
 - [Message Translator](./message-translator.md) — Encoding fixes what the shape is; translation is what happens when two endpoints refuse to agree on it
 - [Claim Check](./claim-check.md) — Past a size threshold the message encodes a reference and the payload goes to object storage
 - [Dead Letter Channel](./dead-letter-channel.md) — A message that cannot be decoded has to leave the partition, or it blocks every message behind it
+- [Canonical Data Model](./canonical-data-model.md) — Encoding rules say how the canonical fields are written on the wire and how they may change
 
 <!-- relationships:end -->

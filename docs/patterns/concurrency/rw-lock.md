@@ -229,9 +229,18 @@ func (c *Cache) GetOrLoad(key string, load func() int) int {
 
 - [Copy-on-Write](./copy-on-write.md) — A copy-on-write structure removes the read lock altogether, at the cost of copying on write
 
+**Variant of**
+
+- [Mutex](./mutex.md) — Lets many readers hold the lock together and gives a writer exclusive access
+
 **Prevents**
 
 - [Race Condition](../../hazards/race-condition.md) — An exclusive write lock stops a writer racing concurrent readers or writers
+
+**Exposed to**
+
+- [Starvation](../../hazards/starvation.md) — Can fall into starvation when a stream of readers can keep a writer out indefinitely
+- [Priority Inversion](../../hazards/priority-inversion.md) — Can fall into priority inversion when a low-priority reader or writer holding the lock blocks a high-priority task
 
 **Demonstrated by**
 

@@ -1,7 +1,7 @@
 # patterns-kb
 
-A knowledge base of 234 software design patterns, 41 design case studies, 51 themes, 41
-hazards, 31 principles, 10 cloud capabilities and 10 product comparisons — 418 pages in all.
+A knowledge base of 255 software design patterns, 41 design case studies, 51 themes, 45
+hazards, 36 principles, 10 cloud capabilities and 10 product comparisons — 448 pages in all.
 **It is data that happens to render**, not a site that happens to hold data.
 
 > **Migrated** to markdown under `docs/` and an Astro site built from it

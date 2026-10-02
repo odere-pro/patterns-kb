@@ -199,6 +199,21 @@ for (const [type, pool] of Object.entries(pools)) {
 
 <!-- fluency:end -->
 
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **Why does a bulkhead work against slow degradation as well as outright failure?**
+>
+> It bounds concurrency per dependency and never needs to detect an error, see [pro 3](bulkhead.md#tradeoffs-pro-3).
+
+> **How can an undersized pool defeat the pattern?**
+>
+> A pool that is too small recreates the starvation it was meant to prevent, so measure peak concurrency before fixing the size, see [con 2](bulkhead.md#tradeoffs-con-2).
+
+> **Why are two compartments not isolated if they share one database?**
+>
+> They saturate the shared resource together, so the isolation on the diagram is not the isolation at runtime, see [con 5](bulkhead.md#tradeoffs-con-5).
+
 ## How it relates
 <!--meta block=relationships-->
 

@@ -246,8 +246,8 @@ async function updateWithOcc(
 - [Google Docs](../../../designs/google-docs.md) — edits proceed optimistically without waiting for a lock or confirmation and are merged after the fact instead of blocking
 - [Online Chess](../../../designs/online-chess.md) — the lock-free compare-and-claim on a hot, heavily contended pool is optimistic concurrency at its purpose-built best
 - [Ticketmaster](../../../designs/ticketmaster.md) — the last-line double-booking guard is a version check that lets a single concurrent write commit and rejects the rest
-- [Online Auction](../../../designs/online-auction.md) — auction bidding is the ideal OCC case since true collisions are rare, so a lock-free conditional retry beats holding a lock
-- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a long KYC flow guards each state change with a version check, so the loser of a race writes nothing and needs no rollback
+- [Online Auction](../../../designs/online-auction.md) — auction bidding is the ideal optimistic concurrency control (OCC) case since true collisions are rare, so a lock-free conditional retry beats holding a lock
+- [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a long know your customer (KYC) flow guards each state change with a version check, so the loser of a race writes nothing and needs no rollback
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — the guard doubles as the ordering key, so a lost update and a stale delivery are stopped by one constraint
 
 <!-- relationships:end -->

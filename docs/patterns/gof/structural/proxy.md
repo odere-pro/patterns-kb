@@ -190,4 +190,8 @@ image.render();                                 // decodes now, on demand
 - [Decorator](./decorator.md) — Add behavior vs. control access — same shape
 - [Adapter](./adapter.md) — Keeps the same interface as the real object and controls access to it
 
+**Exposed to**
+
+- [Leaky Abstraction](../../../hazards/leaky-abstraction.md) — Can fall into leaky abstraction when a remote proxy makes a network call look local, with no timeout or failure branch
+
 <!-- relationships:end -->

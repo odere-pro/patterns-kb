@@ -17,14 +17,15 @@ Of the designs that actually meet the requirement, prefer the simplest one. Comp
 ## What it says
 <!--meta block=description-->
 
-Given two designs that both do the job, take the simpler one. The maxim “Keep It Simple, Stupid” is usually credited to Kelly Johnson, the Lockheed aircraft engineer, as a rule for machines a mechanic could repair in the field with basic tools. The “Stupid” is not aimed at anyone — it is a reminder that the design must stay simple enough to survive contact with ordinary people under pressure.
-
-The crucial distinction, sharpened by Rich Hickey: simple is not the same as easy. Simple means un-braided — one concern, one responsibility, nothing folded together that could stand apart. Easy means familiar, near to hand, quick to type. A one-line trick can be easy and yet deeply un-simple; a few plain, separated steps can take longer to write and be far simpler to live with.
+Given two designs that both do the job, take the simpler one. “Keep It Simple, Stupid” is usually credited to Kelly Johnson, the Lockheed engineer, as a rule for machines a mechanic could repair in the field. The distinction, sharpened by Rich Hickey: simple is not easy. Simple means un-braided, one concern with nothing folded together; easy means familiar and quick to type. A one-line trick can be easy and deeply un-simple.
 
 ## Explained
 <!--meta block=explain-->
 
-KISS says that when two designs both meet the requirement, you ship the one with fewer interlocked parts. Simple here means un-braided: each piece does one job and nothing is folded together. Easy means familiar and quick to type, and a clever one-liner can be easy and still not simple. Choose it over building for the larger requirement you imagine, and make the trigger for adding machinery a measurement, not a fear. Every extra layer, flag or indirection must be understood before anyone can fix a bug, so you pay for it on every future reading. Overdone, it hides real difficulty: concurrency, partial failure and awkward domain rules do not vanish because you skipped modelling them, and they come back as bugs no structure was there to catch. The counter-move is to put the difficulty the domain really has in one openly hard place with a comment, not spread it across five. The other cost is a migration later, because the simplest design will one day stop fitting, so price it. Judge simplicity by how many colleagues can change the thing unaided, not by line count or boxes drawn.
+KISS says that when two designs both meet the requirement, you ship the one with fewer interlocked parts. Simple here means un-braided: each piece does one job and nothing is folded together. Easy means familiar and quick to type, and a clever one-liner can be easy and still not simple. Choose it over building for the larger requirement you imagine, and make the trigger for adding machinery a measurement, not a fear. Every extra layer, flag or indirection must be understood before anyone can fix a bug, so you pay for it on every future reading. Judge simplicity by how many colleagues can change the thing unaided, not by line count or boxes drawn.
+
+- **It can hide real difficulty.** Concurrency and partial failure come back as bugs. Keep the domain's real difficulty in one openly hard, commented place.
+- **The simplest design will one day stop fitting.** Price the later migration now, and set its trigger as a measured limit.
 
 **Example.** A team must email a report to 300 customers each night. One option is a cron job (a timed task) running one 40-line script that one on-call engineer can read. The other is a queue, 3 workers and a scheduler: 5 parts that only two engineers can run. At 300 emails the script finishes in about 2 minutes, so the script wins. The cost arrives at 3 million emails a night, when one machine no longer finishes before morning and the team must split the work. That migration is the bill they accepted, and its trigger is a measured run time past 6 hours, not worry.
 
@@ -72,17 +73,19 @@ The organisational version of the trap is choosing a design for the diagram rath
 - [Prefer Managed Services](./managed-services.md) — Not running it is simpler than running it well
 - [Build for the Needs of the Business](./build-for-business.md) — A stated number is what 'meets the requirement' gets measured against
 - [Transaction Script](../patterns/enterprise/transaction-script.md) — When logic is a few checks and one write, a plain procedure is the simpler design
+- [Convention over Configuration](./convention-over-configuration.md) — Fewer settings to read and get wrong keeps a tool simple
 
 **Prevents**
 
 - [Leaky Abstraction](../hazards/leaky-abstraction.md) — Simplicity is the defence: the abstraction that hides less has less to leak
+- [Premature Optimization](../hazards/premature-optimization.md) — Keeps code simple, so a speed-up must earn the extra complexity it adds
 
 **Demonstrated by**
 
 - [Distributed Cache](../designs/design-distributed-cache.md) — shows simplest-thing-first: a one-box hash table and coarse janitor schedule before ring, shards, and replicas
 - [Yelp](../designs/yelp.md) — the simplest option that meets the requirement is chosen over defensible-but-unneeded complexity at every fork
-- [Connect Four](../designs/connect-four.md) — Choosing the smallest model that makes illegal states unrepresentable is KISS in practice
-- [Persona Identification & Sanction Check](../designs/persona-identification.md) — a KYC design that holds exactly-once effects and tenant isolation on one database, refusing every component its confirmed volume cannot justify
+- [Connect Four](../designs/connect-four.md) — Choosing the smallest model that makes illegal states unrepresentable is keep it simple (KISS) in practice
+- [Persona Identification & Sanction Check](../designs/persona-identification.md) — a know your customer (KYC) design that holds exactly-once effects and tenant isolation on one database, refusing every component its confirmed volume cannot justify
 - [Persona Identification & Sanction Check (V2)](../designs/persona-identification-v2.md) — guarantees kept with fewer moving parts than a bigger design would reach for, each rejection recorded with the number that justifies it
 
 <!-- relationships:end -->

@@ -15,16 +15,16 @@ Guarantees a class is instantiated exactly once and hands every caller that same
 ## What it is
 <!--meta block=description-->
 
-A **singleton** is a class that permits only one instance of itself and provides a well-known way to reach it. The class hides its own constructor so no one can call `new` from outside, keeps the sole instance in a static field, and exposes a static accessor — classically `getInstance()` — that creates the instance on first request and returns the same object forever after.
-
-The forces it resolves are uniqueness and reach. Some resources are genuinely singular — a hardware device, an OS-level handle, one shared connection pool or cache — and having two of them is a bug, not a convenience. At the same time, that one object is needed all over the codebase, and threading it manually through every constructor and call is tedious. The singleton answers both at once: it enforces the single instance and makes it reachable from anywhere.
-
-That very convenience is also its trap. A singleton is a controlled global variable, and global mutable state couples code invisibly, resists isolation in tests, and hides its dependencies. The pattern is disciplined enough to be defensible for truly singular resources and seductive enough to be badly overused everywhere else.
+A singleton is a class that permits one instance of itself and gives the whole program a fixed way to reach it: a hidden constructor, a static field and an accessor such as `getInstance()`. It suits truly singular resources, such as a hardware handle or one connection pool. It is a controlled global variable, so overuse hides dependencies and blocks test isolation.
 
 ## Explained
 <!--meta block=explain-->
 
-A singleton is a class that lets only one instance of itself exist and gives the whole program a fixed way to reach it. Choose it only for a resource that is truly one per process and has no interesting state, such as a logger. For everything else, create one instance where the app starts and pass it to whoever needs it, which gives the same single copy without the global access. The count is rarely the problem. The reach is: every class that calls the singleton depends on it without saying so, so tests share its state, pass or fail depending on order, and cannot swap in a fake. Counter that by letting a container or your startup code own the instance and hand it in. The one-per-process promise also breaks once you deploy, because each process and each server holds its own copy, so never rely on it for something that must be unique across all your servers; use a database or a lock service for that. Creating it lazily from two threads at once can make two, so create it at startup.
+A singleton is a class that lets only one instance of itself exist, through a hidden constructor and a static accessor, and gives the whole program a fixed way to reach it. Choose it only for a resource that is truly one per process and has no interesting state, such as a logger. For everything else, create one instance where the app starts and pass it to whoever needs it, which gives the same single copy without the global access. The count is rarely the problem. The reach is: every class that calls the singleton depends on it without saying so, so tests share its state, pass or fail depending on order, and cannot swap in a fake.
+
+- **Hidden coupling.** Callers depend on it without saying so, so let a container or your startup code own the instance and hand it in.
+- **Not global.** Each process and server holds its own copy, so use a database or lock service for anything that must be unique across servers.
+- **Racy creation.** Creating it lazily from two threads at once can make two, so create it at startup.
 
 **Example.** A settings class is a singleton holding a theme name. Test A sets the theme to dark and finishes, and test B expects the default but sees dark. B passes alone and fails after A, so the suite goes red depending on order. Run on 3 servers, each holds its own settings, so a change made through one server never reaches the other two. The fix is to create one Settings at startup and pass it into each class that needs it. Tests then build a fresh one each, and any setting that must be shared across servers lives in a database.
 
@@ -186,14 +186,20 @@ console.log(a === b);          // true
 **Alternative to**
 
 - [Dependency Injection](../extra/dependency-injection.md) — A global instance vs. handing the instance in
+- [Double-Checked Locking](../../concurrency/double-checked-locking.md) — A singleton needs one instance, and a holder class or once primitive gives it safely
 
 **Often confused with**
 
-- [Service Locator](../extra/service-locator.md) — Both hand back a shared instance; DI is usually better
+- [Service Locator](../extra/service-locator.md) — Both hand back a shared instance; dependency injection (DI) is usually better
 - [Monostate](../extra/monostate.md) — Shared state vs. a single object — often conflated
 
 **Prevents**
 
 - [Improper Instantiation](../../../hazards/improper-instantiation.md) — The right lifetime for a broker that manages its own connections
+
+**Exposed to**
+
+- [Race Condition](../../../hazards/race-condition.md) — Can fall into race condition when lazy initialisation can create two instances when threads check at once
+- [Static Cling](../../../hazards/static-cling.md) — Can fall into static cling when a global accessor is a static call that tests and callers cannot substitute
 
 <!-- relationships:end -->

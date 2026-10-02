@@ -16,18 +16,16 @@ Wraps an object in another that shares its interface — layering new behavior o
 ## What it is
 <!--meta block=description-->
 
-A **decorator** is an object that wraps another object of the same interface, forwards calls to it, and adds behavior before or after. Because the wrapper implements the same interface as the thing it wraps, callers can't tell the two apart — they hold a Component, unaware whether it's a plain component or one dressed in several layers.
-
-The problem it resolves is adding responsibilities to **individual objects rather than to a whole class**, and adding them **dynamically**. Subclassing is static: behavior is fixed at compile time, and every optional feature you add by inheritance multiplies the class count — a separate subclass for each combination of features. Decorator sidesteps that explosion by letting you compose features at runtime, stacking one small wrapper on another.
-
-Each decorator is a thin shell responsible for a single concern — logging, buffering, compression, access checks — so behavior is built up from composable parts instead of baked into a monolithic class hierarchy.
-
-That list is not a coincidence: those are the classic **cross-cutting concerns**, the behaviours every operation needs and none of them is about. Decorator is one of the two mainstream answers to them, and the choice between them is about ordering. Reach for a decorator when each layer genuinely wraps the call — it can act before, after, and around, and it decides whether to delegate at all. Reach for a [Chain of Responsibility](../behavioral/chain-of-responsibility.md) when the concern is "one of these should handle it" rather than "all of these should wrap it". A request pipeline built around a [Mediator](../behavioral/mediator.md) is the same wrapping shape applied once, centrally, instead of per object — which is what makes it the usual answer at the transport edge.
+A decorator wraps an object of the same interface, forwards calls to it and adds behaviour before or after, so callers cannot tell the wrapper from the original. It adds responsibilities to single objects at run time, such as logging, buffering, compression or access checks, without a subclass for every combination of features. Choose it when each layer wraps the call; use a chain of responsibility when only one handler should act.
 
 ## Explained
 <!--meta block=explain-->
 
-A decorator wraps an object that has the same interface, forwards each call to it and adds behaviour before or after. The caller cannot tell the wrapper from the original, so you can stack small wrappers, each doing one job such as logging, buffering or compression, and choose the stack per object at run time. Choose it over subclassing when optional features multiply: n features need n wrappers, while one subclass per combination needs up to 2 to the power n classes. The first cost is order. The order of wrappers changes the result and nothing in the types records it, so compress-then-encrypt and encrypt-then-compress both compile and only one is right. Build the stack in one named function and test its output. The second cost is identity: the wrapped object is not the original, so equality and type checks fail, so compare through the interface. The third is forwarding: on a wide interface every wrapper must pass every method along, so keep decorated interfaces small.
+A decorator wraps an object that has the same interface, forwards each call to it and adds behaviour before or after. The caller cannot tell the wrapper from the original, so you can stack small wrappers, each doing one job such as logging, buffering or compression, and choose the stack per object at run time. Choose it over subclassing when optional features multiply: n features need n wrappers, while one subclass per combination needs up to 2 to the power n classes.
+
+- **Order.** Wrapper order changes the result and nothing in the types records it. Build the stack in one named function and test its output.
+- **Identity.** The wrapped object is not the original, so equality and type checks fail. Compare through the interface.
+- **Forwarding.** On a wide interface every wrapper must pass every method along, so keep decorated interfaces small.
 
 **Example.** A data stream has 3 optional features: compression, encryption and logging. Subclassing needs a class for each of the 2^3 = 8 combinations. With decorators you write 3 wrappers and assemble them per use. Compressing then encrypting a 1 MB log works: the repeated text shrinks, then the small result is encrypted. Reversed, encryption makes the data look random, so the compressor finds nothing to shrink and the file stays about 1 MB. Both orders compile. One function named secureStream builds the right order, and one test checks that the output is smaller than the input.
 
@@ -189,7 +187,7 @@ source.read();            // "secret" — the encoding is invisible to the calle
 
 - [Open/Closed Principle](../../../principles/open-closed.md) — Extends behaviour without modifying the component — open/closed by composition.
 - [Composition over Inheritance](../../../principles/composition-over-inheritance.md) — Composition of wrappers in place of a combinatorial class hierarchy.
-- [Render Props](../../frontend/render-props.md) — HOCs, a render-props sibling, decorate a component with extra behavior
+- [Render Props](../../frontend/render-props.md) — Higher-order components (HOCs), a render-props sibling, decorate a component with extra behavior
 - [Liskov Substitution Principle](../../../principles/liskov-substitution.md) — Stacking wrappers works because each one stays substitutable for the original
 
 **Often confused with**

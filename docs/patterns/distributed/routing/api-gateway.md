@@ -209,7 +209,7 @@ app.use(async (req, res, next) => {
 - [Gatekeeper](./gatekeeper.md) — Validate and screen requests at entry
 - [Strangler Fig](../coordination/strangler-fig.md) — Route slices old-vs-new at the gateway
 - [Intercepting Validator](../../security/intercepting-validator.md) — Validate input at the edge
-- [Micro-Frontends](../../frontend/micro-frontends.md) — An API gateway can front the services behind independently deployed frontends
+- [Micro-Frontends](../../frontend/micro-frontends.md) — An application programming interface (API) gateway can front the services behind independently deployed frontends
 - [API Routing](./api-routing.md) — Pick how a request names its service — by path, hostname or header — before deciding what the gateway does with it
 - [Service Mesh](./service-mesh.md) — A gateway covers edge traffic; a mesh adds service-to-service policy
 - [Federated Identity](../coordination/federated-identity.md) — The gateway validates the provider's signed token so backends need not
@@ -217,6 +217,8 @@ app.use(async (req, res, next) => {
 - [Prefer Managed Services](../../../principles/managed-services.md) — The gateway is edge work there is rarely a reason to build
 - [Microservices](../../architecture/microservices.md) — The gateway exists because services should not be exposed to clients directly.
 - [Model Context Protocol](./mcp.md) — The same aggregation and policy job, applied to capability servers
+- [Context Map](../../ddd/context-map.md) — A gateway can be the open host service a map shows at a context's edge
+- [Front Controller](../../enterprise/front-controller.md) — An application programming interface (API) gateway is a front controller across services
 
 **Generalizes**
 
@@ -231,10 +233,16 @@ app.use(async (req, res, next) => {
 
 - [Host Header Rewriting](../../../hazards/host-header-rewriting.md) — A managed front door often overrides the origin host by default, so the setting has to be turned off deliberately
 
+**Exposed to**
+
+- [Busy Front End](../../../hazards/busy-front-end.md) — Can fall into busy front end when a gateway that transforms payloads itself spends the tier's cores on that work
+- [Extraneous Fetching](../../../hazards/extraneous-fetching.md) — Can fall into extraneous fetching when fixed response shapes ship fields and rows the client never shows
+- [N+1 Query](../../../hazards/n-plus-1-query.md) — Can fall into n plus 1 query when composing a response by calling a backend per item repeats the pattern across services
+
 **Demonstrated by**
 
 - [Distributed Rate Limiter](../../../designs/distributed-rate-limiter.md) — demonstrates the gateway applying cross-cutting request policy — identify, check, admit or reject — before traffic reaches services
-- [Google News](../../../designs/google-news.md) — one edge entry point absorbing cross-cutting concerns ahead of the service tier is the API gateway role
+- [Google News](../../../designs/google-news.md) — one edge entry point absorbing cross-cutting concerns ahead of the service tier is the application programming interface (API) gateway role
 - [Yelp](../../../designs/yelp.md) — one entry point does routing across two services split by their read/write shape
 - [Uber](../../../designs/uber.md) — centralizing auth, rate limiting and routing at one edge is the api-gateway's whole job
 - [Dropbox](../../../designs/dropbox.md) — the gateway is the single front door that authenticates and shapes traffic before it reaches the control-plane service

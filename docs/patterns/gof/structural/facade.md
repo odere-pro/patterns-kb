@@ -15,18 +15,16 @@ Wraps a sprawling subsystem behind a single, task-oriented interface — so call
 ## What it is
 <!--meta block=description-->
 
-A **facade** is a single object that offers a small, high-level interface over a set of lower-level parts. Behind it sit many classes with their own responsibilities and their own vocabulary; in front of it, callers see a handful of methods named after the tasks they actually want to perform.
-
-The force it resolves is **accidental coupling to internals**. A rich subsystem tends to leak its structure: to do one useful thing, a caller has to know which classes exist, the order to call them in, and how they hand data to each other. That knowledge spreads through every client and freezes the subsystem — you can no longer refactor it without breaking them all.
-
-The facade absorbs that orchestration. It knows the call sequence, the wiring, and the defaults, and exposes just the common workflows. Clients depend on the facade's narrow surface, not on the parts, so the subsystem stays free to evolve behind it.
-
-Crucially, a facade holds no subsystem logic of its own — it orchestrates and delegates. Thin work either side of the call is fair game, and the facade is a natural place for it: a log line, an authorization check, a transaction boundary around the whole workflow. It also doesn't wall the subsystem off: advanced callers can still reach past it when they genuinely need finer control.
+A facade is one object offering a few methods named after the tasks callers want, over a set of lower-level classes. It absorbs the call order and wiring, so clients stop depending on subsystem internals and the subsystem stays free to change. It holds no subsystem logic of its own: it orchestrates and delegates, and advanced callers can still reach past it.
 
 ## Explained
 <!--meta block=explain-->
 
-A facade is one object that offers a few methods named after the tasks callers want, such as \`placeOrder\`, and does the work by calling the many classes behind it in the right order. Callers stop depending on those classes, so you can rework them freely and break nobody. Choose it when a handful of workflows account for most uses of a subsystem and you want its inside free to change. If callers need the fine controls most of the time, the facade only gets in the way. The characteristic failure is growth. Convenient entry points attract unrelated operations until one class that everyone imports must be edited by every team, so give each facade one family of workflows and turn away unrelated methods. It also hides power, so keep an escape hatch to the raw parts, knowing that each caller who uses it voids the isolation. And every method you add is a signature you promise to keep, so widen the facade only for requests from several callers.
+A facade is one object that offers a few methods named after the tasks callers want, such as \`placeOrder\`, and does the work by calling the many classes behind it in the right order. Callers stop depending on those classes, so you can rework them freely and break nobody. Choose it when a handful of workflows account for most uses of a subsystem and you want its inside free to change. If callers need the fine controls most of the time, the facade only gets in the way.
+
+- **Growth.** Convenient entry points attract unrelated operations until every team edits one class. Give each facade one family of workflows.
+- **Hidden power.** It hides fine controls, so keep an escape hatch to the raw parts, knowing each caller who uses it voids the isolation.
+- **Signature debt.** Every method you add is a signature you promise to keep, so widen the facade only for requests from several callers.
 
 **Example.** Placing an order means 5 calls, to inventory, pricing, payment, shipping and email, in that order, and 12 screens each repeat the sequence. A facade method placeOrder makes the five calls once, so a change to the payment call is one edit, not 12. Over a year the facade gains refund, reportSales and exportTaxes, and each of 4 teams edits the same file. The fix is to move those 3 methods to their own facades and leave placeOrder alone. The cost is one more class to find and keep in step with the subsystem.
 
@@ -187,7 +185,7 @@ class CheckoutService {
 
 **Generalizes**
 
-- [Page Object](../../testing/page-object.md) — Page objects apply it to a UI under test
+- [Page Object](../../testing/page-object.md) — Page objects apply it to a user interface (UI) under test
 
 **Often confused with**
 
@@ -195,9 +193,13 @@ class CheckoutService {
 - [Gateway](../../enterprise/gateway.md) — Simplify a subsystem vs. wrap one external system
 - [Mediator](../behavioral/mediator.md) — One-way simplification of a subsystem vs. two-way coordination between peers
 
+**Exposed to**
+
+- [God Object](../../../hazards/god-object.md) — Can fall into god object when a facade that starts holding state or logic becomes the same class
+
 **Demonstrated by**
 
-- [File System](../../../designs/file-system.md) — the orchestrator hides tree-walking and path-splitting behind a small path-based API, the essence of a Facade
+- [File System](../../../designs/file-system.md) — the orchestrator hides tree-walking and path-splitting behind a small path-based application programming interface (API), the essence of a Facade
 - [Inventory Management](../../../designs/inventory-management.md) — the manager gives external callers one simplified entry point over the warehouse subsystem
 - [BookMyShow](../../../designs/bookmyshow.md) — the booking orchestrator is the only surface callers see, hiding the theater-and-showtime graph behind four operations
 

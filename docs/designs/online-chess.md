@@ -16,14 +16,18 @@ An online chess platform is three systems wearing one coat: skill-based matchmak
 ## Understanding the problem
 <!--meta block=description-->
 
-Two players are paired by rating, sit down at a shared board with their own countdown clocks, trade moves in real time, and afterwards climb a rating ladder. The one decision that shapes everything is authority: the **server** validates each move and owns both clocks, so no client can play an illegal move, claim extra time, or drift into a different board position than its opponent. A move must land on the other side in under 200&nbsp;ms, and at peak there are hundreds of thousands of these games in flight at once. Build the single game first; the scale, the fairness of the clock, and the survival of the game-server fleet are where the real work is.
+Two players are paired by rating, play with their own countdown clocks, and afterwards climb a rating ladder. The hard part is authority: the server validates each move and owns both clocks, so no client plays an illegal move, claims extra time or sees a different board. The page builds the single game first, then scale, clock fairness and survival of the game-server fleet.
 
 ## Explained
 <!--meta block=explain-->
 
-Online chess keeps each live game in the memory of one server, so every move is checked and both clocks run without a trip to a database. The server appends each accepted move to a durable log before it tells anyone, so the log is the truth and the board is only a copy built from it. Choose this over a stateless design that loads the game from a shared store on every move, because that hop eats the 200 ms budget. It costs three things. A crash takes down that server's games, so a replacement replays the short move log to rebuild the board. A server that was replaced but is still running could keep writing, so each reassignment bumps a counter and writes carrying an old counter fail. A player far from the server loses time in transit, so the server credits back half the measured round trip, capped at about 100 ms a move, because a cheater could stall the measurement. Matchmaking claims a waiting player with one atomic remove from a Redis sorted set, and exactly one matcher wins.
+Online chess keeps each live game in the memory of one server, so that server checks every move and runs both clocks without a trip to a database. It appends each accepted move to a durable log before telling anyone, so the log is the truth and the board is a copy built from it. Choose this over a stateless design that loads the game from a shared store on every move, because that extra hop eats the 200 ms budget. Matchmaking claims a waiting player with one atomic remove from a Redis sorted set (a list ordered by rating), so exactly one matcher wins.
 
-**Example.** With 500,000 games running, there are 1 million open connections. A player 170 ms slower per move than the opponent would lose about 170 ms times 40 moves, which is 6.8 s of a blitz clock, for living far from the server. Compensation gives most of it back. A server dies after move 40. The new server reads the clocks and replays the 40 logged moves, a few hundred bytes, and carries on. The old server wakes up and writes move 41 with a stale counter. The database refuses it. The cost is that the players see a short pause.
+- **Crashes.** A crash takes down that server's games, so a replacement replays the short move log to rebuild the board.
+- **Zombie servers.** A replaced server may keep writing, so each reassignment bumps a counter and writes with an old counter fail.
+- **Lag unfairness.** Distant players lose time in transit, so credit back half the measured round trip, capped near 100 ms a move.
+
+**Example.** With 500,000 games running there are 1 million open connections. A player 170 ms slower per move than the opponent loses about 170 ms times 40 moves, 6.8 s of a blitz clock, just for living far away; lag compensation gives most of it back. A server dies after move 40. The new server reads the clocks, replays the 40 logged moves, a few hundred bytes, and carries on. The old server wakes and writes move 41 with a stale counter, and the database refuses it. The cost is a short pause for the players.
 
 ## Requirements
 <!--meta block=requirements-->

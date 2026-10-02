@@ -187,6 +187,9 @@ check_data() {
     docs/data/learning-paths.json)
       note "docs/data/learning-paths.json holds the theme tours: gen-tours renders each theme's tour block and each member's fluency block from it, the learning-paths gate holds every stage to a route the structure file produces, and json-sanity holds its source header. Run: make gen && make gate G=check-learning-paths && make gate G=check-json"
       ;;
+    docs/data/tracks.json)
+      note "docs/data/tracks.json holds the Start-here tracks and the tier of each page a track stages: site/src/lib/tracks.ts reads it for the home page, the tracks gate holds every track to published, non-draft theme pages and every tier to a legal value, and json-sanity holds its source header. Edited by hand. Run: make gate G=check-tracks && make gate G=check-json"
+      ;;
     tools/src/kb/spec.ts)
       note "tools/src/kb/spec.ts is the kb.mjs command surface: node scripts/kb.mjs prints its usage from it, and the skills and agents name its commands and flags. Run: make tools-test T=kb/spec && make gate G=check-harness-routes"
       ;;

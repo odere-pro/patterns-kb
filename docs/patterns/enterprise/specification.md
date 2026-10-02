@@ -193,6 +193,7 @@ const toRemind = invoices.filter(i => remindable.isSatisfiedBy(i));
 - [Aggregate](../ddd/aggregate.md) — Rules about an aggregate live beside it as named specifications.
 - [Value Object](../ddd/value-object.md) — A specification is itself a small, immutable value with no identity.
 - [Composite](../gof/structural/composite.md) — And, or and not nodes hold other specifications as a composite tree.
+- [Query Object](./query-object.md) — A specification can be turned into a query object's criteria
 
 **Alternative to**
 

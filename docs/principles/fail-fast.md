@@ -17,9 +17,7 @@ Check what you assume as early as you can check it, and stop loudly when a check
 ## What it says
 <!--meta block=description-->
 
-Detect a fault at the earliest point you can detect it, and report it where the context that explains it still exists. The alternative is not carrying on successfully — it is carrying on with state you can no longer trust, until something far away notices and reports a symptom instead of a cause. Jim Shore made the case in IEEE Software: a system that fails immediately and visibly is easier to debug than one that fails silently and late.
-
-Fail fast is a rule about detection, not about what to do next. It says where a problem should be noticed, not how it should be handled — a caller is still free to retry, degrade or fall back, and can only choose sensibly if the fault arrived carrying the field, the value and the caller that produced it. That puts the work in two places: validating input where it crosses into your code, and asserting invariants inside code that has already assumed them.
+Detect a fault at the earliest point you can, and report it where the context that explains it still exists. The alternative is carrying on with state you no longer trust until something far away reports a symptom instead of a cause. Jim Shore made the case in IEEE Software. The rule is about detection, not handling: the caller may still retry or degrade, but only if the fault arrived with its field, value and origin.
 
 ## Explained
 <!--meta block=explain-->
@@ -72,6 +70,7 @@ Underneath both traps is a trade you should price per path: failing fast buys di
 - [Circuit Breaker](../patterns/distributed/resilience/circuit-breaker.md) — Once a dependency is known down, fail now, not later
 - [Dead Letter Channel](../patterns/messaging/dead-letter-channel.md) — Park the poison record so one row fails alone
 - [Design for Self-Healing](./self-healing.md) — Failing fast is the detection half; healing is what happens next
+- [Make Illegal States Unrepresentable](./make-illegal-states-unrepresentable.md) — Checks at run time and stops at once, for what a type cannot rule out
 
 **Prevents**
 

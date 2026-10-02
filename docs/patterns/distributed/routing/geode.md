@@ -16,20 +16,16 @@ Deploys the whole backend as a set of geographically spread nodes, each self-con
 ## What it is
 <!--meta block=description-->
 
-The classic shape is one home for the data and compute placed next to it, growing by getting bigger. It has three predictable failures at global scale: a user on the far side of the world pays hundreds of milliseconds on every request, a regional demand spike overwhelms the one place that can serve it, and standing up full copies of the stack in several regions for a service that must never be down is expensive enough that most teams do not.
-
-The geode inverts the arrangement. Instead of bringing the data to the compute, it brings the compute to the data: deploy the whole backend into many geographically distributed nodes — geodes — and give each one a complete replica. A global edge tier steers each request to the nearest healthy node, and because every node holds everything, **any node can answer any request**. There is no home region and no failover step.
-
-Two properties do the work. Each node is **self-contained** — no dependency outside its own footprint, so one dying leaves the others untouched — and the nodes are joined only loosely, through the edge network on the way in and a replicating data service on the way out. That data service is the **replication backplane**, and it owns quorum so the nodes never have to run a consensus protocol among themselves.
-
-This is the pattern most often confused with [Deployment Stamp](./deployment-stamp.md), and the distinction is sharp. A stamp is meaningful alone and usually owns a slice of users, so the router must know which stamp holds your data. A geode never exists alone, every node is equal, and the router only has to know which one is close and healthy.
-
-The consequence is that **equality is the premise, not a detail**. Anything that makes nodes unequal — data-residency rules, session state pinned to one place, demand heavily skewed to one region — breaks the pattern rather than degrading it, and the honest answer there is a stamp with a data-aware routing plane.
+A geode deploys the whole backend into many geographically distributed nodes, each a complete replica, with a global edge tier that steers each request to the nearest healthy node. Any node can answer any request, so there is no home region and no failover step. It resolves distance latency, regional overload and the cost of a single-region failure. Unlike a deployment stamp, which owns a slice of users, every geode is equal.
 
 ## Explained
 <!--meta block=explain-->
 
-A geode deploys your whole backend as many identical nodes around the world, each with a full copy of the data, so any node can answer any request. A global edge tier sends each user to the nearest healthy node, and a replication service keeps the copies in step. There is no home region and no failover step. Without it, a user far from your one region pays hundreds of milliseconds on every request, a regional spike overwhelms the one place that can serve it, and losing that place is an outage. Choose it over a deployment stamp when every node can hold every record. A stamp owns a slice of users, so its router must know where each one lives, while a geode router only needs to know what is near and healthy. It costs three things. Writes in two regions can conflict, so pick a conflict rule before you start and accept that reading your own write is no longer free. One request's path crosses regions and queues, so you need distributed tracing from day one. And it works only if the nodes are equal, so data-residency rules or session state pinned to one place break it, and there you use stamps with routing that knows where data lives.
+A geode deploys your whole backend as many identical nodes around the world, each with a full copy of the data, so any node can answer any request. A global edge tier sends each user to the nearest healthy node, and a replication service keeps the copies in step. There is no home region and no failover step. Without it, a user far from your one region pays hundreds of milliseconds on every request, a regional spike overwhelms the one place that can serve it, and losing that place is an outage. Choose it over a deployment stamp when every node can hold every record. A stamp owns a slice of users, so its router must know where each one lives, while a geode router only needs to know what is near and healthy.
+
+- **Write conflicts.** Writes in two regions can conflict, so pick a conflict rule first and accept that reading your own write is no longer free.
+- **Cross-region paths.** One request's path crosses regions and queues, so use distributed tracing from day one.
+- **Equal nodes only.** Data-residency rules or session state pinned to one place break it, so use stamps with routing that knows where data lives.
 
 **Example.** Your one region is in Virginia. A user in Sydney is about 200 ms away, so every request pays 200 ms. With nodes in Sydney, London and Virginia, each user reaches a node about 20 ms away. If Virginia is lost, its users move to London with no failover step, and London needs headroom for them. Two users edit the same record in Sydney and London 100 ms apart, while replication takes 250 ms, so both edits are accepted. A last-write-wins rule keeps one and drops the other. That is the cost of the conflict rule.
 

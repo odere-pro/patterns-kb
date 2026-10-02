@@ -178,6 +178,7 @@ console.log(c1.equals(c2)); // true — same identity, different snapshots
 **Combines with**
 
 - [Repository](../enterprise/repository.md) — Looked up and stored by identity, not by its fields
+- [Domain Service](./domain-service.md) — An entity delegates a rule spanning other entities to a domain service
 
 **Part of**
 

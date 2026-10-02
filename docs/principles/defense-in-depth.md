@@ -16,11 +16,7 @@ Stack several independent protections between an attacker and what you guard, so
 ## What it says
 <!--meta block=description-->
 
-The idea comes from military defence: instead of one wall, give an attacker a series of obstacles, each of which costs time and can be noticed. In software it means that no single check, whether a firewall, a login or an input filter, is the only thing between a request and your data. A request passes a network control, then an identity check, then an authorisation check at the service, then validation of its input, then limits on what the data store will return, and each layer is written on the assumption that the one before it may have been fooled.
-
-The common misreading is that more layers means more security. It does not. Five layers that share one failure, such as the same library, the same credential or the same misconfigured rule, are one layer counted five times. What counts is independence: an attacker who defeats one layer gains nothing that helps against the next. That is the same test [Redundancy](./redundancy.md) applies to copies of a component, applied to controls instead.
-
-It is also not the same as having one hardened entry. A [Single Access Point](../patterns/security/single-access-point.md) concentrates the front door; defence in depth assumes someone gets past it and asks what stands behind. The two work together, and neither replaces the other.
+Instead of one wall, give an attacker a series of obstacles, each costing time and each able to be noticed. No single check, whether firewall, login or input filter, is all that stands between a request and your data; each layer assumes the one before it was fooled. More layers does not mean more security: five layers sharing one library, credential or misconfigured rule are one layer counted five times. Independence is what counts.
 
 ## Explained
 <!--meta block=explain-->

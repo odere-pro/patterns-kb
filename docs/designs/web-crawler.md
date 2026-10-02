@@ -16,12 +16,16 @@ A web crawler starts from a handful of seed URLs, downloads each page, keeps the
 ## Understanding the problem
 <!--meta block=description-->
 
-A crawler fetches a page, extracts the parts worth keeping, discovers the outbound links, and repeats — walking the web link by link. What "extract" means depends on the goal: a search engine indexes and ranks pages; the framing here is harvesting raw text at massive scale to train a language model, so extraction means pulling out the readable text and discarding the markup. The web has on the order of **10 billion** reachable pages, far too many for one machine to visit in a sensible window, so nearly every decision downstream falls out of one tension: crawl quickly and cheaply, resume cleanly when a fetch dies, and never hammer a site hard enough to get blocked. Complete coverage is a fiction — the realistic target is the vast majority of the web, not literally every page.
+A crawler fetches a page, extracts its text, finds the outbound links and repeats, here to harvest text at scale for training a language model. With roughly 10 billion reachable pages, one machine cannot cover them in a sensible window. The design balances speed and cost, clean resumption after a failed fetch, and politeness toward each site. The page walks through the fetch and parse pipeline that meets those goals.
 
 ## Explained
 <!--meta block=explain-->
 
-A web crawler splits the work into two stages joined by queues: fetchers download a page and store its HTML in blob storage, and parsers read the HTML back, keep the text and send the links they find to the list of URLs still to visit. A failure then loses one URL, not a whole unit of work, and the queue messages carry only an id, never the HTML. Choose separate stages over one process that does everything because the fetch is the flakiest step; a failed message simply reappears for another worker. Do the arithmetic first: 10 billion pages in 5 days is about 23,000 pages a second, and you should still distrust the machine count because it rests on assumed utilisation, so load-test it. Looking up domain names, not bandwidth, becomes the bottleneck across millions of domains, so cache lookups in each fetcher and use several resolvers. Limit each domain to about 1 request a second with an atomic claim, and add random jitter so waiting fetchers do not all retry when a window resets. Cap link depth to escape traps. Hashing content skips duplicates; a probabilistic set saves memory but occasionally skips a page you never fetched.
+A web crawler splits the work into two stages joined by [queues](../patterns/messaging/message-queue.md): fetchers download a page and store its HTML in blob storage, and parsers read the HTML back, keep the text and send the links they find to the list of URLs still to visit. A failure then loses one URL, not a whole unit of work, and queue messages carry only an id, never the HTML. Choose separate stages over one process that does everything, because the fetch is the flakiest step and a failed message simply reappears for another worker. Do the arithmetic first: 10 billion pages in 5 days is about 23,000 pages a second, and you should load-test the machine count because it rests on an assumed utilisation. Limit each domain to about 1 request a second with an atomic claim, and add random jitter so waiting fetchers do not all retry when a window resets.
+
+- **Name lookups.** Across millions of domains, domain-name lookups, not bandwidth, become the bottleneck. Cache lookups in each fetcher and use several resolvers.
+- **Crawler traps.** Endless link chains never finish. Cap link depth, and hash content so duplicate pages are skipped.
+- **Skipped pages.** A probabilistic seen-set (\[Bloom filter\](../patterns/distributed/coordination/bloom-filter.md)) saves memory but occasionally skips a page you never fetched. Size it for a low error rate.
 
 **Example.** The crawl needs 10 billion pages in 5 days, 432,000 seconds, about 23,000 pages a second. A 200 Gbps machine could pull 200 / 8 / 2 MB = 12,500 pages a second; at 30% real utilisation that is 3,750. One machine needs 10 billion / 3,750, about 31 days; 8 machines need about 3.9 days. A fetcher that dies mid-download never deletes its message, so it reappears for another worker. After 5 failed receives it moves to a dead-letter queue and the site is marked offline.
 
@@ -42,7 +46,7 @@ Out of scope: actually training the model on the text, non-text media (images, v
 - **Fault tolerance** — a failure anywhere resumes without discarding crawled progress.
 - **Politeness** — honour `robots.txt` and never overload a site's servers.
 - **Efficiency** — the whole crawl completes in under 5 days.
-- **Scalability** — handle roughly 10B pages.
+- **Scalability** — handle roughly 10B pages, aiming at the vast majority of the web, since complete coverage is a fiction.
 
 Out of scope: defending against malicious actors, cost/budget limits, and legal or privacy compliance.
 
@@ -190,14 +194,14 @@ stateDiagram-v2
 **Demonstrates**
 
 - [Pipe-and-Filter](../patterns/architecture/pipe-filter.md) — splits the fragile single-process crawler into independently retryable fetch and parse stages
-- [Claim Check](../patterns/messaging/claim-check.md) — the queue message carries only the Metadata DB row id while the multi-megabyte HTML sits in blob storage
+- [Claim Check](../patterns/messaging/claim-check.md) — the queue message carries only the Metadata database (DB) row id while the multi-megabyte HyperText Markup Language (HTML) sits in blob storage
 - [Competing Consumers](../patterns/messaging/competing-consumers.md) — pools of interchangeable fetchers and parser workers pull from shared queues, adding machines to add throughput
-- [Retry with Backoff](../patterns/distributed/resilience/retry-backoff.md) — failed fetches back off via the SQS visibility timeout extended by ApproximateReceiveCount
-- [Dead Letter Channel](../patterns/messaging/dead-letter-channel.md) — a redrive policy moves a URL to a DLQ after maxReceiveCount receives, marking the site offline
+- [Retry with Backoff](../patterns/distributed/resilience/retry-backoff.md) — failed fetches back off via the Simple Queue Service (SQS) visibility timeout extended by ApproximateReceiveCount
+- [Dead Letter Channel](../patterns/messaging/dead-letter-channel.md) — a redrive policy moves a URL to a dead-letter queue (DLQ) after maxReceiveCount receives, marking the site offline
 - [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) — a central Redis sliding window caps requests to ~1/sec/domain across all fetchers
-- [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) — Redis SET NX with a crawl-delay TTL gives one fetcher an atomic per-domain claim, closing the stale-timestamp race
+- [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) — Redis SET NX with a crawl-delay time to live (TTL) gives one fetcher an atomic per-domain claim, closing the stale-timestamp race
 - [Bloom Filter](../patterns/distributed/coordination/bloom-filter.md) — content hashes of crawled pages are checked in a probabilistic set to skip re-parsing duplicates cheaply
-- [Object Storage](../patterns/distributed/routing/object-storage.md) — raw HTML and extracted text live in S3 for durability and low cost at hundreds of terabytes
+- [Object Storage](../patterns/distributed/routing/object-storage.md) — raw HyperText Markup Language (HTML) and extracted text live in S3 for durability and low cost at hundreds of terabytes
 - [Message Queue](../patterns/messaging/message-queue.md) — the frontier and the extraction hand-off are durable managed queues, so a worker that dies mid-URL loses one message rather than its stage's work
 - [Sliding Window](../patterns/distributed/coordination/sliding-window.md) — a central Redis sliding window caps requests per domain across the whole fetcher fleet
 

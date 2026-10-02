@@ -234,6 +234,8 @@ for (let i = 0; i < workerCount; i++) {
 - [Web-Queue-Worker](../architecture/web-queue-worker.md) — The worker tier is the usual home for this: one queue, many identical consumers.
 - [Priority Queue](./priority-queue.md) — Split the pool per class when some work must clear before the rest
 - [Sequential Convoy](./sequential-convoy.md) — Partition by category key when scaling out breaks the order a handler depends on
+- [Resequencer](./resequencer.md) — Competing consumers give up message order, which a resequencer can rebuild afterwards
+- [Polling Consumer](./polling-consumer.md) — Competing consumers often poll, so each worker takes work only when it has capacity
 
 **Requires**
 
@@ -243,15 +245,19 @@ for (let i = 0; i < workerCount; i++) {
 
 - [Busy Front End](../../hazards/busy-front-end.md) — Gives offloaded work a throughput dial that does not touch the request path
 
+**Exposed to**
+
+- [Poison Message](../../hazards/poison-message.md) — Can fall into poison message when each redelivery ties up a worker and repeats the failure
+
 **Demonstrated by**
 
 - [Web Crawler](../../designs/web-crawler.md) — many stateless consumers draw from one queue, balancing load and surviving individual worker crashes
 - [Facebook News Feed](../../designs/fb-news-feed.md) — scaling worker count against queue depth is exactly the competing-consumers throughput lever
 - [LeetCode](../../designs/leetcode.md) — bursty grading work is spread across many identical workers draining one shared queue
-- [YouTube](../../designs/youtube.md) — CPU-bound transcode work fanned out across many equivalent consumers is the pattern in action
+- [YouTube](../../designs/youtube.md) — central processing unit (CPU)-bound transcode work fanned out across many equivalent consumers is the pattern in action
 - [ChatGPT](../../designs/chatgpt.md) — pull-based workers draining a single queue is exactly how competing consumers scales throughput across a worker pool
 - [Job Scheduler](../../designs/job-scheduler.md) — execution throughput to 10k/sec comes from many consumers pulling off one queue in parallel
-- [Persona Identification & Sanction Check](../../designs/persona-identification.md) — KYC worker pools claiming tasks from a Postgres queue with SKIP LOCKED instead of a broker
+- [Persona Identification & Sanction Check](../../designs/persona-identification.md) — Know your customer (KYC) worker pools claiming tasks from a Postgres queue with SKIP LOCKED instead of a broker
 - [Instagram](../../designs/instagram.md) — fan-out on write is drained by a worker fleet off one queue, so a millions-of-followers post spreads across machines instead of one
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — a claim whose lease turns a crashed consumer into the same case as an exhausted retry
 

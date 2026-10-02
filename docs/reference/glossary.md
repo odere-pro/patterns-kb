@@ -12,7 +12,7 @@ source: docs/data/glossary.json
 
 # Glossary
 
-One word per idea, and one place to change it: 86 terms, 21 banned phrasings.
+One word per idea, and one place to change it: 88 terms, 21 banned phrasings.
 
 This page is built from [`glossary.json`](../data/glossary.json): to change a word, edit the data
 file and run `make glossary`. **Glossary reference in sync** fails when the page and the data disagree.
@@ -136,6 +136,12 @@ keeps in other people's words. A line that must name one, as this page does, car
 
 - **Say:** fluency
 - **Why:** Where the pattern shows up — the themes whose tours visit it. Hand-authored, and it must agree with the tour that owns it.
+- **Owner:** Oleksandr Derechei
+
+### <a id="block-selfcheck"></a>selfcheck
+
+- **Say:** selfcheck
+- **Why:** Three questions a reader can answer after the page, each with a short answer that links the element it rests on. Optional on a pattern, a hazard and a principle.
 - **Owner:** Oleksandr Derechei
 
 ### <a id="block-causes"></a>causes
@@ -491,6 +497,12 @@ keeps in other people's words. A line that must name one, as this page does, car
 - **Say:** kb:tours
 - **Why:** A pattern this theme's tour visits. The inverse of `kb:in-theme`.
 - **Owner:** Oleksandr Derechei · **See:** [kb:in-theme](#prop-in-theme)
+
+### <a id="prop-tier"></a>tier
+
+- **Say:** tier
+- **Why:** Where a page sits on the way in: intro, core or advanced. Recorded in docs/data/tracks.json for every theme a Start-here track stages, never in the page's frontmatter; it orders a track and says nothing about the page's depth of reading.
+- **Owner:** Oleksandr Derechei
 
 ## <a id="house"></a>House
 

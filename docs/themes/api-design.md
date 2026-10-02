@@ -14,16 +14,17 @@ An API is a contract with clients you don't own and can't redeploy — so the de
 ## The question
 <!--meta block=description-->
 
-An internal function call is cheap to change: you edit both sides and redeploy. An **API** is the opposite. The moment it's published, callers you've never met build against it, and every one of them is a reason you can no longer just change it. Designing an API is designing a **contract** under that constraint — shaping a boundary you'll have to keep honouring long after you'd rather have moved on.
-
-That reframes the work. The questions stop being "what's the cleanest signature" and become: can a caller discover what's here and how to use it without reading your source? When you need to change it, can existing callers keep working — is it evolvable? When a request times out, is it safe to retry, or does a blind retry double a charge? Does one shape fit a mobile screen, a partner integration, and a batch job equally badly? And increasingly: what does the boundary look like when the caller isn't a screen at all, but a program or an autonomous agent discovering your operations at runtime?
-
-This theme walks the patterns that answer those questions — the front door, the per-client shaping, the payload contract, the edge validation, the retry safety, and the throttle that keeps one caller from sinking the rest.
+A published API is a contract that callers you have never met build against, so every change risks breaking one of them. The design questions follow. Can callers discover it without reading your source? Can it evolve without breaking them? Is a retry after a timeout safe? Does one shape fit a phone, a partner and a batch job? And what does the boundary look like when the caller is a program or an agent?
 
 ## Explained
 <!--meta block=explain-->
 
-Designing an API means shaping a boundary that callers you do not control build against, so every field you publish is a promise you must keep. Choose one shared API when your clients want about the same calls. Choose a backend per client type (a small server that serves only the mobile app, say) when one screen needs several calls that could be one. The cost of a shared shape is that it fits nobody well, and the cost of many is more code to keep in step. A published promise brings three more costs. Changing it breaks callers, so run old and new versions side by side and give callers a date to move. A write that times out may or may not have happened, so make the client send a unique key with each write and have the server return the first result for a repeated key, not do the work twice. One busy caller can starve the rest, so cap each caller with a token bucket, an allowance that refills at a fixed rate and permits short bursts. Put sign-in checks, limits and routing in one front door, so no service repeats them.
+Designing an API means shaping a boundary that callers you do not control build against, so every field you publish is a promise you must keep. Put sign-in checks, limits and routing in one [API gateway](../patterns/distributed/routing/api-gateway.md), so no service repeats them. Choose one shared API when your clients want about the same calls. Choose a backend per client type (a small server that serves only the mobile app, say) when one screen needs several calls that could be one. Each promise also brings a failure. Changing a field breaks callers, so run [versions](../patterns/distributed/routing/api-versioning.md) side by side. A write that times out may or may not have happened, so make the client send a unique key and have the server return the first result for a repeated key ([idempotency](../patterns/messaging/idempotency.md)). One busy caller can starve the rest, so cap each caller with a [rate limiter](../patterns/distributed/resilience/rate-limiter.md), an allowance that refills at a fixed rate and permits short bursts.
+
+- **Shared shape.** One API fits no client well, and many backends mean more code, so split only where one screen needs several calls.
+- **Version overhead.** Old and new versions side by side double what you test, so give callers a date to move by.
+- **Key storage.** The server must keep each idempotency key to answer a repeat, so expire keys after a day.
+- **Refused callers.** Limits turn bursts into errors, so return a retry-after hint and size bursts to real clients.
 
 **Example.** A bank app home screen needs the balance, 10 recent payments and offers. On a shared API that is 3 calls of 100 ms each, 300 ms in sequence. A mobile backend joins them in one 120 ms call, and you now maintain a second server. A payment POST times out at 5 s and the app retries. With no key, the customer is charged 40 twice. With a key, the server returns the first attempt's result, at the price of storing each key for 24 h. A partner is capped at 100 requests a second with a burst of 200. A script sending 200 a second drains the bucket in 2 s and is then refused.
 
@@ -56,37 +57,41 @@ flowchart LR
 
 The one entry point external clients talk to. It's where cross-cutting boundary concerns — auth, rate limiting, routing, aggregation, and increasingly streaming and agent-facing surfaces — live, so no backing service has to reimplement them.
 
+### [Front Controller](../patterns/enterprise/front-controller.md) {#tour-front-controller}
+
+One handler receives every request, runs the shared steps and dispatches to the right controller. An application programming interface (API) gateway is the same idea across services.
+
 ### [API Routing](../patterns/distributed/routing/api-routing.md) {#tour-api-routing}
 
 Before deciding what the front door does, decide what it reads. A path prefix gives callers one address to learn and every team a shared configuration to change carefully; a hostname gives each team its own name and each caller another to remember; a header carries versions, variants and canaries on top of either. The choice sets who bears the cost each time a service is added.
 
 ### [Backend-for-Frontend](../patterns/distributed/routing/bff.md) {#tour-bff}
 
-The answer to "one size fits no one". Each class of client — web, mobile, partner, or an AI agent — gets a backend shaped around exactly the calls and payloads it needs, rather than sharing one API that compromises on all of them.
+The answer to "one size fits no one". Each class of client — web, mobile, partner, or an artificial intelligence (AI) agent — gets a backend shaped around exactly the calls and payloads it needs, rather than sharing one application programming interface (API) that compromises on all of them.
 
 ### [DTO](../patterns/enterprise/dto.md) {#tour-dto}
 
-The shape of what actually goes over the wire. A deliberate transfer object decouples the API's payload from internal domain models, so you can evolve one without breaking the other — the difference between a stable contract and leaking your database schema.
+The shape of what actually goes over the wire. A deliberate transfer object decouples the application programming interface (API)'s payload from internal domain models, so you can evolve one without breaking the other — the difference between a stable contract and leaking your database schema.
 
 ### [Facade](../patterns/gof/structural/facade.md) {#tour-facade}
 
-The in-process ancestor of every API: one coarse, purpose-built interface that hides a tangle of collaborators behind it. Designing an API well is largely designing a good facade over your domain — expose the intent, not the machinery.
+The in-process ancestor of every application programming interface (API): one coarse, purpose-built interface that hides a tangle of collaborators behind it. Designing an API well is largely designing a good facade over your domain — expose the intent, not the machinery.
 
 ### [Service Layer](../patterns/enterprise/service-layer.md) {#tour-service-layer}
 
-The set of application operations the API exposes, defined in one place independent of transport. It keeps the same use cases available whether they're called over REST, a message, or a gRPC method, so the API is a thin skin over a real boundary.
+The set of application operations the application programming interface (API) exposes, defined in one place independent of transport. It keeps the same use cases available whether they're called over representational state transfer (REST), a message, or a gRPC method, so the API is a thin skin over a real boundary.
 
 ### [Intercepting Validator](../patterns/security/intercepting-validator.md) {#tour-intercepting-validator}
 
-Everything crossing the boundary is attacker-controlled until proven otherwise. Validating and sanitising requests at the edge — before they reach any logic — is how an API stays hard to misuse and hard to exploit.
+Everything crossing the boundary is attacker-controlled until proven otherwise. Validating and sanitising requests at the edge — before they reach any logic — is how an application programming interface (API) stays hard to misuse and hard to exploit.
 
 ### [Idempotency](../patterns/messaging/idempotency.md) {#tour-idempotency}
 
-The property that lets a client retry a failed or timed-out call without fear. An idempotency key or a naturally repeatable operation turns "did that go through?" from a support ticket into a safe retry — essential for any write API on a real network.
+The property that lets a client retry a failed or timed-out call without fear. An idempotency key or a naturally repeatable operation turns "did that go through?" from a support ticket into a safe retry — essential for any write application programming interface (API) on a real network.
 
 ### [Rate Limiter](../patterns/distributed/resilience/rate-limiter.md) {#tour-rate-limiter}
 
-The throttle that keeps one client — buggy, abusive, or just popular — from starving everyone else. Publishing an API means publishing a limit; a token-bucket allowance is the usual way to cap the average rate while still tolerating short bursts.
+The throttle that keeps one client — buggy, abusive, or just popular — from starving everyone else. Publishing an application programming interface (API) means publishing a limit; a token-bucket allowance is the usual way to cap the average rate while still tolerating short bursts.
 
 ### [Pagination](../patterns/distributed/routing/pagination.md) {#tour-pagination}
 

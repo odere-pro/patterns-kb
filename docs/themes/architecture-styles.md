@@ -15,16 +15,16 @@ An architecture style is a family of architectures sharing one set of constraint
 ## The question
 <!--meta block=description-->
 
-Two teams build the same application and end up with systems that share no shape: one is a stack of layers shipped as a single deployable, the other is forty services trading messages over a broker. Neither team chose a diagram. Each chose a set of constraints — which kinds of element may exist, and how they are allowed to relate — and the diagram followed from them. That constraint set is the architecture style, and a style needs no particular technology, though some technologies suit some styles.
-
-Constraints buy properties. Say that a service owns one business capability, is independent of every other, and keeps its data private, and you can deploy one service without redeploying the rest, contain a failure to the service that had it, release weekly, and adopt a new runtime in one place. Relax any of the three and the matching property leaves with it: services that share a database deploy together, fail together, and have bought you only the network hops.
-
-So the work is not picking a diagram. It is deciding which constraints this domain can honour and what you will pay for them — and then being practical, because relaxing a constraint deliberately beats chasing architectural purity, as long as you can name the property you just gave up.
+Two teams build the same application and get systems that share no shape: one a stack of layers in a single deployable, the other forty services trading messages over a broker. Each chose constraints, which kinds of element may exist and how they may relate, and the diagram followed. Constraints buy properties and each relaxed constraint loses one, so the work is deciding which constraints your domain can honour and naming what you give up.
 
 ## Explained
 <!--meta block=explain-->
 
-An architecture style is a set of rules about which kinds of parts may exist and how they may call each other, and the shape of your system follows from the rules. Each rule buys a property. If every service owns one capability and its own data, you can release one without the others and a failure stays inside it. Break a rule, such as two services sharing a database, and the property goes while the network calls stay. Choose by how complicated your domain is, not by fashion. Layers stacked in one program (screens, logic, data) suit a plain business domain. A web front end, a queue and background workers suit a simple domain with a few heavy jobs. Microservices, many small services released on their own, suit a complicated domain that changes often. Too simple a style lets code tangle into a Big Ball of Mud, a system nobody can safely change, and too elaborate a style costs coordination nobody asked for. Every split turns a function call into a network call, so count the hops. Distributed styles also need correlated logs, tracing and automated releases, or your first outage cannot be read. Rank your goals first, such as launch date or budget, and revisit the choice when they change.
+An architecture style is a set of rules about which kinds of parts may exist and how they may call each other, and the shape of your system follows from the rules. Each rule buys a property. If every service owns one capability and its own data, you can release one without the others and a failure stays inside it. Break a rule, such as two services sharing a database, and the property goes while the network calls stay. Choose by how complicated your domain is, not by fashion. [Layers](../patterns/architecture/layered.md) stacked in one program (screens, logic, data) suit a plain business domain. A web front end, a queue and background workers ([web-queue-worker](../patterns/architecture/web-queue-worker.md)) suit a simple domain with a few heavy jobs. [Microservices](../patterns/architecture/microservices.md), many small services released on their own, suit a complicated domain that changes often. Too simple a style lets code tangle into a [Big Ball of Mud](../hazards/big-ball-of-mud.md), a system nobody can safely change. Rank your goals first, such as launch date or budget, and revisit the choice when they change.
+
+- **Network hops.** Every split turns a function call into a network call, so count the hops on your slowest path before you split.
+- **Tooling bill.** Distributed styles need correlated logs, tracing and automated releases, or your first outage cannot be read.
+- **Extra coordination.** A style more elaborate than your domain costs coordination nobody asked for, so keep the simplest style that meets your top goal.
 
 **Example.** A 4-person team runs a shop with 2,000 orders a day. As one layered program it deploys in one step and checkout calls everything in-process. Split into 6 services, checkout calls 4 of them in a chain at 5 ms a hop, which adds 20 ms and 6 release pipelines for a team that never needed independent releases. The real pain is the invoice PDF, which takes 30 s and blocks the web request. They move only that job behind a queue with one worker. The page answers at once, and the cost is that the queue can deliver a message twice, so the worker must check the order number before it sends a second invoice.
 
@@ -84,7 +84,7 @@ A web front end takes requests, a queue holds the work, and a back-end worker do
 
 ### [Microservices](../patterns/architecture/microservices.md) {#tour-microservices}
 
-Decompose functionally instead of horizontally: small autonomous services, one business capability each inside one bounded context, each owning its data, talking through APIs, deployed on their own schedules. Teams then ship without coordinating releases. In return you take on service discovery, cross-service data consistency and distributed management as real, staffed work.
+Decompose functionally instead of horizontally: small autonomous services, one business capability each inside one bounded context, each owning its data, talking through application programming interfaces (APIs), deployed on their own schedules. Teams then ship without coordinating releases. In return you take on service discovery, cross-service data consistency and distributed management as real, staffed work.
 
 ### [Event-Driven](../patterns/architecture/eda.md) {#tour-eda}
 

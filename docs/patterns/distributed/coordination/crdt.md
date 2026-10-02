@@ -195,7 +195,7 @@ function mergeSet(a: ORSet, b: ORSet): ORSet {
 
 **Combines with**
 
-- [Gossip Protocol](./gossip-protocol.md) — State-based CRDTs spread by gossip and tolerate its duplicates and reordering.
+- [Gossip Protocol](./gossip-protocol.md) — State-based conflict-free replicated data types (CRDTs) spread by gossip and tolerate its duplicates and reordering.
 
 **Alternative to**
 

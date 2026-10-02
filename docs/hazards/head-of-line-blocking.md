@@ -16,11 +16,7 @@ One stuck or slow item at the front of an ordered lane holds up every item behin
 ## What it is
 <!--meta block=description-->
 
-**Head-of-line blocking** is what happens when work must leave a lane in the order it entered, and the item at the front cannot move. Everything behind it waits, however small or ready. The lane takes many forms. A [message queue](../patterns/messaging/message-queue.md) read by one ordered consumer, where one message hangs on a call to a dead partner. An HTTP/1.1 connection that pipelines requests, where responses must come back in request order and one slow response holds the rest. A network switch with one input queue per port, where a packet for a busy output blocks packets behind it that are bound for idle outputs. For first in, first out (FIFO) input queues in a switch, uniform traffic saturates the switch at about 58.6 percent of its capacity, which is the textbook figure for the effect.
-
-You recognise it by a mismatch. Items that need 5 ms spend 30 s in the system. The service time of every item looks normal in the traces and the wait time looks wrong. Consumers or links sit idle while work waits, and the age of the oldest item climbs while the depth barely moves. A p99 spikes in step with one slow item, and rolls off when that item finally leaves.
-
-The defining trait is that the blocked items are innocent. Their own work is short and their dependencies are healthy. Overload is different: there the lane has too little capacity for everything in it. [Starvation](./starvation.md) is different too: there a policy keeps choosing other work first. Here the lane has capacity, it simply cannot use it, because the order rule forbids anything from passing the head.
+Head-of-line blocking happens when work must leave a lane in the order it entered and the item at the front cannot move, so everything behind it waits. You see items needing 5 ms spend 30 s in the system, idle consumers, and an oldest-item age that climbs while depth barely moves. The defining trait is that the blocked items are innocent: the lane has capacity, but the order rule forbids anything passing the head.
 
 ## Explained
 <!--meta block=explain-->
@@ -81,5 +77,10 @@ Finally, hide what you cannot remove. If a slow server at the front is the cause
 - [Priority Queue](../patterns/messaging/priority-queue.md) — Separate lanes by class keep urgent items out from behind slow ones.
 - [Message Queue](../patterns/messaging/message-queue.md) — Many consumers on one queue mean a stuck item holds one worker, not the whole lane.
 - [Timeout / Deadline](../patterns/distributed/resilience/timeout-deadline.md) — A per-item timeout bounds how long any one item may hold the front.
+
+**Threatens**
+
+- [Resequencer](../patterns/messaging/resequencer.md) — It holds all later messages until the missing earlier one arrives
+- [WebSocket](../patterns/messaging/websocket.md) — One multiplexed ordered connection lets one slow message delay all the others behind it
 
 <!-- relationships:end -->

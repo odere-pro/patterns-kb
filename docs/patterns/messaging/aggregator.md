@@ -204,6 +204,7 @@ class Aggregator<T, R> {
 **Often confused with**
 
 - [Fan-In](./fan-in.md) — An aggregator does the combining at a fan-in's convergence point
+- [Resequencer](./resequencer.md) — Combines related messages into one, where a resequencer only reorders and keeps each message
 
 **Demonstrated by**
 

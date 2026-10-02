@@ -15,14 +15,16 @@ A system design interview asks you to architect something like Ticketmaster or U
 ## The question
 <!--meta block=description-->
 
-A system design interview hands you a deliberately vague prompt — design [Ticketmaster](../designs/ticketmaster.md), design Uber, design a [rate limiter](../designs/design-rate-limiter.md) — and asks you to architect it at a whiteboard, in boxes and arrows rather than code. The prompts fall into two overlapping buckets. **Product design** questions are user-facing apps you already know — [Dropbox](../designs/dropbox.md), Uber, a chat app — where the interesting work is modelling a real feature. **Infrastructure design** questions are non-user-facing systems — a rate limiter, a message queue, an ad-click aggregator — where the interesting work is data flow and throughput. Both reward the same thing: a clear path from requirements to a design that holds up under scrutiny.
-
-The pressure is the clock. You have roughly 35–60 minutes to go from that one-line prompt to a design that satisfies both what the system must do (its **functional requirements**) and how well it must do it (its **non-functional requirements** — latency, scale, consistency, availability). Spend too long on breadth and you never go deep enough to prove real expertise; dive too early and you go deep on the wrong thing. A framework is what keeps breadth and depth in balance against the clock — and this theme is the map of the patterns you reach for once that framework has put you at the deep end.
+A system design interview gives you a one-line prompt, such as design Ticketmaster or a rate limiter, and 35 to 60 minutes to draw a design in boxes and arrows. Product questions reward modelling a real feature, and infrastructure questions reward data flow and throughput. A framework balances breadth and depth against the clock, and this theme maps the patterns you reach for in the deep dives.
 
 ## Explained
 <!--meta block=explain-->
 
-A system design interview gives you a one-line prompt, such as design Ticketmaster, and 35 to 60 minutes to draw a working system in boxes and arrows. The way through is a fixed order in which each step narrows the problem. Agree the functional requirements (what it does) and non-functional ones (how fast, how large, how consistent), list the core entities, define the API, draw the high-level design, then go deep. The one idea to hold is that the high-level design satisfies the functional requirements and the deep dives satisfy the non-functional ones. Keep the first sketch almost boring, so a user can book a ticket at all, and only then make it fast, correct and large. Spending too long on breadth means you never prove depth, and diving early means going deep on the wrong thing, so the order is the guard. Scoring rewards finding the real challenge, weighing trade-offs, and going deep in a few places over shallow coverage. When the interviewer pushes on slow reads, spikes or failures, reach for the matching pattern and say what it costs.
+A system design interview gives you a one-line prompt, such as design Ticketmaster, and 35 to 60 minutes to draw a working system in boxes and arrows. The way through is a fixed order in which each step narrows the problem. Agree the functional requirements (what it does) and non-functional ones (how fast, how large, how consistent), list the core entities, define the API, draw the high-level design, then go deep. The high-level design satisfies the functional requirements and the deep dives satisfy the non-functional ones. Keep the first sketch almost boring, so a user can book a ticket at all, and only then make it fast, correct and large. When the interviewer pushes on slow reads, reach for a [cache](../patterns/caching/cache-aside.md) or [CDN](../patterns/distributed/routing/cdn.md); on spikes, a [message queue](../patterns/messaging/message-queue.md) or [rate limiter](../patterns/distributed/resilience/rate-limiter.md); on scale, [sharding](../patterns/distributed/routing/sharding.md); and say what each costs.
+
+- **Breadth eats depth.** Too long on breadth and you never prove expertise. Time-box the high-level design to about 10 minutes.
+- **Early dives go wrong.** Going deep before requirements are agreed means going deep on the wrong thing. Fix the order.
+- **Patterns without prices.** Naming a pattern earns little. Say what it costs and why you accept it.
 
 **Example.** Ticketmaster in 45 minutes: requirements 5, entities 3, API 5, high-level design 10, leaving 22 for deep dives. The sketch is client, API, booking service, database. The deep dives answer the non-functional goals. Two users must not buy one seat, so a seat is held for 10 minutes with an expiring lock. A sale draws 500,000 users for 50,000 seats, 10 per seat, so a waiting queue admits users slowly. Reads of the seat map are cached. Each choice names its cost, such as held seats that look sold for 10 minutes.
 
@@ -94,7 +96,7 @@ A cache with geography. Copies of static and media content sit at edge locations
 
 ### [Object Storage](../patterns/distributed/routing/object-storage.md) {#tour-object-storage}
 
-Where images, video, and other large blobs belong — not in the database, which bloats and slows the moment you cram bytes into it. Keep a reference in the row and let a CDN serve the object from the edge.
+Where images, video, and other large blobs belong — not in the database, which bloats and slows the moment you cram bytes into it. Keep a reference in the row and let a content delivery network (CDN) serve the object from the edge.
 
 ### [Replication](../patterns/distributed/coordination/replication.md) {#tour-replication}
 

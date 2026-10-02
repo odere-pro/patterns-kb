@@ -16,9 +16,7 @@ Software entities should be open for extension but closed for modification. Add 
 ## What it says
 <!--meta block=description-->
 
-Software entities should be open for extension, but closed for modification. It is the “O” in SOLID. The phrasing is Bertrand Meyer's, from Object-Oriented Software Construction (1988), where the mechanism was inheritance; the modern, polymorphic reading — extend behaviour through new implementations of an abstraction — is Robert C. Martin's.
-
-Open for extension: the module can be given new behaviour. Closed for modification: you gain that behaviour without editing the module's existing, working source. The two are reconciled by an abstraction — a stable interface whose callers never change while the set of implementations behind it grows.
+Software entities should be open for extension but closed for modification. The phrase is Bertrand Meyer's (1988), where inheritance was the mechanism; Robert C. Martin's reading extends behaviour through new implementations of an abstraction. You gain new behaviour without editing the module's working source, because a stable interface sits between its callers and a set of implementations that grows. It is the O in SOLID.
 
 ## Explained
 <!--meta block=explain-->
@@ -30,7 +28,7 @@ The open-closed principle says you add new behaviour by writing new code, not by
 ## Why it helps
 <!--meta block=rationale-->
 
-Code that already works and is tested is an asset; reopening it to bolt on a case puts that asset at risk. The classic shape is a `switch` over a type that grows a new arm for every variant — each edit re-touches the one function every variant shares, and a mistake made for the newest case can break all the old ones.
+Code that already works and is tested is an asset; reopening it to bolt on a case puts that asset at risk. The classic shape is a `switch` over a type that grows a new arm for every variant — each edit re-touches the one function every variant shares, and a mistake made for the newest case can break all the old ones. Add a bank-transfer arm, mistype a shared variable, and card refunds that passed review last quarter now fail in production, in a function nobody meant to touch.
 
 Push the variation behind an abstraction and new cases arrive as new code in new files. The dispatch site never changes, so it never regresses; the blast radius of adding a variant is exactly the variant. You are extending the system by addition rather than surgery — the safest kind of change there is.
 
@@ -46,12 +44,34 @@ Find the axis of variation and lay a seam across it:
 
 The goal: the next expected variant costs one new file and zero edits to what already ships.
 
+## In code
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — a switch edited per variant, then a seam that new variants plug into"
+// Before: every new payment method reopens this function.
+function pay(kind: string, amount: number) {
+  switch (kind) {
+    case "card": return chargeCard(amount);
+    case "paypal": return chargePaypal(amount);
+    // bank transfer means editing here and re-testing both arms above
+  }
+}
+
+// After: checkout depends on the interface; a new method is a new class.
+interface PaymentMethod { pay(amount: number): void }
+class Card implements PaymentMethod { pay(a: number) { chargeCard(a); } }
+class Paypal implements PaymentMethod { pay(a: number) { chargePaypal(a); } }
+const checkout = (m: PaymentMethod, amount: number) => m.pay(amount); // never edited
+```
+
 ## Taken too far
 <!--meta block=overreach-->
 
 Every abstraction is a bet that a particular axis will vary. Guess the axis wrong — or add seams for variation that never arrives — and you have paid for flexibility no one uses: layers of indirection, interfaces with a single implementation, a plugin framework for a thing that changed once. This is where the principle collides head-on with YAGNI (you aren't gonna need it).
 
 So do not build the extension point on speculation. Let the first hard-coded version stand; when a second variant actually shows up, then refactor to the seam the real difference reveals. An abstraction earned by two concrete cases fits; one imagined in advance almost never does.
+
+The false positive is a seam over code that has one variant and changes for unrelated reasons. A `PaymentMethod` interface with only `Card` behind it costs two extra files and an extra jump on every read, and buys nothing until a second method ships. The same holds when you close the wrong axis: if payments stay stable and the fee rules change weekly, the interface sits in the wrong place and every fee change still edits shipped code. Check the commit history before you pick the axis: the file that changes most often is where a seam pays.
 
 ## How it relates
 <!--meta block=relationships-->
@@ -67,11 +87,15 @@ So do not build the extension point on speculation. Let the first hard-coded ver
 - [Strategy](../patterns/gof/behavioral/strategy.md) — Swap the algorithm by adding a new Strategy, not by editing the context.
 - [Decorator](../patterns/gof/structural/decorator.md) — Add responsibilities by wrapping, leaving the wrapped class untouched.
 - [Template Method](../patterns/gof/behavioral/template-method.md) — New behaviour arrives through a subclass hook; the algorithm skeleton stays closed.
-- [Microkernel / Plugin](../patterns/architecture/microkernel.md) — A stable extension API is the principle applied to a whole product
+- [Microkernel / Plugin](../patterns/architecture/microkernel.md) — A stable extension application programming interface (API) is the principle applied to a whole product
 
 **Specializes**
 
 - [Design for Evolution](./design-for-evolution.md) — Open/closed is this rule at the level of a single class
+
+**Prevents**
+
+- [Shotgun Surgery](../hazards/shotgun-surgery.md) — Adds behaviour by adding a new class, so existing classes stay untouched
 
 **Demonstrated by**
 

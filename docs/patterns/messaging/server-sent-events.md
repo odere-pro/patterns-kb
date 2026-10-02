@@ -16,16 +16,17 @@ Server-Sent Events keep one HTTP response open and let the server write a stream
 ## What it is
 <!--meta block=description-->
 
-The client makes one GET request with `Accept: text/event-stream`. The server answers with status 200 and `Content-Type: text/event-stream` and never finishes the response. It writes events as plain UTF-8 text, each one a few `field: value` lines ending with a blank line. The fields are `data`, `event` for a type name, `id` for a position and `retry` for a reconnect delay. A line starting with a colon is a comment, often sent as a keepalive.
-
-Without it you have [long polling](./long-polling.md), which pays a full request for every event, or [WebSocket](./websocket.md), which brings a new protocol, a stateful connection and your own reconnect logic for a feed that only flows one way. A dashboard, a notification badge or an AI answer written token by token needs the server to talk and the client to listen.
-
-The defining trait is what the browser does for you. `EventSource` reconnects after a drop, waits the `retry` delay and sends the last `id` it saw in a `Last-Event-ID` header. The server uses that to replay what was missed. The cost is the one direction: the client can only send through the request that opened the stream, so any upstream message is a separate HTTP call. The [real-time updates](../../themes/realtime-updates.md) theme picks it for feeds and dashboards.
+Server-Sent Events keep one HTTP response open and write events down it as lines of text, each ending with a blank line and optionally carrying an id. The browser reads them through EventSource and reconnects by itself. It suits one-way feeds such as dashboards, notifications and streamed answers, where WebSocket would add more than the feed needs.
 
 ## Explained
 <!--meta block=explain-->
 
-Server-Sent Events are one HTTP response that never ends. The client opens it with a GET, and the server writes events down it as lines of text, each ending with a blank line and carrying an id. The browser reads them through the EventSource API. Choose it over a WebSocket when data only flows from server to client, such as a feed, a dashboard or a streamed answer: it is plain HTTP, so your proxies, cookies and auth work unchanged. Its big gain is automatic reconnect. After a drop the browser waits, reconnects and sends the last id it saw in a Last-Event-ID header, and the server replays what was missed if it kept a window of recent events. Its costs have counter-moves. The client cannot send upstream, so use a separate request. Events are text only, so encode binary data. Browsers limit HTTP/1.1 to about 6 connections per host, so use HTTP/2. Buffering proxies delay events, so turn buffering off on that route and send a comment line every 15 to 30 seconds.
+Server-Sent Events are one HTTP response that never ends. The client opens it with a GET, and the server writes events down it as lines of text, each ending with a blank line and carrying an id. The browser reads them through the EventSource API. Choose it over a WebSocket when data only flows from server to client, such as a feed, a dashboard or a streamed answer: it is plain HTTP, so your proxies, cookies and auth work unchanged. Its big gain is automatic reconnect. After a drop the browser waits, reconnects and sends the last id it saw in a Last-Event-ID header, and the server replays what was missed if it kept a window of recent events.
+
+- **One direction.** The client cannot send upstream, so any message to the server is a separate request.
+- **Text only.** Events are text, so encode binary data.
+- **Connection limit.** Browsers allow about 6 HTTP/1.1 connections per host, so use HTTP/2.
+- **Buffering proxies.** They delay events. Turn buffering off on that route and send a comment line every 15 to 30 seconds.
 
 **Example.** A build page shows live logs to 5,000 viewers. Each log line is one event with an id, about 120 bytes. A viewer on a train loses signal at line 8,412 and gets it back 20 s later. The browser reconnects with Last-Event-ID 8412, and the server replays the 35 lines it kept in a 1,000-line window, so the viewer sees no gap. Had the server kept only 20 lines, the replay would start at the wrong place, so the window must cover your longest expected outage. The cost is 5,000 open connections held on the server.
 
@@ -92,11 +93,6 @@ sequenceDiagram
 - **Text only** — events are UTF-8, so binary data needs base64 and costs about a third more bytes.
 - **Connection limits on HTTP/1.1** — browsers allow about 6 connections per host, shared across tabs, so several open streams starve the page. HTTP/2 lifts this by multiplexing.
 - **Buffering proxies break it** — a proxy that holds the response until it ends delays every event, so you disable buffering on that route.
-
-### Cons
-<!--meta polarity=con-->
-
-- TODO.
 
 ## When to use it
 <!--meta block=usage-->
@@ -216,6 +212,6 @@ createServer((req, res) => {
 **Alternative to**
 
 - [Long Polling](./long-polling.md) — Long polling is the fallback when a proxy or client cannot hold a stream.
-- [WebSocket](./websocket.md) — Pick SSE when data only flows server to client and you want reconnect for free.
+- [WebSocket](./websocket.md) — Pick server-sent events (SSE) when data only flows server to client and you want reconnect for free.
 
 <!-- relationships:end -->

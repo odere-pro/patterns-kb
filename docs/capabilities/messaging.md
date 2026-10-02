@@ -21,7 +21,12 @@ Every cloud sells the same job here: a durable place to put a message, so the se
 ## Explained
 <!--meta block=explain-->
 
-A managed messaging service is a durable place to put a message, so the sender and the receiver need not be healthy at the same moment. Choose on one question first: will a reader you have not met yet need these records? If so, take a stream, an ordered log that readers move through at their own pace, because queue messages are deleted once handled and a stream keeps them. The retention window is the hard edge of how far back you can replay. If not, use a queue for a task with one owner or a topic for an announcement with many listeners. Four costs follow. Delivery is at least once, so duplicates are normal; check a deduplication key against a store you own, because a broker's own window is short, from 5 minutes on Simple Queue Service (SQS) first in, first out (FIFO) up to 7 days on Service Bus. Strict ordering lowers throughput, so require it per key, never globally. Fan-out bills per delivery, so one event to twenty subscriptions costs twenty; let consumers pull from one stream instead. And no broker joins your database transaction, so write the message into your own database in the same commit and send it from there.
+A managed messaging service is a durable place to put a message, so the sender and the receiver need not be healthy at the same moment. Choose on one question first: will a reader you have not met yet need these records? If so, take a stream, an ordered log that readers move through at their own pace, because queue messages are deleted once handled and a stream keeps them. The retention window is the hard edge of how far back you can replay. If not, use a queue for a task with one owner or a topic for an announcement with many listeners.
+
+- **Duplicates are normal** Delivery is at least once, so check a deduplication key against a store you own, because a broker's own window is short.
+- **Strict ordering lowers throughput** Require it per key, never globally.
+- **Fan-out bills per delivery** One event to twenty subscriptions costs twenty, so let consumers pull from one stream instead.
+- **No broker joins your database transaction** Write the message into your own database in the same commit and send it from there.
 
 **Example.** An order service emits 1,000 events a day. A month later, analytics wants the last 30 days. Through a queue, every event was deleted once handled, so it gets 0 events. Through a stream with 7 days of retention it gets 7,000. With 30 days of retention it gets all 30,000. The cost is storage for 30,000 events, plus a consumer that must tolerate seeing any of them twice. Without a deduplication key, a crash before the consumer saves its position counts some orders twice.
 
@@ -121,7 +126,7 @@ Then watch the depth. A managed queue will accept far more than your consumers c
 - [Workflow Orchestration](../patterns/distributed/coordination/workflow-orchestration.md) — The same state machines sold as an integration service, driving the steps between your queues.
 - [Fan-Out](../patterns/messaging/fan-out.md) — A topic delivers one publish to every subscriber, which is this pattern as a hosted primitive.
 - [Content-Based Router](../patterns/messaging/content-based-router.md) — An event bus matches the message body against rules and picks the destination for you.
-- [Sequential Convoy](../patterns/messaging/sequential-convoy.md) — FIFO message groups and broker sessions keep one related run in order while others proceed in parallel.
+- [Sequential Convoy](../patterns/messaging/sequential-convoy.md) — First in, first out (FIFO) message groups and broker sessions keep one related run in order while others proceed in parallel.
 - [Scheduling](../patterns/concurrency/scheduling.md) — Delay and schedule fields on a message move the timer into the broker.
 
 <!-- relationships:end -->

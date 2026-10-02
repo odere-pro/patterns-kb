@@ -17,18 +17,19 @@ Captures the events an audit trail needs — who did what, when — while maskin
 ## What it is
 <!--meta block=description-->
 
-Someone debugging a broken login writes `console.log(request)`. The request object holds the password the user just typed, their session token and their address, and all of it is now a line of text in a log aggregator that far more people can read than the database it came from. Nobody did anything malicious and nothing crashed. Meanwhile the record you actually needed — who signed in, who changed a permission, who read whose data — is not there, because logging was never anybody's job in particular. A **secure logger** takes both problems away from the call site: one component decides what gets written down and what gets masked first.
-
-Every security-relevant event travels one path before it reaches a sink. Rather than each call site formatting its own line, code hands the logger a structured event — actor, action, target, metadata — and the logger applies a sensitivity policy, masks or tokenizes anything that must not leave the process in the clear, and only then writes to an append-only, access-controlled store. The exposure this closes is asymmetric: a log aggregator is usually protected far less carefully than the system it collects from, so a secret copied there verbatim is a breach that needs no attacker skill at all.
-
-Secure Logger is one of the classic J2EE-era security patterns, catalogued alongside [Intercepting Validator](./intercepting-validator.md) and [Single Access Point](./single-access-point.md). Its job is narrow on purpose: centralize the one place where "does this field get written down" is decided, so that decision doesn't depend on every engineer remembering it at every call site.
+A secure logger is the one component that decides what gets written down and what gets masked, so call sites stop deciding. Code hands it a structured event (actor, action, target, metadata); it applies a sensitivity policy, masks anything that must not leave the process in the clear, and writes to an append-only, access-controlled store. It closes two gaps: secrets copied verbatim into a weakly protected aggregator, and missing records of who did what.
 
 ## Explained
 <!--meta block=explain-->
 
-A secure logger is the one function every security-relevant event passes through, which takes a structured event (who, what, on which target) and masks or drops sensitive fields before anything is written. Without it, every call site decides alone what to write, and a debugging line that prints the whole request puts a password in a log that far more people can read than the database. Choose it over trusting each developer to remember, because the decision is then made once and call sites do not get a vote. It costs four things. A list of banned fields misses a new field holding a secret, so allow only named fields and mask the rest. Redaction can remove detail an investigator needs, so log stable ids in place of identities. One stray console.log bypasses it, so add a lint rule that bans it. And text from outside can carry line breaks that forge log entries, so strip control characters on the way in. Send security events down a durable path, because a buffered sink drops records under load, during an incident.
+A secure logger is the one function every security-relevant event passes through, which takes a structured event (who, what, on which target) and masks or drops sensitive fields before anything is written. Without it, every call site decides alone what to write, and a debugging line that prints the whole request puts a password in a log that far more people can read than the database. Choose it over trusting each developer to remember, because the decision is then made once and call sites do not get a vote. Send security events down a durable path, because a buffered sink drops records under load, during an incident.
 
-**Example.** A login handler used to run console.log(request). The request holds the password and a session token, and the log aggregator is readable by 200 engineers while the database is open to 5. After the change, the handler calls audit with userId, ip and outcome, the only three fields the allowlist knows. The password field is not listed, so it is written as \[REDACTED\]. An attacker who submits the username bob followed by a line break and a fake success entry has the line break stripped, so the log shows one entry, not two. The cost is upkeep: a new field is invisible in logs until someone adds it to the list.
+- **Allowlist upkeep.** A banned-field list misses new secrets, so allow only named fields and mask the rest; each new field must be added.
+- **Lost detail.** Redaction can remove what an investigator needs; log stable ids in place of identities.
+- **Bypass.** One stray console.log skips it; add a lint rule that bans it.
+- **Log forging.** Outside text with line breaks can forge entries; strip control characters on the way in.
+
+**Example.** A login handler used to run console.log(request). The request holds the password and a session token, and the log aggregator is readable by 200 engineers while the database is open to 5. After the change, the handler calls audit with userId, ip and outcome, the only three fields the allowlist knows. The password field is not listed, so it is written as \\\[REDACTED\\\]. An attacker who submits the username bob followed by a line break and a fake success entry has the line break stripped, so the log shows one entry, not two. The cost is upkeep: a new field is invisible in logs until someone adds it to the list.
 
 ## How it works
 <!--meta block=structure-->
@@ -245,7 +246,7 @@ logger.audit({
 
 **Demonstrated by**
 
-- [Persona Identification & Sanction Check](../../designs/persona-identification.md) — redacting raw PII from every log line in a persona-verification saga, emitting flowId/personaId references instead
+- [Persona Identification & Sanction Check](../../designs/persona-identification.md) — redacting raw personally identifiable information (PII) from every log line in a persona-verification saga, emitting flowId/personaId references instead
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — the same reasoning that rejects a wire tap here: a monitoring surface is where access controls are weakest
 
 **Implemented by**

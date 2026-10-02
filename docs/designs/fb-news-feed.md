@@ -16,12 +16,16 @@ A social news feed shows a user the recent posts of everyone they follow, newest
 ## Understanding the problem
 <!--meta block=description-->
 
-A news feed pulls the recent posts from a user's social graph into one reverse-chronological stream. The mechanics look trivial — get the people you follow, get their posts, sort by time — until the numbers arrive. One reader may follow thousands of accounts; one author may be followed by tens of millions. Either extreme turns a single request into an avalanche of downstream work, and that avalanche, called fan-out, is the only interesting problem on the page. To keep the graph simple we model relationships as uni-directional **follows** rather than mutual friendships, which changes nothing about the fan-out. This is a canonical read-heavy system, and it draws on the whole playbook of the [Scaling Reads](../themes/scaling-reads.md) theme.
+A news feed pulls recent posts from a user's follows into one reverse-chronological stream. Get the followed accounts, get their posts, sort by time: simple until one reader follows thousands of accounts or one author has tens of millions of followers. Either extreme turns one request into an avalanche of downstream work, called fan-out. The page designs for that, drawing on the Scaling Reads playbook.
 
 ## Explained
 <!--meta block=explain-->
 
-A news feed builds each reader's list ahead of time: when someone posts, background workers add the post id to a stored list for every follower, so reading a feed is one lookup however many accounts the reader follows. Choose this over assembling the feed at read time once readers follow thousands of accounts, because one request would otherwise fan out into thousands of queries. It costs three things. A post from an account with 90 million followers becomes 90 million writes, so skip precomputing for those few accounts and merge their recent posts in at read time, which makes the read path more complex. Paging past the stored 200 posts is not served from the lists; fall back to the slow query and bet that nobody scrolls that far. And one viral post can overload the single cache shard that owns it, so keep a full copy of the cache on each of several machines and spread the requests, accepting colder starts and fewer distinct posts cached. Set the cutoff for skipping by measuring your follower counts. The lists themselves are cheap: 200 ids at 10 bytes is 2 KB a user.
+A news feed builds each reader's list ahead of time: when someone posts, background workers add the post id to a stored list for every follower ([fan-out on write](../patterns/messaging/fan-out.md)), so reading a feed is one lookup however many accounts the reader follows. Choose this over assembling the feed at read time once readers follow thousands of accounts, because one request would otherwise fan out into thousands of queries. The lists are cheap: 200 ids at 10 bytes is 2 KB a user. Set the cutoff for skipping precomputation by measuring your follower counts.
+
+- **Celebrity writes.** A post from an account with 90 million followers means 90 million writes. Skip those accounts and merge their posts at read time.
+- **Shallow paging.** Scrolling past the stored 200 posts falls back to the slow query. You bet nobody scrolls that far.
+- **Hot cache shard.** One viral post can overload its shard. Keep full cache copies on several machines, accepting colder starts and fewer posts cached.
 
 **Example.** You follow 2,000 accounts, one of them with 90 million followers. A friend with 300 followers posts: 300 list updates run in the background. The big account posts: workers skip it, so there are 0 list updates instead of 90 million. When you open the feed, one lookup returns your 200 stored ids and one live query adds the big account's recent posts, merged by time. Storage for all of it is 2 KB x 2 billion users, about 4 TB. A viral post read 500 times a second splits across 10 cache copies at 50 each.
 
@@ -180,7 +184,7 @@ flowchart TB
 - [Message Queue](../patterns/messaging/message-queue.md) — post creation enqueues {postId, creatorId} so fan-out happens off the critical path and the write returns in milliseconds
 - [Competing Consumers](../patterns/messaging/competing-consumers.md) — a fleet of fan-out workers drains the queue in parallel, each writing a post into its followers' feeds
 - [Idempotency](../patterns/messaging/idempotency.md) — at-least-once delivery plus the idempotent PUT /follow mean redelivered fan-out writes must be safe no-ops
-- [Cache-Aside](../patterns/caching/cache-aside.md) — a long-TTL Redis post cache keyed by postID fronts the store and is invalidated only on the rare edit
+- [Cache-Aside](../patterns/caching/cache-aside.md) — a long-time to live (TTL) Redis post cache keyed by postID fronts the store and is invalidated only on the rare edit
 - [Stateless Service](../patterns/distributed/routing/stateless-service.md) — the Post and Feed services hold no per-request state, so they scale horizontally behind the gateway
 - [Replication](../patterns/distributed/coordination/replication.md) — the post cache is replicated rather than sharded so any instance serves any postID, spreading a viral post's reads
 - [Load Balancer](../patterns/distributed/routing/load-balancer.md) — A replicated post cache is fronted by a load balancer, so a viral post's reads split across every replica

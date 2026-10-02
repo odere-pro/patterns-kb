@@ -17,16 +17,16 @@ Publishers broadcast to a topic and subscribers listen to it, but neither ever h
 ## What it is
 <!--meta block=description-->
 
-When an order is placed, four other things have to happen: charge the card, reserve stock, send the receipt, update the analytics. Call each one directly and the order service now knows all four addresses, waits for all four to answer, and fails when any one of them is down. The fifth thing someone wants next month means editing and redeploying the order service again. **Publish-subscribe** takes the announcement instead: the order service says "an order was placed" to a named channel and moves on, and whoever cares signs up to that channel in advance and gets every announcement from then on.
-
-Publishers emit to a named topic rather than to a receiver; subscribers register interest in that topic; a broker, bus or channel abstraction in between handles matching and delivery, and neither side holds a reference to the other. That breaks the three couplings a direct call always carries at once: space — no receiver addresses; time — no need for both sides to be up together; synchronization — no blocking on however long delivery and processing take.
-
-Dropping all three ties at once — no addresses to hold, no shared uptime, no waiting for an answer — is what makes this the default wiring for event-driven systems. A service that emits `order.placed` never has to know whether zero, one, or ten downstream services care, and adding an eleventh needs no change to the publisher at all. The cost is that "who consumes this, and why" moves out of code and into topic names, schemas, and runtime configuration — a [fan-out](./fan-out.md) a compiler can no longer see.
+Publish-subscribe lets a service announce an event to a named topic instead of calling each interested service. A broker matches and delivers a copy to every subscriber, so the publisher holds no addresses, does not wait and does not need consumers online, and adding one needs no publisher change. The cost is that who consumes an event moves from code into topic names, schemas and configuration.
 
 ## Explained
 <!--meta block=explain-->
 
-Publish-subscribe lets a service announce an event to a named topic and leaves delivery to a broker that hands a copy to every subscriber. The publisher holds no addresses, does not wait for answers and does not need the consumers to be up, so you add an eleventh consumer without touching it. Choose it over direct calls when the set of consumers is unknown or growing, and use a queue instead when each message needs just one worker. It costs three things. Publishing and the database write are two steps, so a crash between them loses the event or announces a change that was rolled back; write the event to an outbox table in the same transaction as the data and publish from there. A subscription that is not durable drops messages while nobody listens, with no word to the publisher, so make it durable when loss matters. And a renamed field breaks consumers the publisher cannot list, so version the topic schema and check compatibility before release. Carry a correlation id, a token shared by all messages of one request, to trace it across topics.
+Publish-subscribe lets a service announce an event to a named topic and leaves delivery to a broker that hands a copy to every subscriber. The publisher holds no addresses, does not wait for answers and does not need the consumers to be up, so you add an eleventh consumer without touching it. Choose it over direct calls when the set of consumers is unknown or growing, and use a [queue](message-queue.md) instead when each message needs just one worker.
+
+- **Dual write.** Publishing and the database write are two steps, so a crash between loses an event; use an outbox table in the same transaction.
+- **Dropped messages.** A non-durable subscription loses messages while nobody listens and tells the publisher nothing, so make it durable when loss matters.
+- **Schema drift.** A renamed field breaks consumers the publisher cannot list, so version the topic schema and check compatibility before release.
 
 **Example.** A signup service publishes user.signed_up at 50 a second. Three consumers need it: email, customer relationship management (CRM) and fraud. Called directly, they take 100, 150 and 250 ms, so signup waits 500 ms, and a CRM outage fails the signup. Published to a topic, signup returns after one publish. A fourth consumer, analytics, subscribes next month with no change to the publisher, and deliveries rise from 150 to 200 a second. The cost is that nothing in the signup code now says who consumes the event, so keep a list of subscribers.
 
@@ -212,7 +212,7 @@ bus.publish("order.placed", "order-42");
 - [Outbox](../distributed/coordination/outbox.md) — The outbox makes publishing atomic with the write
 - [Inbox](../distributed/coordination/inbox.md) — The inbox makes receiving atomic with processing
 - [Long Polling](./long-polling.md) — A parked long-poll request is one kind of subscriber waiting on a topic.
-- [Server-Sent Events](./server-sent-events.md) — An open SSE stream is a push channel from a topic to a browser.
+- [Server-Sent Events](./server-sent-events.md) — An open server-sent events (SSE) stream is a push channel from a topic to a browser.
 - [WebSocket](./websocket.md) — A WebSocket is the last hop that delivers a topic's events to a client.
 - [Event-Carried State Transfer](./event-carried-state-transfer.md) — A topic carrying full state lets consumers build replicas.
 
@@ -230,6 +230,10 @@ bus.publish("order.placed", "order-42");
 - [Message Queue](./message-queue.md) — Broadcast to many vs. one consumer per message
 - [Fan-Out](./fan-out.md) — Pub/sub is how you wire it; fan-out is the one-to-many delivery shape it produces.
 
+**Exposed to**
+
+- [Poison Message](../../hazards/poison-message.md) — Can fall into poison message when a subscriber that keeps failing on one event redelivers it without end
+
 **Demonstrated by**
 
 - [WhatsApp](../../designs/whatsapp.md) — decoupling publishers from subscribers is exactly what lets message routing scale across hundreds of independent chat servers
@@ -238,7 +242,7 @@ bus.publish("order.placed", "order-42");
 - [Dropbox](../../designs/dropbox.md) — sync is a publish/subscribe fan-out of change events to every device subscribed to a user's folder
 - [ChatGPT](../../designs/chatgpt.md) — decoupling token producers (workers) from consumers (connection-holding instances) through a keyed channel is publish/subscribe fanout
 - [Online Auction](../../designs/online-auction.md) — coordinating real-time bid updates across many servers is a direct pub/sub deployment
-- [Robinhood](../../designs/robinhood.md) — publishers and the SSE-fronting subscribers stay decoupled per symbol channel, with subscriptions tracking live demand
+- [Robinhood](../../designs/robinhood.md) — publishers and the server-sent events (SSE)-fronting subscribers stay decoupled per symbol channel, with subscriptions tracking live demand
 - [CamelCamelCamel](../../designs/camelcamelcamel.md) — fanning price-change events out to independent notification consumers over a topic is publish/subscribe at work
 
 **Implemented by**

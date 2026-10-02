@@ -16,14 +16,15 @@ A subtype must be substitutable for its base type without changing a program's c
 ## What it says
 <!--meta block=description-->
 
-A subtype must be substitutable for its base type without changing the correctness of the program. It is the “L” in SOLID, named for Barbara Liskov, who framed it in a 1987 keynote; she and Jeannette Wing later made it precise as behavioural subtyping (1994). If code is written against a type, any subtype must be able to stand in for it unnoticed.
-
-Substitutability is about behaviour, not just shape. Matching the method signatures is the easy part; the subtype must also honour the base type's contract — do not strengthen a precondition (demand more of the caller), do not weaken a postcondition (promise less in return), and preserve the invariants the base type guarantees.
+A subtype must be substitutable for its base type without changing the correctness of the program. Barbara Liskov framed it in 1987 and, with Jeannette Wing, made it precise as behavioural subtyping in 1994. It is about behaviour, not shape: matching signatures is the easy part. A subtype must also honour the base contract, so do not strengthen a precondition, do not weaken a postcondition, and keep the base invariants.
 
 ## Explained
 <!--meta block=explain-->
 
-The Liskov substitution principle says code written against a base type must stay correct when handed any subtype, so a subtype must keep every promise the base type makes. Matching method signatures is the easy part. The subtype must also accept at least what the base accepts, promise at least what the base promises, and never put an object into a state the base forbids. When it breaks a promise, callers that know only the base type fail in ways nobody can predict from reading them, and the usual patch is a type check at each call site. Inherit only when the subtype is the base type everywhere the base is used. A square is a rectangle in English but not under a contract where width and height change separately. The common cost is contorting a hierarchy to hold a relationship that is not real, with no-op overrides, methods that throw not supported and ever more abstract base classes. The counter-move is composition, or a separate type that shares an interface rather than a base class. Do not inherit merely to reuse code.
+The Liskov substitution principle says code written against a base type must stay correct when handed any subtype, so a subtype must keep every promise the base type makes. Matching method signatures is the easy part. The subtype must also accept at least what the base accepts, promise at least what the base promises, and never put an object into a state the base forbids. When it breaks a promise, callers that know only the base type fail in ways nobody can predict from reading them, and the usual patch is a type check at each call site. Inherit only when the subtype is the base type everywhere the base is used. A square is a rectangle in English but not under a contract where width and height change separately. Do not inherit merely to reuse code.
+
+- **Contorted hierarchies.** Forcing an unreal relationship brings no-op overrides and methods that throw not supported. Share an interface instead of a base class.
+- **Lost reuse.** Separate types cannot share inherited code, so a few lines repeat. Hold a shared helper by composition.
 
 **Example.** A Rectangle class lets callers set width and height separately, and a test runs r.setWidth(5); r.setHeight(4); assert r.area() == 20. A team adds Square extends Rectangle, where setting either side sets both. The same test now computes 16 and fails, and so does a layout routine written against Rectangle that never knew squares existed. A fix inside the hierarchy, such as a no-op setHeight, breaks the promise a different way. The team drops the inheritance: Rectangle and Square become separate classes sharing a Shape interface with area(). The cost is that the two cannot share the code that stores the sides, so a few lines are written twice.
 
@@ -46,6 +47,24 @@ Treat the base type's contract as law for every subtype:
 - Prefer is-substitutable-for over is-a. A square is-a rectangle in English, yet is not substitutable for one under a mutable-sides contract — so it is not a subtype.
 
 The check: could a caller written against the base type, knowing nothing of this subclass, still be correct? If not, the hierarchy is lying.
+
+## In code
+<!--meta block=sketch-->
+
+```typescript summary="TypeScript — a Square that breaks the Rectangle contract, and a shared interface that keeps it"
+// Before: Square inherits Rectangle but changes what setWidth promises.
+class Rectangle { w = 0; h = 0; setWidth(n: number) { this.w = n; } setHeight(n: number) { this.h = n; } area() { return this.w * this.h; } }
+class Square extends Rectangle {
+  setWidth(n: number) { this.w = this.h = n; }   // surprise: height moves too
+  setHeight(n: number) { this.w = this.h = n; }
+}
+// A caller sets 5 x 4 and expects area 20; for a Square it gets 16.
+
+// After: no inheritance; both honour one small contract.
+interface Shape { area(): number }
+class Rect implements Shape { constructor(readonly w: number, readonly h: number) {} area() { return this.w * this.h; } }
+class Sq implements Shape { constructor(readonly side: number) {} area() { return this.side ** 2; } }
+```
 
 ## Taken too far
 <!--meta block=overreach-->

@@ -14,9 +14,7 @@ Every object has to come from somewhere. These patterns decide who creates it, w
 ## The question
 <!--meta block=description-->
 
-Writing new SomeConcreteClass() in the middle of a method is the simplest way to get an object, and it welds that method to that class. Swapping the class, building one in steps, sharing a single instance, or testing the method with a stand-in all mean editing the call site.
-
-The vocabulary is small. A **product** is the object a creation step hands back. A **creator** is the code that decides which product to build. A **family** is a set of products meant to be used together, such as every widget of one platform. A **collaborator** is an object a class needs to do its work. **Lifecycle** is when an object is made, shared and thrown away.
+Writing new SomeConcreteClass() mid-method is the simplest way to get an object, and it welds that method to that class. Swapping the class, building one in steps, sharing one instance or testing with a stand-in all mean editing the call site. A **product** is what a creation step returns. A **creator** decides which product to build. A **family** is products used together. A **collaborator** is an object a class needs. **Lifecycle** is when an object is made, shared and discarded.
 
 ## Explained
 <!--meta block=explain-->

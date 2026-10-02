@@ -189,6 +189,21 @@ async function getOrderSummary(orderId: string, view: OrderSummaryStore) {
 
 <!-- fluency:end -->
 
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **What does a reader see right after a write?**
+>
+> Often a stale value, because the read side catches up eventually, see [con 2](cqrs.md#tradeoffs-con-2).
+
+> **Why is CQRS overkill for a small CRUD app?**
+>
+> Two models cost more to build and keep in sync than the asymmetry between reads and writes repays, see [con 4](cqrs.md#tradeoffs-con-4).
+
+> **What does the split buy on the read side?**
+>
+> Query models shaped for the screen they serve, added or rebuilt without touching write logic, see [pro 4](cqrs.md#tradeoffs-pro-4).
+
 ## How it relates
 <!--meta block=relationships-->
 
@@ -212,12 +227,16 @@ async function getOrderSummary(orderId: string, view: OrderSummaryStore) {
 **Often confused with**
 
 - [Event Sourcing](./event-sourcing.md) — Separate read/write models vs. store events — distinct ideas
-- [Command-Query Separation](../../principles/command-query-separation.md) — CQRS lifts command-query separation from methods to models and services.
+- [Command-Query Separation](../../principles/command-query-separation.md) — Command query responsibility segregation (CQRS) lifts command-query separation from methods to models and services.
 
 **Prevents**
 
 - [Monolithic Persistence](../../hazards/monolithic-persistence.md) — Separates the read model from the write store, so one engine no longer serves both shapes
 - [Partial Object](../../hazards/partial-object.md) — A read shaped for a screen stops being the domain type, so the domain type keeps its invariants
+
+**Exposed to**
+
+- [Golden Hammer](../../hazards/golden-hammer.md) — Can fall into golden hammer when the read and write split gets adopted by habit in simple create-read-update-delete apps
 
 **Demonstrated by**
 

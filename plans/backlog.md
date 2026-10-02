@@ -27,51 +27,17 @@ deleted when it ships or is dropped. A trap, something that bit a session, goes 
     whitespace in `tidy` (`tools/src/gates/check-json.ts`), as `tools/src/lib/data-json.ts` does.
 
 - From the 2026-10-01 site evaluation ([record](../docs/records/2026-10-01-site-evaluation.md)),
-  each needing an owner call before any work:
-  - **Explain block shape.** Every explain block is one paragraph of 6 to 13 sentences (mean
-    185 words, 19.4 words a sentence), and none of the 216 original pattern explains links or
-    glosses a term that has its own page. KB-014 sets that shape on purpose. Options: allow a
-    first-use link or a parenthesis gloss inside the paragraph; or a short costs list under it.
-  - **Description before Explained.** The description (mean 250 words) is read before the
-    explain block and repeats it. Options: put Explained first, or cap the description.
-  - **Start-here tracks and levels.** No page carries a level, and the home page has no
-    beginner route across the 51 tours. Option: a `tracks.json` naming four to six tracks, with
-    a level per page and a "Start here" block on the home page.
-  - **Self-check.** No page asks the reader anything; the only quiz is the `kb-grill-page`
-    skill, which a site reader cannot reach. Option: an optional folded `check` block of three
-    questions whose answers cite element ids.
-  - **Progress on a tour.** Practiced counts per hub only. Option: "n of m practiced" on each
-    theme page and on the home page, from `docs/data/learning-paths.json`.
-  - **Principles with code.** None of the 31 principle pages has a diagram or a sketch; the
-    SOLID five would each take a before-and-after of at most 15 lines. Needs an optional
-    `sketch` block on the principle kind in `docs/data/content-model.json`.
+  round 3 closed every item but one:
   - **Sketch languages.** 96% of pattern sketches are TypeScript; the concurrency patterns
     (semaphore, lock-free, rw-lock, thread-pool) would read more truly in Go, Java or Rust.
-  - **A verb for "exposed to".** No relation verb says a pattern is threatened by a hazard
-    (lease and distributed-lock against clock-skew went in as `combines-with`), and `unlink`
-    drops every edge between a pair, so one pair cannot hold two verbs.
-  - **Search order for a symptom.** "one slow dependency blocks my threads" ranks bulkhead
-    first, a logging case study second and circuit-breaker fifth.
-  - **A link inside a search option.** Each search result is a link inside `role="option"`,
-    which axe reports as a nested control; it is waived in `STATE_WAIVERS` in
-    `tools/src/gates/check-site-axe.ts`. The fix moves the option role onto the link and
-    changes `search.client.ts`, its tests and the search flows.
 
 ## Pages
 
 - Groom the `persona-identification` design page, `docs/designs/persona-identification.md`
   (its `-v2` sibling may deserve the same pass).
 
-- Missing pages the 2026-10-01 evaluation listed and this pass did not write. Patterns:
-  resequencer, content-enricher, routing-slip, polling-consumer, canonical-data-model
-  (messaging); query-object, front-controller (enterprise); domain-service, context-map (ddd);
-  mutex, barrier, fork-join, proactor, active-object, double-checked-locking, channels
-  (concurrency); shadow-traffic, rolling-deployment (routing); ring-buffer; inverted-index, trie.
-  Hazards: premature-optimization, shotgun-surgery, primitive-obsession, lava-flow, lost-update.
-  Principles: hyrums-law, high-cohesion-low-coupling, rule-of-three,
-  convention-over-configuration, make-illegal-states-unrepresentable.
 - Thin pages from the same evaluation: `parking-lot` (the shortest design in eight blocks);
-  34 of 41 designs have fewer than three diagrams; `open-closed`, `cache-stampede`,
+  34 of 41 designs have fewer than three diagrams; `cache-stampede`,
   `bot-detection` and `harmful-content` sit in the bottom 5% of their blocks; 73 pages have no
   inbound prose link; `transaction-script` and `dummy-object` have no real-world entry.
 - 70 of the pattern sketches run past 30 lines (`repr` 43, `vertical-slice` 37).

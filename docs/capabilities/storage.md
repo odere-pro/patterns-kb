@@ -16,16 +16,15 @@ Four shapes of managed storage — object, block, file and archive — what each
 ## What the cloud gives you here
 <!--meta block=description-->
 
-Every cloud sells the same four shapes of storage, and the shape you pick decides the API you write against for the life of the system. [Object storage](../patterns/distributed/routing/object-storage.md) is an HTTP endpoint over whole blobs addressed by key. Block storage is a raw device that exactly one machine formats and mounts, and file storage is one directory tree that many machines mount at once.
-
-Archive is the fourth shape and the one most often misread: it is object storage priced for data you will almost never read, which is a bargain until you read it. Every tier below the hot one trades retrieval latency and a per-gigabyte retrieval fee for a lower resting price, so choosing a tier is a bet on your access pattern rather than a property of the data itself.
-
-The names differ on every cloud and the shapes do not, so most of the mapping below is mechanical. What is not mechanical is redundancy scope and the access-control model — two providers can both say a copy exists in another region and mean different things by it, and a copy that exists is not always a copy you can read.
-
+Every cloud sells four shapes of storage, and the shape you pick decides the API you write against for the life of the system. [Object storage](../patterns/distributed/routing/object-storage.md) is whole blobs by key over HTTP, block is a raw device one machine mounts, file is a directory tree many machines mount, and archive is object storage priced for data you almost never read. Redundancy scope and access control do not map mechanically.
 ## Explained
 <!--meta block=explain-->
 
-Cloud storage comes in four shapes. Object storage holds whole blobs addressed by key over HTTP. Block storage is a raw disk that one machine mounts. File storage is a directory tree many machines mount at once. Archive is object storage priced for data you almost never read. Pick on two questions: who writes, and how far apart must the copies be. One writer that updates the middle of a file forces block, and many machines that need a filesystem force shared file. Everything else should be object, the only shape that grows without a resize. The bill is rarely bytes. Request charges dominate small objects and egress, the fee for data leaving the provider, dominates anything user-facing, so write fewer, larger objects and put a cache in front. Cold tiers lower the resting price but charge a retrieval fee and a minimum storage time, so demoting data you later re-read costs more than never tiering. Map redundancy by what you can read, not by name: a second-region copy is sometimes readable at once and sometimes only after a failover is declared.
+Cloud storage comes in four shapes. Object storage holds whole blobs addressed by key over HTTP. Block storage is a raw disk that one machine mounts. File storage is a directory tree many machines mount at once. Archive is object storage priced for data you almost never read. Pick on two questions: who writes, and how far apart must the copies be. One writer that updates the middle of a file forces block, and many machines that need a filesystem force shared file. Everything else should be object, the only shape that grows without a resize.
+
+- **Request and egress fees dominate the bill** Write fewer, larger objects and put a cache in front of anything user-facing.
+- **Cold tiers charge to read** A retrieval fee and a minimum storage time mean demoting data you later re-read costs more than never tiering.
+- **Redundancy names mislead** A second-region copy is sometimes readable at once and sometimes only after failover, so map by what you can read.
 
 **Example.** You store 1 million objects of 4 KB each, 4 GB in all. Use illustrative prices: 0.005 dollars per 1,000 write requests and 0.023 dollars per GB-month. Writing them costs 1,000 times 0.005, or 5 dollars, while a month of storage costs about 0.09. Packing them into 1,000 files of 4 MB makes 1,000 writes, or 0.005 dollars. The cost is that reading one small record now means fetching a byte range of a larger file, so you keep an index of where each record sits.
 
@@ -104,7 +103,7 @@ The bill for storage is rarely storage. Request charges dominate small-object wo
 
 **Combines with**
 
-- [CDN](../patterns/distributed/routing/cdn.md) — Object storage holds the origin copy; the CDN is what stops you paying origin egress for every read.
+- [CDN](../patterns/distributed/routing/cdn.md) — Object storage holds the origin copy; the content delivery network (CDN) is what stops you paying origin egress for every read.
 - [Claim Check](../patterns/messaging/claim-check.md) — The claim a message carries is usually an object key — this is where the payload actually sits.
 
 **Generalizes**

@@ -224,6 +224,11 @@ func (b *BoundedBuffer) Take() int {
 - [Actor Model](./actor-model.md) — Message-passing vs. shared-state locking
 - [Thread Confinement](./thread-confinement.md) — Guard the shared state with a lock, rather than partitioning it away
 - [Lock-Free](./lock-free.md) — A mutex is simpler and correct by inspection; go lock-free only when contention proves it necessary
+- [Active Object](./active-object.md) — The monitor makes callers run the method under a lock, where an active object runs it for them
+
+**Composed of**
+
+- [Mutex](./mutex.md) — Builds a lock and condition waits into the object, so callers never take the lock themselves
 
 **Often confused with**
 
@@ -232,6 +237,11 @@ func (b *BoundedBuffer) Take() int {
 **Prevents**
 
 - [Race Condition](../../hazards/race-condition.md) — Serialize the check and the act under one lock so they can't interleave
+
+**Exposed to**
+
+- [Deadlock](../../hazards/deadlock.md) — Can fall into deadlock when nested monitor calls take locks in whatever order the call chain dictates
+- [Priority Inversion](../../hazards/priority-inversion.md) — Can fall into priority inversion when a monitor lock shared across priorities is where the inversion forms
 
 **Demonstrated by**
 

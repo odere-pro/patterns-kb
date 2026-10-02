@@ -15,16 +15,17 @@ A stream never finishes — data keeps arriving, and the system has to process i
 ## The question
 <!--meta block=description-->
 
-Batch processing has a clean answer to "when is it done": when the last record in the file is read. A stream has no last record. Clicks, sensor readings, log lines, and trades keep arriving for as long as the system runs, and the processing has to keep pace indefinitely — not against a fixed input, but against a rate that changes minute to minute and spikes without warning.
-
-That shifts the engineering questions. Instead of "how fast can we finish this dataset," streaming asks: what happens when the producer momentarily outruns the consumer? What happens when a consumer crashes mid-message — does the event get lost, processed twice, or exactly once? Can a downstream reader join late and still reconstruct history, or is the past gone the moment it scrolls off a buffer?
-
-Streaming is the discipline of answering those questions deliberately, with named patterns, rather than discovering the answer under production load the first time a producer gets faster than its consumer.
+Batch work ends when the last record is read. A stream has no last record: clicks, sensor readings and trades arrive for as long as the system runs, at a rate that spikes without warning. This theme asks what happens when a producer outruns its consumer, when a consumer crashes mid-message, and whether a late reader can still reconstruct history.
 
 ## Explained
 <!--meta block=explain-->
 
-Streaming is processing data that never ends, such as clicks or sensor readings, at a rate that changes by the minute. Sooner or later a producer sends faster than its consumer can take, and something must give. You have four responses. Slow the producer down with a signal, called backpressure. Absorb the burst in a queue. Drop what you cannot handle, called load shedding. Or add more consumers that share the work. Each response costs something different: slowing the producer cuts its throughput, a queue costs memory and delay, dropping loses data, and more consumers cost more to run. Most pipelines layer them. A queue takes short bursts, backpressure starts when the queue is nearly full, and extra consumers raise the ceiling before either is needed. A stream that never ends also needs a bounded view of itself: a [Sliding Window](../patterns/distributed/coordination/sliding-window.md) keeps the aggregate over the last interval only, at a memory cost you multiply by the number of keys alive at once. Shed only data you can lose, such as debug logs, and never payments. Choose a queue over backpressure alone when the producer cannot be slowed, as with sensors. Also decide what a crashed consumer means: a lost event, one processed twice, or exactly once, and keep the stream long enough that a late reader can replay history.
+Streaming is processing data that never ends, such as clicks or sensor readings, at a rate that changes by the minute. Sooner or later a producer sends faster than its consumer can take, and something must give. You have four responses. Slow the producer with a signal, called [backpressure](../patterns/concurrency/backpressure.md). Absorb the burst in a [message queue](../patterns/messaging/message-queue.md). Drop what you cannot handle, called load shedding. Or add [competing consumers](../patterns/messaging/competing-consumers.md) that share the work. Most pipelines layer them: a queue takes short bursts, backpressure starts when the queue is nearly full, and extra consumers raise the ceiling. Choose a queue over backpressure alone when the producer cannot be slowed, as with sensors. A [sliding window](../patterns/distributed/coordination/sliding-window.md) bounds an endless stream to the last interval, and keeping the stream with [event sourcing](../patterns/architecture/event-sourcing.md) lets a late reader replay history.
+
+- **Slower producers.** Backpressure cuts throughput. Use it only where the producer can wait.
+- **Lost data.** Shedding drops events. Shed only data you can lose, such as debug logs, never payments.
+- **Memory and delay.** A queue holds events and adds wait. Cap its length and alert on depth.
+- **Delivery guarantees.** A crashed consumer loses an event or repeats one. Decide which, and make handling safe to repeat.
 
 **Example.** Sensors send 10,000 events a second, and one consumer handles 6,000. The queue gains 4,000 a second, so a 30-second burst leaves 120,000 events and the newest waits 120,000 / 6,000 = 20 s. A second consumer lifts capacity to 12,000 a second, above the 10,000 incoming, so the backlog stops growing and drains. Without it, a 1,000,000-event queue fills in 250 s, and backpressure must then slow the senders. Debug logs are shed first so that payment events are never dropped.
 
@@ -55,6 +56,10 @@ flowchart TD
 ### [Producer-Consumer](../patterns/concurrency/producer-consumer.md) {#tour-producer-consumer}
 
 Every streaming pipeline is built from this cell: one side generates data, the other processes it, decoupled by a boundary between them. Get this relationship — and its capacity mismatch — handled before composing anything more elaborate.
+
+### [Ring Buffer](../patterns/concurrency/ring-buffer.md) {#tour-ring-buffer}
+
+A fixed circular array sits between producer and consumer, with a policy for when it is full, so it never grows and allocates nothing per item.
 
 ### [Backpressure](../patterns/concurrency/backpressure.md) {#tour-backpressure}
 

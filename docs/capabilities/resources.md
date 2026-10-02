@@ -16,16 +16,15 @@ The containers, hierarchies and labels every cloud makes you organise resources 
 ## What the cloud gives you here
 <!--meta block=description-->
 
-Every cloud makes you put a resource inside something, and what that something is decides your permission blast radius, your bill, and what happens when you delete it. The container is an account on AWS, a subscription on Azure and a project on Google Cloud. The three translate well enough to draw the same diagram and not well enough to port the scripts, because they differ in the two places that hurt: whether the container is optional, and what it takes with it when it goes away.
-
-Azure puts every resource in exactly one resource group, which must exist before the resource does, and deleting that group deletes everything in it. AWS has no mandatory grouping object — resources sit directly in the account, and an AWS resource group is a saved query over tags whose deletion removes nothing. Google Cloud folds both jobs into the project, so the thing you bill against is also the thing that cascades.
-
-Above the container sits a hierarchy — organisational units, management groups, folders — so that one policy reaches many containers at once. Below it sit tags or labels, the only mechanism tying a resource to a team, an environment or a cost centre. Where you draw those boundaries settles how coarse your [least privilege](../patterns/security/least-privilege.md) can get, and you draw them early, because moving a resource across a boundary afterwards is often not an operation the provider offers.
-
+Every cloud makes you put a resource inside a container: an account on AWS, a subscription on Azure, a project on Google Cloud. The container decides your permission blast radius, your bill and what deleting it takes with it, so it sets how coarse [least privilege](../patterns/security/least-privilege.md) can get. The three translate well enough to draw one diagram and not well enough to port scripts, because they differ on whether the container is optional and what it cascades.
 ## Explained
 <!--meta block=explain-->
 
-A resource container is the account, subscription or project that every cloud resource must live inside. It sets your permission blast radius, your bill, and what is deleted along with it. Draw a boundary where you want a mistake to stop at a wall: always one per environment, with production alone, one per team where teams must not reach each other's data, and one per tenant where a tenant's trouble must stay its own. Each boundary costs three things. Work across containers needs explicit wiring, so make a container the product of a template, not something a person clicks, and one more costs a pull request. Tags decay once they are optional, so reject an untagged resource when it is created, not in a monthly report. And quotas are counted per container and per region, so a fine layout multiplies the increases you must request. Check the limits your design leans on before you commit. Choose the layout you will want in two years, because a resource rarely moves between containers afterwards.
+A resource container is the account, subscription or project that every cloud resource must live inside. It sets your permission blast radius, your bill, and what is deleted along with it. Draw a boundary where you want a mistake to stop at a wall: always one per environment, with production alone, one per team where teams must not reach each other's data, and one per tenant where a tenant's trouble must stay its own. Choose the layout you will want in two years, because a resource rarely moves between containers afterwards.
+
+- **Cross-container work needs explicit wiring** Make a container the product of a template, not a click, so one more costs a pull request.
+- **Tags decay once optional** Reject an untagged resource at creation, not in a monthly report.
+- **Quotas count per container and per region** A fine layout multiplies increase requests, so check the limits your design leans on before you commit.
 
 **Example.** A company has 4 teams and 3 environments, giving 12 containers. It needs a GPU quota increase in 2 regions. Each container is counted separately, so that is 12 times 2, or 24 requests, each with a lead time. A layout with one container per environment would need 3 times 2, or 6. The finer layout buys isolation: a team's runaway job exhausts only its own quota. The cost is 18 extra requests, which you pay by asking in the quarter before you need the capacity.
 

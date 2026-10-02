@@ -740,11 +740,11 @@ export function contentModelJson(): string {
     updated: '2026-09-24',
     note: 'fixture',
     kinds: [
-      { id: 'pattern', folder: 'patterns', blocks: ['description', 'explain', 'tradeoffs', 'usage', 'sketch', 'relationships'], optional: ['usage'] },
+      { id: 'pattern', folder: 'patterns', blocks: ['description', 'explain', 'tradeoffs', 'usage', 'sketch', 'selfcheck', 'relationships'], optional: ['usage', 'selfcheck'] },
       { id: 'theme', folder: 'themes', blocks: ['description', 'explain', 'relationships'], optional: ['relationships'] },
     ],
     groups: { tradeoffs: { fact: 'polarity', values: ['pro', 'con'] }, usage: { fact: 'polarity', values: ['when', 'avoid'] } },
-    facts: { block: ['description', 'explain', 'tradeoffs', 'usage', 'sketch', 'relationships', 'requirements'], polarity: ['pro', 'con', 'when', 'avoid'], requirement: ['fr', 'nfr'] },
+    facts: { block: ['description', 'explain', 'tradeoffs', 'usage', 'sketch', 'selfcheck', 'relationships', 'requirements'], polarity: ['pro', 'con', 'when', 'avoid'], requirement: ['fr', 'nfr'] },
     suffix: { idPattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$', keys: [], fenceKeys: ['caption', 'summary', 'wide'] },
     sketchLangs: [
       { id: 'typescript', label: 'TypeScript', definition: 'fixture' },

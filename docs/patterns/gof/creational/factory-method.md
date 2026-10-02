@@ -203,6 +203,10 @@ console.log(logistics.planDelivery("40ft container"));
 
 - [Abstract Factory](./abstract-factory.md) — Its product methods are usually Factory Methods
 
+**Exposed to**
+
+- [Static Cling](../../../hazards/static-cling.md) — Can fall into static cling when a static factory call fixes the concrete type at the call site
+
 **Demonstrated by**
 
 - [Rate Limiter](../../../designs/design-rate-limiter.md) — creation of the right limiter from runtime config is concentrated in one factory, exactly the problem factories solve

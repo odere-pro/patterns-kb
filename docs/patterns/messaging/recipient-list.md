@@ -15,18 +15,17 @@ Computes, per message, the set of channels that message belongs on, and sends a 
 ## What it is
 <!--meta block=description-->
 
-A recipient list computes, for each message it handles, the set of channels that message belongs on, and sends a copy to every one of them. The list is data — a configuration entry, a table of rules, a subscription registry, or a field the message itself carries — so adding a fourth destination changes that data and nothing else. The sender still makes one publish call and never learns who read it.
-
-The force it resolves is a producer that knows too much. Hardcode the destinations and onboarding a consumer becomes a deploy of a service with no stake in the question; broadcast to everyone instead and each consumer spends effort opening messages it was never meant to act on. Computing the list per message keeps both problems away: the same order event reaches billing, fulfilment and the audit log for one customer, and billing alone for the next.
-
-Three neighbours sit close enough to confuse. A [Message Router](./message-router.md) sends each message to exactly one channel, and a recipient list makes the same dispatch decision without that constraint. A [Content-Based Router](./content-based-router.md) lets the first matching rule win; when every match should get a copy, you are here. [Fan-Out](./fan-out.md) is the closer call: it copies to every consumer, where a recipient list copies to a computed subset — so if the answer is always everyone, take the broadcast and let the broker own delivery.
-
-A [Splitter](./splitter.md) commonly feeds a recipient list, handing each fragment to the step that decides where that fragment goes.
+A recipient list computes, for each message, the set of channels it belongs on and sends a copy to each. The list is data, such as a rules table, a subscription registry or a field on the message, so adding a destination changes that data and not the producer. It sits between a router, which picks one channel, and a broadcast to everyone.
 
 ## Explained
 <!--meta block=explain-->
 
-A recipient list works out, for each message, which channels it belongs on and sends a copy to each one. The list is data, such as a rules table or a field on the message, so adding a destination changes that data and not the producer. Choose it only when the set of destinations really varies per message. If every subscriber always gets every message, publish-subscribe is simpler, and if each message goes to exactly one place, a router says so more plainly. It costs three things. Delivery can be partial, with some recipients holding the message and others not, so record an outcome per recipient and retry only the failures. A retry sends a second copy to recipients that already succeeded, so make every consumer safe to run twice. And a list that comes out empty drops the message with no error, so send that case to a dead-letter channel (a side queue for failures) and alert on its rate. Send to recipients in parallel too, or one slow recipient sets the pace for all of them.
+A recipient list works out, for each message, which channels it belongs on and sends a copy to each one. The list is data, such as a rules table or a field on the message, so adding a destination changes that data and not the producer. Choose it only when the set of destinations really varies per message. If every subscriber always gets every message, publish-subscribe is simpler, and if each message goes to exactly one place, a router says so more plainly.
+
+- **Partial delivery.** Some recipients hold the message and others do not. Record an outcome per recipient and retry only the failures.
+- **Duplicates.** A retry sends a second copy to recipients that already succeeded, so make every consumer safe to run twice.
+- **Empty list.** An empty list drops the message silently. Send that case to a dead-letter channel (a side queue) and alert on its rate.
+- **Slow recipient.** One slow recipient sets the pace if you send in sequence, so send to recipients in parallel.
 
 **Example.** An alert system gets 1,000 alerts a minute. Every alert goes to the log, warnings and critical alerts go to chat, and critical alerts go to the pager. With 100 warnings and 20 critical, that is 1,000 + 120 + 20 = 1,140 copies a minute. The pager service goes down. Replaying the whole list for each failed critical alert would send its log and chat copies again, 3 deliveries for 1 needed. Recording an outcome per recipient retries only the pager, and nobody sees duplicates in chat.
 
@@ -246,5 +245,6 @@ const unsent = (await dispatch(order)).filter((o) => !o.ok);
 
 - [Content-Based Router](./content-based-router.md) — A content-based router picks the first matching rule; a recipient list takes every match
 - [Fan-Out](./fan-out.md) — Fan-out copies to every consumer; a recipient list copies to a computed subset
+- [Routing Slip](./routing-slip.md) — Sends one copy of the message to every recipient at once, in parallel
 
 <!-- relationships:end -->

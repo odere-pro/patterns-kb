@@ -16,14 +16,15 @@ Cut a system so that each part deals with one aspect — how it looks, what the 
 ## What it says
 <!--meta block=description-->
 
-A concern is one coherent aspect of what a system must do — presentation, business rules, persistence, validation, transport. The principle says to organise the code so that each concern is addressed in its own place, and a part responsible for one is not also entangled in another. The phrase is Edsger W. Dijkstra’s, from “On the role of scientific thought” (1974): the value of “focusing one’s attention upon some aspect” on its own, in isolation from the rest.
-
-It is the general idea sitting beneath a lot of more specific structure. Layering, module boundaries, the model–view–controller split — each is a particular way of drawing lines between concerns so that each side can be looked at without the others crowding in.
+A concern is one coherent aspect of what a system must do, such as presentation, business rules, persistence, validation or transport. Organise code so each concern is addressed in its own place and no part is entangled in another. Edsger Dijkstra coined the phrase in 1974, describing the value of focusing attention on one aspect in isolation. Layering, module boundaries and model-view-controller are particular ways of drawing these lines.
 
 ## Explained
 <!--meta block=explain-->
 
-Separation of concerns says to put each aspect of what the system does, such as presentation, business rules, persistence or validation, in its own place, so you can read and change one without the others crowding in. Mix them and a change to a page layout touches SQL, and testing a pricing rule needs a database. Make each boundary a real seam you can swap or test against, such as a module, a layer or an interface, not a comment. Choose it over keeping everything together when two parts change for different reasons or at different speeds. It costs ceremony when a boundary has no real seam: adding one field hops through a controller, a service, a mapper, a data object and a repository. Cutting before you know what varies together is worse, since a wrong boundary fights every change that crosses it, so let the seams show themselves first. Concerns that touch every part, such as logging and security, cannot be localised by any line, so apply one decision across many call sites with middleware on the request path or a decorator around the operation.
+Separation of concerns says to put each aspect of what the system does, such as presentation, business rules, persistence or validation, in its own place, so you can read and change one without the others crowding in. Mix them and a change to a page layout touches SQL, and testing a pricing rule needs a database. Make each boundary a real seam you can swap or test against, such as a module, a layer or an interface, not a comment. Choose it over keeping everything together when two parts change for different reasons or at different speeds. Concerns that touch every part, such as logging and security, cannot be localised by any line, so apply one decision across many call sites with middleware on the request path or a decorator around the operation.
+
+- **Ceremony.** A boundary with no real seam makes one new field hop through five layers, so add a boundary only where a seam pays.
+- **Wrong cuts.** A boundary drawn before you know what varies together fights every change that crosses it, so let the seams show themselves first.
 
 **Example.** A signup handler validates the email, writes SQL and builds the HTML reply in one 120-line function. Changing the confirmation page means editing code that also writes to the database, and testing the email rule needs a running Postgres. The team splits out validate(email), a UserRepository and a template, and the validator is now tested in milliseconds with no database. They stop there. A teammate proposes a controller, service, mapper, data transfer object (DTO) and repository chain per field, which would mean 15 files for a 3-field form, so one handler keeps calling those three pieces. Request logging goes into one middleware instead of every function.
 
@@ -68,6 +69,7 @@ The other failure is separating too early. Before you understand where the conce
 - [MVC](../patterns/architecture/mvc.md) — Model, view, and controller are three concerns kept deliberately apart.
 - [Keep It Simple (KISS)](./kiss.md) — Keeping concerns apart is what makes a design simple rather than merely short
 - [Command-Query Separation](./command-query-separation.md) — Command-query separation is one small case of it.
+- [High Cohesion, Low Coupling](./high-cohesion-low-coupling.md) — Separating concerns is how a module gets cohesive
 
 **Generalizes**
 

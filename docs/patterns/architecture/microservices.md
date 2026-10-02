@@ -263,4 +263,13 @@ await broker.publish("ShipmentReady", { orderId, weight: local.weight });
 
 - [Bounded Context](../ddd/bounded-context.md) — A service that spans two contexts mixes domain models, which is the boundary error every other problem follows from.
 
+**Exposed to**
+
+- [Big Ball of Mud](../../hazards/big-ball-of-mud.md) — Can fall into big ball of mud when a tangled system split without untangling it becomes a distributed mess
+- [Chatty I/O](../../hazards/chatty-io.md) — Can fall into chatty io when fine-grained services need many calls to render one screen
+- [Distributed Monolith](../../hazards/distributed-monolith.md) — Can fall into distributed monolith when a split along technical layers with a shared schema keeps the coupling and adds the network
+- [Golden Hammer](../../hazards/golden-hammer.md) — Can fall into golden hammer when the style gets applied to every system regardless of fit
+- [Monolithic Persistence](../../hazards/monolithic-persistence.md) — Can fall into monolithic persistence when services that share one database keep unlike workloads on one engine
+- [Shotgun Surgery](../../hazards/shotgun-surgery.md) — Can fall into shotgun surgery when a change cutting across service boundaries needs coordinated edits in many repos
+
 <!-- relationships:end -->

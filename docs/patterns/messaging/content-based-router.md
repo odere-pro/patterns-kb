@@ -194,6 +194,10 @@ dispatch({ amount: 15_000, region: "US" }, {
 - [Dead Letter Channel](./dead-letter-channel.md) — A payload matching no rule goes to the dead-letter channel, not nowhere
 - [Message Translator](./message-translator.md) — Route by shape first, then translate each branch into one format
 
+**Alternative to**
+
+- [Routing Slip](./routing-slip.md) — One central router inspects each message and picks its next hop, so every new route changes it
+
 **Variant of**
 
 - [Message Router](./message-router.md) — Route by rules; content-based inspects the body

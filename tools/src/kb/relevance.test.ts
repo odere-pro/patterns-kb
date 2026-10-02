@@ -34,9 +34,10 @@ const REPORT = MODE === 'report';
  * top-1 measures 99.2% (364 of 367), its MRR 0.994 and the facts-only top-1
  * 99.7% (732 of 734). The inflected top-1 measures 98.6% (362 of 367), above
  * its floor of 98.5%: the report names its misses, and raising it waits on
- * fixing them. Design steals measure 0.0% and designs in the top five 0.9%:
+ * fixing them. Design steals measure 0.0% and designs in the top five 0.0%:
  * a case study that only brushes a symptom's words is scored down
- * (DESIGN_COVER in search-score.ts), so it crowds out no pattern.
+ * (DESIGN_COVER in search-score.ts), and every case study is scored down
+ * (CASE_STUDY_DAMP) when the best hit is not one, so it crowds out no pattern.
  */
 const GATES = {
   cliTop1: { verbatim: 0.99, inflected: 0.985 },
@@ -44,7 +45,7 @@ const GATES = {
   cliMrr: 0.99,
   hubTop1: 0.995,
   maxDesignStealsTop1: 0.005,
-  maxDesignInTop5: 0.01,
+  maxDesignInTop5: 0.005,
 } as const;
 
 const words = (s: string): string[] =>

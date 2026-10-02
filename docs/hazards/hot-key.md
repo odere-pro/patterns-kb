@@ -16,18 +16,17 @@ One cache key is so much more popular than the rest that the single node or shar
 ## What it is
 <!--meta block=description-->
 
-A **hot key** — also called the celebrity problem — is a single cache entry that draws wildly disproportionate traffic. Think of a social platform where everyone is loading the same superstar's profile: the key for that one record can field millions of reads per second while the millions of other keys see a handful each. Caching is doing its job — the value is served from memory, not the database — and yet one entry alone can be more than a single cache node can handle.
-
-The distinction from a [cache stampede](./cache-stampede.md) matters, because from a dashboard the two look alike. A stampede is transient: it happens in the gap when a key is absent, and it ends the moment the key is repopulated. A hot key is a standing condition — the entry is present and served correctly, and the load stays exactly where it is until you change how that key is read.
-
-A [hot partition](./hot-partition.md) is the storage-tier version of the same skew, and the two names get traded freely enough that an incident channel will use them for each other. Separate them by what saturates: a hot key overloads the one node holding a single entry, a hot partition overloads a shard holding a whole slice of the keyspace. The fixes follow that split — replicate the entry, or repartition the key.
+A **hot key** is one cache entry that draws far more reads than the rest, so the single node that owns it saturates while its neighbours idle. You recognise it when one node runs hot, latency rises for every key on that node, and adding nodes changes nothing. The defining trait is that it persists until you change how the key is read. A cache stampede is brief and ends when the value reloads.
 
 ## Explained
 <!--meta block=explain-->
 
-A hot key is one cache entry that gets far more reads than all the others, so the one cache node that owns it saturates while the rest sit idle. Caching works as intended, since every read is served from memory, but a sharded cache places each key on exactly one node by hashing, and hashing balances the number of keys, not the traffic. You meet it with a celebrity profile, a viral post, a global setting or a live scoreboard. Adding cache nodes does nothing, because the hot key still lives on one of them, and the saturated node also slows every other key it holds. It differs from a cache stampede, which is brief and ends when the value is reloaded, while a hot key stays until you change how it is read. The only lever is the read path. Copy the entry onto several nodes and spread reads across the copies. Keep a short-lived copy in each application process for the hottest values. Both cost freshness, since every copy must be refreshed or expire, so set the expiry to the staleness you can tolerate. Replication fits read-heavy keys but not one that everyone writes.
+A hot key is one cache entry that gets far more reads than all the others, so the one cache node that owns it saturates while the rest sit idle. Caching works as intended, since every read is served from memory, but a sharded cache places each key on exactly one node by hashing, and hashing balances the number of keys, not the traffic. You meet it with a celebrity profile, a viral post, a global setting or a live scoreboard. Adding cache nodes does nothing, because the hot key still lives on one of them. It differs from a [cache stampede](cache-stampede.md), which is brief and ends when the value is reloaded, while a hot key stays until you change how it is read. The only lever is the read path. Copy the entry onto several nodes and spread reads across the copies. Keep a short-lived copy in each application process for the hottest values. Replication fits read-heavy keys but not one that everyone writes.
 
-**Example.** A cache cluster has 10 nodes, each good for 100,000 reads a second. One celebrity profile gets 400,000 reads a second, so its owner node is 4 times over its limit while the other 9 nodes sit near idle. You copy the profile under 5 keys on 5 nodes, so each takes 80,000 reads a second. You also add a 2 s copy in each of 200 app servers. Each server then reads the cache at most once every 2 s, which is 100 reads a second for the whole fleet. The cost is that a profile edit takes up to 2 s to appear, and each edit must update 5 copies.
+- **Staleness.** Every copy must be refreshed or expire, so set the expiry to the staleness you can tolerate.
+- **Write fan-out.** Each edit must update every copy; keep the copy count small.
+
+**Example.** A cache cluster has 10 nodes, each good for 100,000 reads a second. One celebrity profile gets 400,000 reads a second, so its owner node is 4 times over its limit while the other 9 nodes sit near idle. You copy the profile under 5 keys on 5 nodes, so each takes 80,000 reads a second. You also add a 2 s copy in each of 200 app servers, so the fleet reads the cache at most 100 times a second. A profile edit now takes up to 2 s to appear.
 
 ## How it happens
 <!--meta block=causes-->
@@ -74,5 +73,11 @@ The fix is to stop routing all of the hot key's traffic to one place. **Replicat
 - [Replication](../patterns/distributed/coordination/replication.md) — Copy the hot entry onto several nodes and spread reads across them
 - [In-Process Cache](../patterns/caching/in-process-cache.md) — A local fallback cache keeps the hottest key in the app's own memory, off the shared node
 - [Partition Around Limits](../principles/partition-around-limits.md) — A key chosen to distribute is a key that never gets hot
+
+**Threatens**
+
+- [Cache-Aside](../patterns/caching/cache-aside.md) — One popular key lives on a single cache node, and every reader goes to it
+- [Consistent Hashing](../patterns/distributed/routing/consistent-hashing.md) — Placement by hash balances key count, not traffic
+- [Sharding](../patterns/distributed/routing/sharding.md) — A sharded cache puts a viral key on exactly one shard
 
 <!-- relationships:end -->

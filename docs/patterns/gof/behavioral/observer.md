@@ -194,7 +194,7 @@ stop(); // unsubscribed: no further callbacks
 **Combines with**
 
 - [Flux](../../frontend/flux.md) — A Flux store is an observable; views subscribe and re-render on change
-- [MVC](../../architecture/mvc.md) — Classic MVC notifies its views through exactly this registration
+- [MVC](../../architecture/mvc.md) — Classic model-view-controller (MVC) notifies its views through exactly this registration
 
 **Generalizes**
 

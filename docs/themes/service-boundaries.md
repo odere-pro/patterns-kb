@@ -15,24 +15,16 @@ A service should do one thing, and no mechanical process turns that sentence int
 ## The question
 <!--meta block=description-->
 
-A service should do one thing. Turning that into an actual line on a diagram is the hard part, and no procedure takes requirements in and produces the boundary out — you have to think about the business domain, the requirements, the characteristics you have prioritised and the goals behind them. Draw the lines wrong and the symptoms arrive later wearing other names: hidden dependencies, interfaces shaped like database tables, and two services that ship together or not at all, which is a [Distributed Monolith](../hazards/distributed-monolith.md).
-
-The work has four steps. Analyze the business domain until you can describe its functions and how they depend on each other. Define the bounded contexts, one per subdomain. Apply the tactical patterns inside each context to find its entities, aggregates and domain services. Then work out the services from what that produced, and adjust for the non-functional requirements — team size, data types, scalability, availability, security — which will split one candidate or merge several.
-
-Treat the result as a hypothesis with an expiry date. A boundary that was right when the business had four capabilities is wrong when it has forty, and redrawing one costs real development work, so evaluate boundaries on a schedule rather than at the end of the design phase. And when the answer is genuinely unclear, start coarser: splitting one service into two is far easier than gathering functionality back out of several that already exist.
-
-```mermaid caption="The fourth step feeds the second — a candidate that fails validation sends you back to the context map, not forward to the code."
-flowchart LR
-    A["1 · Analyze the business domain"] --> B["2 · Define the bounded contexts"]
-    B --> C["3 · Find entities, aggregates and domain services inside each"]
-    C --> D["4 · Work out services, then adjust for non-functional requirements"]
-    D --> |"chatty, co-deployed, or two models in one service"| B
-```
+A service should do one thing, but no procedure turns requirements into a boundary. You draw it from the business domain, the requirements and your priorities. Wrong lines show up later as hidden dependencies, interfaces shaped like database tables, and services that ship together or not at all. This theme gives four steps from domain to services, and treats each boundary as a hypothesis with an expiry date.
 
 ## Explained
 <!--meta block=explain-->
 
-A service boundary is the line that says which work belongs in one service, and no procedure produces it from requirements, so you draw it from the business domain and test it against symptoms. Work through four steps: describe the business functions and how they depend on each other, define one bounded context per subdomain (a part of the business with its own vocabulary), find the entities and aggregates inside each, then adjust for team size, scale and security. The two mistakes are not equal. Cut too fine and services chatter, so latency stacks per call and two services have to be released together, which gives you the cost of many services and the independence of none. Cut too coarse and one service holds two meanings of the same word and one team blocks another. Prefer the coarse mistake, because splitting a service is a known refactor while pulling one capability out of four services is a data merge. Treat each boundary as a hypothesis, review it on a schedule, and align teams to the contexts on purpose, since systems drift toward the org chart anyway. Decide consistency per rule, not per system.
+A service boundary is the line that says which work belongs in one service, and no procedure produces it from requirements, so you draw it from the business domain and test it against symptoms. Work through four steps: describe the business functions and how they depend on each other, define one [bounded context](../patterns/ddd/bounded-context.md) per subdomain (a part of the business with its own vocabulary), find the [entities](../patterns/ddd/entity.md) and [aggregates](../patterns/ddd/aggregate.md) inside each, then adjust for team size, scale and security. Cut too fine and services chatter, latency stacks per call, and two services must be released together. Cut too coarse and one service holds two meanings of the same word and one team blocks another. Prefer the coarse mistake, because splitting a service is a known refactor while pulling one capability out of four services is a data merge. When you must move off a wrong cut, migrate gradually with a [strangler fig](../patterns/distributed/coordination/strangler-fig.md).
+
+- **Boundaries expire.** A cut right at four capabilities is wrong at forty. Review boundaries on a schedule.
+- **Redrawing is expensive.** Moving a line costs real development work. Start coarser when the answer is unclear.
+- **Org chart drift.** Systems drift toward team structure. Align teams to contexts on purpose.
 
 **Example.** A delivery firm splits orders from billing. Checkout calls billing 6 times per order at 20 ms each, adding 120 ms, and the two were released together 9 times out of the last 10. The symptoms say the cut went through something cohesive, so they merge them. Another service holds a vehicle model with mileage and service history for maintenance, and only free-or-busy and arrival time for scheduling. Two vocabularies live in one model, so they split it along the context line, and each team now changes its own model without asking the other.
 
@@ -62,7 +54,11 @@ Two contexts can hold the same real-world thing and disagree about what it is, a
 
 ### [Bounded Context](../patterns/ddd/bounded-context.md) {#tour-bounded-context}
 
-This is the first cut, and the rule that follows from it is strict: a service should never span more than one bounded context. A candidate that mixes two domain models is telling you the analysis is unfinished — go back to the map, not forward to the code. Contexts are never isolated, so record how they meet: an upstream context supplying a downstream one under a negotiated contract, a published API in a shared format that several downstream contexts consume, a translation layer where an upstream model would otherwise leak, or no integration at all.
+This is the first cut, and the rule that follows from it is strict: a service should never span more than one bounded context. A candidate that mixes two domain models is telling you the analysis is unfinished — go back to the map, not forward to the code. Contexts are never isolated, so record how they meet: an upstream context supplying a downstream one under a negotiated contract, a published application programming interface (API) in a shared format that several downstream contexts consume, a translation layer where an upstream model would otherwise leak, or no integration at all.
+
+### [Context Map](../patterns/ddd/context-map.md) {#tour-context-map}
+
+Once the contexts exist, a map names the relationship on each border: who is upstream, who translates, and which model is shared.
 
 ### [Entity](../patterns/ddd/entity.md) {#tour-entity}
 
@@ -75,6 +71,10 @@ The complement: a concept with no identity, equal to another whenever its attrib
 ### [Aggregate](../patterns/ddd/aggregate.md) {#tour-aggregate}
 
 An aggregate clusters entities and value objects behind one root that owns an invariant spanning them, which makes it the strongest service candidate you have — a well-drawn aggregate already carries the four properties a well-drawn service needs. It comes from business requirements rather than technical ones. It is functionally cohesive. It is a boundary of persistence. And it is loosely coupled to the other aggregates. Domain services are candidates too: stateless operations spanning several aggregates, which usually become a workflow across services.
+
+### [Domain Service](../patterns/ddd/domain-service.md) {#tour-domain-service}
+
+A rule that belongs to no single aggregate or entity lives in a stateless service in the domain, so the boundaries stay clean.
 
 ### [Anti-Corruption Layer](../patterns/ddd/acl.md) {#tour-acl}
 

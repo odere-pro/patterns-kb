@@ -15,16 +15,16 @@ Sits in front of one or more backend servers and receives every client request o
 ## What it is
 <!--meta block=description-->
 
-A **reverse proxy** is a server that sits in front of one or more backend servers and intercepts every request from a client, forwarding it to an appropriate backend and returning the backend's response as if the proxy itself had produced it. To the client it looks like the origin; the real servers stay behind it, unaddressable directly. It is reverse because — unlike a forward proxy, which acts on behalf of clients reaching out to the wider internet — it acts on behalf of servers, fronting them for inbound traffic.
-
-The force it resolves is coupling at the edge. Left to talk to backends directly, clients bind themselves to internal topology — which host, which port, which service lives where — and every backend has to independently handle the same cross-cutting concerns: TLS termination, compression, request buffering, response caching, access control. A reverse proxy factors all of that out into one shared intermediary at the network boundary. Backends can move, multiply, or be replaced without a client noticing, and none of them re-implements the same edge logic.
-
-Mechanically it terminates the client connection — usually the TLS session too — inspects the request, chooses a backend, opens or reuses a connection to it, relays the request, then streams the response back, optionally caching, compressing, or rewriting headers along the way. Because it is the single choke point for all inbound traffic, it is also the natural place to observe traffic and enforce limits — and a natural single point of failure that must be made redundant.
+A reverse proxy sits in front of one or more backends, takes every client request, forwards it to a suitable backend and returns the response as if it had produced it. The real servers stay unaddressable. It factors shared edge work, such as TLS termination, compression, caching and access control, out of every backend into one intermediary. Unlike a forward proxy, it acts for servers. It is also a natural single point of failure to make redundant.
 
 ## Explained
 <!--meta block=explain-->
 
-A reverse proxy is a server in front of your backends that receives every client request, forwards it to a suitable backend and returns the answer as if it had produced it, so the real servers are never addressed directly. Without it, clients learn which host and port holds each service, and every backend repeats the same edge work: encrypted connections, compression, caching and access control. Choose it over direct access when backends must not be publicly reachable, or when that edge work would otherwise be rebuilt inside every service: the internal layout can change freely while all inbound traffic passes one place you can watch and limit. The costs have counter-moves. Each request takes an extra hop plus the CPU to parse it and finish the encryption handshake, so keep connections to backends open and reuse them. It is one more component to patch and harden. It is a single point of failure for everything behind it, so run two or more behind a shared address. And ending TLS there puts plaintext and private keys on your most exposed host, so give it minimal rights and short-lived certificates.
+A reverse proxy is a server in front of your backends that receives every client request, forwards it to a suitable backend and returns the answer as if it had produced it, so the real servers are never addressed directly. Without it, clients learn which host and port holds each service, and every backend repeats the same edge work: encrypted connections, compression, caching and access control. Choose it over direct access when backends must not be publicly reachable, or when that edge work would otherwise be rebuilt inside every service: the internal layout can change freely while all inbound traffic passes one place you can watch and limit.
+
+- **Extra hop.** Each request pays a hop plus parsing and TLS handshake CPU, so keep connections to backends open and reuse them.
+- **Single point of failure.** Everything behind it vanishes if it dies, so run two or more behind a shared address.
+- **Exposed secrets.** Ending TLS there puts plaintext and private keys on your most exposed host, so give it minimal rights and short-lived certificates.
 
 **Example.** Six backends sit on private addresses and only the proxy has a public one. Of 1,000 requests a second, 60% are static files that the proxy serves from its cache, so the backends see 400. Each request pays about 1 ms for the extra hop. If a single proxy died, all six backends would vanish from the clients' view at once, so you run two behind one shared address, each sized for the full 1,000 requests a second, and one failing costs no traffic.
 
@@ -198,7 +198,7 @@ proxy.listen(443); // clients connect here; the backends stay private
 
 - [API Routing](./api-routing.md) — Routing schemes are the rules a proxy matches on: path prefix, host, or header
 - [Load Balancer](./load-balancer.md) — Fronting interchangeable instances, the proxy is also spreading the load
-- [CDN](./cdn.md) — A CDN edge plays this same caching-proxy role at global scale
+- [CDN](./cdn.md) — A content delivery network (CDN) edge plays this same caching-proxy role at global scale
 - [Sidecar](./sidecar.md) — Deployed per-instance as a sidecar, the proxy runs over localhost
 
 **Enables**
@@ -207,7 +207,7 @@ proxy.listen(443); // clients connect here; the backends stay private
 
 **Often confused with**
 
-- [API Gateway](./api-gateway.md) — A reverse proxy forwards and terminates connections; an API gateway adds routing, auth, rate limiting and aggregation on top of that role.
+- [API Gateway](./api-gateway.md) — A reverse proxy forwards and terminates connections; an application programming interface (API) gateway adds routing, auth, rate limiting and aggregation on top of that role.
 
 **Prevents**
 

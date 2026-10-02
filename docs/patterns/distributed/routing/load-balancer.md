@@ -16,16 +16,16 @@ Sits in front of a fleet of interchangeable instances and spreads every incoming
 ## What it is
 <!--meta block=description-->
 
-A **load balancer** sits between clients and a pool of identical backend instances, presenting one stable address to the outside world while deciding, request by request or connection by connection, which instance actually handles the work. Callers never address an instance directly — they address the balancer, and it picks for them.
-
-The force it resolves is a hard ceiling on any single machine's capacity, paired with the fact that a lone instance is also a lone point of failure. Scaling past that ceiling means running many copies of the same service, but then something has to decide which copy answers each request and hide the churn as instances come and go — deploys, crashes, [autoscaling](./autoscaling.md). Leaving that choice to each client means every client needs a current view of the pool and has to redo the bookkeeping the balancer could do once, centrally.
-
-A balancer answers this by owning the pool: it tracks which instances exist, watches which ones are healthy — usually by polling a health endpoint — and applies a routing algorithm to spread load across the survivors. Layer 4 balancers do this at the connection level, forwarding TCP or User Datagram Protocol (UDP) packets by IP and port with no notion of what's inside them; Layer 7 balancers terminate and read the request itself, so they can route on path, header, or cookie as well as on load.
+A load balancer presents one stable address in front of a pool of identical backend instances and decides, per request or connection, which one handles it. It tracks which instances exist, polls their health and applies a routing algorithm across the survivors. It resolves the capacity ceiling and single point of failure of one machine. Layer 4 balancers forward connections by address and port, and Layer 7 balancers read the request to route on path, header or cookie.
 
 ## Explained
 <!--meta block=explain-->
 
-A load balancer is one stable address that spreads requests across a group of identical copies of your service and skips the ones that are down. Callers talk to the balancer, never to a copy, so you can add copies, restart them and deploy without callers noticing. Without it, one machine caps your capacity and its crash ends the service, and clients picking copies themselves would each need a current list and would hit dead copies. The balancer keeps the list, polls a health check on each copy, and picks among the healthy ones by a rule such as round-robin (take turns) or least connections. Choose it over buying a bigger machine once one box cannot hold the load or must not be your single point of failure. Layer 4 balancers forward connections by address and port without reading them. Layer 7 balancers read the request, so they route by path, header or cookie at the price of more work per request. It costs three things. The balancer is itself a single point of failure, so run two behind a shared address. Taking turns ignores real load, so use least connections when requests differ in cost. And sticky sessions pin a user to one copy, so keep session data outside the copies.
+A load balancer is one stable address that spreads requests across a group of identical copies of your service and skips the ones that are down. Callers talk to the balancer, never to a copy, so you can add copies, restart them and deploy without callers noticing. Without it, one machine caps your capacity and its crash ends the service, and clients picking copies themselves would each need a current list and would hit dead copies. The balancer keeps the list, polls a health check on each copy, and picks among the healthy ones by a rule such as round-robin (take turns) or least connections. Choose it over buying a bigger machine once one box cannot hold the load or must not be your single point of failure. Layer 4 balancers forward connections by address and port without reading them. Layer 7 balancers read the request, so they route by path, header or cookie at the price of more work per request.
+
+- **Single point of failure.** The balancer can fail too, so run two behind a shared address.
+- **Blind turns.** Taking turns ignores real load, so use least connections when requests differ in cost.
+- **Sticky sessions.** Pinning a user to one copy unbalances load, so keep session data outside the copies.
 
 **Example.** Three copies each handle 100 requests a second, and traffic is 240 a second, so each gets 80. One copy crashes. The balancer checks every 5 s and drops a copy after 2 misses, so for about 10 s a third of traffic, 80 a second, goes to a dead copy and about 800 requests fail. Then the two survivors get 120 each, over their 100, so the site slows anyway. With 4 copies, each takes 60, and after a loss the other three take 80. The cost is the extra copy kept spare, plus the 10 s detection gap.
 
@@ -218,6 +218,7 @@ class LoadBalancer {
 - [Blue-Green Deployment](./blue-green-deployment.md) — The pool it fronts can be a whole release, swapped in one call
 - [Geode](./geode.md) — Chooses the node by proximity and health, since every node can serve every request
 - [Service Discovery](./service-discovery.md) — Needs a live instance list, which is what discovery produces
+- [Rolling Deployment](./rolling-deployment.md) — Rolling deployments rely on its readiness and draining of instances
 
 **Has variant**
 
@@ -230,6 +231,11 @@ class LoadBalancer {
 **Requires**
 
 - [Health Endpoint Monitoring](../resilience/health-endpoint.md) — Load balancers route only to healthy instances
+
+**Exposed to**
+
+- [Cascading Failure](../../../hazards/cascading-failure.md) — Can fall into cascading failure when redistributing a dead node's share overloads the survivors
+- [Host Header Rewriting](../../../hazards/host-header-rewriting.md) — Can fall into host header rewriting when host rewriting at the balancer breaks cookies and redirects behind it
 
 **Demonstrated by**
 

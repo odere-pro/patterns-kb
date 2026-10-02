@@ -60,6 +60,10 @@ describe('Practiced', () => {
   it('says in its tooltip what practiced means, on the check and on the hub count', async () => {
     const check = await render({ slug: 'bulkhead', name: 'Bulkhead' });
     expect(check).toContain('title="Mark when you have used this in real work"');
+    // A hub row's bare check repeats this 45 times on the hazards hub, which sits at its size budget:
+    // it keeps a one-word tooltip and the hub's count line carries the sentence.
+    const row = await render({ slug: 'bulkhead', name: 'Bulkhead', compact: true });
+    expect(row).toContain('title="Practiced"');
     const count = await render({ count: true });
     expect(count).toContain('title="Practiced means you have used a page in real work');
   });

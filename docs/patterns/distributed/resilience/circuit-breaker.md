@@ -276,6 +276,21 @@ await idBreaker.call(flowId, () => verifyDocument(personaId, deadline));
 
 <!-- fluency:end -->
 
+## Check yourself
+<!--meta block=selfcheck-->
+
+> **Why trip on an error rate over a window rather than on one failure?**
+>
+> One slow call is noise, and a single trip would flap the breaker; the cost is thresholds you must tune, see [con 1](circuit-breaker.md#tradeoffs-con-1).
+
+> **What can an open breaker hide, and what do you pair it with?**
+>
+> It stops traffic, so a mildly degraded dependency goes unobserved; a health check keeps reporting on it, see [con 2](circuit-breaker.md#tradeoffs-con-2).
+
+> **Why is failing fast not enough on its own?**
+>
+> Without a fallback, fail fast just becomes failing loudly to the caller, see [con 4](circuit-breaker.md#tradeoffs-con-4).
+
 ## How it relates
 <!--meta block=relationships-->
 
@@ -306,6 +321,10 @@ await idBreaker.call(flowId, () => verifyDocument(personaId, deadline));
 - [Cascading Failure](../../../hazards/cascading-failure.md) — Prevents the chain reaction that ends in a total outage
 - [Connection-Pool Exhaustion](../../../hazards/connection-pool-exhaustion.md) — Calls holding a shared pool slot are the case it exists for
 - [Metastable Failure](../../../hazards/metastable-failure.md) — Stopping calls to an overloaded dependency lets it escape a sustained overload.
+
+**Exposed to**
+
+- [Thundering Herd](../../../hazards/thundering-herd.md) — Can fall into thundering herd when a fleet shares one cooldown, so every half-open trial call lands in the same instant
 
 **Demonstrated by**
 

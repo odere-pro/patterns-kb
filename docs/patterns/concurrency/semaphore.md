@@ -218,11 +218,16 @@ func callDownstream() error {
 **Often confused with**
 
 - [Monitor Object](./monitor-object.md) — A binary semaphore (one permit) is a lock — but a counting semaphore admits N, not one
+- [Mutex](./mutex.md) — Counts permits with no owner, so any thread may release and many may hold at once
 
 **Prevents**
 
 - [Unbounded Queue](../../hazards/unbounded-queue.md) — Permits are a fixed budget — work blocks at the cap instead of piling into memory
 - [Resource Leak](../../hazards/resource-leak.md) — Acquire-with-timeout and guaranteed release keep permits from draining away
 - [Thundering Herd](../../hazards/thundering-herd.md) — A counted gate turns a released crowd into a served queue
+
+**Exposed to**
+
+- [Connection-Pool Exhaustion](../../hazards/connection-pool-exhaustion.md) — Can fall into connection pool exhaustion when a counted permit with no acquire timeout parks callers behind slow holders
 
 <!-- relationships:end -->

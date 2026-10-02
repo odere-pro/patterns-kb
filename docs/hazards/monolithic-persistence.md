@@ -16,16 +16,17 @@ Every kind of data the system holds — business records, logs, queued work, lar
 ## What it is
 <!--meta block=description-->
 
-**Monolithic persistence** is one store used for everything the system needs to keep, chosen once and then never revisited as the kinds of data multiplied. It causes two distinct problems that arrive together. The first is **contention**: a high-volume append-only stream of log records and a latency-sensitive transactional workload share connections, buffer memory and I/O bandwidth, so the rate of one governs the response time of the other for no reason either of them can see. The second is **fit**: a store optimized for one access shape is holding data with entirely different shapes, and serves them adequately at best.
-
-You recognize it from the composition of the load rather than from any single slow query. Access statistics show the busiest tables are the ones holding no business value — audit rows, event records, job state — while the transactional tables they crowd out are what the users are waiting on. The store saturates its shared capacity metric and stays there; the application tier does not. And the clearest tell is the mismatch inventory: large binary objects stored as rows, documents in relational columns, a queue implemented as a table that is polled, cached values persisted durably at full cost.
+Monolithic persistence is using one data store for everything the system keeps, chosen once and never revisited as the kinds of data multiplied. You recognise it in the mix of load, not one slow query: the busiest tables hold audit rows, events and job state, while the transactional tables users wait on queue behind them. The defining trait is unlike workloads competing for one engine's connections, memory and disk.
 
 ## Explained
 <!--meta block=explain-->
 
-Monolithic persistence is using one data store for everything the system keeps, chosen once and never reconsidered as the kinds of data multiplied. Log lines, job queues, search and money-moving records all share the same connections, memory and disk bandwidth. A high-volume stream of appended records then crowds out the transactional work users are waiting on, and one engine has to fit data it was never shaped for. You see it in the mix of load, not in one slow query: the busiest tables hold audit rows, events and job state, while the tables that matter wait behind them. Split by how the data is used, and start with whatever is loudest, not whatever is largest. Logs go first, since they are appended, read off the request path and written by one place. Queued work comes next, because a polled table turns every idle worker into read traffic, and a real queue removes it. Read-heavy views can then move to a store built for reading, at the price of a delay you must show readers. Split business data last, along ownership lines. Every store you add must be backed up and watched, so justify each split with its share of the load.
+Monolithic persistence is using one data store for everything the system keeps, chosen once and never reconsidered as the kinds of data multiplied. Log lines, job queues, search and money-moving records all share the same connections, memory and disk bandwidth. A high-volume stream of appended records then crowds out the transactional work users are waiting on, and one engine has to fit data it was never shaped for. You see it in the mix of load, not in one slow query: the busiest tables hold audit rows, events and job state, while the tables that matter wait behind them. Split by how the data is used, and start with whatever is loudest, not whatever is largest. Logs go first, since they are appended and read off the request path. Queued work comes next, because a polled table turns every idle worker into read traffic, and a real queue removes it. Read-heavy views can then move to a store built for reading. Split business data last, along ownership lines.
 
-**Example.** A database volume allows 10,000 I/O operations a second. Audit logging takes 6,000, polling the job table takes 2,500, and checkout needs 3,000 at peak, 11,500 in all. Checkout gets about 3,000 / 11,500 x 10,000 = 2,600, so it queues. Move the logs to a log store and the jobs to a queue, and the database has 3,000 of 10,000 in use. The cost is that an order and its audit record are no longer written in one transaction, and two more systems need on-call cover.
+- **Lost transactions.** An order and its audit record no longer commit together; accept a short lag or write an outbox.
+- **More systems.** Every store you add needs backups and on-call, so justify each split with its share of the load.
+
+**Example.** A database volume allows 10,000 I/O operations a second. Audit logging takes 6,000, polling the job table takes 2,500, and checkout needs 3,000 at peak, 11,500 in all. Checkout gets about 3,000 / 11,500 x 10,000 = 2,600, so it queues. Move the logs to a log store and the jobs to a queue, and the database has 3,000 of 10,000 in use.
 
 ## How it happens
 <!--meta block=causes-->
@@ -69,5 +70,9 @@ Every store you add is one more thing to back up, monitor, patch and be woken by
 - [Object Storage](../patterns/distributed/routing/object-storage.md) — Large binary content leaves the record, which keeps only the key that points at it
 - [CQRS](../patterns/architecture/cqrs.md) — Let a read-heavy view live in a store shaped for reading, while writes stay where the invariants are
 - [Functional Partitioning](../patterns/distributed/routing/functional-partitioning.md) — Splitting by area stops one store serving every access shape badly
+
+**Threatens**
+
+- [Microservices](../patterns/architecture/microservices.md) — Services that share one database keep unlike workloads on one engine
 
 <!-- relationships:end -->
