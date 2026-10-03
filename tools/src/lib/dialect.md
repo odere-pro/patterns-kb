@@ -3,7 +3,7 @@
 Every page under `docs/` is written in this dialect, and every rule is numbered `D-nn` (or
 `X-nn`) so a gate, a test or a commit can cite it. The pages were converted once from the
 HTML pages the site used to be built from, by a converter and a round-trip proof that have
-since retired with that HTML (`plans/harness-optimize.md`, P2 and P5; git history holds
+since retired with that HTML (the [migration record](../../../docs/records/2026-09-30-migration-round-trip.md); git history holds
 both). Rules that say what the converter did with an HTML construct record where a page's
 shape came from; the rule for the markdown itself holds for every page written since.
 

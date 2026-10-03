@@ -88,7 +88,7 @@ sequenceDiagram
 ### Cons
 <!--meta polarity=con-->
 
-- **One slow request delays all the ones behind it** — the thread runs one at a time, so put slow I/O on another executor.
+- **One slow request delays all the ones behind it** — the thread runs one at a time, which is [head-of-line blocking](../../hazards/head-of-line-blocking.md), so put slow I/O on another executor.
 - **An unbounded queue hides overload** — memory grows while latency climbs, so bound the queue and decide what a full queue does.
 - **Each call pays a queue hop and a thread switch** — a call that was 50 ns becomes microseconds, so do not use it for tiny hot methods.
 - **Stack traces stop at the proxy** — the failure surfaces on the future, so log the request origin when you enqueue.

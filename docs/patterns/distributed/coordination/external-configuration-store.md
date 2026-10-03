@@ -127,51 +127,35 @@ sequenceDiagram
 
 ```typescript summary="TypeScript — a typed reader with refresh on change and a startup fallback"
 type Settings = Record<string, string>
-
 interface SettingsStore {
   version(): Promise<string>        // an entity tag or revision id
   fetchAll(): Promise<Settings>
 }
-
-const REFRESH_INTERVAL_MS = 30_000
-
 export class Configuration {
   private cache: Settings = {}
   private version = ''
-
   constructor(
     private readonly store: SettingsStore,
-    // Shipped with the deployment. The cache covers a store that dies at
-    // runtime; only this covers a store that is down when the process starts.
+    // Shipped with the deployment: covers a store that is down at process start.
     private readonly fallback: Settings,
   ) {}
-
   async start(): Promise<void> {
-    try {
-      await this.refresh()
-    } catch {
-      this.cache = this.fallback
-    }
-    setInterval(() => void this.refresh().catch(() => {}), REFRESH_INTERVAL_MS)
+    await this.refresh().catch(() => { this.cache = this.fallback })
+    setInterval(() => void this.refresh().catch(() => {}), 30_000)
   }
-
   private async refresh(): Promise<void> {
-    // Compare versions first: an unchanged store costs one cheap call
-    // instead of refetching every key on every tick.
+    // Version first: an unchanged store costs one cheap call, not every key.
     const version = await this.store.version()
     if (version === this.version) return
     this.cache = await this.store.fetchAll()
     this.version = version
   }
-
-  // Typed access with an explicit default, because a missing key must have a
-  // decided answer rather than propagating undefined into the caller.
+  // A missing key gets a decided answer, not an undefined in the caller.
   getNumber(key: string, fallback: number): number {
-    const parsed = Number(this.cache[key])
-    return Number.isFinite(parsed) ? parsed : fallback
+    const n = Number(this.cache[key])
+    return Number.isFinite(n) ? n : fallback
   }
 }
-
 ```
 
 ## In the wild

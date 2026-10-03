@@ -71,7 +71,7 @@ sequenceDiagram
 
 - **Adding a new element type** forces a change to every existing visitor.
 - **Boilerplate**: every element needs an `accept` method to route the call back (double dispatch).
-- **Visitors often need to see an element's internals**, which weakens its encapsulation.
+- **Visitors often need to see an element's internals**, which weakens its [encapsulation](../../../principles/encapsulation.md).
 - **Overkill when there is only one operation**, or when it belongs on the element itself.
 
 ## When to use it

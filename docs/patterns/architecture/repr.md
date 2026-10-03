@@ -105,33 +105,23 @@ interface Endpoint<Req, Res> {
   route: string;                       // the route lives WITH the handler
   handle(req: Req): Promise<Res>;
 }
-
 // ---- endpoints/place-order.ts ----
 type PlaceOrder = { sku: string; qty: number };
-
 class PlaceOrderEndpoint implements Endpoint<PlaceOrder, { orderId: string }> {
   method = "POST" as const;
   route = "/orders";
   // Declares ONE dependency, because this operation needs one. A controller
   // hosting this action alongside nine others would declare all ten.
   constructor(private orders: OrderStore) {}
-
-  async handle(req: PlaceOrder) {
-    return { orderId: await this.orders.place(req.sku, req.qty) };
-  }
+  async handle(r: PlaceOrder) { return { orderId: await this.orders.place(r.sku, r.qty) }; }
 }
-
-// ---- endpoints/get-order.ts ----
+// ---- endpoints/get-order.ts: same shape, a different dependency entirely ----
 class GetOrderEndpoint implements Endpoint<{ id: string }, OrderView> {
   method = "GET" as const;
   route = "/orders/:id";
-  constructor(private views: OrderViewStore) {}   // a different dependency entirely
-
-  handle(req: { id: string }) {
-    return this.views.byId(req.id);
-  }
+  constructor(private views: OrderViewStore) {}
+  handle(req: { id: string }) { return this.views.byId(req.id); }
 }
-
 // ---- the pipeline: the ONLY place cross-cutting behaviour belongs ----
 function register<Req, Res>(app: App, e: Endpoint<Req, Res>, ...stages: Stage[]) {
   app.route(e.method, e.route, async (http) => {
@@ -140,9 +130,6 @@ function register<Req, Res>(app: App, e: Endpoint<Req, Res>, ...stages: Stage[])
     http.json(await e.handle(ctx.body));
   });
 }
-
-register(app, new PlaceOrderEndpoint(orders), requireUser, validate, inTransaction);
-register(app, new GetOrderEndpoint(views), requireUser);
 ```
 
 ## In the wild

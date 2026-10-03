@@ -102,18 +102,16 @@ class HashRing {
   private ring = new Map<number, string>(); // ring position -> node id
   private positions: number[] = [];
   private readonly vnodes = 100;
-
   addNode(node: string): void {
-    for (let i = 0; i < this.vnodes; i++) {
-      this.ring.set(hash(`${node}#${i}`), node);
-    }
-    this.positions = [...this.ring.keys()].sort((a, b) => a - b);
+    for (let i = 0; i < this.vnodes; i++) this.ring.set(hash(`${node}#${i}`), node);
+    this.reindex();
+  }
+  removeNode(node: string): void {
+    for (let i = 0; i < this.vnodes; i++) this.ring.delete(hash(`${node}#${i}`));
+    this.reindex();
   }
 
-  removeNode(node: string): void {
-    for (let i = 0; i < this.vnodes; i++) {
-      this.ring.delete(hash(`${node}#${i}`));
-    }
+  private reindex(): void {
     this.positions = [...this.ring.keys()].sort((a, b) => a - b);
   }
 

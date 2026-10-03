@@ -118,13 +118,11 @@ for (let i = 0; i < workerCount; i++) worker(jobQueue);
 
 ```typescript summary="TypeScript — replicas claiming KYC tasks from one Postgres queue"
 interface Task { id: string; flowId: string; type: "verify_id" | "check_list"; }
-
 interface TaskQueue {
   claim(leaseMs: number): Promise<Task | null>;
   complete(id: string): Promise<void>;
   release(id: string): Promise<void>; // returns the task for another consumer
 }
-
 const claimSql = `
   UPDATE task SET status = 'processing', locked_at = now(), attempts = attempts + 1
   WHERE id = (
@@ -139,19 +137,12 @@ async function runConsumer(queue: TaskQueue, handle: (t: Task) => Promise<void>)
   while (true) {
     const task = await queue.claim(30_000); // leased to this replica for 30s
     if (!task) continue;                    // nothing waiting, poll again
-    try {
-      await handle(task);
-      await queue.complete(task.id);        // done — leaves the queue
-    } catch {
-      await queue.release(task.id);         // let a sibling retry it
-    }
+    try { await handle(task); await queue.complete(task.id); } // done — leaves the queue
+    catch { await queue.release(task.id); }                    // let a sibling retry it
   }
 }
-
 // N interchangeable replicas on the same table — capacity is replica count.
-for (let i = 0; i < workerCount; i++) {
-  runConsumer(taskQueue, runKycStep);
-}
+for (let i = 0; i < workerCount; i++) runConsumer(taskQueue, runKycStep);
 ```
 
 ## In the wild

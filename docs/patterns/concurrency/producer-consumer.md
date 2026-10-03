@@ -101,10 +101,10 @@ flowchart LR
 <!--meta block=sketch-->
 
 ```go summary="Go — producers and consumers around a bounded channel"
+
 func main() {
 	// The buffer is the whole interface: a channel with room for 4 items.
 	queue := make(chan int, 4)
-
 	// Producer: the send waits while the buffer is full. That wait is the backpressure.
 	var producers sync.WaitGroup
 	for p := 0; p < 2; p++ {
@@ -116,27 +116,21 @@ func main() {
 			}
 		}()
 	}
-	// Close the buffer once every producer is finished, so consumers can stop.
+	// Close once every producer is finished, so consumers can stop.
 	go func() { producers.Wait(); close(queue) }()
-
-	// Consumers: the receive waits while the buffer is empty, and the loop
-	// ends when the channel is closed and drained.
-	var consumers sync.WaitGroup
-	var mu sync.Mutex
-	total := 0
+	// Consumers: the receive waits while the buffer is empty; the loop ends on close.
+	results := make(chan int)
 	for c := 0; c < 3; c++ {
-		consumers.Add(1)
 		go func() {
-			defer consumers.Done()
+			sum := 0
 			for item := range queue {
-				mu.Lock()
-				total += item
-				mu.Unlock()
+				sum += item
 			}
+			results <- sum
 		}()
 	}
-	consumers.Wait()
-	fmt.Println(total) // 2 x (0+...+49) = 2450
+	fmt.Println(<-results + <-results + <-results) // 2 x (0+...+49) = 2450
+}
 ```
 
 ## In the wild

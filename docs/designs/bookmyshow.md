@@ -142,6 +142,21 @@ The default answer wraps the whole sequence in a lock the `Showtime` owns — va
 
 The validation is all-or-nothing: every seat is checked before any state changes, so a request for `["A5","A6","A7"]` where A6 is taken throws immediately and A5 is never claimed. A finer design gives each seat its own lock so bookings for different seats of a packed opening night proceed in parallel — real throughput, but it promotes `Seat` from a string to a class with a lock and a `bookedBy` field, and demands sorted lock acquisition to avoid [deadlock](../hazards/deadlock.md). That is the answer to a measured hot-screening bottleneck, not the starting point.
 
+```mermaid caption="Why is there exactly one winner for seat A5? Both bookings take the same per-screening lock in turn, so the second one's availability check sees the first one's reservation."
+sequenceDiagram
+    participant U1 as Buyer 1
+    participant U2 as Buyer 2
+    participant S as Showtime
+    U1->>S: book(A5)
+    Note over S: lock held for Buyer 1
+    S->>S: A5 is free, append reservation
+    S-->>U1: confirmed
+    Note over S: lock released
+    U2->>S: book(A5)
+    Note over S: lock held for Buyer 2
+    S--xU2: seat A5 unavailable
+```
+
 ```python summary="Pseudocode — Showtime.book under the lock"
 def book(self, reservation):
     with self._lock:                       # the screening owns its lock

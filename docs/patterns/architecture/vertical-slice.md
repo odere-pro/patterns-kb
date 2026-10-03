@@ -107,10 +107,7 @@ flowchart LR
 
 ```typescript summary="TypeScript — one slice, and the dispatcher that finds it"
 // ---- the whole seam: a request type, and a handler for exactly that type ----
-interface Handler<Req, Res> {
-  handle(req: Req): Promise<Res>;
-}
-
+interface Handler<Req, Res> { handle(req: Req): Promise<Res>; }
 const handlers = new Map<string, Handler<never, unknown>>();
 
 function slice<Req, Res>(name: string, h: Handler<Req, Res>): void {
@@ -118,10 +115,7 @@ function slice<Req, Res>(name: string, h: Handler<Req, Res>): void {
 }
 
 // ---- slices/place-order.ts — input, rules, work and output, all in one file ----
-type PlaceOrder = { sku: string; qty: number };
-type Placed = { orderId: string };
-
-slice<PlaceOrder, Placed>("place-order", {
+slice<{ sku: string; qty: number }, { orderId: string }>("place-order", {
   async handle(req) {
     if (req.qty <= 0) throw new Error("qty must be positive"); // its own validation
     const row = await db.one(                                  // its own data access
@@ -140,8 +134,7 @@ slice<{ customerId: string }, unknown[]>("order-history", {
 
 // ---- the transport edge stays thin: translate, dispatch, serialize ----
 app.post("/orders", async (httpReq, httpRes) => {
-  const result = await handlers.get("place-order")!.handle(httpReq.body);
-  httpRes.status(201).json(result);
+  httpRes.status(201).json(await handlers.get("place-order")!.handle(httpReq.body));
 });
 ```
 

@@ -146,6 +146,18 @@ One Redis instance tops out near 50k–100k checks/second, an order of magnitude
 
 Sharding turns every shard into a single point of failure for the clients it holds: lose one and those clients go uncovered, and if they retry hard, an unprotected backend can cascade. Two honest answers exist for a check that cannot reach its shard. **Fail-open** admits the request — good when availability of the API matters more than the limit. **Fail-closed** rejects it — chosen here, because a rate-limiter outage tends to coincide with a traffic spike, which is exactly when protection matters most; better to shed some load briefly than to let a viral surge flatten the databases. Prevention beats both: run each shard as a master with [replicas](../patterns/distributed/coordination/replication.md) that sync continuously, and let Redis Cluster auto-promote a replica on failure — typically a 1–2 second gap, not the worst-case tens of seconds. The cost is extra infrastructure and a little replication lag, which eventual consistency here happily tolerates.
 
+A check that cannot reach its shard has to be admitted or rejected, and this design rejects.
+
+```mermaid caption="What happens to a check when its shard is down, and what keeps that window short?"
+flowchart TB
+    GW["Gateway"] -->|"check for client"| Shard["Shard master"]
+    Shard -.->|"fails"| Down{"shard reachable?"}
+    Down -->|"no, fail-closed (chosen)"| Rej["Reject request"]
+    Down -->|"no, fail-open (rejected)"| Adm["Admit request"]
+    Shard -->|"sync continuously"| Rep["Replica"]
+    Rep -->|"auto-promoted, typically 1-2 s"| Shard
+```
+
 ### 5 · Shaving the network cost
 
 Every check is a round trip, and the round trip — not the Redis op — is where the milliseconds go. Two optimisations do most of the work. **Connection pooling** keeps a warm set of TCP connections from each gateway to Redis so no request pays the 20–50&nbsp;ms handshake; it is a classic [object pool](../patterns/gof/extra/object-pool.md), and most Redis clients do it for you once tuned to the request volume. **Geographic distribution** is the bigger win: put gateways and their Redis clusters in the same region as the users, so a Tokyo request does not cross an ocean to a Virginia shard. Cross-region consistency gets fuzzier, but eventual consistency is acceptable for rate limiting, and the latency saved is large. Local caching of counts, pipelining, and request batching exist too, but they are rarely worth their staleness risk once pooling and locality are in place.

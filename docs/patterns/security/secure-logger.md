@@ -129,46 +129,33 @@ audit("user-42", "login.succeeded", { ip: "203.0.113.7", password: "hunter2" });
 
 ```typescript summary="TypeScript — an audit logger that emits references, not identities"
 interface AuditEvent {
-  flowId: string;                 // safe correlation handles …
-  personaId: string;              // … stand in for who the subject is
-  action: string;
-  metadata?: Record<string, unknown>;
+  flowId: string; personaId: string;  // safe handles stand in for who the subject is
+  action: string; metadata?: Record<string, unknown>;
 }
 
-// The encrypted vault is the one place raw PII exists. A log line that carried a
-// name or a document number would quietly become a second, unguarded copy of it.
-const SENSITIVE_KEYS = new Set([
-  "fullname", "dateofbirth", "dob", "documentnumber", "address", "photo",
-]);
+// The vault is the one place raw PII exists; a log line carrying it is a second, unguarded copy.
+const SENSITIVE_KEYS = new Set(["fullname", "dateofbirth", "dob", "documentnumber", "address", "photo"]);
 
 function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);
   if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) {
-      out[k] = SENSITIVE_KEYS.has(k.toLowerCase()) ? "[REDACTED]" : redact(v);
-    }
-    return out;
+    return Object.fromEntries(Object.entries(value).map(([k, v]) =>
+      [k, SENSITIVE_KEYS.has(k.toLowerCase()) ? "[REDACTED]" : redact(v)]));
   }
   return value;
 }
 
 class SecureLogger {
   constructor(private readonly sink: (line: string) => void) {}
-
   audit(event: AuditEvent): void {
     const safe = { ...event, metadata: redact(event.metadata) };
     this.sink(JSON.stringify({ ts: new Date().toISOString(), ...safe }));
   }
 }
 
-const logger = new SecureLogger(line => auditStore.append(line));
-logger.audit({
-  flowId, personaId,
-  action: "idVendor.verified",
-  metadata: { documentNumber: "X1234567", dob: "1984-02-11", outcome: "pass" },
-});
-// written: flowId and personaId identify the subject; documentNumber and dob are "[REDACTED]"
+new SecureLogger(line => auditStore.append(line)).audit({ flowId, personaId,
+  action: "idVendor.verified", metadata: { documentNumber: "X1234567", dob: "1984-02-11" } });
+// written: documentNumber and dob are "[REDACTED]"
 ```
 
 ## In the wild

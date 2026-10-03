@@ -129,6 +129,17 @@ Precomputing feeds means a single post from a high-follower account must be writ
 - **Good — async workers.** Enqueue `{ postId, creatorId }` and let a fleet of [competing consumers](../patterns/messaging/competing-consumers.md) drain the [queue](../patterns/messaging/message-queue.md), each looking up the author's followers and prepending the post to their feeds. The queue smooths the burst so post creation never blocks. At-least-once delivery means a message can be redelivered, so the prepend must be [idempotent](../patterns/messaging/idempotency.md) — applying the same post to a feed twice has to be a no-op. Worker load still varies enormously between a small account and a giant one, so very large fan-outs may be split into smaller tasks.
 - **Great — hybrid feeds.** Stop precomputing for the extreme accounts. Flag specific follow edges as "not precomputed" (a Justin-Bieber-scale account with 90M+ followers), and the workers simply skip them. At read time the Feed Service merges the precomputed feed with the recent posts of those few celebrity accounts, fetched live. In other words, choose [fan-out](../patterns/messaging/fan-out.md)-on-write for the many ordinary authors and fan-out-on-read for the handful of giants — the precomputation threshold is a tunable knob. The price is more work at read time and a more complex Feed Service.
 
+The async option moves fan-out off the write path, and the hybrid skips the biggest accounts.
+
+```mermaid caption="How does one post reach followers' feeds without blocking post creation, and which follow edges are skipped?"
+flowchart TB
+    PS["Post Service"] -->|"enqueue postId, creatorId"| Q[("Message queue")]
+    Q -->|"deliver"| W["Fan-out workers"]
+    W -->|"look up followers"| W
+    W -->|"prepend postId, idempotent"| PF[("PrecomputedFeed")]
+    W -.->|"skip edges flagged not precomputed"| Skip["Celebrity posts fetched live at read time"]
+```
+
 ### 3 · Uneven reads on the post store
 
 Whichever way feeds are built, the Feed Service eventually reads post bodies from the key-value store, and those reads are lopsided: most posts are read hard for a day or two then never again, while a viral post draws a spike of traffic in its first hours. A key-value store sustains throughput only when load is spread evenly across the keyspace; one post ID at 500&nbsp;req/s against its neighbours at 0 is a textbook [hot key](../hazards/hot-key.md) that pins a single physical shard.

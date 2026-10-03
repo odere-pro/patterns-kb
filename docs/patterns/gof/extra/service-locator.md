@@ -110,10 +110,7 @@ class ServiceLocator {
   }
 }
 
-interface Clock {
-  now(): Date;
-}
-
+interface Clock { now(): Date }
 const CLOCK = Symbol("Clock") as Key<Clock>;
 
 const locator = new ServiceLocator();

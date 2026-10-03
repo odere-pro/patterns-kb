@@ -95,13 +95,8 @@ Handing collaborators in keeps a class from quietly accumulating everything it t
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — constructor injection with a composition root"
-interface Clock {
-  now(): Date;
-}
-
-interface Mailer {
-  send(to: string, body: string): Promise<void>;
-}
+interface Clock { now(): Date }
+interface Mailer { send(to: string, body: string): Promise<void> }
 
 // The service names what it needs, but never constructs it.
 class ReminderService {
@@ -118,15 +113,12 @@ class ReminderService {
 
 // Real implementations, defined once.
 const systemClock: Clock = { now: () => new Date() };
-
-class ConsoleMailer implements Mailer {
-  async send(to: string, body: string): Promise<void> {
-    console.log(`-> ${to}: ${body}`);
-  }
-}
+const consoleMailer: Mailer = {
+  send: async (to, body) => console.log(`-> ${to}: ${body}`),
+};
 
 // Composition root: the one place that wires the real graph together.
-const service = new ReminderService(systemClock, new ConsoleMailer());
+const service = new ReminderService(systemClock, consoleMailer);
 
 // A test swaps in doubles — no wall clock, no side effects.
 const frozenClock: Clock = { now: () => new Date("2026-01-01T00:00:00Z") };

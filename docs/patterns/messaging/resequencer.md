@@ -121,25 +121,19 @@ The stream is defined by a key, usually the same value a [correlation identifier
 
 ```typescript summary="TypeScript — release in order per key, hold the early, report the gap on timeout"
 interface Msg { key: string; seq: number; body: unknown }
-
 class Resequencer {
   private next = new Map<string, number>();            // next expected number per key
   private held = new Map<string, Map<number, Msg>>();  // early arrivals per key
-
   constructor(private release: (m: Msg) => void) {}
 
   accept(m: Msg): void {
-    const want = this.next.get(m.key) ?? 1;
-    if (m.seq < want) return;                          // duplicate or replay: drop
+    let n = this.next.get(m.key) ?? 1;
+    if (m.seq < n) return;                             // duplicate or replay: drop
     const buf = this.held.get(m.key) ?? new Map<number, Msg>();
-    buf.set(m.seq, m);
-    this.held.set(m.key, buf);
-
-    let n = want;
+    this.held.set(m.key, buf.set(m.seq, m));
     while (buf.has(n)) {                               // drain every consecutive message
       this.release(buf.get(n)!);
-      buf.delete(n);
-      n++;
+      buf.delete(n++);
     }
     this.next.set(m.key, n);
   }
@@ -148,7 +142,7 @@ class Resequencer {
   // skip to the lowest held number and report the gap instead of waiting forever.
   giveUp(key: string): void {
     const buf = this.held.get(key);
-    if (!buf || buf.size === 0) return;
+    if (!buf?.size) return;
     const lowest = Math.min(...buf.keys());
     this.next.set(key, lowest);
     this.accept(buf.get(lowest)!);

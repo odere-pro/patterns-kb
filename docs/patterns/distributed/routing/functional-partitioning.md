@@ -120,9 +120,8 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — one connection per area, and the cross-boundary read made explicit"
-// One handle per functional partition. Separate handles are not ceremony: they
-// make a cross-boundary query impossible to write by accident, because there is
-// no connection that can see both schemas.
+// One handle per functional partition: no connection can see both schemas,
+// so a cross-boundary query cannot be written by accident.
 const orders    = connect(process.env.ORDERS_DSN);      // transactional, write-heavy
 const catalogue = connect(process.env.CATALOGUE_DSN);   // read-heavy, search-shaped
 const history   = connect(process.env.HISTORY_DSN);     // append-only, cheap tier
@@ -131,8 +130,7 @@ const history   = connect(process.env.HISTORY_DSN);     // append-only, cheap ti
 export async function placeOrder(cmd: PlaceOrder) {
   return orders.tx(async (t) => {
     const order = await t.insertOrder(cmd);
-    // The event ships from an outbox in the SAME transaction, so the write and
-    // the announcement of it cannot diverge. No store spans both partitions.
+    // Outbox row in the SAME transaction: the write and its announcement cannot diverge.
     await t.insertOutbox({ type: "OrderPlaced", orderId: order.id, sku: cmd.sku });
     return order;
   });
@@ -146,13 +144,11 @@ export async function orderWithProduct(orderId: string) {
   return { ...order, product: products.get(order.sku) ?? UNKNOWN_PRODUCT };
 }
 
-// Reference data used by every area is REPLICATED into each partition rather than
-// joined from a shared one. That removes a hot spot every area would hit, at the
-// price of a window in which each copy is briefly out of date.
+// Reference data every area uses is REPLICATED into each partition, not joined
+// from a shared one: no hot spot, at the price of briefly stale copies.
 export async function onTaxonomyPublished(version: TaxonomyVersion) {
   await Promise.all([orders.upsertTaxonomy(version), catalogue.upsertTaxonomy(version)]);
 }
-
 ```
 
 ## In the wild

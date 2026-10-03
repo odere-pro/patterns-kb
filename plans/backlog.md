@@ -31,16 +31,34 @@ deleted when it ships or is dropped. A trap, something that bit a session, goes 
   - **Sketch languages.** 96% of pattern sketches are TypeScript; the concurrency patterns
     (semaphore, lock-free, rw-lock, thread-pool) would read more truly in Go, Java or Rust.
 
+- Slim the hub rows' toggles: each row's favourite and practiced buttons inline their own
+  SVG icon, 57,000 of `hazards.html`'s 139,078 bytes. One `<symbol>` per page and a
+  `<use href>` per button would save about 35,000 a hub (`site/src/components/Favourites/`,
+  `Practiced/`); `hubRaw` was re-measured to 149,000 on 2026-10-02 instead.
+
+- Left open when the migration plan was deleted (its history is in git and
+  [the migration record](../docs/records/2026-09-30-migration-round-trip.md)):
+  - The CLI's inflected top-1 measures exactly its 98.5% floor; its five misses are not ties.
+  - `pages.yml` has not been dispatched by hand, as workflow-edits.md asks.
+  - The search box does not show a page's requires and related.
+  - `kb.mjs link`/`unlink` could run gen-relations and gen-prerequisites directly instead of
+    printing `make gen`.
+  - Site-lane owner questions never recorded as settled: `kb:alias` / `kb:solves` head meta
+    (head-C1: keep, or move to the manifest and payload); hub controls inside the knowledge
+    region (blocks-C9); the search-synonyms third payload key (search-C1) and a Term
+    component; home-page atlas controls; about five CORS console errors per page from
+    `file://`.
+
 ## Pages
 
-- Groom the `persona-identification` design page, `docs/designs/persona-identification.md`
-  (its `-v2` sibling may deserve the same pass).
-
-- Thin pages from the same evaluation: `parking-lot` (the shortest design in eight blocks);
-  34 of 41 designs have fewer than three diagrams; `cache-stampede`,
-  `bot-detection` and `harmful-content` sit in the bottom 5% of their blocks; 73 pages have no
-  inbound prose link; `transaction-script` and `dummy-object` have no real-world entry.
-- 70 of the pattern sketches run past 30 lines (`repr` 43, `vertical-slice` 37).
+- Left from the 2026-10-01 evaluation's thin pages: `cache-stampede`, `bot-detection` and
+  `harmful-content` sit in the bottom 5% of their blocks; `transaction-script` has no
+  real-world entry, because nothing could be named with certainty.
+- 21 pages have no inbound prose link, and no page's hand-written prose names them, so a link
+  would be forced: each needs a sentence that earns it, written where the idea belongs. Mostly
+  principles (`command-query-separation`, `defense-in-depth`, `hyrums-law`, `rule-of-three`,
+  …), hazards (`static-cling`, `partial-object`, `priority-inversion`, …) and five
+  capabilities (`messaging`, `networking`, `regions`, `resources`, `storage`).
 
 ## Questions
 

@@ -118,8 +118,7 @@ RUN npm run build && npm prune --omit=dev
 FROM gcr.io/distroless/nodejs22-debian12
 WORKDIR /app
 
-# Only the built output crosses the stage boundary. The build cache, the
-# toolchain and the .git directory stay behind in stage 1.
+# Only the built output crosses the stage boundary; toolchain and .git stay behind.
 COPY --from=build /src/node_modules ./node_modules
 COPY --from=build /src/dist ./dist
 
@@ -127,12 +126,9 @@ USER nonroot                 # never the default privileged account
 EXPOSE 8080
 CMD ["dist/server.js"]
 
-# Two things this file deliberately does NOT do:
-#   - RUN npm config set //registry/:_authToken=$TOKEN
-#     A secret written in a layer survives in the image even if a later
-#     layer deletes it, because layers are diffs. Use a build-time mount.
-#   - FROM node:latest
-#     A mutable tag is not an identity. Pin a digest for a reproducible build.
+# Deliberately NOT here: a token written in a layer (it survives a later delete,
+# because layers are diffs; use a build-time mount) and FROM node:latest (a
+# mutable tag is not an identity; pin a digest).
 ```
 
 ## In the wild

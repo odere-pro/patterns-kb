@@ -111,22 +111,21 @@ flowchart LR
 const EPOCH = 1_700_000_000_000n; // chosen once; changing it invalidates every existing id
 const NODE_BITS = 10n, SEQ_BITS = 12n;
 const MAX_SEQ = (1n << SEQ_BITS) - 1n;
+const nowMs = () => BigInt(Date.now()) - EPOCH;
 
 class IdGenerator {
   private lastMs = -1n;
   private seq = 0n;
-
   constructor(private nodeId: bigint) {
     if (nodeId >> NODE_BITS) throw new Error("node id does not fit in 10 bits");
   }
 
   next(): bigint {
-    let ms = BigInt(Date.now()) - EPOCH;
-
+    let ms = nowMs();
     if (ms === this.lastMs) {
       this.seq = (this.seq + 1n) & MAX_SEQ;
       // 4096 ids used inside one millisecond: the only correct move is to wait.
-      if (this.seq === 0n) ms = this.spinUntilAfter(this.lastMs);
+      if (this.seq === 0n) while ((ms = nowMs()) <= this.lastMs);
     } else if (ms < this.lastMs) {
       // The clock moved backwards. Issuing now risks repeating an id we already
       // handed out, so refuse rather than produce a duplicate silently.
@@ -134,16 +133,9 @@ class IdGenerator {
     } else {
       this.seq = 0n;
     }
-
     this.lastMs = ms;
     // Field order IS the sort order: time highest, so ids compare by time first.
     return (ms << (NODE_BITS + SEQ_BITS)) | (this.nodeId << SEQ_BITS) | this.seq;
-  }
-
-  private spinUntilAfter(ms: bigint): bigint {
-    let now = BigInt(Date.now()) - EPOCH;
-    while (now <= ms) now = BigInt(Date.now()) - EPOCH;
-    return now;
   }
 }
 ```

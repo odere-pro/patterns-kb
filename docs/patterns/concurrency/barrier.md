@@ -116,18 +116,13 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```go summary="Go — a reusable barrier built on a condition variable"
+
 type Barrier struct {
 	mu      sync.Mutex
 	cond    *sync.Cond
 	parties int // N threads that must arrive
 	waiting int // how many have arrived this round
 	gen     int // round number, so a fast thread cannot lap the others
-}
-
-func NewBarrier(n int) *Barrier {
-	b := &Barrier{parties: n}
-	b.cond = sync.NewCond(&b.mu)
-	return b
 }
 
 func (b *Barrier) Wait() {
@@ -146,8 +141,7 @@ func (b *Barrier) Wait() {
 	}
 }
 
-// Each worker: compute its slice, wait for the rest, then read neighbours.
-// for step := 0; step < steps; step++ { computeSlice(id, step); bar.Wait() }
+// NewBarrier sets cond = sync.NewCond(&b.mu). Each worker calls Wait() once per step.
 ```
 
 ## In the wild

@@ -141,7 +141,7 @@ classDiagram
 The state a Game must expose is exactly one of three values: in progress, won, or drawn. The tempting first cut is three boolean flags — `isOver`, `hasWinner`, `isDraw` — beside a nullable `winner`.
 
 - **Three booleans, eight worlds.** Three flags encode 2³ = 8 combinations for a domain that has 3 legal states. `isOver=false, hasWinner=true` (won but not over?) and `isOver=true, isDraw=true, hasWinner=true` (a win and a draw?) are both writable, and each one has to be kept consistent by hand on every move. The type system is now working against you.
-- **One enum, three states (chosen).** A single `GameState` collapses those eight ghosts to three real states; the field holds exactly one, and "won and drawn at once" simply cannot be expressed. Adding `PAUSED` or `ABANDONED` later is one new enum value, not another boolean and a fresh round of coordination logic everywhere. This is the design leaning on [Keep It Simple, Stupid (KISS)](../principles/kiss.md) and, more sharply, on making illegal states unrepresentable.
+- **One enum, three states (chosen).** A single `GameState` collapses those eight ghosts to three real states; the field holds exactly one, and "won and drawn at once" simply cannot be expressed. Adding `PAUSED` or `ABANDONED` later is one new enum value, not another boolean and a fresh round of coordination logic everywhere. This is the design leaning on [Keep It Simple, Stupid (KISS)](../principles/kiss.md) and, more sharply, on [making illegal states unrepresentable](../principles/make-illegal-states-unrepresentable.md).
 - **The honest gap.** `winner` is still a separate nullable field, so `state=WON` with `winner=null` remains technically writable. Languages with tagged unions — Rust, Swift, Kotlin sealed classes, TypeScript discriminated unions — can fold the winner into the `WON` case and close it; Java, Python, C#, and Go cannot do it cleanly, so a plain enum plus a nullable winner is the pragmatic call. Naming the ideal shows depth without over-building the real thing.
 
 ### 2 · One win-check, four directions — not four checkers
@@ -151,6 +151,18 @@ Win detection is where the design most invites over-engineering. From the cell j
 - **Four checker classes.** The over-built answer is a `WinChecker` interface with a `HorizontalWinChecker`, a `VerticalWinChecker`, and two diagonal classes, looped over inside `checkWin` — a [Strategy](../patterns/gof/behavioral/strategy.md) arrangement. But all four bodies are the identical "count contiguous discs both ways"; only a pair of step values differs. That is parameterisable data masquerading as polymorphism, and Connect Four's win geometry is fixed forever, so the extension point guards a requirement that will never change — a textbook [You Aren't Gonna Need It (YAGNI)](../principles/yagni.md) violation and a misapplied Strategy.
 - **Directions as data (chosen).** The unified version treats the four axes as vectors — `(0,1)`, `(1,0)`, `(1,1)`, `(-1,1)` — and reuses one `countInDirection(row, col, dr, dc, color)` helper for each vector and its opposite. Four lines of loop replace four classes. A fix to the counting logic lands once instead of four times, and extending to "five in a row" or a larger board is a one-method change. This is [Don't Repeat Yourself (DRY)](../principles/dry.md) doing real work: one behaviour, expressed once, driven by different parameters.
 
+```mermaid caption="How does one helper cover four axes? Each vector is counted forward and backward from the cell just played, and four or more in a row on any axis wins."
+flowchart TB
+    Start(["checkWin(row, column, color)"]) --> Pick["Take the next vector (dr, dc)"]
+    Pick --> Fwd["countInDirection(row, col, dr, dc, color)"]
+    Pick --> Back["countInDirection(row, col, -dr, -dc, color)"]
+    Fwd --> Sum{"forward + backward + 1 >= 4?"}
+    Back --> Sum
+    Sum -->|"yes"| Win(["return true"])
+    Sum -->|"no, vectors left"| Pick
+    Sum -->|"no, none left"| None(["return false"])
+```
+
 ### 3 · Which object owns which rule
 
 The three classes only earn their keep if every rule has an obvious home.
@@ -158,6 +170,30 @@ The three classes only earn their keep if every rule has an obvious home.
 - **Board owns grid rules.** Bounds checking, the lowest-free-row scan, the full-board test, and win detection all live on Board, because they depend only on the grid — not on turns or players. `placeDisc` does its own validation and returns `-1` for an illegal column rather than making Game pre-check with `canPlace`, so grid validation stays in one place.
 - **Game owns game rules.** Turn order, the state transitions, and rejecting a move out of turn or after the end live on Game. `makeMove` is the single mutating method and validates in a fixed order — game not over, then correct player, then a legal landing — before anything changes. This split is [separation of concerns](../principles/separation-of-concerns.md) and the [single-responsibility principle](../principles/single-responsibility.md) made concrete: two reasons to change — grid geometry versus game flow — live in two classes.
 - **Player owns nothing but data.** A name and a colour, two getters, no logic — deliberately a [value object](../patterns/ddd/value-object.md), so identity and decision-making stay separate. Making Player an interface with Human and Bot subclasses would add abstraction a pure data holder cannot justify (a human "does" nothing), which is exactly why the bot opponent below is a separate collaborator instead.
+
+The fixed validation order matters because each check is cheaper and safer than the next. A move after the game ends or out of turn is rejected before the board is touched, so a rejected call leaves no half-applied state to undo.
+
+```mermaid caption="In what order does makeMove decide? Two cheap guards on Game run first, the board is touched only after both pass, and the state changes only after the board reports its answer."
+sequenceDiagram
+    participant C as Caller
+    participant G as Game
+    participant B as Board
+    C->>G: makeMove(player, column)
+    alt game is not IN_PROGRESS or wrong player
+        G-->>C: false
+    else guards pass
+        G->>B: placeDisc(column, color)
+        B-->>G: landing row, or -1
+        alt row is -1
+            G-->>C: false
+        else disc landed
+            G->>B: checkWin(row, column, color)
+            B-->>G: win or no win
+            G->>G: set WON, or DRAW if board is full, else switch turn
+            G-->>C: true
+        end
+    end
+```
 
 ### 4 · Extending without a rewrite
 

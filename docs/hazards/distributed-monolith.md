@@ -37,7 +37,7 @@ The reason it survives review is that each individual decision looks reasonable.
 
 - **Boundaries along technical layers.** A "data access service", a "validation service" and a "messaging service" can never change alone, because every feature crosses all three.
 - **A shared database schema.** Two services reading and writing the same tables are coupled through the data whatever their code does, so a column change has to be scheduled across everyone who touches it. Sharing a database server is fine; sharing a schema is not.
-- **Boundaries drawn before the domain is understood.** Split on the org chart or on a guess and responsibilities keep migrating between services, with each migration costing a coordinated release.
+- **Boundaries drawn before the domain is understood.** Split on the org chart ([Conway's law](../principles/conways-law.md)) or on a guess and responsibilities keep migrating between services, with each migration costing a coordinated release.
 - **Shared libraries carrying domain logic.** A common library recreates compile-time coupling: a version bump has to land everywhere at once, which is the release train the split was meant to remove.
 - **Chatty synchronous chains.** If two pieces talk constantly once separated, the chatter is the evidence they belonged together — and A calls B calls C means every link has to be up for the request to succeed.
 - **Distributed transactions treated as ordinary calls.** Insisting on all-or-nothing outcomes across services re-couples them at the tightest possible point, and does it inside the request path.

@@ -100,10 +100,7 @@ export const hostConfig = {
   plugins: [
     new ModuleFederationPlugin({
       name: "shell",
-      remotes: {
-        // load the "cart" slice from its own deployment
-        cart: "cart@https://cart.example.com/remoteEntry.js",
-      },
+      remotes: { cart: "cart@https://cart.example.com/remoteEntry.js" }, // the cart slice, its own deployment
       shared: ["react", "react-dom"], // dedupe shared libs across slices
     }),
   ],
@@ -123,7 +120,6 @@ export const cartConfig = {
 
 // In the shell, the remote is imported like any module — resolved at run time.
 const Cart = (await import("cart/Cart")).default;
-
 ```
 
 ## In the wild

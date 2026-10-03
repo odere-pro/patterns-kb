@@ -66,7 +66,7 @@ flowchart LR
 - **Every "change" allocates a new instance** — real churn and garbage collection (GC) pressure at scale if overused.
 - **Equality and hashing must compare every field**; forgetting one silently reintroduces identity bugs.
 - **Persistence layers built around row identity** often force embedding or serialization workarounds.
-- **Easy to under-use** — a thin primitive wrapper feels like ceremony, so primitive obsession creeps back in.
+- **Easy to under-use** — a thin primitive wrapper feels like ceremony, so [primitive obsession](../../hazards/primitive-obsession.md) creeps back in.
 - **Value or entity is a call** each model makes for itself, not a property of the concept: an address is a value to the shipping context and an identified thing to the utility that bills the premises, so a classification carried across a service boundary is wrong as often as it is right.
 
 ## When to use it

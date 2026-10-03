@@ -116,6 +116,7 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```go summary="Go — a counter guarded by a sync.Mutex"
+
 type Counter struct {
 	mu sync.Mutex // guards n and nothing else
 	n  int
@@ -133,21 +134,8 @@ func (c *Counter) Value() int {
 	return c.n
 }
 
-func main() {
-	var c Counter
-	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 1_000_000; j++ {
-				c.Inc()
-			}
-		}()
-	}
-	wg.Wait()
-	fmt.Println(c.Value()) // always 2000000; without mu it is often lower
-}
+// Two goroutines calling c.Inc() a million times each: Value() is always
+// 2000000; without mu it is often lower.
 ```
 
 ## In the wild

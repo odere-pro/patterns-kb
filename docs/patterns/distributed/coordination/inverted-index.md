@@ -116,7 +116,6 @@ sequenceDiagram
 
 ```typescript summary="TypeScript — a tiny in-memory inverted index: add documents, then AND-query by intersecting sorted lists"
 const postings = new Map<string, number[]>();                // term -> sorted doc ids
-
 const analyze = (text: string) =>
   [...new Set(text.toLowerCase().match(/[a-z0-9]+/g) ?? [])]; // split, lowercase, dedupe
 
@@ -144,9 +143,7 @@ function search(query: string): number[] {
   return lists.reduce(intersect);
 }
 
-add(1, "Waterproof rain jacket");
-add(2, "Wool jacket");
-add(3, "Waterproof boots");
+add(1, "Waterproof rain jacket"); add(2, "Wool jacket"); add(3, "Waterproof boots");
 search("waterproof jacket");                                 // [1]
 ```
 

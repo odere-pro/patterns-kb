@@ -150,6 +150,28 @@ The consistency requirement is really a locking problem: a driver gets a 10-seco
 - **A status column with a timeout.** Move the lock into the database and lean on its transactions so only one instance wins. Better, but the release still depends on an in-memory timeout somewhere — if that process dies, the driver can stay "outstanding" forever.
 - **Distributed lock with TTL — this design's answer.** Acquire a [distributed lock](../patterns/distributed/coordination/distributed-lock.md) in Redis keyed by `driverId`, with the TTL (time to live) set to the 10-second window. Winning the key means no other instance can offer that driver a ride; accept within the window and you release it and mark the ride `accepted`; stay silent and the key simply expires, freeing the driver with zero bookkeeping. The system now leans on the lock store's availability, but because every lock is short-lived, recovery from a hiccup is cheap.
 
+Two matcher instances race for the same driver, and the lock key decides:
+
+```mermaid caption="How does a Redis lock with a 10-second TTL stop two matchers offering the same driver, and free the driver on silence?"
+sequenceDiagram
+    autonumber
+    participant A as Matcher A
+    participant B as Matcher B
+    participant R as Redis lock
+    participant D as Driver
+    A->>R: acquire lock on driverId, TTL 10s
+    R-->>A: lock won
+    B->>R: acquire lock on driverId
+    R--xB: key held, cannot offer this driver
+    A->>D: offer the ride
+    alt driver accepts within the window
+        D-->>A: accept
+        A->>R: release lock, mark ride accepted
+    else driver stays silent
+        R->>R: key expires after 10s, driver freed
+    end
+```
+
 ### 3 · Not dropping requests when demand spikes
 
 Processing requests the instant they arrive is fine until 100k of them land at once and the matcher — or an instance of it — falls over, taking its in-flight work with it. The fix is to stop coupling arrival rate to processing rate.

@@ -156,6 +156,15 @@ Path resolution is a sequence of by-name child lookups: to reach `/home/user/doc
 - **A list of children.** `getChild(name)` is a linear scan. A folder holding 10,000 files is up to 10,000 comparisons per segment, multiplied across every level of every path — it fails the responsiveness bar outright.
 - **A map from name to entry (chosen).** Lookup is O(1) no matter the fan-out, so a folder with ten children and one with ten thousand resolve equally fast. The map earns a bonus: because its keys are unique, it is the "no two siblings share a name" rule — the data structure enforces the invariant for free, with no extra check.
 
+Each path segment is one map lookup, so depth costs steps and fan-out costs nothing.
+
+```mermaid caption="How does /home/user/docs resolve, and why does a folder's size not slow it down?"
+flowchart LR
+    Root["root Folder"] -->|"getChild(home), O(1)"| H["home"]
+    H -->|"getChild(user), O(1)"| U["user"]
+    U -->|"getChild(docs), O(1)"| D["docs"]
+```
+
 ### 3 · One tree, two kinds of node
 
 File and Folder both have a `name`, a `parent`, a `getName()`, and a `getPath()`; they differ only in that folders contain children and files don't. A bare interface fixes the typing — it lets `children` be a `Map<String, FileSystemEntry>` — but shares no implementation, so each class re-declares the same fields and methods. An **abstract base class** shares both the fields and the behaviour: `File` is the leaf, `Folder` the composite, and `FileSystemEntry` the common base — the [Composite](../patterns/gof/structural/composite.md) pattern, reached not by naming it but by noticing the shared identity and the single real difference. Inheritance earns its place here precisely because the usual tests hold: genuine shared behaviour, a stable contract, and an honest is-a. Each subclass overrides only `isDirectory()`. Pulling the base out is also where [the duplication](../principles/dry.md) disappears, and it puts [separation of concerns](../principles/separation-of-concerns.md) on a clean footing — identity in the base, containment in Folder, content in File, orchestration in FileSystem, each with a [single reason to change](../principles/single-responsibility.md).

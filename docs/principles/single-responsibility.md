@@ -40,7 +40,7 @@ Group by reason to change, not by superficial similarity:
 - Ask of each module: who requests changes to this? If two different actors do, that is two responsibilities living in one place.
 - Separate the axes that move independently — policy from mechanism, formatting from calculation, persistence from domain logic.
 - Watch for the tell: a class named with an “and,” or a vague `Manager`/`Util`, is usually holding more than one job.
-- Keep together what changes together — cohesion is the other half. Do not split code that a single actor always edits in lockstep.
+- Keep together what changes together — [cohesion](./high-cohesion-low-coupling.md) is the other half. Do not split code that a single actor always edits in lockstep.
 
 The test: describe the class in one sentence without using “and.” If you cannot, it is probably answering to more than one actor.
 

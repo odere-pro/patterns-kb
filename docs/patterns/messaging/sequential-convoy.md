@@ -125,58 +125,35 @@ sequenceDiagram
 
 ```typescript summary="TypeScript — accept a group, hold it, renew the lease while handling"
 type Message = { categoryKey: string; sequence: number; body: unknown }
-
-interface SessionBroker {
-  // Blocks until some unlocked group is available, then leases it exclusively.
-  acceptAnyGroup(): Promise<GroupLease | null>
-}
-
 interface GroupLease {
-  key: string
   next(): Promise<Message | null>   // strictly in enqueue order
   complete(m: Message): Promise<void>
   deadLetter(m: Message, reason: string): Promise<void>
   renew(): Promise<void>            // push the lease out while still working
   close(): Promise<void>
 }
-
+// Blocks until some unlocked group is available, then leases it exclusively.
+interface SessionBroker { acceptAnyGroup(): Promise<GroupLease | null> }
 const MAX_ATTEMPTS = 5
 
 async function runOneGroup(broker: SessionBroker, handle: (m: Message) => Promise<void>) {
   const lease = await broker.acceptAnyGroup()
   if (!lease) return
-
   try {
-    for (;;) {
-      const message = await lease.next()
-      if (!message) return
-
+    for (let message = await lease.next(); message; message = await lease.next()) {
       // Renew before the slow part, not after: an expired lease hands this
       // group to another consumer and the message is delivered twice.
       await lease.renew()
-
-      let attempt = 0
-      for (;;) {
-        try {
-          await handle(message)
-          await lease.complete(message)
-          break
-        } catch (err) {
-          attempt += 1
-          // Nothing behind this message in the group can move until it leaves,
-          // so bound the retries and get it out of the lane.
-          if (attempt >= MAX_ATTEMPTS) {
-            await lease.deadLetter(message, String(err))
-            break
-          }
+      for (let attempt = 1; ; attempt++) {
+        try { await handle(message); await lease.complete(message); break }
+        catch (err) {
+          // Nothing behind this message can move until it leaves: bound the retries.
+          if (attempt >= MAX_ATTEMPTS) { await lease.deadLetter(message, String(err)); break }
         }
       }
     }
-  } finally {
-    await lease.close()
-  }
+  } finally { await lease.close() }
 }
-
 ```
 
 ## In the wild

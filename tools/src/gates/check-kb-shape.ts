@@ -1,7 +1,7 @@
 /**
  * The KB's own page rules, KB-001 to KB-016 on docs/reference/page-rules.md:
  * what the page shape of spec kb.content.page-shape does not say, because it
- * is this knowledge base's and no other's (plans/harness-optimize.md, P3a).
+ * is this knowledge base's and no other's.
  *
  *   KB-000  the two data files the rules read are there and readable
  *   KB-001  a page sits where the structure file's row says, in its area

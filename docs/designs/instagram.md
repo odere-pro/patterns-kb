@@ -158,6 +158,21 @@ Two distinct problems: getting big files in, and getting them out fast everywher
 
 **Download.** Serving raw S3 URLs means a viewer in Singapore waits on a bucket in `us-east-1` — multi-second stalls, every request hitting the origin, and the same full-resolution file shipped to a phone on 4G as to a desktop. A CDN (content delivery network) fixes the distance: edge caches hold media near viewers, fetch from S3 only on a miss, and cache images for hours since they never change. The best version adds a media-processing step that generates variants per upload — multiple resolutions, WebP for browsers that take it, adaptive bitrate ladders for video — and the CDN serves the variant that fits the requesting device and network. More storage and a processing pipeline to run, but it is what every large media platform actually does.
 
+A video never passes through the app tier; the sequence below shows how a post becomes complete.
+
+```mermaid caption="How does a large upload reach S3 and flip the post from pending to complete without crossing the app tier?"
+sequenceDiagram
+    participant C as Client
+    participant A as App tier
+    participant S as S3
+    participant J as Background job
+    C->>A: POST /posts
+    A-->>C: pre-signed URL (post status pending)
+    C->>S: multipart upload, chunk by chunk
+    S->>J: event notification
+    J->>A: record object key, status complete
+```
+
 ### 3 · Holding at 500M DAU
 
 Scale here is not one trick but the sum of the choices above. Precomputed hybrid feeds keep the read path a single Redis slice regardless of how many people a user follows. The CDN keeps media latency flat as the audience globalizes. Chunked, direct uploads keep large writes off the app tier. Metadata sits in a store [sharded](../patterns/distributed/routing/sharding.md) by user id, with a composite `(created_at, post_id)` sort key so a user's posts come back already in chronological order. And cost is managed by **tiering**: warm bytes sit at the edge and in cache, cold media ages down to cheaper storage such as Glacier — walking the ladder from CDN → memory → solid-state drive (SSD) → hard disk drive (HDD) → tape as access frequency drops. Every service tier autoscales horizontally behind a [load balancer](../patterns/distributed/routing/load-balancer.md) on CPU and memory pressure.

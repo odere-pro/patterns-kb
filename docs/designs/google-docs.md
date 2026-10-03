@@ -135,6 +135,22 @@ The core question: given two edits made against the same starting text but in ig
 
 The alternative worth naming is a **CRDT**: make every operation commutative so order stops mattering and no central server is needed. Text CRDTs (conflict-free replicated data types) give each character a unique, infinitely-subdividable position id and keep deleted characters as hidden tombstones, so any merge order converges. That buys peer-to-peer and offline editing (Yjs is the well-known open-source implementation; Figma runs an industrial variant), but it pays in memory — the document only ever grows, tombstones and all. With a central server already in the design and a 100-editor cap, operational transformation is the lighter, better-fitting choice; CRDTs are the answer if the requirement shifts to peer-to-peer or heavy offline use.
 
+Two edits against the same text show why the server must transform one of them.
+
+```mermaid caption="How does a delete made in ignorance of a concurrent insert still remove the right character?"
+sequenceDiagram
+    autonumber
+    participant A as Editor A
+    participant B as Editor B
+    participant S as Document Service
+    A->>S: INSERT(5, ", world")
+    B->>S: DELETE(6), meant for the exclamation mark
+    S->>S: apply insert first, set canonical order
+    S->>S: transform DELETE(6) to DELETE(13)
+    S-->>A: DELETE(13)
+    S-->>B: INSERT(5, ", world")
+```
+
 ### 2 · Real-time delivery and optimistic editing
 
 Two read paths hang off the socket. On **connect**, the owning server replays the document's operations so the new client starts from the shared state. On every **successful edit**, the server pushes the transformed operation to every other connected client — a straight [fan-out](../patterns/messaging/fan-out.md) that is trivial precisely because all of a document's sockets live on one server. The 100&nbsp;ms budget then forces the subtle part: a user's own keystroke is applied to their local view immediately, before any server round trip — an [optimistic](../patterns/distributed/coordination/optimistic-concurrency-control.md) local write. When a remote edit arrives that was created against an earlier state, the same transform logic runs on the client to reconcile the differing local orderings (server sees `Ea, Eb`; A applied `Ea, Eb`; B applied `Eb, Ea`) so everyone still converges. Cursors ride the same socket but never touch the store: the server holds presence in memory, broadcasts moves, and on socket disconnect drops the departed editor and tells the rest.

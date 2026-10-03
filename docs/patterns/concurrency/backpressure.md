@@ -133,10 +133,7 @@ class BoundedChannel<T> {
 
   // Consumer pulls when ready, never faster than it can process.
   receive(): Promise<T> {
-    return new Promise<T>((resolve) => {
-      this.consumers.push(resolve);
-      this.drain();
-    });
+    return new Promise<T>((resolve) => { this.consumers.push(resolve); this.drain(); });
   }
 
   private drain(): void {

@@ -141,6 +141,21 @@ The naïve "replay everything each turn" grows cost and latency turn over turn a
 
 **Cancellation, and why a dropped tab isn't one.** When a user hits stop, the client calls the plain-HTTP `cancel` side-channel; the Chat Service flips the Generation to `cancelled` and publishes a signal on a control channel keyed by `runId`, and the worker — checking between token batches — drops the sequence and reclaims the GPU immediately rather than burning compute on an abandoned answer. Crucially, closing the tab is not a cancel: the Redis-Stream-plus-reconnect design exists precisely so a dropped connection isn't read as termination. Generation continues in the background, and the user can reconnect or refetch the finished message from Postgres. Cancellation must be an explicit signal, never inferred from a network drop.
 
+```mermaid caption="How does stop reclaim the GPU while a closed tab does not? Only the explicit cancel call flips the Generation and signals the worker, which checks between token batches."
+sequenceDiagram
+    participant B as Browser
+    participant C as Chat Service
+    participant R as Control channel (runId)
+    participant W as GPU worker
+    B->>C: cancel (plain HTTP)
+    C->>C: flip Generation to cancelled
+    C->>R: publish cancel signal
+    R-->>W: cancel signal
+    W->>W: check between token batches
+    W->>W: drop the sequence, reclaim the GPU
+    Note over B,W: a closed tab sends no cancel, so generation continues
+```
+
 ```mermaid caption="How does a stream survive an instance dropping mid-sentence? The Redis Stream is the buffer: on reconnect to any other instance, XREAD replays exactly the missed deltas from the client's last-seen id."
 sequenceDiagram
     autonumber

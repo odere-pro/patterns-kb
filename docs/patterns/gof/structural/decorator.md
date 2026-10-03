@@ -47,7 +47,7 @@ classDiagram
 ## Variations
 <!--meta block=variations-->
 
-- **Transparent (interface-preserving)** — The classic form: the wrapper exposes exactly the wrapped interface, so it stays substitutable and stackable and callers never change.
+- **Transparent (interface-preserving)** — The classic form: the wrapper exposes exactly the wrapped interface, so it stays [substitutable](../../../principles/liskov-substitution.md) and stackable and callers never change.
 - **Function / higher-order decorator** — Wrap a function in another function instead of an object — memoize, throttle, retry, or time a call. Same idea, no class hierarchy needed.
 - **Language-level decorators** — Python `@decorator` syntax and TypeScript/Java annotations augment a declaration at definition time. Related in spirit, but they rewrite the target rather than wrap a live instance.
 - **Stackable, order-sensitive** — Several wrappers compose into a pipeline where order is significant — compress-then-encrypt behaves differently from encrypt-then-compress.

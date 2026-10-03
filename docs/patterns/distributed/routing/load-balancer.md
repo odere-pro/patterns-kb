@@ -101,11 +101,7 @@ flowchart LR
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — least-connections routing over a health-filtered pool"
-interface Instance {
-  id: string;
-  healthy: boolean;
-  connections: number;
-}
+interface Instance { id: string; healthy: boolean; connections: number }
 
 class LoadBalancer {
   constructor(private readonly instances: Instance[]) {}

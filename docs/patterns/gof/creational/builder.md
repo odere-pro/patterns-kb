@@ -103,22 +103,14 @@ interface HttpRequest {
   readonly headers: Readonly<Record<string, string>>;
   readonly body?: string;
 }
-
 // Each step returns `this`, so calls chain into one readable expression.
 class RequestBuilder {
   private method: HttpRequest["method"] = "GET";
   private url?: string;
   private readonly headers: Record<string, string> = {};
   private body?: string;
-
-  to(url: string): this {
-    this.url = url;
-    return this;
-  }
-  using(method: HttpRequest["method"]): this {
-    this.method = method;
-    return this;
-  }
+  to(url: string): this { this.url = url; return this; }
+  using(method: HttpRequest["method"]): this { this.method = method; return this; }
   json(payload: unknown): this {
     this.headers["Content-Type"] = "application/json";
     this.body = JSON.stringify(payload);
@@ -126,15 +118,9 @@ class RequestBuilder {
   }
   build(): HttpRequest {
     if (!this.url) throw new Error("a request needs a URL");   // validate first
-    return {
-      method: this.method,
-      url: this.url,
-      headers: { ...this.headers },
-      body: this.body,
-    };
+    return { method: this.method, url: this.url, headers: { ...this.headers }, body: this.body };
   }
 }
-
 const request = new RequestBuilder()
   .to("https://api.example.com/orders")
   .using("POST")

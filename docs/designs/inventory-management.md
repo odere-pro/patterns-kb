@@ -156,6 +156,21 @@ removeStock(productId, qty):
     return true
 ```
 
+The sequence below shows the lock covering only the mutation, with listeners called after release.
+
+```mermaid caption="Why does a low-stock listener never run while the warehouse lock is held?"
+sequenceDiagram
+    participant T as Caller thread
+    participant W as Warehouse
+    participant L as Listener
+    T->>W: removeStock(productId, qty)
+    W->>W: lock, reject if have < qty
+    W->>W: newQty = have - qty, decide alerts to fire
+    W->>W: release lock
+    W->>L: onLowStock(id, productId, newQty)
+    W-->>T: true
+```
+
 ```mermaid caption="How does a transfer move stock across two warehouses atomically? Take both locks up front in warehouse-id order, do remove-then-add while holding both, and no thread ever observes the in-between state."
 sequenceDiagram
     autonumber

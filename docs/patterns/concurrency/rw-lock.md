@@ -125,7 +125,8 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```go summary="Go — a cache behind a read-write lock"
-// Cache is read far more often than it is written, so it takes a RWMutex.
+
+// Read far more often than written, so a RWMutex.
 type Cache struct {
 	mu   sync.RWMutex
 	data map[string]int
@@ -139,28 +140,19 @@ func (c *Cache) Get(key string) (int, bool) {
 	return v, ok
 }
 
-// Set takes the exclusive mode: it waits for every reader to leave, and
-// while it holds the lock nobody else reads or writes.
-func (c *Cache) Set(key string, v int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.data[key] = v
-}
-
 // A read hold cannot upgrade in place: two readers trying it deadlock.
-// Release, take the write lock, and recheck what another writer may have set.
+// Release, take the write lock (exclusive: it waits for every reader to
+// leave), and recheck what another writer may have set.
 func (c *Cache) GetOrLoad(key string, load func() int) int {
 	if v, ok := c.Get(key); ok {
 		return v
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if v, ok := c.data[key]; ok { // the recheck
-		return v
+	if _, ok := c.data[key]; !ok { // the recheck
+		c.data[key] = load()
 	}
-	v := load()
-	c.data[key] = v
-	return v
+	return c.data[key]
 }
 ```
 

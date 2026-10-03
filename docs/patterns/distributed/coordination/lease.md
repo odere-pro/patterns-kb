@@ -146,9 +146,7 @@ class Lease {
   }
 
   // Call before every step of work; stop at once when it is false.
-  holds(): boolean {
-    return performance.now() < this.validUntil - this.marginMs;
-  }
+  holds = () => performance.now() < this.validUntil - this.marginMs;
 }
 ```
 

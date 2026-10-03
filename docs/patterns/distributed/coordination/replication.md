@@ -103,43 +103,32 @@ flowchart LR
 // A flow's state transition is one log entry. The writer acknowledges
 // it only after the in-region standby has it, so promoting the standby
 // never loses a transition the caller was already told had committed.
-interface LogEntry {
-  seq: number;
-  flowId: string;
-  state: string;
-}
+interface LogEntry { seq: number; flowId: string; state: string }
 
 class Primary {
   private log: LogEntry[] = [];
   private standby?: Replica;        // synchronous, in-region
   private readers: Replica[] = [];  // asynchronous, may lag
-
   async write(flowId: string, state: string): Promise<void> {
     const entry: LogEntry = { seq: this.log.length, flowId, state };
     this.log.push(entry);
     await this.standby?.apply(entry);                  // the ack waits here
     for (const r of this.readers) void r.apply(entry); // ship in commit order
   }
-
   attach(reader: Replica): void {
-    for (const entry of this.log) void reader.apply(entry); // catch up first
+    this.log.forEach((e) => void reader.apply(e));     // catch up first
     this.readers.push(reader);
   }
 }
-
 class Replica {
   private flows = new Map<string, string>();
   private lastSeq = -1;
-
-  async apply(entry: LogEntry): Promise<void> {
-    if (entry.seq !== this.lastSeq + 1) throw new Error("gap in log");
-    this.flows.set(entry.flowId, entry.state);
-    this.lastSeq = entry.seq;
+  async apply(e: LogEntry): Promise<void> {
+    if (e.seq !== this.lastSeq + 1) throw new Error("gap in log");
+    this.flows.set(e.flowId, e.state);
+    this.lastSeq = e.seq;
   }
-
-  read(flowId: string): string | undefined {
-    return this.flows.get(flowId); // an async reader may lag the primary
-  }
+  read = (flowId: string) => this.flows.get(flowId); // an async reader may lag
 }
 ```
 

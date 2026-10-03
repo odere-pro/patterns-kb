@@ -264,7 +264,7 @@ describe('REPO_ROOT', () => {
   it('points at this repository', () => {
     expect(fs.existsSync(path.join(REPO_ROOT, 'CLAUDE.md'))).toBe(true);
     expect(fs.existsSync(path.join(REPO_ROOT, 'tools/package.json'))).toBe(true);
-    expect(fs.existsSync(path.join(REPO_ROOT, 'plans/harness-optimize.md'))).toBe(true);
+    expect(fs.existsSync(path.join(REPO_ROOT, 'plans/backlog.md'))).toBe(true);
   });
 
   it('is the git top level, not the tools workspace', () => {

@@ -127,25 +127,18 @@ class TokenBucket {
   constructor(
     private readonly capacity: number,     // burst size — the most you may spend at once
     private readonly refillPerSec: number, // steady-state rate
-  ) {
-    this.tokens = capacity;                 // start full
-  }
+  ) { this.tokens = capacity; }            // start full
 
   /** True if the request is allowed, false if it should be rate-limited. */
   tryConsume(cost = 1): boolean {
-    this.refill();
+    // lazy refill: no timer — compute accrued tokens from elapsed time
+    const now = Date.now();
+    const elapsedSec = (now - this.lastRefill) / 1000;
+    this.tokens = Math.min(this.capacity, this.tokens + elapsedSec * this.refillPerSec);
+    this.lastRefill = now;
     if (this.tokens < cost) return false;  // bucket empty → shed the request
     this.tokens -= cost;
     return true;
-  }
-
-  private refill(): void {
-    const now = Date.now();
-    const elapsedSec = (now - this.lastRefill) / 1000;
-    if (elapsedSec <= 0) return;
-    // lazy refill: no timer — compute accrued tokens from elapsed time
-    this.tokens = Math.min(this.capacity, this.tokens + elapsedSec * this.refillPerSec);
-    this.lastRefill = now;
   }
 }
 

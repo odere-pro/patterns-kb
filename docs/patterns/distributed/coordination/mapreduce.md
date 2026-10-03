@@ -105,17 +105,12 @@ flowchart LR
 type Pair<K, V> = [K, V];
 
 // MAP: turn each input into zero or more key/value pairs.
-function map(doc: string): Pair<string, number>[] {
-  return doc
-    .toLowerCase()
-    .match(/[a-z]+/g)
-    ?.map((word) => [word, 1] as Pair<string, number>) ?? [];
-}
+const map = (doc: string): Pair<string, number>[] =>
+  (doc.toLowerCase().match(/[a-z]+/g) ?? []).map((w) => [w, 1]);
 
 // REDUCE: fold all values for one key into a single result.
-function reduce(word: string, counts: number[]): Pair<string, number> {
-  return [word, counts.reduce((a, b) => a + b, 0)];
-}
+const reduce = (word: string, counts: number[]): Pair<string, number> =>
+  [word, counts.reduce((a, b) => a + b, 0)];
 
 function mapReduce(docs: string[]): Map<string, number> {
   // map over every input (a real system runs this in parallel across nodes)

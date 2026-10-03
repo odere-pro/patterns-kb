@@ -123,49 +123,33 @@ sequenceDiagram
 
 ```typescript summary="TypeScript — propagate the context, including across the hop that usually loses it"
 // INBOUND: continue the caller's trace if there is one, start a new one if not.
-// The header is the whole interoperability story — any service that speaks the
-// same format joins the trace without agreeing on anything else.
+// Any service that speaks the same header format joins the trace, no other agreement needed.
 app.use((req, res, next) => {
   const parent = propagator.extract(req.headers);      // reads `traceparent`
   tracer.startActiveSpan(`${req.method} ${req.route?.path ?? "unmatched"}`, { parent }, (span) => {
     // Route TEMPLATE, never the concrete path: `/orders/:id` is one operation,
-    // `/orders/8f2c...` is one operation per request and it kills the backend index.
-    res.on("finish", () => {
-      span.setAttribute("http.status_code", res.statusCode);
-      if (res.statusCode >= 500) span.setStatus({ code: ERROR });
-      span.end();
-    });
+    // `/orders/8f2c...` is one per request and kills the backend index.
+    res.on("finish", () => { span.setAttribute("http.status_code", res.statusCode); span.end(); });
     next();
   });
 });
-
-// OUTBOUND over HTTP: injection is usually automatic, and worth asserting anyway.
-async function callPricing(sku: string) {
-  const headers: Record<string, string> = {};
-  propagator.inject(context.active(), headers);        // writes `traceparent`
-  return fetch(`${PRICING}/price/${sku}`, { headers });
-}
-
-// OUTBOUND over a QUEUE: the hop that breaks. There is no connection to carry
-// the context, so it must be written into the ENVELOPE and read back out — or
-// the asynchronous half of the work starts a brand-new, unrelated trace.
+// OUTBOUND over HTTP: propagator.inject(context.active(), headers) writes `traceparent`.
+// OUTBOUND over a QUEUE: the hop that breaks. No connection carries the context,
+// so write it into the ENVELOPE and read it back out, or the asynchronous half
+// of the work starts a brand-new, unrelated trace.
 async function publishOrderPlaced(event: OrderPlaced) {
   const carrier: Record<string, string> = {};
   propagator.inject(context.active(), carrier);
   await queue.publish({ body: event, headers: carrier });
 }
-
 async function onMessage(msg: Message) {
   const parent = propagator.extract(msg.headers);
-  // A `link` rather than a child span when the consumer runs much later: the
-  // producer's span has long since ended, and a child would distort its duration.
+  // A `link`, not a child span, when the consumer runs much later: a child
+  // would distort the producer's span, which ended long ago.
   tracer.startActiveSpan("OrderPlaced handler", { links: [{ context: parent }] }, async (span) => {
-    try { await handle(msg.body); }
-    catch (e) { span.recordException(e); span.setStatus({ code: ERROR }); throw e; }
-    finally { span.end(); }
+    try { await handle(msg.body); } finally { span.end(); }
   });
 }
-
 ```
 
 ## In the wild

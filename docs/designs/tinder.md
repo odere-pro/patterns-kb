@@ -132,6 +132,18 @@ The naive feed query — `SELECT … WHERE age BETWEEN … AND lat BETWEEN … A
 
 The two combine: instant from the precomputed stack, and when a user nears the end of it the Feed Service falls back to the live geo query and refreshes the stack in the background, so the feed feels endless. The risk is a [stale feed](../hazards/stale-cache.md) — a candidate moves out of range or edits their filters and no longer qualifies. Bounding it is a set of tunable knobs: a short TTL (time to live) (well under an hour), precompute only for genuinely active users rather than everyone, and trigger a refresh when the user changes filters or moves a meaningful distance.
 
+Both paths feed the Feed Service, which prefers the precomputed stack:
+
+```mermaid caption="How does the Feed Service load a stack in under 300 ms and still feel endless?"
+flowchart LR
+    App["Client app"] -->|"open app"| Feed["Feed Service"]
+    Profiles["Profile store"] -->|"CDC: profile edits"| Geo[("Geo index (Elasticsearch / OpenSearch)")]
+    Job["Background job"] -->|"precompute next stack for active users"| Stack[("Materialized stack (cache)")]
+    Feed -->|"serve stack straight from cache"| Stack
+    Feed -->|"near end of stack: live geo query"| Geo
+    Feed -->|"refresh stack in background"| Stack
+```
+
 ### 3 · Never re-showing a swiped profile
 
 Re-showing someone the user already dismissed reads as a bug, and worse, suggests their swipes weren't recorded. The obvious approach — query swipe history and filter the feed against it — has two problems: under an availability-leaning store a very recent swipe may not have replicated to the replica the feed reads from, and a heavy swiper's history grows into an ever more expensive contains-check. Both get solved on the way to the client. Because a user is on a single device, a [client-side cache](../patterns/caching/client-side-cache.md) of the last K swipes filters anything just swiped out of the next stack, closing the replication-lag window with no server-side cache to maintain. For users whose history is genuinely enormous, keep a per-user [Bloom filter](../patterns/distributed/coordination/bloom-filter.md) of everything they've swiped and test candidates against it: it never re-shows a swiped profile (no false negatives) and only, rarely, hides a fresh one (a false positive), with the error rate traded against memory. It is arguably over-engineered for the median user — which is the point: it earns its keep only in the long tail.

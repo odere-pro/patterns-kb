@@ -30,7 +30,7 @@ Performance work means not repeating work: do it once and reuse the result, do i
 ## The trade-space
 <!--meta block=tradespace-->
 
-Almost every performance pattern buys speed by spending something else. Caching buys latency with **freshness** — a cached answer is a bet that the world hasn't changed since it was computed, and the bet is occasionally wrong. Precomputation buys read speed with **storage and update complexity** — a materialized view is fast to read and someone has to keep it in sync with its source. Pooling and sharing buy allocation savings with **statefulness** — a reused object can leak state between callers if it isn't reset carefully.
+Almost every performance pattern buys speed by spending something else. Caching buys latency with **freshness** — a cached answer is a bet that the world hasn't changed since it was computed, and the bet is occasionally wrong. Precomputation buys read speed with **storage and update complexity** — a materialized view is fast to read and someone has to keep it in sync with its source. Pooling and sharing buy allocation savings with **statefulness** — a reused object can leak state between callers if it isn't reset carefully. When an exact answer costs more than it is worth, [Approximate Answers](./approximate-answers.md) trades a bounded error for fixed memory.
 
 Spreading load geographically or across instances buys throughput with **routing complexity**: a load balancer or a consistent-hashing ring has to keep working correctly as the pool of nodes changes underneath it, or the cure becomes the outage. None of these trades are free, which is why the first move is always diagnosis — find which bottleneck you actually have before reaching for the pattern that fixes it.
 

@@ -123,13 +123,10 @@ sequenceDiagram
 
 ```typescript summary="TypeScript — relay one direction, settling only after the far side accepts"
 type Envelope = { id: string; body: Uint8Array; headers: Record<string, string> }
-
 interface Source {
   receive(): Promise<{ message: Envelope; settle(): Promise<void>; abandon(): Promise<void> } | null>
 }
-interface Destination {
-  send(m: Envelope): Promise<void>
-}
+interface Destination { send(m: Envelope): Promise<void> }
 
 // Pausing beats retrying here: during an infrastructure outage every message
 // looks poisonous, and a per-message attempt counter would dead-letter the lot.
@@ -138,10 +135,8 @@ interface Breaker { allows(): boolean; onSuccess(): void; onFailure(): void }
 async function relay(source: Source, destination: Destination, breaker: Breaker) {
   for (;;) {
     if (!breaker.allows()) return   // forwarding paused; the source queue absorbs the backlog
-
     const delivery = await source.receive()
     if (!delivery) return
-
     try {
       // The payload crosses untouched — the bridge carries, it does not translate.
       await destination.send(delivery.message)
@@ -156,7 +151,6 @@ async function relay(source: Source, destination: Destination, breaker: Breaker)
     }
   }
 }
-
 ```
 
 ## In the wild

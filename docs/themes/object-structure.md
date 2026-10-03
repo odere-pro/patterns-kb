@@ -26,7 +26,7 @@ Objects rarely arrive in the shape a caller wants, and the structural patterns w
 ## The trade-space
 <!--meta block=tradespace-->
 
-Several of these patterns share one shape, an object that wraps another, and they differ only by the question they answer. An adapter converts one interface into the one the client expects. A facade simplifies many classes into a few high-level calls. A decorator keeps the same interface and adds behaviour. A proxy keeps the same interface and controls access. Choose by intent, because the shapes look alike and a wrong choice misleads the next reader.
+Several of these patterns share one shape, an object that wraps another, and they differ only by the question they answer. An adapter converts one interface into the one the client expects. A facade simplifies many classes into a few high-level calls. A decorator keeps the same interface and adds behaviour. A proxy keeps the same interface and controls access. Choose by intent, because the shapes look alike and a wrong choice misleads the next reader. The [File System](../designs/file-system.md) case study uses a composite for files and folders, and the [Logging Service](../designs/logging-service.md) composes two axes without a class explosion.
 
 Two others change how the structure is built. A bridge splits two independent concerns into two hierarchies up front, so you extend each side alone. A composite arranges objects in a tree so that a leaf and a container answer the same calls, and a flyweight shares the unchanging part of many leaves so a tree can hold millions of nodes. The cost throughout is indirection: each wrapper is another hop and another object to keep in mind.
 

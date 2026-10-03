@@ -98,9 +98,8 @@ flowchart LR
 <!--meta block=sketch-->
 
 ```go summary="Go — a fixed pool of workers in front of a bounded queue"
-var ErrBusy = errors.New("queue full")
 
-// Pool keeps size workers alive in front of a bounded queue of tasks.
+// Pool keeps size workers alive in front of a bounded queue. Close: close(queue), wg.Wait().
 type Pool struct {
 	queue chan func()
 	wg    sync.WaitGroup
@@ -126,12 +125,9 @@ func (p *Pool) Submit(task func()) error {
 	case p.queue <- task:
 		return nil
 	default:
-		return ErrBusy
+		return errors.New("queue full")
 	}
 }
-
-// Close lets the queued tasks finish, then stops the workers.
-func (p *Pool) Close() { close(p.queue); p.wg.Wait() }
 ```
 
 ## In the wild

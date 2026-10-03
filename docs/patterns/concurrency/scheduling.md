@@ -111,8 +111,7 @@ class DelayScheduler {
 
   // Schedule `task` to run after `delayMs`.
   schedule(task: () => void, delayMs: number): void {
-    const job = { dueAt: Date.now() + delayMs, task };
-    this.jobs.push(job);
+    this.jobs.push({ dueAt: Date.now() + delayMs, task });
     this.jobs.sort((a, b) => a.dueAt - b.dueAt);
     this.arm();                      // re-arm for the new earliest job
   }
@@ -133,7 +132,6 @@ class DelayScheduler {
     this.arm();                      // schedule the next tick
   }
 }
-
 ```
 
 ## In the wild

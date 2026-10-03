@@ -39,7 +39,7 @@ export const collections = {
         status: statusSchema(learningPresent(repoRoot())),
         // The page's source when it is generated: the generator of a hub.
         source: z.string().optional(),
-        // KB extension keys (plans/harness-optimize.md, Target layout).
+        // KB extension keys, each with its own KB rule (docs/reference/page-rules.md).
         aliases: z.array(z.string()).optional(),
         solves: z.array(z.string()).optional(),
         favourite: z.boolean().optional(),

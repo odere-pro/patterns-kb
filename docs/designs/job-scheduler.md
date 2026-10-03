@@ -126,6 +126,21 @@ In a single-loop design, the poll frequency is the precision ceiling: poll every
 
 The queue's one hard requirement is delayed visibility. A strictly-ordered log like Kafka fails here: a newly created urgent job would queue behind everything already buffered and miss its window. Three options deliver deferred delivery. A **Redis sorted set** scores entries by timestamp and pops those with `score < now` — sub-millisecond, but you build retries, failure handling and replication yourself. **RabbitMQ** can fake it with per-message TTL (time to live) plus a dead-letter exchange, but high availability needs quorum queues and the TTL trick is fiddly. **Simple Queue Service (SQS)** wins for a managed stack: `DelaySeconds` gives native per-message delay (capped at 15 minutes, which comfortably covers the 5-minute lookahead), visibility timeouts recover from worker failure, and it auto-scales across availability zones. Jobs created with under 5 minutes of lead time skip the poll entirely and go straight to the queue with the right delay. Workers form a pool of [competing consumers](../patterns/messaging/competing-consumers.md), each message handled by exactly one of them.
 
+The two phases meet at a queue that holds each job invisible until its run time.
+
+```mermaid caption="How does a job fire at its exact time when the database is only polled every few minutes?"
+sequenceDiagram
+    participant Sch as Scheduler
+    participant Ex as Executions table
+    participant Q as Queue (SQS)
+    participant W as Worker
+    Sch->>Ex: poll every few minutes, due in next ~5 min
+    Ex-->>Sch: due executions
+    Sch->>Q: enqueue, visible only at run time
+    Q-->>W: message becomes visible at run time
+    W->>W: execute the job
+```
+
 ### 2 · Scaling the pipeline to 10k jobs a second
 
 Work left to right and fix bottlenecks one at a time. **Creates** peak below 10k/sec (recurring jobs write once, fire often); the [stateless service](../patterns/distributed/routing/stateless-service.md) tier scales out and the database absorbs the writes directly, so a buffering queue in front of creation is tempting but usually over-engineering — keep it simple until the write path actually strains. **The Jobs table** scales cleanly: partitioned by `job_id`, writes spread evenly. **The Executions table** is the real hazard: partitioning by hourly `time_bucket` concentrates a whole hour of writes on a single partition — a classic [hot partition](../hazards/hot-key.md). The fix is [write sharding](../patterns/distributed/routing/sharding.md): append a random suffix to the key (`time_bucket#shard_3`) to fan writes across N partitions, and have the poller query all shards for a bucket in parallel. Old executions age out to object storage after ~a year.

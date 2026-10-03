@@ -113,6 +113,12 @@ test("sums item prices without touching the logger", () => {
 });
 ```
 
+## In the wild
+<!--meta block=wild-->
+
+- **Mockito** — A mock created with \`mock(Type.class)\` and never stubbed returns default values (null, zero, empty collections) from every method, so it serves as a no-op dummy for a parameter the code under test does not use. {#wild-mockito}
+- **Python unittest.mock.sentinel** — \`sentinel.NAME\` returns one unique object per name (the same object each time that name is used), which makes a handy dummy value for an argument the test never inspects; its repr shows the name when a failure prints it. {#wild-python-sentinel}
+
 ## Where it shows up
 <!--meta block=fluency-->
 

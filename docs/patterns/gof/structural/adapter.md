@@ -94,12 +94,9 @@ interface PaymentProcessor {
 
 // A third-party SDK we cannot modify: it wants a dollar string and a currency.
 class VendorSdk {
-  async charge(
-    dollars: string,
-    currency: string,
-  ): Promise<{ status: "ok" | "declined"; txnId: string }> {
-    // a real call would hit the network here
-    return { status: "ok", txnId: "txn_8f21" };
+  async charge(dollars: string, currency: string):
+    Promise<{ status: "ok" | "declined"; txnId: string }> {
+    return { status: "ok", txnId: "txn_8f21" };   // a real call hits the network
   }
 }
 

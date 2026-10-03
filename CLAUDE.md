@@ -5,8 +5,8 @@ hazards, 36 principles, 10 cloud capabilities and 10 product comparisons — 448
 **It is data that happens to render**, not a site that happens to hold data.
 
 > **Migrated** to markdown under `docs/` and an Astro site built from it
-> ([plan and status](plans/harness-optimize.md)). The migration is done and awaits the owner's
-> dev testing: [Testing the site](docs/concepts/testing-the-site.md).
+> ([the record](docs/records/2026-09-30-migration-round-trip.md)). The migration is done and
+> awaits the owner's dev testing: [Testing the site](docs/concepts/testing-the-site.md).
 
 ## The one thing to understand
 

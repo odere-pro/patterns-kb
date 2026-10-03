@@ -117,11 +117,9 @@ class Core {
   register(plugin: Plugin): void {
     plugin.init(this); // plug-in wires itself into the core
   }
-
   addCommand(name: string, handler: (arg: string) => void): void {
     this.commands.set(name, handler); // core stays ignorant of who registered
   }
-
   run(name: string, arg: string): void {
     const handler = this.commands.get(name);
     if (!handler) throw new Error(`no plug-in handles "${name}"`);
@@ -130,15 +128,12 @@ class Core {
 }
 
 // A plug-in the core has never heard of at compile time
-class MarkdownExportPlugin implements Plugin {
-  name = "markdown-export";
-  init(core: Core): void {
-    core.addCommand("export", (path) => console.log(`exporting to ${path}`));
-  }
-}
-
+const markdownExport: Plugin = {
+  name: "markdown-export",
+  init: (core) => core.addCommand("export", (path) => console.log(`exporting to ${path}`)),
+};
 const core = new Core();
-core.register(new MarkdownExportPlugin());
+core.register(markdownExport);
 core.run("export", "./out.md");
 ```
 

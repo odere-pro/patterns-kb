@@ -149,6 +149,24 @@ for region in affected_regions(article):
 ZREVRANGEBYSCORE  "feed:US"  (cursor_id  -inf  LIMIT 0 20
 ```
 
+The chosen precompute has two halves: a write-side worker that maintains the sorted set, and a read that never touches the database.
+
+```mermaid caption="How does a new article reach a regional feed without any read touching the database?"
+sequenceDiagram
+    participant Ing as Ingestion
+    participant W as Feed Generation Workers
+    participant R as Redis feed:US
+    participant FS as Feed Service
+    participant C as Client
+    Ing->>W: CDC new-article event
+    W->>R: ZADD (score = monotonic article id)
+    W->>R: ZREMRANGEBYRANK (trim to recent ~2k)
+    C->>FS: GET /feed?region=US&cursor=ID
+    FS->>R: ZREVRANGEBYSCORE (cursor, LIMIT 20)
+    R-->>FS: 20 articles
+    FS-->>C: feed page
+```
+
 ### 3 · Getting breaking news in within 30 minutes
 
 Baseline polling runs every 3–6 hours — fine for a magazine, useless for a fast-moving story readers already saw on social media. Freshness is a spectrum of cooperation with the publisher.

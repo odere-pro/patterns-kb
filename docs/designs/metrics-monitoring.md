@@ -134,6 +134,20 @@ flowchart TB
 
 Polling every minute already meets the requirement for most rules, but a breach one second after a cycle isn't seen for ~59 seconds, and a few critical services want faster. Increasing the poll frequency is an incremental patch — it never removes the round trip. The real move is **stream processing**: evaluate the condition directly on the Kafka stream (kafka → stream → alert) instead of round-tripping through the database (kafka → db → alert), reacting to data in flight. It's genuine added complexity, so keep it a minority path — most alerts stay on the cheap polling loop, and only the few that need seconds go real-time. Evaluating a daily-grained metric in real time is pure overkill.
 
+Most alerts stay on the polling loop, and only the few that need seconds take the stream path.
+
+```mermaid caption="Why does evaluating alerts on the stream beat polling the database?"
+flowchart LR
+    subgraph Poll["Polling path - most alerts, up to ~59 s late"]
+        K1[("Kafka")] --> DB[("Database")]
+        DB -->|"rule polled every minute"| A1["Alert"]
+    end
+    subgraph Stream["Stream path - few critical rules, seconds"]
+        K2[("Kafka")] -->|"data in flight"| SP["Stream processing"]
+        SP -->|"condition breached"| A2["Alert"]
+    end
+```
+
 ### 3 · Staying up exactly when it matters
 
 A monitoring system that dies during an incident blinds you at the worst possible moment, so availability matters more here than almost anywhere. Both paths need redundancy: the ingest/data path so collection survives node loss, and the alert/notify path so breaches are still detected and delivered. The durable queue already double-buffers ingestion through transient failures. The recurring post-mortem trap is **meta-monitoring**: never run the monitoring system on the very infrastructure it watches, or it goes dark alongside the outage it should be reporting.

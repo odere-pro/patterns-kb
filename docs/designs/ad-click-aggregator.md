@@ -145,6 +145,23 @@ At 10k writes/sec the transactional store is already saturated, and a `GROUP BY`
 
 Every hop scales out. The Click Processor is stateless and autoscales behind the load balancer. The stream is [partitioned by `ad_id`](../patterns/distributed/routing/sharding.md) so all events for one ad land on one shard and Flink can read shards in parallel — Kinesis, for instance, caps a shard near 1&nbsp;MB/s or 1,000 records/sec, so many shards are mandatory. One Flink job per shard keeps aggregation embarrassingly parallel, and a self-managed OLAP (online analytical processing) store can be sharded by `advertiser_id` so a single advertiser's data sits on one node. The failure mode is a [hot shard](../hazards/hot-key.md): a viral ad — think a superstar-fronted spot during a final — floods one partition, spiking its latency and risking loss. The mitigation is to salt the partition key for known-popular ads only, appending a random suffix (`ad_id:0..N`) so the load fans across shards; Flink strips the suffix and upserts with a `SUM` so the sub-partitions recombine into one correct total on write.
 
+```mermaid caption="How does a viral ad stop flooding one shard? Known-hot ads get a salted partition key, so the load fans across shards and the SUM upsert recombines it into one total."
+flowchart TB
+    CP["Click Processor: verify, dedup"]
+    S0[("Stream shard ad_id:0")]
+    S1[("Stream shard ad_id:1")]
+    S2[("Stream shard ad_id:2")]
+    Flink["Flink stream processor"]
+    OLAP[("OLAP store")]
+    CP -->|"append, random suffix 0..N"| S0
+    CP -->|"append, random suffix 0..N"| S1
+    CP -->|"append, random suffix 0..N"| S2
+    S0 -->|"per-shard read"| Flink
+    S1 -->|"per-shard read"| Flink
+    S2 -->|"per-shard read"| Flink
+    Flink -->|"strip suffix, upsert with SUM"| OLAP
+```
+
 ### 3 · Never losing a click
 
 The stream is the durability layer: Kafka replicates across brokers, Kinesis across availability zones, and a multi-day retention window means a crashed processor replays from where it left off rather than losing data. Flink checkpoints its state to S3 for resume-from-failure, but for minute-sized windows that is often over-engineered — a Flink outage loses at most a minute of aggregates, all recoverable from the retained stream, and knowing when the textbook answer is overkill is itself a signal of seniority. The real guarantee comes from the batch layer: every raw click is also sinked to S3 (via Kafka Connect or Kinesis Firehose, adding no load to Flink), and a daily Spark job re-aggregates the lake [MapReduce-style](../patterns/distributed/coordination/mapreduce.md) and reconciles it against the live counts, correcting any drift from bad deploys or transient errors. That append-only raw log is the [source of truth](../patterns/architecture/event-sourcing.md) the fast path is measured against.

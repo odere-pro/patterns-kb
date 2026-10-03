@@ -1,6 +1,6 @@
 /**
  * "Mentioned by": the pages that link to a page from their prose without
- * declaring a typed relation with it (plans/harness-optimize.md, P5; today's
+ * declaring a typed relation with it (the migration's P5; the HTML era's
  * scripts/build.mjs "mentions" and build-pages.mjs `mentionsFor`).
  *
  * A typed relation is on both pages already, and a theme's tour lists its

@@ -123,7 +123,6 @@ sequenceDiagram
 
 ```typescript summary="TypeScript — a partially denormalised index over a hash-sharded fact table"
 type Customer = { id: string; town: string; lastName: string; email: string; notes: string }
-
 // Partial denormalisation: carry the fields the list view renders, plus the
 // shard key needed to fetch the rest. The lookup never recomputes the hash.
 type IndexEntry = { town: string; lastName: string; shardKey: string; customerId: string }
@@ -132,16 +131,14 @@ interface Store {
   put(table: string, key: string, value: unknown): Promise<void>
   delete(table: string, key: string): Promise<void>
   rangeScan(table: string, prefix: string): Promise<IndexEntry[]>
-  get(table: string, shardKey: string, id: string): Promise<Customer>
 }
 
 // Composite key: sorted by town, then by surname inside a town — so both
 // "everyone in Bergen" and "the Olsens in Bergen" are one contiguous range.
 const indexKey = (c: Customer) => `${c.town}#${c.lastName}#${c.id}`
 
-async function findByTown(store: Store, town: string): Promise<IndexEntry[]> {
-  return store.rangeScan('customers_by_town', `${town}#`)
-}
+const findByTown = (store: Store, town: string) =>
+  store.rangeScan('customers_by_town', `${town}#`)
 
 // Called by the worker draining the change queue, never inline with the write:
 // the two tables are updated separately, so there is a window where they disagree.
@@ -150,13 +147,10 @@ async function reindex(store: Store, before: Customer | null, after: Customer) {
     await store.delete('customers_by_town', indexKey(before))
   }
   await store.put('customers_by_town', indexKey(after), {
-    town: after.town,
-    lastName: after.lastName,
-    shardKey: hashShardKey(after.id),
-    customerId: after.id,
+    town: after.town, lastName: after.lastName,
+    shardKey: hashShardKey(after.id), customerId: after.id,
   })
 }
-
 ```
 
 ## In the wild

@@ -132,6 +132,23 @@ Durability is bought cheaply and separately. Every accepted move is appended to 
 
 Tens of thousands of match requests per second hit one pending pool, and most players cluster around middle ratings where nearly everyone is a compatible opponent — so the same waiting players are candidates for huge numbers of simultaneous incoming requests. Two matchers reading the same waiting player and both pairing them is a [race condition](../hazards/race-condition.md) that double-books someone into two games. The pool moves into a Redis **sorted set** per time control (member = requestId, score = rating): `ZRANGEBYSCORE` finds opponents in a rating window that widens with wait time, and the claim is a single `ZREM` — a return of 1 means this worker won the player, 0 means someone already took them. That atomic compare-and-claim is [optimistic concurrency](../patterns/distributed/coordination/optimistic-concurrency-control.md) doing its purpose-built job: no lock is held, exactly one worker wins the contested claim, and losers simply retry. The winning worker then publishes `matchFound` on a [pub/sub](../patterns/messaging/pubsub.md) channel keyed by requestId; whichever node holds that player's long-poll is subscribed and completes the request with the gameId. Throughput checks out — the busiest single time control is well under a third of one Redis node's sorted-set capacity — so the pool is replicated with automatic failover rather than sharded; pending requests are cheap and ephemeral, so a failed-over pool just refills within seconds.
 
+Two matchers can see the same waiting player; the single ZREM decides who gets them.
+
+```mermaid caption="How do two matchers racing for one waiting player end with exactly one winner?"
+sequenceDiagram
+    participant M1 as Matcher 1
+    participant M2 as Matcher 2
+    participant Z as Redis sorted set
+    M1->>Z: ZRANGEBYSCORE (rating window)
+    M2->>Z: ZRANGEBYSCORE (rating window)
+    Z-->>M1: same waiting player
+    Z-->>M2: same waiting player
+    M1->>Z: ZREM
+    Z-->>M1: 1, claim won
+    M2->>Z: ZREM
+    Z-->>M2: 0, already taken, retry
+```
+
 ### 3 · Surviving a game-server crash
 
 Routing and survival are one problem. The Session Router maps `gameId` to a server with [consistent hashing](../patterns/distributed/routing/consistent-hashing.md) — each game server holds an ephemeral node in a membership registry (ZooKeeper, etcd, or Consul) that expires when it stops heartbeating, and the router rebuilds its ring on membership change so adding or losing a node remaps only a small slice of games. Recovery is pure replay: the successor loads the Game row for clocks and turn, replays the move log to rebuild the board, and takes over. The subtle failure is a zombie — a replaced-but-still-alive server on the far side of a partition that keeps writing to a game the ring has moved on from. The fix is a `generation` counter on the Game row, bumped each time the ring reassigns the game; every write runs as a [conditional write](../patterns/distributed/coordination/conditional-write.md) guarded by `WHERE generation <= :gen`, so the zombie's stale-generation updates silently fail their predicate and are dropped. (Player-initiated disconnects are handled differently: the clock keeps running, matching over-the-board rules, so nobody escapes a losing position by closing the tab.)

@@ -26,7 +26,7 @@ A method that branches on a type or a mode grows a case every time the business 
 ## The trade-space
 <!--meta block=tradespace-->
 
-The patterns sit on three questions. The first is what varies. Strategy swaps an algorithm the client picks, state changes behaviour as the object's own state changes, and template method fixes the skeleton and lets subclasses fill steps. A null object is a do-nothing member of the family that stands in where a caller would otherwise test for null. The shapes look alike, so choose by who decides: the client, the object's own state, or a subclass.
+The patterns sit on three questions. The first is what varies. Strategy swaps an algorithm the client picks, state changes behaviour as the object's own state changes, and template method fixes the skeleton and lets subclasses fill steps. A null object is a do-nothing member of the family that stands in where a caller would otherwise test for null. The shapes look alike, so choose by who decides: the client, the object's own state, or a subclass. The [Elevator](../designs/elevator.md) and [Connect Four](../designs/connect-four.md) case studies work state and a swappable policy through, and the [Rate Limiter](../designs/design-rate-limiter.md) case study swaps limiting algorithms behind one interface.
 
 The second question is where a request goes. A chain lets each handler deal with it or pass it on, and a mediator makes one object the only place colleagues interact. The third is how you work over a structure. An iterator walks a collection, a visitor adds an operation without editing the classes, an interpreter gives a small language its own tree, and a memento saves state so you can restore it. The cost is more small objects and more indirection to follow.
 

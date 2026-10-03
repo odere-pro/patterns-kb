@@ -118,9 +118,7 @@ class PriceFeed {
   publish(symbol: string, price: number): void {
     if (this.#last.get(symbol) === price) return;  // skip unchanged ticks
     this.#last.set(symbol, price);
-    for (const observer of this.#observers) {
-      observer.onPrice(symbol, price);
-    }
+    for (const observer of this.#observers) observer.onPrice(symbol, price);
   }
 }
 

@@ -121,41 +121,32 @@ sequenceDiagram
 // One internal model. Each breaking change is a small transformer stamped with
 // the date it shipped — so N versions cost N transformers, not N services.
 type Change = {
-  date: string;                      // the day the change shipped
-  summary: string;
+  date: string; summary: string;     // the day the change shipped, and what changed
   downgrade: (body: any) => any;     // new shape -> the shape immediately before it
 };
 
 const CHANGES: Change[] = [
   {
-    date: "2025-03-27",
-    summary: "address split into street/city/state/zip",
-    downgrade: (b) => ({
-      ...b,
-      address: [b.address.street, b.address.city, b.address.state, b.address.zip].join(" "),
-    }),
+    date: "2025-03-27", summary: "address split into street/city/state/zip",
+    downgrade: (b) => ({ ...b,
+      address: [b.address.street, b.address.city, b.address.state, b.address.zip].join(" ") }),
   },
   {
-    date: "2025-09-01",
-    summary: "state renamed to status",
+    date: "2025-09-01", summary: "state renamed to status",
     downgrade: (b) => { const { status, ...rest } = b; return { ...rest, state: status }; },
   },
 ].sort((a, b) => b.date.localeCompare(a.date));   // newest first
 
 const OLDEST = "2025-01-01";   // what an unstated version means — decide once, publish it
-
 function render(body: unknown, pinned: string = OLDEST) {
   // Walk backwards from today, undoing every change the caller never opted into.
-  return CHANGES
-    .filter((c) => c.date > pinned)
-    .reduce((b, c) => c.downgrade(b), body);
+  return CHANGES.filter((c) => c.date > pinned).reduce((b, c) => c.downgrade(b), body);
 }
 
 // Vary is not optional here: the URI is identical across versions, so without it
 // a shared cache serves one caller's shape to another and the bug is unreproducible.
 res.setHeader("Vary", "Accept-Version");
 res.json(render(customer, req.header("Accept-Version")));
-
 ```
 
 ## In the wild

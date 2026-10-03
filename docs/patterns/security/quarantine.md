@@ -135,12 +135,9 @@ sequenceDiagram
 ```typescript summary="TypeScript — import to the untrusted store, run the checks, publish or destroy"
 type ArtifactRef = { source: string; digest: string; type: 'oci' | 'package' | 'iac' | 'osimage' }
 type CheckResult = { name: string; passed: boolean; critical: boolean; detail: string }
-
 const REPORT_TTL_DAYS = 30
-
 interface Store { import(ref: ArtifactRef): Promise<void>; publish(ref: ArtifactRef, report: unknown): Promise<void>; destroy(ref: ArtifactRef): Promise<void> }
 interface Audit { record(ref: ArtifactRef, results: CheckResult[], verdict: string): Promise<void> }
-
 // The check set is fixed per artifact type. Varying it per request is what
 // makes a quarantine verdict meaningless.
 const CHECKS: Record<ArtifactRef['type'], ((r: ArtifactRef) => Promise<CheckResult>)[]> = {
@@ -151,26 +148,19 @@ const CHECKS: Record<ArtifactRef['type'], ((r: ArtifactRef) => Promise<CheckResu
 }
 
 async function quarantine(ref: ArtifactRef, untrusted: Store, trusted: Store, audit: Audit) {
-  // Copy locally first: the checks must run against the exact bytes that will
-  // be published, not against whatever the public source serves next time.
+  // Copy first: checks must run on the exact bytes that get published.
   await untrusted.import(ref)
-
   const results = await Promise.all(CHECKS[ref.type].map((check) => check(ref)))
   const blocking = results.filter((r) => !r.passed && r.critical)
-
   if (blocking.length > 0) {
     await audit.record(ref, results, 'rejected')
-    // Destroy rather than leave it lying around — an artifact reachable by
-    // accident is an artifact that will be used by accident.
-    await untrusted.destroy(ref)
-    return
+  } else {
+    await audit.record(ref, results, 'trusted')
+    await trusted.publish(ref, { results, expiresInDays: REPORT_TTL_DAYS })
   }
-
-  await audit.record(ref, results, 'trusted')
-  await trusted.publish(ref, { results, expiresInDays: REPORT_TTL_DAYS })
+  // Destroy either way — an artifact reachable by accident is used by accident.
   await untrusted.destroy(ref)
 }
-
 ```
 
 ## In the wild

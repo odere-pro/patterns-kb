@@ -119,16 +119,12 @@ Prevents the smell of a whole system frozen behind one dead dependency — a ste
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — checkout to fraud check: the smallest breaker that works, state in this process"
-type State = "closed" | "open" | "half-open";
-
 class Breaker {
   private failures = 0;
   private openedAt = 0;
   private probing = false;                                   // true while the one trial call runs
-
   constructor(private threshold = 5, private cooldownMs = 30_000) {}
-
-  private state(): State {
+  private state(): "closed" | "open" | "half-open" {
     if (this.failures < this.threshold) return "closed";
     return Date.now() - this.openedAt < this.cooldownMs ? "open" : "half-open";
   }
@@ -147,68 +143,42 @@ class Breaker {
     } catch (err) {
       if (++this.failures >= this.threshold) this.openedAt = Date.now(); // a failed probe restarts the cooldown
       throw err;
-    } finally {
-      this.probing = false;
-    }
+    } finally { this.probing = false; }
   }
 }
-
-const fraudCheck = new Breaker();
-await fraudCheck.call(() => checkFraud(order, deadline));
+await new Breaker().call(() => checkFraud(order, deadline));
 ```
 
 ```typescript summary="TypeScript — production-shaped variant: one breaker per vendor, state in a shared cache"
-type State = "closed" | "open" | "half-open";
-
 class SharedBreaker {
   constructor(
     private readonly kv: Kv,          // TTL-capable key-value store, shared by all workers
     private readonly vendor: string,  // "idVendor" | "sanctionsVendor"
-    private readonly threshold = 5,
-    private readonly cooldownMs = 30_000,
+    private readonly threshold = 5, private readonly cooldownMs = 30_000,
   ) {}
-
-  private key(suffix: string) { return `cb:${this.vendor}:${suffix}`; }
-
+  private key(s: string) { return `cb:${this.vendor}:${s}`; }
   async call<T>(flowId: string, fn: () => Promise<T>): Promise<T> {
-    if (await this.state(flowId) === "open") {
-      throw new VendorUnavailable(this.vendor); // fail fast; the task reschedules
-    }
+    if (await this.state(flowId) === "open") throw new VendorUnavailable(this.vendor); // fail fast
     try {
       const result = await fn();
-      await this.reset();               // success closes the breaker for everyone
-      return result;
+      await Promise.all(["open", "failures", "probe"].map(s => this.kv.del(this.key(s))));
+      return result;                  // success closes the breaker for everyone
     } catch (err) {
-      await this.recordFailure();
+      const failures = await this.kv.incr(this.key("failures"), this.cooldownMs);
+      if (failures >= this.threshold) await this.kv.set(this.key("open"), "1", this.cooldownMs);
       throw err;
     }
   }
-
-  private async state(flowId: string): Promise<State> {
+  private async state(flowId: string): Promise<"closed" | "open" | "half-open"> {
     if (!(await this.kv.get(this.key("open")))) return "closed";
     // Exactly one replica wins the probe lease and goes half-open. The rest stay
     // open, so a recovering vendor sees one request instead of the whole fleet.
     const won = await this.kv.setIfAbsent(this.key("probe"), flowId, this.cooldownMs);
     return won ? "half-open" : "open";
   }
-
-  private async recordFailure() {
-    const failures = await this.kv.incr(this.key("failures"), this.cooldownMs);
-    if (failures >= this.threshold) {
-      await this.kv.set(this.key("open"), "1", this.cooldownMs);
-    }
-  }
-  private async reset() {
-    await Promise.all([this.key("open"), this.key("failures"), this.key("probe")]
-      .map(k => this.kv.del(k)));
-  }
 }
-
 // One compartment per vendor: a jammed sanctions list never trips ID verification.
-const idBreaker = new SharedBreaker(kv, "idVendor");
-const sanctionsBreaker = new SharedBreaker(kv, "sanctionsVendor");
-
-await idBreaker.call(flowId, () => verifyDocument(personaId, deadline));
+await new SharedBreaker(kv, "idVendor").call(flowId, () => verifyDocument(personaId, deadline));
 ```
 
 ## In the wild

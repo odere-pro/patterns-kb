@@ -138,7 +138,6 @@ function logout(req: Request) {
 import { createHash, randomBytes } from "node:crypto";
 
 interface Session { flowId: string; personaId: string; expiresAt: number; usedAt: number | null }
-
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 // The onboardee has no account: the link IS the session. Storing only its hash
@@ -148,30 +147,22 @@ class SessionStore {
   constructor(private readonly ttlMs = 48 * 60 * 60_000) {}
 
   create(flowId: string, personaId: string): string {
-    const token = randomBytes(32).toString("base64url"); // only the onboardee ever holds this
-    const expiresAt = Date.now() + this.ttlMs;
-    this.byHash.set(sha256(token), { flowId, personaId, expiresAt, usedAt: null });
+    const token = randomBytes(32).toString("base64url"); // only the onboardee holds this
+    this.byHash.set(sha256(token), { flowId, personaId, expiresAt: Date.now() + this.ttlMs, usedAt: null });
     return token;
   }
-
   validate(token: string): Session | null {
     const s = this.byHash.get(sha256(token));
     if (!s || s.usedAt || s.expiresAt < Date.now()) return null; // spent, expired or unknown
     s.usedAt = Date.now();                                        // single use
     return s;
   }
-
   // Resend: the new link supersedes the old one the instant it is issued.
   rotate(flowId: string, personaId: string): string {
-    for (const [hash, s] of this.byHash) {
-      if (s.flowId === flowId) this.byHash.delete(hash);
-    }
+    for (const [hash, s] of this.byHash) if (s.flowId === flowId) this.byHash.delete(hash);
     return this.create(flowId, personaId);
   }
-
-  destroy(token: string): void {
-    this.byHash.delete(sha256(token));
-  }
+  destroy(token: string): void { this.byHash.delete(sha256(token)); }
 }
 ```
 

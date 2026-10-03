@@ -120,20 +120,14 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```go summary="Go — a bounded buffer as a monitor"
-// BoundedBuffer is a monitor: one lock, two conditions, all guarding items.
+
+// BoundedBuffer is a monitor: one lock, two conditions (sync.NewCond(&b.mu)), all guarding items.
 type BoundedBuffer struct {
 	mu       sync.Mutex
 	notFull  *sync.Cond
 	notEmpty *sync.Cond
 	items    []int
 	capacity int
-}
-
-func NewBoundedBuffer(capacity int) *BoundedBuffer {
-	b := &BoundedBuffer{capacity: capacity}
-	b.notFull = sync.NewCond(&b.mu)
-	b.notEmpty = sync.NewCond(&b.mu)
-	return b
 }
 
 func (b *BoundedBuffer) Put(item int) {
@@ -146,16 +140,15 @@ func (b *BoundedBuffer) Put(item int) {
 	b.notEmpty.Signal()
 }
 
-func (b *BoundedBuffer) Take() int {
+func (b *BoundedBuffer) Take() (item int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for len(b.items) == 0 { // a loop, not an if: recheck after every wake
 		b.notEmpty.Wait()
 	}
-	item := b.items[0]
-	b.items = b.items[1:]
+	item, b.items = b.items[0], b.items[1:]
 	b.notFull.Signal()
-	return item
+	return
 }
 ```
 

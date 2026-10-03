@@ -109,7 +109,6 @@ class LsmTree {
   private memtable: Table = new Map();
   private sstables: Table[] = []; // immutable, newest first
   private readonly flushAt = 1000;
-
   set(key: string, value: string) { this.write(key, value); }
   delete(key: string) { this.write(key, null); } // writes a tombstone
 
@@ -118,27 +117,19 @@ class LsmTree {
     this.memtable.set(key, value);
     if (this.memtable.size >= this.flushAt) this.flush();
   }
-
   // Memtable full: freeze it as a sorted, immutable file and start fresh.
   private flush() {
-    const sorted: Table = new Map(
-      [...this.memtable].sort(([a], [b]) => (a < b ? -1 : 1)),
-    );
-    this.sstables.unshift(sorted); // never mutated again
+    const sorted = [...this.memtable].sort(([a], [b]) => (a < b ? -1 : 1));
+    this.sstables.unshift(new Map(sorted)); // never mutated again
     this.memtable = new Map();
   }
-
-  // Newest wins: memtable, then SSTables newest-to-oldest.
-  // A real read consults a per-SSTable Bloom filter to skip most files.
+  // Newest wins: memtable, then SSTables newest-to-oldest. A real read
+  // consults a per-SSTable Bloom filter to skip most files.
   get(key: string): string | null {
-    if (this.memtable.has(key)) return this.memtable.get(key)!;
-    for (const table of this.sstables) {
-      if (table.has(key)) return table.get(key)!; // may be a tombstone (null)
-    }
-    return null;
+    const hit = [this.memtable, ...this.sstables].find((t) => t.has(key));
+    return hit?.get(key) ?? null; // a tombstone (null) reads as absent
   }
 }
-
 ```
 
 ## In the wild

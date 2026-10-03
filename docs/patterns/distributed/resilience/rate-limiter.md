@@ -110,22 +110,14 @@ flowchart LR
 
 ```typescript summary="TypeScript — a token bucket per tenant, and a tighter one per flow"
 class TokenBucket {
-  private tokens: number;
   private last = Date.now();
-
-  constructor(private capacity: number, private refillPerSec: number) {
-    this.tokens = capacity;
-  }
-
-  private refill() {
-    const now = Date.now();
-    const elapsed = (now - this.last) / 1000;
-    this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.refillPerSec);
-    this.last = now;
-  }
+  private tokens: number;
+  constructor(private capacity: number, private refillPerSec: number) { this.tokens = capacity; }
 
   tryConsume(cost = 1): boolean {
-    this.refill();
+    const now = Date.now();                       // refill lazily, on each call
+    this.tokens = Math.min(this.capacity, this.tokens + (now - this.last) / 1000 * this.refillPerSec);
+    this.last = now;
     if (this.tokens < cost) return false;
     this.tokens -= cost;
     return true;
@@ -142,14 +134,10 @@ function limiterFor(key: string, capacity: number, refillPerSec: number): TokenB
 }
 
 // API edge: a tenant submitting personas for verification. Burst 100, refill 10/s.
-if (!limiterFor(`client:${clientId}`, 100, 10).tryConsume()) {
-  throw new Error("429 Too Many Requests");
-}
+if (!limiterFor(`client:${clientId}`, 100, 10).tryConsume()) throw new Error("429 Too Many Requests");
 
 // The resend endpoint is bounded far tighter — a handful of links per flow per hour.
-if (!limiterFor(`resend:${flowId}`, 3, 3 / 3600).tryConsume()) {
-  throw new Error("429 Too Many Requests");
-}
+if (!limiterFor(`resend:${flowId}`, 3, 3 / 3600).tryConsume()) throw new Error("429 Too Many Requests");
 ```
 
 ## In the wild

@@ -114,23 +114,17 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — a minimal trie with insert and top-k autocomplete, counts decide the ranking"
-class Node {
-  children = new Map<string, Node>();
-  count = 0;                                  // > 0 marks the end of a stored word
-}
-
+class Node { children = new Map<string, Node>(); count = 0 } // count > 0 ends a stored word
 class Trie {
   private root = new Node();
-
   insert(word: string, count = 1) {
     let node = this.root;
-    for (const ch of word) {
+    for (const ch of word) {                  // reuse the shared prefix path
       if (!node.children.has(ch)) node.children.set(ch, new Node());
-      node = node.children.get(ch)!;          // reuse the shared prefix path
+      node = node.children.get(ch)!;
     }
     node.count += count;
   }
-
   suggest(prefix: string, k = 3): string[] {
     let node = this.root;
     for (const ch of prefix) {
@@ -147,10 +141,7 @@ class Trie {
     return found.sort((a, b) => b[1] - a[1]).slice(0, k).map(([w]) => w);
   }
 }
-
-const t = new Trie();
-t.insert("car", 50); t.insert("cat", 80); t.insert("cart", 20);
-t.suggest("ca");                              // ["cat", "car", "cart"]
+// insert("car", 50), ("cat", 80), ("cart", 20) → suggest("ca") is ["cat", "car", "cart"]
 ```
 
 ## In the wild

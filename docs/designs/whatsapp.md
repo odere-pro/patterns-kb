@@ -126,6 +126,23 @@ flowchart LR
 
 With ~200M live connections spread over hundreds of hosts, sender and recipient rarely share a server, so delivery becomes a routing problem. A per-user Kafka topic is a non-starter — brokers top out around 10–20k topics, not millions. [Consistent hashing](../patterns/distributed/routing/consistent-hashing.md) can map each user deterministically to a server, but you then own the hard parts yourself: hot nodes, and redistributing connections every time a host is added or removed. Offloading to pub/sub sidesteps all of it — servers subscribe to their users' channels and the broker handles membership. The partitioning choice is by **user**, not by chat: because 1:1 chats dominate, per-chat channels would create a mountain of near-duplicate channels for little gain, and chats are capped at 100 members anyway. The one exception is the [celebrity problem](../hazards/hot-key.md) — a rare very-large chat. Above a size threshold (say 25 members) clients also subscribe to a per-chat channel and senders publish there instead, publishing to both briefly during the transition so no server misses the switch.
 
+Messages route by recipient channel, with a per-chat channel only for large chats:
+
+```mermaid caption="How does a message reach the right chat server without each server knowing where every user is connected?"
+flowchart LR
+    Sender["Sender's chat server"]
+    subgraph PS["Redis pub/sub"]
+        UserCh[("Recipient's user channel")]
+        ChatCh[("Per-chat channel (chats above ~25 members)")]
+    end
+    Dest["Recipient's chat server"]
+    Members["Large-chat members' clients"]
+    Sender -->|"publish to recipient's channel"| UserCh
+    UserCh -->|"deliver to subscribed server"| Dest
+    Sender -->|"large chat: publish here instead"| ChatCh
+    ChatCh -->|"deliver to subscribed clients"| Members
+```
+
 ### 2 · One user, many devices
 
 A user reads on a phone and a laptop, and both must stay in sync — so a single per-user inbox is not enough. A `Clients` table keyed by user id resolves each participant to its active devices; the `Inbox` becomes per client; and a message fans out to every one of a recipient's clients, each acking independently. The pub/sub layer is untouched — channels are still keyed by `userId`. To bound the storage and throughput this multiplies, the number of clients per account is capped (around 3).

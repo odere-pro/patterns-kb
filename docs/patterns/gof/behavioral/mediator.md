@@ -90,15 +90,9 @@ Kept lean, it stops scattered coordination from congealing across your classes â
 
 ```typescript summary="TypeScript â€” a signup form where one hub owns the widgets' rules"
 type WidgetEvent = "toggled" | "changed";
+interface Mediator { notify(sender: Component, event: WidgetEvent): void }
 
-interface Mediator {
-  notify(sender: Component, event: WidgetEvent): void;
-}
-
-abstract class Component {
-  constructor(protected readonly mediator: Mediator) {}
-}
-
+abstract class Component { constructor(protected readonly mediator: Mediator) {} }
 class Checkbox extends Component {
   checked = false;
   toggle(): void {
@@ -106,17 +100,12 @@ class Checkbox extends Component {
     this.mediator.notify(this, "toggled");   // tell the hub, not the button
   }
 }
-
 class SubmitButton extends Component {
   enabled = false;
   setEnabled(on: boolean): void { this.enabled = on; }
 }
-
 class SignupForm implements Mediator {
-  constructor(
-    private readonly terms: Checkbox,
-    private readonly submit: SubmitButton,
-  ) {}
+  constructor(private readonly terms: Checkbox, private readonly submit: SubmitButton) {}
 
   notify(sender: Component, event: WidgetEvent): void {
     // one place owns the rule: submit follows the terms checkbox

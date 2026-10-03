@@ -103,27 +103,16 @@ flowchart LR
 ```typescript summary="TypeScript — a semaphore-bounded worker pool per vendor"
 class Bulkhead {
   private inFlight = 0;
-
-  constructor(
-    private readonly name: string,
-    private readonly maxConcurrent: number,
-  ) {}
+  constructor(private readonly name: string, private readonly maxConcurrent: number) {}
 
   free(): number { return this.maxConcurrent - this.inFlight; }
-
   async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.free() === 0) {
-      throw new Error(`${this.name} pool full — rejecting immediately`);
-    }
+    if (this.free() === 0) throw new Error(`${this.name} pool full — rejecting immediately`);
     this.inFlight++;
-    try {
-      return await fn();
-    } finally {
-      this.inFlight--; // always release the permit, even on error
-    }
+    try { return await fn(); }
+    finally { this.inFlight--; } // always release the permit, even on error
   }
 }
-
 // One compartment per vendor, plus one for our own outbound invites.
 const pools = {
   idVendor: new Bulkhead("idVendor", 20),

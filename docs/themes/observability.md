@@ -35,7 +35,7 @@ Instrumentation costs something whether or not you ever need it: CPU cycles to c
 
 The usual answer is sampling, and it comes in two shapes. **Head-based sampling** decides up front — keep one trace in a hundred, say — which is cheap and predictable, but means the one request that timed out for a customer at 3am has a 99% chance of never having been recorded at all. **Tail-based sampling** defers the decision to the end of the request — keep it only if it was slow or errored — which answers the question you actually care about, at the cost of buffering every in-flight trace until its outcome is known.
 
-Logs, metrics, and traces make the same trade at different granularities. Metrics are cheap because they're pre-aggregated and blind to any single request; logs are detailed but expensive and hard to correlate alone; traces are the priciest, and the only one that shows the shape of a request as it crosses services. Most systems need all three, each tuned to its own retention and sampling budget.
+Logs, metrics, and traces make the same trade at different granularities. Metrics are cheap because they're pre-aggregated and blind to any single request; logs are detailed but expensive and hard to correlate alone; traces are the priciest, and the only one that shows the shape of a request as it crosses services. Most systems need all three, each tuned to its own retention and sampling budget. The [Metrics & Monitoring](../designs/metrics-monitoring.md) case study works through ingesting and alerting on the metrics side.
 
 ```mermaid caption="Every sampling strategy trades storage cost against the risk of missing the one request you needed."
 flowchart TB
@@ -97,4 +97,4 @@ The answer to "which of these six services was slow". Every unit of work becomes
 
 - [Resilience](./resilience.md) — Retries, timeouts, and circuit breakers only help if you can see whether they're firing.
 - [Performance](./performance.md) — You can't tune what you can't measure — latency histograms and traces are the raw material.
-- [Streaming](./streaming.md) — Message flow between services is invisible by default; the same instrumentation makes a pipeline observable.
+- [Streaming](./streaming.md) — [Message flow](./message-flow.md) between services is invisible by default; the same instrumentation makes a pipeline observable.

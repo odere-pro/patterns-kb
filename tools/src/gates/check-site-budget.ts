@@ -46,8 +46,8 @@ export const BUDGETS = {
   pageHtml: { raw: 1_100_000, gzip: 180_000 },
   /** Any page that is not a case study under /designs/. Measured: the largest, patterns/gof/behavioral/chain-of-responsibility.html, 258,534 raw; set at about 1.18 times. */
   contentPageRaw: 305_000,
-  /** Any hub. Measured: the largest, hazards.html, 130,850 raw; set at about 1.07 times. */
-  hubRaw: 140_000,
+  /** Any hub. Measured: the largest, hazards.html, 139,078 raw (45 rows; the two toggles' inline icons are 57,000 of it); set at about 1.07 times. */
+  hubRaw: 149_000,
   /** The bundle, kb.<hash>.js. Measured: 34,887 raw, 12,633 gzipped; set at the measure plus 15 percent. */
   bundle: { raw: 40_100, gzip: 14_500 },
   /** The stylesheets that block a page's first paint, summed. Measured: the largest, designs/persona-identification.html, 111,059 (the main stylesheet, the code frames' and four shared diagram styles); set at about 1.13 times. */

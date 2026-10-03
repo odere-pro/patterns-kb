@@ -104,14 +104,12 @@ flowchart LR
 <!--meta block=sketch-->
 
 ```typescript summary="TypeScript — a login view-model with state and a command"
-interface AuthService { login(username: string): Promise<void>; }
-
 class LoginViewModel {
   private _username = "";
   private _isBusy = false;
   private readonly listeners = new Set<() => void>();
 
-  constructor(private readonly auth: AuthService) {}
+  constructor(private readonly auth: { login(u: string): Promise<void> }) {}
 
   get username(): string { return this._username; }
   set username(value: string) {
@@ -126,16 +124,14 @@ class LoginViewModel {
   // Bound to the view's submit button as a command.
   submit = async (): Promise<void> => {
     if (!this.canSubmit) return;
-    this._isBusy = true; this.notify();
+    this._isBusy = true;
+    this.notify();
     await this.auth.login(this._username);
-    this._isBusy = false; this.notify();
+    this._isBusy = false;
+    this.notify();
   };
 
-  onChange(fn: () => void): () => void {
-    this.listeners.add(fn);
-    return () => this.listeners.delete(fn);
-  }
-
+  onChange(fn: () => void) { this.listeners.add(fn); }
   private notify() { for (const fn of this.listeners) fn(); }
 }
 ```

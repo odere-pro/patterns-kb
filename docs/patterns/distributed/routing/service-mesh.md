@@ -104,12 +104,10 @@ flowchart TB
 type Policy = { timeoutMs: number; retries: number };
 
 // One data-plane proxy rides beside each service. The app dials it over
-// localhost; the proxy applies whatever policy the control plane has pushed,
-// then forwards to the destination's proxy.
+// localhost; the proxy applies the policy the control plane pushed.
 class MeshProxy {
-  // Pushed by the control plane at runtime — the app never sees it.
   private policy: Policy = { timeoutMs: 1000, retries: 2 };
-  applyConfig(p: Policy) { this.policy = p; }
+  applyConfig(p: Policy) { this.policy = p; }   // pushed at runtime — the app never sees it
 
   async forward(target: string, body: unknown): Promise<Response> {
     const { timeoutMs, retries } = this.policy;
@@ -117,16 +115,12 @@ class MeshProxy {
     for (let attempt = 0; attempt <= retries; attempt++) {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      const start = performance.now();
       try {
-        // mTLS, load balancing, and routing also live here — never in the app.
-        const res = await fetch(target, {
-          method: "POST",
-          body: JSON.stringify(body),
-          signal: ctrl.signal,
-        });
-        this.record(target, res.status, performance.now() - start);
-        return res;                    // success — no retry needed
+        // mTLS, load balancing, routing and per-hop golden metrics also live
+        // here, uniform across the fleet — never in the app.
+        return await fetch(target, {
+          method: "POST", body: JSON.stringify(body), signal: ctrl.signal,
+        });                            // success — no retry needed
       } catch (err) {
         lastErr = err;                 // retried transparently; app unaware
       } finally {
@@ -134,11 +128,6 @@ class MeshProxy {
       }
     }
     throw lastErr;
-  }
-
-  // Golden metrics for every hop, emitted uniformly across the whole fleet.
-  private record(target: string, status: number, ms: number) {
-    console.log(`out ${target} ${status} ${ms.toFixed(1)}ms`);
   }
 }
 ```

@@ -114,43 +114,36 @@ sequenceDiagram
 <!--meta block=sketch-->
 
 ```sql summary="SQL — one entity split by access pattern, with the write kept atomic"
--- HOT: every field the listing and search results read. Narrow on purpose —
--- more rows per page, higher cache hit rate, and the index covers the query.
+-- HOT: what the listing and search read. Narrow on purpose: more rows per
+-- page, higher cache hit rate, and the index covers the query.
 CREATE TABLE product (
   id           bigint PRIMARY KEY,
   name         text        NOT NULL,
   price_cents  integer     NOT NULL,
   updated_at   timestamptz NOT NULL
 );
-
--- COLD: the bulk nobody reads until a product is actually opened. Same key,
--- one row each, so the two halves join on identity rather than on a lookup.
+-- COLD: the bulk nobody reads until a product is opened. Same key, one row each.
 CREATE TABLE product_detail (
   product_id   bigint PRIMARY KEY REFERENCES product(id) ON DELETE CASCADE,
   description  text,
   spec_sheet   jsonb,
   image_keys   text[]        -- references into object storage, not the bytes
 );
-
--- VOLATILE: updated on every order. Separated so a counter churning all day
--- stops invalidating the page that holds slow-moving descriptive data.
+-- VOLATILE: updated on every order, so its churn stops invalidating the cold page.
 CREATE TABLE product_stock (
   product_id   bigint PRIMARY KEY REFERENCES product(id) ON DELETE CASCADE,
-  on_hand      integer     NOT NULL,
-  last_ordered timestamptz
+  on_hand      integer     NOT NULL
 );
 
 -- The listing pays for nothing it does not show.
 SELECT id, name, price_cents FROM product WHERE price_cents < 5000 LIMIT 25;
 
--- A write spanning partitions needs a transaction scoped over both. Split the
--- entity across two STORES and this guarantee is gone — then it is a
--- compensation you write, not a keyword you type.
+-- Same store: one transaction spans the partitions. Split across two STORES
+-- and this guarantee is gone — then it is a compensation you write.
 BEGIN;
   UPDATE product       SET price_cents = 4200, updated_at = now() WHERE id = 7;
   UPDATE product_stock SET on_hand = on_hand - 1                  WHERE product_id = 7;
 COMMIT;
-
 ```
 
 ## In the wild

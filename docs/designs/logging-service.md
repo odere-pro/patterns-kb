@@ -152,6 +152,27 @@ Underneath all three is the same discipline — [separation of concerns](../prin
 
 Thread safety means one record's bytes must never split across another's on the same output. The tempting answer is to `synchronize` the whole of `Logger.log()` — correct, but a sledgehammer: a slow file write (disk full, contended I/O) then blocks every other call, including console writes that should be instant, and one lock ends up guarding five unrelated resources. The better answer puts the lock where the resource is. Each `Destination` owns its own lock and applies it around only `sink.write()` — a [monitor object](../patterns/concurrency/monitor-object.md) guarding exactly one output. A hung remote destination can't block the file; a slow file can't block the console. And crucially, the level check and the formatting happen outside the critical section — safe precisely because the record is immutable and the formatter is pure, so there is nothing to race on — which keeps the locked region the smallest correct one. Holding the lock across format-and-write instead is also defensible and simpler; the throughput cost only bites when formatting is expensive and contention is high.
 
+Each destination owns its own lock, so a slow output stalls only itself.
+
+```mermaid caption="Why can a hung remote destination not block the file or the console?"
+flowchart TB
+    Log["Logger.log() - one immutable record"]
+    subgraph D1["Console Destination"]
+        F1["level check + format - no lock"]
+        L1["own lock: sink.write()"]
+    end
+    subgraph D2["File Destination"]
+        F2["level check + format - no lock"]
+        L2["own lock: sink.write()"]
+    end
+    Log -->|"same record"| F1
+    Log -->|"same record"| F2
+    F1 -->|"formatted string"| L1
+    F2 -->|"formatted string"| L2
+    L1 --> CS["ConsoleSink"]
+    L2 --> FS["FileSink"]
+```
+
 ### 4 · When a destination fails — and what comes next
 
 A logger is infrastructure, so a broken output must never crash the code that called it. If `sink.write()` throws and you let it propagate, a full disk turns `logger.error("payment failed")` into a payment-processing crash, and a later destination in the [fan-out](../patterns/messaging/fan-out.md) never sees the record. Swallowing the exception inside `Destination.write()` fixes the crash but fails silently — a forensic file can sit empty for days. The production default is to swallow and emit a one-line diagnostic to a known-good fallback stream (stderr), mirroring Log4j's `StatusLogger` and Python's handler-error behaviour; the diagnostic itself must be rate-limited or a persistently failing sink floods stderr. As for the deferred requirements, the shape holds: making `log()` non-blocking means a bounded queue and a single worker thread per destination (Log4j's `AsyncAppender`, Python's `QueueHandler`) — which brings its own worker-lifecycle and overflow-policy questions; hierarchical named loggers add a name and a parent pointer plus a registry `LoggerFactory`, the one place where shared global state is genuinely the requirement. Neither forces a rewrite of the core, which is the point of drawing the boundaries where they are.
