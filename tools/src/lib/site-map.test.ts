@@ -162,6 +162,26 @@ describe('the stack index', () => {
     expect(rows[0]?.compare).toEqual([{ title: 'Cache servers', href: '/comparisons/cache-servers.html#matrix-row-1', criterion: 'Survives a restart' }]);
   });
 
+  it('keeps the comparison chip off a later row that is pinned too', () => {
+    const read = (source: string): string => (source === 'docs/capabilities/databases.md' ? CACHES : (docs[source] ?? ''));
+    const rows = buildStack(
+      STRUCTURE,
+      [
+        { a: 'cache-servers', verb: 'implements', b: 'cache-aside', maps_a: 'matrix-row-1' },
+        { a: 'caches', verb: 'implements', b: 'cache-aside', maps_a: 'mapping-row-1' },
+        { a: 'databases', verb: 'implements', b: 'cache-aside', maps_a: 'mapping-row-1' },
+      ],
+      read,
+      linkify,
+    )
+      .bands.flatMap((b) => b.groups.flatMap((g) => g.rows))
+      .filter((r) => r.pattern.title === 'Cache-Aside');
+    expect(rows.map((r) => [r.state, r.source?.title, r.compare.length])).toEqual([
+      ['mapped', 'Caches & Stores', 1],
+      ['mapped', 'Databases', 0],
+    ]);
+  });
+
   it('rides a comparison on a gap row, linking its whole page when no criterion is pinned or found', () => {
     const rows = rowsOf([
       { a: 'cache-servers', verb: 'implements', b: 'write-through' },
@@ -283,6 +303,11 @@ describe('reading a tree', () => {
     expect(row?.cells[0]).toBe('<a class="kb-product" href="https://aws.test/" target="_blank" rel="noopener noreferrer">Amazon ElastiCache</a>');
     expect(row?.cells[1]).toBe('Azure Cache');
     expect(typeof (await productLinker(sb.dir))).toBe('function');
+  });
+
+  it('links nothing when the product registry has no products', async () => {
+    sb.write('docs/data/products.json', JSON.stringify({ version: 1 }));
+    expect((await productLinker(sb.dir))('Amazon ElastiCache', 'aws')).toBe('Amazon ElastiCache');
   });
 });
 
