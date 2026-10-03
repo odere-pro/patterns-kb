@@ -46,6 +46,11 @@ describe('check-site-budget', () => {
     expect(r.out).toBe('[site-budget] 7 pages, the bundle, the search payload and the manifest are inside their budgets');
   });
 
+  it('weighs only the stylesheets and scripts that exist: a reference to a missing file adds nothing', async () => {
+    sb.write(ALPHA, withBody('/patterns/caching/alpha.html', '</p><link rel="stylesheet" href="gone.css"><script src="gone.js"></script><p>'));
+    expectPass(await sb.run(spec));
+  });
+
   it('fails a page over the raw budget, naming the file, its size, the budget and the biggest part', async () => {
     sb.write(DESIGN, withBody('/designs/big.html', `<svg>${flat(BUDGETS.pageHtml.raw)}</svg>`));
     const r = await sb.run(spec);
@@ -206,5 +211,10 @@ describe('the pieces', () => {
       '<script>inline()</script>',
     ].join('\n');
     expect(loadsOf(html)).toEqual({ blockingCss: ['a.css'], printCss: ['b.css'], syncScripts: ['s.js'], otherScripts: ['d.js', 'm.js'], icons: ['f.svg'] });
+  });
+
+  it('counts nothing for a link with no rel, a link with no href, or a tag that loads nothing', () => {
+    const html = ['<meta charset="utf-8">', '<link href="n.css">', '<link rel="stylesheet">', '<script src="s.js"></script>'].join('\n');
+    expect(loadsOf(html)).toEqual({ blockingCss: [], printCss: [], syncScripts: ['s.js'], otherScripts: [], icons: [] });
   });
 });
