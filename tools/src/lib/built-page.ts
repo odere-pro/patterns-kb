@@ -287,15 +287,14 @@ export function decode(text: string): string {
 export function stripTags(html: string): string {
   const parts: string[] = [];
   let last = 0;
-  let skipTo = -1;
+  // tags() never yields a tag inside a script or style body, so only the
+  // body's text needs skipping here.
   for (const t of tags(html)) {
-    if (t.start < skipTo) continue;
     parts.push(html.slice(last, t.start).replace(/<!--[\s\S]*?(?:-->|$)/g, ' '), ' ');
     last = t.end;
     if (!t.closing && (t.name === 'script' || t.name === 'style')) {
       const close = html.toLowerCase().indexOf(`</${t.name}`, t.end);
-      skipTo = close < 0 ? html.length : close;
-      last = skipTo;
+      last = close < 0 ? html.length : close;
     }
   }
   parts.push(html.slice(last).replace(/<!--[\s\S]*?(?:-->|$)/g, ' '));
