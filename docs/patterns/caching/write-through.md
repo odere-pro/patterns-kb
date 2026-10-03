@@ -216,4 +216,8 @@ class WriteThroughCache<K, V> {
 
 - [Dual-Write Inconsistency](../../hazards/dual-write-inconsistency.md) — Can fall into dual write inconsistency when the cache and store are written by two calls with no shared transaction
 
+**Implemented by**
+
+- [Databases](../../capabilities/databases.md) — Some caches write every update through to the database before returning.
+
 <!-- relationships:end -->

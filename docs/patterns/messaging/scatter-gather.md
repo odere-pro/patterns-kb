@@ -243,4 +243,8 @@ async function screen(
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — a fan-in whose tally is round-scoped, and whose legs carry a third outcome so an unreachable participant still terminates
 - [Uber](../../designs/uber.md) — Scatter-gather as the rare exception cost of sharding by region
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that sends a request to several parties and collects the replies as a ready-made building block.
+
 <!-- relationships:end -->

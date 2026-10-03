@@ -261,4 +261,8 @@ async function updateUser(id: string, patch: Partial<User>): Promise<void> {
 - [Gopuff](../../designs/gopuff.md) — inventory is read from cache first, populated on miss, and invalidated on write — the canonical cache-aside loop
 - [YouTube](../../designs/youtube.md) — populating the cache on a miss to shield a hot database read path is precisely cache-aside
 
+**Implemented by**
+
+- [Databases](../../capabilities/databases.md) — Managed in-memory caches give you the store; you still write the load-on-miss logic.
+
 <!-- relationships:end -->

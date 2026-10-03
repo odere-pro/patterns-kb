@@ -68,6 +68,9 @@ A cloud network is a private address range you choose, cut into subnets, each wi
 | Request rate limiting at the edge | AWS WAF rate-based rules, API Gateway throttling | API Management rate-limit policy, Front Door WAF rate limiting | Cloud Armor rate limiting, Apigee quota policy | NGINX limit_req, Envoy rate limit filter |
 | Dedicated private circuit | AWS Direct Connect | Azure ExpressRoute | Cloud Interconnect | no direct open-source equivalent |
 | Site-to-site virtual private network (VPN) | AWS Site-to-Site VPN | Azure VPN Gateway | Cloud VPN | WireGuard, strongSwan |
+| Service mesh | no first-party mesh since AWS App Mesh shut down in September 2026; Amazon VPC Lattice, ECS Service Connect | Istio-based add-on for Azure Kubernetes Service | Cloud Service Mesh | Istio, Linkerd |
+| Service discovery | AWS Cloud Map | no first-party equivalent | Service Directory | Consul, CoreDNS |
+| Managed WebSocket connections | Amazon API Gateway WebSocket APIs | Azure Web PubSub | no first-party equivalent | Socket.IO, Centrifugo |
 
 ## Choosing between them
 <!--meta block=choosing-->
@@ -127,5 +130,14 @@ The bill for a cloud network is mostly for the boxes that are not machines. Outb
 - [Intercepting Validator](../patterns/security/intercepting-validator.md) — A web application firewall is the choke point for request shape, sitting ahead of your code.
 - [API Routing](../patterns/distributed/routing/api-routing.md) — A managed gateway matches host and path and forwards to the backing service, as configuration rather than code.
 - [Token Bucket](../patterns/distributed/resilience/token-bucket.md) — Edge throttling is a token bucket: a steady refill rate plus a burst capacity, and nothing else to tune.
+- [Service Mesh](../patterns/distributed/routing/service-mesh.md) — A managed mesh runs the sidecar proxies and control plane for you.
+- [Circuit Breaker](../patterns/distributed/resilience/circuit-breaker.md) — Mesh outlier detection ejects failing backends without a library in your code.
+- [Retry with Backoff](../patterns/distributed/resilience/retry-backoff.md) — Mesh retry policies re-send failed calls from the proxy.
+- [Timeout / Deadline](../patterns/distributed/resilience/timeout-deadline.md) — Mesh route timeouts cap each call at the proxy.
+- [Shadow Traffic](../patterns/distributed/routing/shadow-traffic.md) — Mesh traffic mirroring copies live requests to a second version.
+- [Service Discovery](../patterns/distributed/routing/service-discovery.md) — A managed registry lets services find each other by name instead of address.
+- [WebSocket](../patterns/messaging/websocket.md) — A managed service holds the long-lived client connections for you.
+- [Single Access Point](../patterns/security/single-access-point.md) — A managed API gateway is the one front door to your services.
+- [Leaky Bucket](../patterns/distributed/resilience/leaky-bucket.md) — The open-source edge proxy limits requests at a fixed drain rate.
 
 <!-- relationships:end -->

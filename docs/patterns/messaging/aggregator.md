@@ -210,4 +210,8 @@ class Aggregator<T, R> {
 
 - [Metrics & Monitoring](../../designs/metrics-monitoring.md) — gathering related alerts within a time window and combining them is the aggregator preventing an alert storm
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that combines related messages into one as a ready-made building block.
+
 <!-- relationships:end -->

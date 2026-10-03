@@ -250,4 +250,8 @@ async function updateWithOcc(
 - [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — a long know your customer (KYC) flow guards each state change with a version check, so the loser of a race writes nothing and needs no rollback
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — the guard doubles as the ordering key, so a lost update and a stale delivery are stopped by one constraint
 
+**Implemented by**
+
+- [Databases](../../../capabilities/databases.md) — Version tags and condition checks in managed stores implement the compare step for you.
+
 <!-- relationships:end -->

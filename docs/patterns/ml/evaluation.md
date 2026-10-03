@@ -179,4 +179,8 @@ console.log("recall",   recall(lazy).toFixed(3));   // 0.000 — catches nothing
 - [Feature Engineering](./feature-engineering.md) — An offline gain that dies online usually traces back to features
 - [Retrieval-Augmented Generation](./rag.md) — A retrieval-augmented system has two stages to measure, and one score hides which broke
 
+**Implemented by**
+
+- [Data & Analytics](../../capabilities/data-analytics.md) — Each cloud sells hosted scoring runs, so you supply the test set and the metrics.
+
 <!-- relationships:end -->

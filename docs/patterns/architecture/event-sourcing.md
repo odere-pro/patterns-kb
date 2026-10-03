@@ -269,4 +269,8 @@ const state = log.reduce(apply, {} as AccountState);
 - [Payment System](../../designs/payment-system.md) — payments show why an append-only event log beats mutable current-state — you can reconstruct any past state and defend a chargeback
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — a case study where the pattern's payoff is a delivery guarantee: the record needs no companion queue because it already is one
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — A purpose-built event store gives you the append, per-stream read and subscription that this pattern needs.
+
 <!-- relationships:end -->

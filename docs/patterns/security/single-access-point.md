@@ -198,4 +198,8 @@ app.listen(443);
 
 - [Gatekeeper](../distributed/routing/gatekeeper.md) — A gatekeeper is a hardened single entry
 
+**Implemented by**
+
+- [Networking](../../capabilities/networking.md) — A managed API gateway gives all clients one entry point with auth and routing already built.
+
 <!-- relationships:end -->

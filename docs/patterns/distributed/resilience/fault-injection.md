@@ -253,4 +253,8 @@ async function report(e: Experiment, result: Result) {
 - [Cascading Failure](../../../hazards/cascading-failure.md) — Rehearse the first failure and find the spread before it happens for real
 - [Retry Storm](../../../hazards/retry-storm.md) — A deliberate outage under load makes the amplification visible in a controlled window
 
+**Implemented by**
+
+- [Observability Platform](../../../capabilities/observability-platform.md) — Two clouds sell this as a service, and open-source tools run the same experiments on Kubernetes.
+
 <!-- relationships:end -->

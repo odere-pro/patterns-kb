@@ -234,4 +234,8 @@ class Lease {
 - [Resource Leak](../../../hazards/resource-leak.md) — Can fall into resource leak when a holder that never releases keeps the grant until the lease expires
 - [Thundering Herd](../../../hazards/thundering-herd.md) — Can fall into thundering herd when leases granted together expire together, and the holders all renew in the same instant
 
+**Implemented by**
+
+- [Databases](../../../capabilities/databases.md) — Time-limited ownership is available ready-made as a blob lease or a coordination-service lease.
+
 <!-- relationships:end -->

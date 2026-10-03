@@ -290,4 +290,8 @@ async function relayOnce(db: Db, webhooks: WebhookSender) {
 - [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — committing a know your customer (KYC) flow's state transition and its client webhook event in one transaction, so a crash can never separate what happened from what the client is told
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — a case study where the pattern's guarantee is kept without its table — an append-only record with a client-visible flag and a per-flow cursor is the relay's whole queue
 
+**Implemented by**
+
+- [Messaging & Eventing](../../../capabilities/messaging.md) — Change data capture can read the outbox table and publish its rows, so you do not write the relay.
+
 <!-- relationships:end -->

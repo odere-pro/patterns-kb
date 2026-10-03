@@ -222,4 +222,8 @@ async function handle(order: Order) {
 
 - [Message Translator](./message-translator.md) — Adds data the message does not carry, fetched from another source
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that adds data to a message in flight as a ready-made building block.
+
 <!-- relationships:end -->

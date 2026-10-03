@@ -55,7 +55,7 @@ A resource container is the account, subscription or project that every cloud re
 | Metadata labels | tags | tags | labels | no direct open-source equivalent |
 | Policy enforcement | service control policies, AWS Config | Azure Policy | Organization Policy Service | Open Policy Agent |
 | Quotas and limits | Service Quotas, per account and region | quotas, per subscription and region | quotas, per project and region | no direct open-source equivalent |
-| Native infrastructure as code | AWS CloudFormation, AWS CDK | ARM templates, Bicep | no single first-party successor to Deployment Manager | OpenTofu |
+| Native infrastructure as code | AWS CloudFormation, AWS CDK | ARM templates, Bicep | Infrastructure Manager (managed Terraform), successor to Deployment Manager | OpenTofu |
 | Cost analysis | AWS Cost Explorer | Microsoft Cost Management | Cloud Billing reports | OpenCost |
 | Third-party infrastructure as code | Terraform | Terraform | Terraform | OpenTofu, Pulumi |
 | Landing zone tooling | AWS Control Tower | Azure landing zones | no first-party equivalent | no direct open-source equivalent |

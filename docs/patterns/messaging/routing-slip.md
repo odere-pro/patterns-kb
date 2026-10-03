@@ -219,4 +219,8 @@ await send("validate", {
 
 - [Recipient List](./recipient-list.md) — Sends the message through steps one after another, each step forwarding to the next address
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that sends a message along a route it carries as a ready-made building block.
+
 <!-- relationships:end -->

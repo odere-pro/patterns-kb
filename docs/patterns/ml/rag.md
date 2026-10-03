@@ -205,4 +205,8 @@ def answer(question, user):
 
 - [Embeddings](./embeddings.md) — Passages and questions only become comparable once both are vectors from the same model
 
+**Implemented by**
+
+- [Data & Analytics](../../capabilities/data-analytics.md) — Each cloud sells the retrieval half ready-made, so you configure sources instead of building the pipeline.
+
 <!-- relationships:end -->

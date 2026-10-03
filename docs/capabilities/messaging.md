@@ -66,6 +66,9 @@ A managed messaging service is a durable place to put a message, so the sender a
 | Device-facing MQTT broker | AWS IoT Core | Azure IoT Hub | no first-party equivalent | Eclipse Mosquitto, EMQX |
 | Mobile push notification | Amazon SNS mobile push | Azure Notification Hubs | Firebase Cloud Messaging | no direct open-source equivalent |
 | Transactional email | Amazon SES | Azure Communication Services | no first-party equivalent | Postfix |
+| Message routing and transformation flows | AWS Step Functions, Amazon EventBridge Pipes | Azure Logic Apps | Application Integration | Apache Camel, Spring Integration |
+| Change data capture | DynamoDB Streams | Azure Cosmos DB change feed | Datastream | Debezium |
+| Event store database | no first-party equivalent | no first-party equivalent | no first-party equivalent | KurrentDB |
 
 ## Choosing between them
 <!--meta block=choosing-->
@@ -128,5 +131,24 @@ Then watch the depth. A managed queue will accept far more than your consumers c
 - [Content-Based Router](../patterns/messaging/content-based-router.md) — An event bus matches the message body against rules and picks the destination for you.
 - [Sequential Convoy](../patterns/messaging/sequential-convoy.md) — First in, first out (FIFO) message groups and broker sessions keep one related run in order while others proceed in parallel.
 - [Scheduling](../patterns/concurrency/scheduling.md) — Delay and schedule fields on a message move the timer into the broker.
+- [Event-Driven Architecture](../patterns/architecture/eda.md) — An event bus carries the events and routes them to consumers for you.
+- [Producer-Consumer](../patterns/concurrency/producer-consumer.md) — A managed queue is the buffer between the producers and the consumers.
+- [Compensating Transaction](../patterns/distributed/resilience/compensating-transaction.md) — Workflow definitions run the undo steps for a failed run.
+- [Message Router](../patterns/messaging/message-router.md) — A subscription filter makes the broker deliver only the messages that match.
+- [Splitter](../patterns/messaging/splitter.md) — Integration flows and the Apache Camel library cover the step that splits one message into many.
+- [Aggregator](../patterns/messaging/aggregator.md) — Integration flows and the Apache Camel library cover the step that combines related messages into one.
+- [Scatter-Gather](../patterns/messaging/scatter-gather.md) — Integration flows and the Apache Camel library cover the step that sends a request to several parties and collects the replies.
+- [Content Enricher](../patterns/messaging/content-enricher.md) — Integration flows and the Apache Camel library cover the step that adds data to a message in flight.
+- [Message Translator](../patterns/messaging/message-translator.md) — Integration flows and the Apache Camel library cover the step that converts a message between formats.
+- [Wire Tap](../patterns/messaging/wire-tap.md) — Integration flows and the Apache Camel library cover the step that copies messages to a side channel.
+- [Recipient List](../patterns/messaging/recipient-list.md) — Integration flows and the Apache Camel library cover the step that sends a message to a computed list of recipients.
+- [Routing Slip](../patterns/messaging/routing-slip.md) — Integration flows and the Apache Camel library cover the step that sends a message along a route it carries.
+- [Resequencer](../patterns/messaging/resequencer.md) — Integration flows and the Apache Camel library cover the step that restores the order of out-of-order messages.
+- [Polling Consumer](../patterns/messaging/polling-consumer.md) — Integration flows and the Apache Camel library cover the step that pulls messages on a schedule.
+- [Messaging Bridge](../patterns/messaging/messaging-bridge.md) — Integration flows and the Apache Camel library cover the step that connects two messaging systems.
+- [Correlation Identifier](../patterns/messaging/correlation-identifier.md) — Integration flows and the Apache Camel library cover the step that matches replies to their requests.
+- [Claim Check](../patterns/messaging/claim-check.md) — Integration flows and the Apache Camel library cover the step that stores the payload aside and passes a reference.
+- [Outbox](../patterns/distributed/coordination/outbox.md) — Change feeds and Debezium read committed rows and publish them, which is the relay half of this pattern.
+- [Event Sourcing](../patterns/architecture/event-sourcing.md) — An event store database keeps the append-only log of events per entity.
 
 <!-- relationships:end -->

@@ -122,5 +122,6 @@ Human sessions and workload credentials pull the lifetime dial in opposite direc
 - [Authorization Enforcer (RBAC)](../patterns/security/authorization-enforcer.md) — The resource authorization engine evaluates every control-plane call.
 - [Valet Key](../patterns/distributed/routing/valet-key.md) — Short-lived scoped credentials are the general form of the delegated-access token.
 - [Secure Logger](../patterns/security/secure-logger.md) — The control-plane audit trail is append-only, so a caller inside the account cannot edit what it already recorded.
+- [Secure Session Manager](../patterns/security/secure-session-manager.md) — Customer identity services issue, expire and revoke sign-in sessions for you.
 
 <!-- relationships:end -->

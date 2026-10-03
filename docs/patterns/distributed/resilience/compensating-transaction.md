@@ -234,4 +234,8 @@ await runSaga([
 
 - [Dual-Write Inconsistency](../../../hazards/dual-write-inconsistency.md) — When the second write fails, an explicit undo of the first restores a consistent state
 
+**Implemented by**
+
+- [Messaging & Eventing](../../../capabilities/messaging.md) — A managed state machine can hold the undo steps and run them in reverse when a later step fails.
+
 <!-- relationships:end -->

@@ -203,4 +203,8 @@ for (const fragment of splitOrder(order)) {
 
 - [Scatter-Gather](./scatter-gather.md) — Scatter fans out, gather aggregates
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that splits one message into many as a ready-made building block.
+
 <!-- relationships:end -->

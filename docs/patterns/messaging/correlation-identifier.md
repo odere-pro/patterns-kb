@@ -238,4 +238,8 @@ await webhook.deliver(clientUrl, { flowId, state: "cleared" }); // … and on th
 - [Persona Identification & Sanction Check](../../designs/persona-identification.md) — one flowId threading a persona-verification saga's vendor calls, logs, and webhook payload end to end
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — one id instead of distributed tracing, with the honest note that this stops being true when work leaves the transaction
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that matches replies to their requests as a ready-made building block.
+
 <!-- relationships:end -->

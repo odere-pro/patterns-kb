@@ -250,4 +250,8 @@ async function runVerify(
 - [YouTube](../../designs/youtube.md) — A transcode queue is the canonical claim check: the payload stays in the store
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — the key travels through the queue and the log; the payload never does
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that stores the payload aside and passes a reference as a ready-made building block.
+
 <!-- relationships:end -->

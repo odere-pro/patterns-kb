@@ -40,6 +40,7 @@ An observability platform stores three kinds of evidence about your running syst
 - **Synthetic checks** — A probe run from outside your system on a schedule, exercising a URL or a whole scripted journey. It is the only signal that keeps arriving when the system is down hard enough to stop reporting on itself, and the only one that covers a path no real user happened to take in the last five minutes.
 - **Long-term retention and archive** — A cheaper tier for telemetry you must keep but rarely read — usually with slower or more limited query, and often with a per-scan charge instead of a per-gigabyte-month one. This is what separates an audit requirement from an operations budget, and keeping the two in the hot tier together is the most common overspend on this bill.
 - **Metrics computed from logs** — A rule that extracts a counter or a distribution out of matching log lines, so a number you can alert on cheaply is produced from events you may not keep. Worth reaching for exactly when a metric is missing from an application you cannot change.
+- **Fault injection experiments** — A managed service that slows, fails or kills a dependency on a schedule you set, with a stop condition tied to an alarm. Run it against a system you have already watched, or you learn nothing from the result.
 
 ## What each cloud calls it
 <!--meta block=mapping-->
@@ -55,6 +56,7 @@ An observability platform stores three kinds of evidence about your running syst
 | Synthetic checks | CloudWatch Synthetics | Azure Monitor availability tests | Cloud Monitoring uptime checks | Prometheus Blackbox Exporter |
 | Log archive to object storage | CloudWatch Logs export to Amazon S3 | Azure Monitor Logs export to Storage | Cloud Logging sink to Cloud Storage | object storage plus a columnar file format |
 | Metrics computed from logs | CloudWatch metric filters | Azure Monitor log alert rules | Cloud Logging log-based metrics | Grafana Loki recording rules |
+| Fault injection experiments | AWS Fault Injection Service | Azure Chaos Studio | no first-party equivalent | Chaos Mesh, LitmusChaos |
 
 ## Choosing
 <!--meta block=choosing-->
@@ -100,5 +102,6 @@ Two decisions people leave until the bill arrives, and should make on day one. S
 - [Distributed Tracing](../patterns/distributed/resilience/distributed-tracing.md) — Managed trace collection is this pattern rented: the collector, the store and the waterfall view
 - [Secure Logger](../patterns/security/secure-logger.md) — Redaction rules in the collection pipeline apply this before telemetry reaches any store
 - [Sidecar](../patterns/distributed/routing/sidecar.md) — The telemetry agent is a helper process beside the application, so no service links a vendor software development kit (SDK).
+- [Fault Injection](../patterns/distributed/resilience/fault-injection.md) — Managed chaos services run the experiment and halt it when your alarm fires.
 
 <!-- relationships:end -->

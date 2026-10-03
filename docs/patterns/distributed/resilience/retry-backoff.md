@@ -273,4 +273,8 @@ const claim = `SELECT * FROM task WHERE status = 'pending' AND run_after <= now(
 - [Gopuff](../../../designs/gopuff.md) — bounding the replay is what stops contention on a promoted item becoming a retry storm
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — backoff with jitter argued from the recovery it belongs to, where the alternative is a synchronised stampede at the end of a six-hour outage
 
+**Implemented by**
+
+- [Networking](../../../capabilities/networking.md) — A mesh sets retries per route in configuration, so no service carries its own retry loop.
+
 <!-- relationships:end -->

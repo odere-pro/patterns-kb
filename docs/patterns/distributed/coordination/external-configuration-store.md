@@ -242,4 +242,8 @@ export class Configuration {
 - [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — the list roster, each list's criticality, the recheck cadences, vendor quotas and fallback weights move without a deploy — and a worker that cannot reach the store boots from its last cached version rather than from defaults
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — configuration that decides what an unreachable check costs, which is why compiled-in defaults would screen the wrong lists and look successful doing it
 
+**Implemented by**
+
+- [Compute](../../../capabilities/compute.md) — Every cloud sells a managed configuration store; you still decide how your service reloads a changed value.
+
 <!-- relationships:end -->

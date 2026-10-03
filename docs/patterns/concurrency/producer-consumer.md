@@ -218,4 +218,8 @@ func main() {
 - [Elevator](../../designs/elevator.md) — a queue decouples the many request producers from the single consumer that advances the cars, removing shared-set contention
 - [Online Auction](../../designs/online-auction.md) — splitting bid acceptance from bid adjudication is what lets an acknowledged bid outlive a crash of whatever judges it
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — A managed queue replaces the in-process buffer when producers and consumers run as separate services.
+
 <!-- relationships:end -->

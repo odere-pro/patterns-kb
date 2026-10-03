@@ -197,4 +197,8 @@ function onLegacyOrder(raw: LegacyOrder, publish: (o: CanonicalOrder) => void) {
 - [Messaging Bridge](./messaging-bridge.md) — Reshapes the message; a bridge only moves it between infrastructures
 - [Content Enricher](./content-enricher.md) — Changes the format of what the message already carries, and adds nothing
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that converts a message between formats as a ready-made building block.
+
 <!-- relationships:end -->
