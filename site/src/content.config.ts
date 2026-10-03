@@ -11,8 +11,8 @@
  */
 import { defineCollection } from 'astro:content';
 import { z } from 'astro/zod';
-import { docsLoader } from '@astrojs/starlight/loaders';
-import { docsSchema } from '@astrojs/starlight/schema';
+import { docsLoader, i18nLoader } from '@astrojs/starlight/loaders';
+import { docsSchema, i18nSchema } from '@astrojs/starlight/schema';
 
 import { learningPresent, statusSchema } from './lib/learning';
 import { repoRoot } from './lib/repo-root';
@@ -46,4 +46,8 @@ export const collections = {
       }),
     }),
   }),
+  // Starlight reads its UI strings from this collection on every page, and
+  // Astro warns once per build when it holds no entry. src/content/i18n/en.json
+  // is that entry, and overrides no string.
+  i18n: defineCollection({ loader: i18nLoader(), schema: i18nSchema() }),
 };

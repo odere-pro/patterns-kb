@@ -178,6 +178,10 @@ describe('writer-owned blocks', () => {
     expect(explainItems(parsePage('## E\n<!--meta block=explain-->\n\nOne  \ntwo.\n'))?.text).toBe('One two.');
   });
 
+  it('reads an image in the paragraph as its alt text, since it has no children to walk', () => {
+    expect(explainItems(parsePage('## E\n<!--meta block=explain-->\n\nSee ![the gate](gate.svg) here.\n'))?.text).toBe('See the gate here.');
+  });
+
   it('dumps the costs list beside the paragraph, and keeps a link as `[label](target)`', () => {
     const doc = parsePage(
       [

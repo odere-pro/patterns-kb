@@ -68,6 +68,13 @@ describe('searchTree', () => {
     expect(loop?.categories.at(-1)).toBe('theme');
   });
 
+  it('reads a frontmatter key the page leaves out as empty, not as a missing value', () => {
+    writeKbFixture(sb.dir);
+    const file = 'docs/patterns/messaging/queue.md';
+    sb.write(file, sb.read(file).replace(/^description:.*\n/m, ''));
+    expect(searchTree(sb.dir).pages.find((p) => p.title === 'Queue')?.description).toBe('');
+  });
+
   it('skips a row whose file is gone', () => {
     writeKbFixture(sb.dir);
     sb.rm('docs/patterns/messaging/queue.md');
