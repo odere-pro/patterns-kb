@@ -155,6 +155,10 @@ describe('decode and stripTags', () => {
     expect(stripTags(html)).toBe('One two label three & four');
   });
 
+  it('drops markup quoted inside a script, rather than reading its tags as the page’s', () => {
+    expect(stripTags('<p>before</p><script>el.innerHTML = "<b>not text</b>";</script><p>after</p>')).toBe('before after');
+  });
+
   it('keeps a no-break space inside a word, as a browser and the markdown do', () => {
     expect(stripTags('<h3>under 500&nbsp;ms</h3>')).toBe('under 500\u00a0ms');
   });
