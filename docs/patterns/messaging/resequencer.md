@@ -228,4 +228,8 @@ class Resequencer {
 
 - [Head-of-Line Blocking](../../hazards/head-of-line-blocking.md) — Can fall into head of line blocking when it holds all later messages until the missing earlier one arrives
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that restores the order of out-of-order messages as a ready-made building block.
+
 <!-- relationships:end -->

@@ -244,4 +244,8 @@ class SessionStore {
 - [Persona Identification & Sanction Check](../../designs/persona-identification.md) — a know your customer (KYC) flow builds a session for a principal with no account — an opaque single-use link whose state is a stored hash, which is what lets it be expired and revoked; a self-validating token could be neither
 - [Persona Identification & Sanction Check (V2)](../../designs/persona-identification-v2.md) — a session designed around a person who will never register, and revoked by a resend rather than by a logout
 
+**Implemented by**
+
+- [Identity & Access](../../capabilities/identity.md) — Hosted identity services keep the session and hand your app a token, so you do not build the store.
+
 <!-- relationships:end -->

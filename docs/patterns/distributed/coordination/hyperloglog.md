@@ -210,4 +210,8 @@ class HyperLogLog {
 - [Count-Min Sketch](./count-min-sketch.md) — Same sketch family, different question: distinct-count here, per-item frequency there
 - [Bloom Filter](./bloom-filter.md) — Same sketch family: how many distinct here, is it present there
 
+**Implemented by**
+
+- [Databases](../../../capabilities/databases.md) — Managed warehouses and Redis-compatible stores ship this as a built-in function or command.
+
 <!-- relationships:end -->

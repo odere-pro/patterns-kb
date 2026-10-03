@@ -301,4 +301,8 @@ await new SharedBreaker(kv, "idVendor").call(flowId, () => verifyDocument(person
 - [Persona Identification & Sanction Check](../../../designs/persona-identification.md) — one breaker per external vendor in a persona-verification saga, isolating a slow sanction-list check from a healthy ID-verification call
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — a breaker whose state is shared on purpose, with the cold-start seeding rule that a per-process copy cannot express
 
+**Implemented by**
+
+- [Networking](../../../capabilities/networking.md) — A mesh applies the breaker in the proxy, so every service gets it without code changes.
+
 <!-- relationships:end -->

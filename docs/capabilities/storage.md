@@ -48,7 +48,7 @@ Cloud storage comes in four shapes. Object storage holds whole blobs addressed b
 
 | Capability | AWS | Azure | Google Cloud | Open source |
 | --- | --- | --- | --- | --- |
-| Object storage | Amazon S3 | Azure Blob Storage | Cloud Storage | [MinIO](../comparisons/object-stores.md), Ceph |
+| Object storage | Amazon S3 | Azure Blob Storage | Cloud Storage | Ceph, [MinIO](../comparisons/object-stores.md) (community edition in maintenance mode since December 2025) |
 | Block storage, one virtual machine (VM) | Amazon EBS | Azure managed disks | Persistent Disk, Hyperdisk | Ceph RBD |
 | Ephemeral local disk | EC2 instance store | VM temporary disk | Local SSD | no direct open-source equivalent |
 | Shared file storage, Network File System (NFS) | Amazon EFS | Azure Files | Filestore | Linux NFS server |

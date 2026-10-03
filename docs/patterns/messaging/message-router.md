@@ -199,4 +199,8 @@ publish(router.route(incoming), incoming); // decide once, forward unchanged
 
 - [Fan-Out](./fan-out.md) — A router picks exactly one channel; fan-out copies to every consumer
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Subscription filters move the routing decision into the broker.
+
 <!-- relationships:end -->

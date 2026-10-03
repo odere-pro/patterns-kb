@@ -210,4 +210,8 @@ async function roll(f: Fleet, next: string, surge = 1, readyTimeoutMs = 60_000) 
 
 - [Blue-Green Deployment](./blue-green-deployment.md) — Swaps instances in place in small batches, with no second full fleet
 
+**Implemented by**
+
+- [Compute](../../../capabilities/compute.md) — Every cloud fleet service sells this as a setting: you choose the batch size and the health gate, the platform does the roll.
+
 <!-- relationships:end -->

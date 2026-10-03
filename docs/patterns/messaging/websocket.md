@@ -228,4 +228,8 @@ setInterval(() => {                                // heartbeat every 30 s
 
 - [Head-of-Line Blocking](../../hazards/head-of-line-blocking.md) — Can fall into head of line blocking when one multiplexed ordered connection lets one slow message delay all the others behind it
 
+**Implemented by**
+
+- [Networking](../../capabilities/networking.md) — Managed connection services hold the open sockets, so your backend handles messages rather than connections.
+
 <!-- relationships:end -->

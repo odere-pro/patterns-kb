@@ -241,4 +241,8 @@ const u = await users.get("42");
 
 - [Ticketmaster](../../designs/ticketmaster.md) — the hot event page is the archetypal read-through workload — high-read, low-change data fronted by a cache keyed by id
 
+**Implemented by**
+
+- [Databases](../../capabilities/databases.md) — Some caches load from the database on a miss so your code never does.
+
 <!-- relationships:end -->

@@ -69,6 +69,10 @@ Compute is machine time you rent at one of several levels: a virtual machine you
 | Batch and HPC job scheduling | AWS Batch | Azure Batch | Batch | Slurm |
 | Stateful workflow orchestration | AWS Step Functions | Azure Durable Functions, Logic Apps | Workflows | [Temporal](../comparisons/workflow-orchestrators.md), Airflow |
 | Cloud-managed on-premises hardware | AWS Outposts | Azure Local | Google Distributed Cloud | no direct open-source equivalent |
+| Rolling update of a fleet | EC2 Auto Scaling instance refresh | Virtual Machine Scale Sets rolling upgrades | Managed instance group rolling updates | Kubernetes Deployment rolling update |
+| Container image build | AWS CodeBuild | Azure Container Registry Tasks | Cloud Build | Docker BuildKit, Cloud Native Buildpacks |
+| Virtual actors with per-instance state | no first-party equivalent | Azure Durable Functions entities | no first-party equivalent | Microsoft Orleans, Dapr actors, Akka |
+| Runtime configuration and feature flags | AWS AppConfig, Systems Manager Parameter Store | Azure App Configuration | Parameter Manager, Firebase Remote Config | etcd, Consul, OpenFeature with flagd |
 
 ## Choosing between them
 <!--meta block=choosing-->
@@ -127,5 +131,9 @@ Two constraints settle the shape before price gets a vote. Regional quota comes 
 - [Container Orchestration](../patterns/distributed/coordination/container-orchestration.md) — Managed Kubernetes is this control loop rented by the hour: you declare the desired state, the service reconciles it.
 - [Big Compute](../patterns/architecture/big-compute.md) — Batch and high-performance computing (HPC) schedulers acquire the cores, run the job and release them, which is the whole shape of this.
 - [Workflow Orchestration](../patterns/distributed/coordination/workflow-orchestration.md) — Step Functions and Durable Functions persist each step, so a crash resumes instead of restarting.
+- [Rolling Deployment](../patterns/distributed/routing/rolling-deployment.md) — Instance refresh, scale set rolling upgrades and managed instance group updates replace a fleet in batches for you.
+- [Actor Model](../patterns/concurrency/actor-model.md) — Durable entities and the open-source actor runtimes give each actor its own state and a single-threaded mailbox.
+- [External Configuration Store](../patterns/distributed/coordination/external-configuration-store.md) — A managed configuration store holds settings outside the deployment, so changing one is an API call rather than a redeploy.
+- [Feature Flag](../patterns/distributed/routing/feature-flag.md) — Managed flag services evaluate and roll out flags for you, with targeting and gradual percentages built in.
 
 <!-- relationships:end -->

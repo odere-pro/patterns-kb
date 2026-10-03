@@ -229,4 +229,8 @@ const unsent = (await dispatch(order)).filter((o) => !o.ok);
 - [Fan-Out](./fan-out.md) — Fan-out copies to every consumer; a recipient list copies to a computed subset
 - [Routing Slip](./routing-slip.md) — Sends one copy of the message to every recipient at once, in parallel
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that sends a message to a computed list of recipients as a ready-made building block.
+
 <!-- relationships:end -->

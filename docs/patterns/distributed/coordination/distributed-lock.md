@@ -250,4 +250,8 @@ async function release(redis: Redis, key: string, token: string) {
 - [Ticketmaster](../../../designs/ticketmaster.md) — the seat reservation is exactly a distributed lock with automatic time to live (TTL) expiry shared across many booking-service instances
 - [Job Scheduler](../../../designs/job-scheduler.md) — automatic crash recovery is exactly self-expiring exclusive ownership of a job
 
+**Implemented by**
+
+- [Databases](../../../capabilities/databases.md) — Locks are sold as leases on a blob, a conditional row or a coordination service.
+
 <!-- relationships:end -->

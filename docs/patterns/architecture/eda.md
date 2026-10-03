@@ -211,4 +211,8 @@ bus.emit("OrderPlaced", { orderId: "o-42", total: 4999 });
 
 - [CamelCamelCamel](../../designs/camelcamelcamel.md) — replacing full-table poll scans with per-event who-cares reaction is the event-driven shift that meets the sub-hour alert service level agreement (SLA)
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Managed event buses give you the delivery and routing, and you write the producers and consumers.
+
 <!-- relationships:end -->

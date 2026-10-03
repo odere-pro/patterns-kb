@@ -190,4 +190,8 @@ await send({ id: "1", payload: { amount: 42 }, timestamp: Date.now() });
 
 - [Fan-Out](./fan-out.md) — The tap's copy is out-of-band and discardable, not a delivery
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that copies messages to a side channel as a ready-made building block.
+
 <!-- relationships:end -->

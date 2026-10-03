@@ -212,4 +212,8 @@ class MeshProxy {
 - [Sidecar](./sidecar.md) — A service mesh is built from a sidecar proxy beside every service instance, programmed by a shared control plane.
 - [Service Discovery](./service-discovery.md) — Resolution is one of the concerns the mesh's data plane takes over
 
+**Implemented by**
+
+- [Networking](../../../capabilities/networking.md) — Managed meshes run the proxies and control plane, so you configure policy instead of operating them.
+
 <!-- relationships:end -->

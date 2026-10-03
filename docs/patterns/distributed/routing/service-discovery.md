@@ -227,4 +227,8 @@ class Client {
 
 - [Service Mesh](./service-mesh.md) — A mesh generalizes per-instance resolution across the whole fleet, plus policy and telemetry
 
+**Implemented by**
+
+- [Networking](../../../capabilities/networking.md) — Managed registries hold service names and healthy addresses, so you do not run the registry yourself.
+
 <!-- relationships:end -->

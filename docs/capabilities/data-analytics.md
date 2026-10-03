@@ -45,6 +45,7 @@ Data analytics is a pipeline you rent in stages: raw events land in cheap durabl
 - **[Managed search and vector index](../patterns/ml/embeddings.md)** — A service that indexes documents for keyword search and stores vectors so you can retrieve by similarity rather than by exact term. It is priced on the capacity you keep online rather than on bytes at rest, so an index queried once a day costs what a busy one does.
 - **[ML training and deployment platform](../patterns/ml/feature-engineering.md)** — A managed environment for notebooks, training jobs, a model registry and an endpoint that serves predictions. It buys you the undifferentiated parts — accelerator provisioning, experiment tracking, staged rollout — and it is the least portable thing in this category.
 - **Foundation-model platform** — An API over hosted large models, with fine-tuning, grounding against your own data and safety filtering around them. You are renting inference capacity and a model you did not train, so the questions that decide the purchase are token pricing, context limits and what the provider does with a prompt you send.
+- **Retrieval, features, evaluation and agent runtime** — Services that sit on top of a model platform: retrieval that grounds answers in your documents, a store that serves the same features to training and inference, scoring of model output against a test set, and a runtime that runs a model in a tool-calling loop. You buy them to avoid building plumbing, and each ties you to the provider's model and index formats.
 
 ## What each cloud calls it
 <!--meta block=mapping-->
@@ -59,10 +60,14 @@ Data analytics is a pipeline you rent in stages: raw events land in cheap durabl
 | Stream processing | Amazon Managed Service for Apache Flink | Azure Stream Analytics | Dataflow | Apache Flink |
 | Cloud data warehouse | Amazon Redshift | Microsoft Fabric Warehouse; Azure Synapse Analytics | BigQuery | ClickHouse |
 | Query-in-place over object storage | Amazon Athena | Azure Synapse serverless SQL pool | BigQuery external tables | Trino, DuckDB |
-| Business intelligence | Amazon QuickSight | Power BI | Looker; Looker Studio | Apache Superset, Metabase |
-| Managed search and vector search | Amazon OpenSearch Service | Azure AI Search | Vertex AI Vector Search | [OpenSearch](../comparisons/search-engines.md) |
-| ML training and deployment | Amazon SageMaker | Azure Machine Learning | Vertex AI | Kubeflow, MLflow |
-| Foundation-model platform | Amazon Bedrock | Azure OpenAI Service | Vertex AI Model Garden | no direct open-source equivalent |
+| Business intelligence | Amazon Quick Sight, in Amazon Quick | Power BI | Looker; Looker Studio | Apache Superset, Metabase |
+| Managed search and vector search | Amazon OpenSearch Service | Azure AI Search | Vector Search (Gemini Enterprise Agent Platform) | [OpenSearch](../comparisons/search-engines.md) |
+| ML training and deployment | Amazon SageMaker | Azure Machine Learning | Gemini Enterprise Agent Platform, formerly Vertex AI | Kubeflow, MLflow |
+| Foundation-model platform | Amazon Bedrock | Microsoft Foundry Models | Model Garden (Gemini Enterprise Agent Platform) | no direct open-source equivalent |
+| Managed retrieval for model grounding | Amazon Bedrock Knowledge Bases | Azure AI Search | RAG Engine (Gemini Enterprise Agent Platform) | LlamaIndex, Haystack |
+| Feature store | Amazon SageMaker Feature Store | Azure Machine Learning managed feature store | Feature Store (Gemini Enterprise Agent Platform) | Feast |
+| Model and prompt evaluation | Amazon Bedrock Evaluations | Microsoft Foundry evaluation | Gen AI evaluation service (Gemini Enterprise Agent Platform) | MLflow |
+| Managed agent runtime | Amazon Bedrock AgentCore | Microsoft Foundry Agent Service | Agent Runtime (Gemini Enterprise Agent Platform) | LangGraph |
 
 ## Choosing between them
 <!--meta block=choosing-->
@@ -116,5 +121,10 @@ Do not buy the model layer as a separate thing. Training features come out of th
 - [Batching](../patterns/concurrency/batching.md) — Warehouse loads and stream windows batch on your behalf.
 - [Big Data](../patterns/architecture/big-data.md) — The batch path and the streaming path are both sold here, which is what this architecture needs.
 - [Object Storage](../patterns/distributed/routing/object-storage.md) — A data lake is object storage with a catalogue over it — the blobs never move into the warehouse.
+- [Embeddings](../patterns/ml/embeddings.md) — Managed search and vector services store and query embeddings for you.
+- [Retrieval-Augmented Generation](../patterns/ml/rag.md) — Managed knowledge-base services chunk, index and retrieve your documents for a model.
+- [Feature Engineering](../patterns/ml/feature-engineering.md) — Feature stores serve one set of computed features to both training and inference.
+- [Evaluation](../patterns/ml/evaluation.md) — Evaluation services score model output against a test set and report the result.
+- [AI Agent](../patterns/architecture/ai-agent.md) — Managed agent runtimes host the model, tool calls and session state for you.
 
 <!-- relationships:end -->

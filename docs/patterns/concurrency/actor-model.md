@@ -220,4 +220,8 @@ class Counter extends Actor {
 - [Online Chess](../../designs/online-chess.md) — a chess game is a textbook actor — private in-memory state mutated by a serial mailbox of moves, which is why platforms run it on cluster sharding
 - [WhatsApp](../../designs/whatsapp.md) — The design leans on actors as the reason a small team could serve billions of messages a day
 
+**Implemented by**
+
+- [Compute](../../capabilities/compute.md) — Only Azure sells this ready-made, as durable entities; elsewhere you run an actor framework such as Orleans, Dapr or Akka.
+
 <!-- relationships:end -->

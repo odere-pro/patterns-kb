@@ -247,4 +247,8 @@ await deadline.run(signal => sanctionsVendor.screen(doc.name, flowId, signal));
 - [LeetCode](../../../designs/leetcode.md) — a bounded deadline caps work that could otherwise run forever and pin a core
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — deadlines as columns rather than call settings, which is what turns a silent third party into a breach somebody is paged for
 
+**Implemented by**
+
+- [Networking](../../../capabilities/networking.md) — A mesh sets per-route timeouts in configuration, so a slow call is cut off outside your code.
+
 <!-- relationships:end -->

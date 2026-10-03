@@ -263,4 +263,8 @@ export const RECOMMENDATIONS = defineFlag({
 
 - [Boat Anchor](../../../hazards/boat-anchor.md) — Can fall into boat anchor when flags nobody removes after rollout become permanent dead branches
 
+**Implemented by**
+
+- [Compute](../../../capabilities/compute.md) — Clouds sell flag evaluation and rollout as a service; removing the flag from your code once it has served stays your job.
+
 <!-- relationships:end -->

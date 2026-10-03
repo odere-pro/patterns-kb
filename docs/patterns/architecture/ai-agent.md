@@ -245,4 +245,8 @@ async function runAgent(goal: string, tools: Tool[], limits: { turns: number; to
 - [Agent2Agent](../distributed/coordination/a2a.md) — Delegating a task to an agent built by someone else
 - [Agent Client Protocol](../distributed/routing/acp.md) — How the agent reaches a human-facing host without a plug-in per editor
 
+**Implemented by**
+
+- [Data & Analytics](../../capabilities/data-analytics.md) — Each cloud sells the hosting loop, so you write the tools and the instructions.
+
 <!-- relationships:end -->

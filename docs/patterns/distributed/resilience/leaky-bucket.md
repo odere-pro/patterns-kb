@@ -221,4 +221,8 @@ async function callPartner() {
 
 - [Load Shedding](./load-shedding.md) — It delays a burst up to the queue size, then refuses the rest.
 
+**Implemented by**
+
+- [Networking](../../../capabilities/networking.md) — NGINX limit_req smooths bursts into a steady rate, which is this pattern as configuration.
+
 <!-- relationships:end -->

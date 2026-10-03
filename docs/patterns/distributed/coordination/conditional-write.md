@@ -252,4 +252,8 @@ async function sellTicket(db: Db, concertId: string, userId: string) {
 - [Online Auction](../../../designs/online-auction.md) — the single-row compare-and-set that guards the contended high bid is a conditional write in its purest form
 - [Persona Identification & Sanction Check (V2)](../../../designs/persona-identification-v2.md) — a redemption whose rowcount distinguishes expired from forged from already-spent, which a read-then-write cannot
 
+**Implemented by**
+
+- [Databases](../../../capabilities/databases.md) — Each cloud database exposes a check-and-write primitive you can use directly.
+
 <!-- relationships:end -->

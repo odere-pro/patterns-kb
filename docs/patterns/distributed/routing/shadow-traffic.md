@@ -165,4 +165,8 @@ declare function record(primary: Response, shadow: Response): void;
 
 - [Canary Release](./canary-release.md) — Mirrors requests to the new version and discards its responses, so no user is exposed
 
+**Implemented by**
+
+- [Networking](../../../capabilities/networking.md) — A mesh can mirror live requests to a candidate version without the caller seeing its answer.
+
 <!-- relationships:end -->

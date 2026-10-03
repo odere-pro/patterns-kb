@@ -229,4 +229,8 @@ async function relay(source: Source, destination: Destination, breaker: Breaker)
 
 - [Message Translator](./message-translator.md) — A bridge carries the payload untouched; the moment it reshapes it, it is a translator
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that connects two messaging systems as a ready-made building block.
+
 <!-- relationships:end -->

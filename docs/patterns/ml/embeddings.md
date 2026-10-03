@@ -196,4 +196,8 @@ catalog
 
 - [Retrieval-Augmented Generation](./rag.md) — The retrieval step of a retrieval-augmented generation (RAG) pipeline is the most common reason to build an embedding index
 
+**Implemented by**
+
+- [Data & Analytics](../../capabilities/data-analytics.md) — Every cloud sells the vector index, so you do not run the similarity search yourself.
+
 <!-- relationships:end -->

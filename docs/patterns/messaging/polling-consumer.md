@@ -212,4 +212,8 @@ async function pollLoop(queue: Queue, handle: (m: Message) => Promise<void>, sig
 
 - [Long Polling](./long-polling.md) — The consumer asks the channel for work, and the call may return empty
 
+**Implemented by**
+
+- [Messaging & Eventing](../../capabilities/messaging.md) — Integration platforms and the Camel library ship the step that pulls messages on a schedule as a ready-made building block.
+
 <!-- relationships:end -->

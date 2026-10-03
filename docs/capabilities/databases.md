@@ -66,6 +66,11 @@ A managed database is an engine the provider operates for you: it handles failov
 | Globally distributed strongly consistent relational | Amazon Aurora DSQL | no first-party equivalent | Cloud Spanner | CockroachDB (source-available), YugabyteDB |
 | Managed data warehouse | Amazon Redshift | Microsoft Fabric Warehouse | BigQuery | ClickHouse |
 | Database migration | AWS Database Migration Service | Azure Database Migration Service | Database Migration Service | no direct open-source equivalent |
+| Cache that reads and writes through to the database | Amazon DynamoDB Accelerator (DAX), read-through and write-through for DynamoDB | no first-party equivalent | no first-party equivalent | Hazelcast, Apache Ignite |
+| Automatically sharded database | Amazon DynamoDB | Azure Cosmos DB | Cloud Spanner | Vitess, MongoDB sharding (SSPL) |
+| Conditional write | DynamoDB condition expressions | Cosmos DB ETag with If-Match | Cloud Bigtable check-and-mutate | etcd transactions |
+| Distributed lock and lease | DynamoDB Lock Client (library over conditional writes) | Azure Blob Storage leases | no first-party equivalent | etcd, Apache ZooKeeper, Consul |
+| Approximate distinct count | Amazon Redshift HLLSKETCH, ElastiCache PFCOUNT | Azure Data Explorer dcount() | BigQuery HLL_COUNT functions | Valkey PFADD and PFCOUNT, Apache DataSketches |
 
 ## Choosing between them
 <!--meta block=choosing-->
@@ -127,5 +132,13 @@ Managed does not mean tuned, and the two workloads that prove it are worth rehea
 - [Write-Ahead Log](../patterns/distributed/coordination/write-ahead-log.md) — Point-in-time recovery is the write-ahead log kept and replayed for you.
 - [LSM Tree](../patterns/distributed/coordination/lsm-tree.md) — Wide-column stores are log-structured merge (LSM) engines you rent, with compaction running without you scheduling it.
 - [Quorum & Consensus](../patterns/distributed/coordination/quorum-consensus.md) — A globally consistent relational service commits through a replica majority, and the latency is the bill.
+- [Cache-Aside](../patterns/caching/cache-aside.md) — The managed in-memory cache is the store your application code reads aside and fills on a miss.
+- [Read-Through](../patterns/caching/read-through.md) — A cache that loads missing entries from the database for you is this pattern sold ready-made.
+- [Write-Through](../patterns/caching/write-through.md) — A cache that writes each update to the database before it acknowledges is this pattern sold ready-made.
+- [Conditional Write](../patterns/distributed/coordination/conditional-write.md) — The store rejects a write when your stated condition no longer holds.
+- [Optimistic Concurrency Control](../patterns/distributed/coordination/optimistic-concurrency-control.md) — Conditional writes and version tags give you optimistic concurrency without a lock.
+- [Distributed Lock](../patterns/distributed/coordination/distributed-lock.md) — Lease-backed locks are available as a library, a blob lease or a coordination service.
+- [Lease](../patterns/distributed/coordination/lease.md) — Blob leases and coordination-service leases hand out time-limited ownership.
+- [HyperLogLog](../patterns/distributed/coordination/hyperloglog.md) — Warehouses and in-memory stores count distinct values approximately in small, fixed memory.
 
 <!-- relationships:end -->

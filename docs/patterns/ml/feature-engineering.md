@@ -180,4 +180,8 @@ smoothedRate(1800, 9000);  // 0.199: the evidence is there, so it stands
 - [Generalization](./generalization.md) — Leakage, cold start, and drift are feature problems that wreck generalization
 - [Evaluation](./evaluation.md) — Leakage and train/serve skew inflate offline metrics that vanish online
 
+**Implemented by**
+
+- [Data & Analytics](../../capabilities/data-analytics.md) — Managed feature stores keep training and serving features consistent, so you do not hand-build that sync.
+
 <!-- relationships:end -->
