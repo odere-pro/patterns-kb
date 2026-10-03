@@ -83,7 +83,11 @@ const write = async (doc: Document, view: Window, text: string): Promise<boolean
     field.style.setProperty('top', '-9999px');
     doc.body.appendChild(field);
     field.select();
-    const ok = doc.execCommand('copy');
+    // `execCommand` is deprecated, and still the only copy an engine without
+    // the clipboard API has. Called through this narrower type, so the
+    // typecheck does not flag a fallback that is deliberate.
+    const legacy: { execCommand(command: 'copy'): boolean } = doc;
+    const ok = legacy.execCommand('copy');
     field.remove();
     return ok;
   } catch {

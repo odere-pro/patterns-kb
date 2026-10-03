@@ -91,6 +91,18 @@ export default defineConfig({
     build: {
       cssCodeSplit: false,
       assetsInlineLimit: 0,
+      rolldownOptions: {
+        // Astro's content-assets plugin (astro/dist/content/vite-plugin-content-assets.js)
+        // writes "use astro:head-inject" into every .mdx page it bundles, and
+        // Rolldown warns once per page that it may drop the directive. Astro
+        // reads the directive itself, so the warning names nothing to fix
+        // here; every other log passes through.
+        onLog(level, log, handler) {
+          if (log.code === 'MODULE_LEVEL_DIRECTIVE' && log.message.includes('astro:head-inject'))
+            return;
+          handler(level, log);
+        },
+      },
     },
     // Resolve links the way Node was told to. A checkout whose packages are
     // links into another one (the build command's scenario tests,
@@ -134,7 +146,11 @@ export default defineConfig({
       // The not-found page is hand-written in src/content/docs/404.mdx, so it
       // carries the page facts every built page does. GitHub Pages serves the
       // built 404.html for any address the site does not hold.
-      disable404Route: false,
+      //
+      // The docs catch-all route already renders that entry to 404.html, as it
+      // does every page. Starlight's own /404 route would claim the same file,
+      // and the build would warn that one of them was dropped.
+      disable404Route: true,
       // Drops the outline of a page that has fewer than two entries.
       routeMiddleware: './src/route-middleware.ts',
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 3 },
